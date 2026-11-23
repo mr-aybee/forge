@@ -49,6 +49,7 @@ pub mod notifying;
 pub mod perms;
 pub mod pins;
 pub mod public_address;
+pub mod registries;
 pub mod service_ports;
 pub mod stacks;
 pub mod state;

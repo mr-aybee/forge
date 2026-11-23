@@ -29,8 +29,10 @@ be current (it reports `container_exec`). Update an older agent from
 
 ## Steps
 
-1. Open the node and select the **Containers** tab. The **Containers** panel
-   has three views: **containers**, **stacks** and **images**. The cluster's
+1. Open the node and select the **Docker** tab, then **Containers**. The
+   **Containers** panel has two views: **containers** and **stacks**. Images,
+   volumes, networks, events and disk use have their own sub-tabs; see
+   [Docker images, volumes and networks](/docs/guides/docker-resources/). The cluster's
    **Containers** page in the sidebar lists the containers of every Docker
    node in the cluster, grouped by node. Each node's header shows how many
    of its containers run; a node with Docker but no containers shows
@@ -50,9 +52,8 @@ be current (it reports `container_exec`). Update an older agent from
    Containers that Forge created for a service are named
    `forge-app-<environment>-<service>`; the **Overview** tab links to that
    service, and the service's **Nodes** table links back to the container.
-4. To pull an image, open **images**, enter a reference such as `nginx:1.27`,
-   `ghcr.io/org/app:1.2` or `name@sha256:…`, and select **Pull image**. The
-   pull runs in the background; follow it in **Operations → Jobs**.
+4. To pull an image, open **Docker → Images** and select **Pull image**. See
+   [Docker images, volumes and networks](/docs/guides/docker-resources/).
 
 Container packages from the App Store, such as SQL Server and RustFS, appear
 here too. **stacks** lists the compose stacks on the node. **Create** offers
@@ -100,7 +101,7 @@ to 25 seconds for a result.
 ## Verify
 
 - After **Start** or **Stop**, the **State** column shows the new state.
-- After a pull, the image is listed in **images**, and the job in
+- After a pull, the image is listed in **Docker → Images**, and the job in
   **Operations → Jobs** shows `succeeded`.
 
 ## Troubleshooting
@@ -122,6 +123,7 @@ to 25 seconds for a result.
 
 ## Next steps
 
+- [Docker images, volumes and networks](/docs/guides/docker-resources/)
 - [Create a container](/docs/guides/create-container/)
 - [Deploy a compose stack](/docs/guides/compose-stacks/)
 - [App Store](/docs/guides/app-store/)

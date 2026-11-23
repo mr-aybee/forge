@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { Activity, Boxes, ChevronDown, Container, Download, FileCode2, FileText, Layers, Loader2, Play, Plus, RefreshCw, RotateCw, Search, Square, SquareTerminal, Trash2 } from "lucide-react";
+import { Activity, Boxes, ChevronDown, Container, FileCode2, FileText, Layers, Play, Plus, RefreshCw, RotateCw, Search, Square, SquareTerminal, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import {
@@ -15,7 +15,7 @@ import { errorText, useToast } from "../app/toast";
 import { useStacks } from "../api/stacks";
 import { StoredContainerLogs } from "./containers/StoredContainerLogs";
 import { StackTable } from "./stacks/StackList";
-import { RowMenu, type RowAction, useRowMenu, Badge, Button, Confirm, Empty, ErrorNote, IconButton, Input, Modal, Mono, Panel, Skeleton, Status, Table, Td, bytes } from "./ui";
+import { RowMenu, type RowAction, useRowMenu, Button, Confirm, Empty, ErrorNote, IconButton, Modal, Mono, Panel, Skeleton, Status, Table, Td, bytes } from "./ui";
 
 /** Binary units; `—` for 0 or unknown (Docker reports 0 for "no limit"). */
 const fmtBytes = (n?: number | null) => (n ? bytes(n) : "—");
@@ -27,9 +27,8 @@ export function NodeContainers({ node }: { node: Server }) {
   const info = useContainerQuery<DockerInfo>(node.id, "info", online);
   const hasDocker = info.data?.status === "succeeded";
   const list = useContainerQuery<ContainerSummary[]>(node.id, "list", online && hasDocker);
-  const images = useContainerQuery<{ id: string; tags: string[] | null; size: number }[]>(node.id, "images", false);
   const act = useContainerAction(node.id);
-  const [tab, setTab] = useState<"containers" | "images" | "stacks">("containers");
+  const [tab, setTab] = useState<"containers" | "stacks">("containers");
   const stacks = useStacks({ server: node.id }, online);
   const [q, setQ] = useState("");
   const [removing, setRemoving] = useState<ContainerSummary>();
@@ -37,7 +36,6 @@ export function NodeContainers({ node }: { node: Server }) {
   const navigate = useNavigate();
   const openContainer = (c: ContainerSummary, tab?: "logs" | "shell" | "environment") =>
     void navigate({ to: "/nodes/$nodeId/containers/$containerId", params: { nodeId: node.id, containerId: c.id }, search: tab ? { tab } : {} });
-  const [image, setImage] = useState("");
   const [stats, setStats] = useState<Record<string, { cpu_percent: number; memory_bytes: number; memory_limit: number }>>({});
 
   const rows = useMemo(
@@ -45,15 +43,14 @@ export function NodeContainers({ node }: { node: Server }) {
     [list.data, q],
   );
 
-  const run = (op: "start" | "stop" | "restart" | "remove" | "pull", c?: ContainerSummary) =>
+  const run = (op: "start" | "stop" | "restart" | "remove", c?: ContainerSummary) =>
     act.mutate(
-      { op, id: c?.id, image: op === "pull" ? image.trim() : undefined },
+      { op, id: c?.id },
       {
         onSuccess: (r) => {
           if (r.status === "failed") toast(r.error ?? `${op} failed`, "error");
-          else toast(r.status === "running" ? `${op} started — follow it in Jobs` : `${op} ${c?.name ?? image} done`);
+          else toast(r.status === "running" ? `${op} started — follow it in Jobs` : `${op} ${c?.name ?? ""} done`);
           void list.refetch();
-          if (op === "pull") void images.refetch();
         },
         onError: (e) => toast(errorText(e), "error"),
       },
@@ -129,13 +126,10 @@ export function NodeContainers({ node }: { node: Server }) {
         <div className="flex items-center gap-1">
           <CreateActions node={node} />
           <div className="mx-2 flex rounded-md border border-line p-0.5 text-xs">
-            {(["containers", "stacks", "images"] as const).map((t) => (
+            {(["containers", "stacks"] as const).map((t) => (
               <button
                 key={t}
-                onClick={() => {
-                  setTab(t);
-                  if (t === "images") void images.refetch();
-                }}
+                onClick={() => setTab(t)}
                 className={`rounded px-2.5 py-1 capitalize ${tab === t ? "bg-accent-soft text-accent" : "text-muted"}`}
               >
                 {t}
@@ -143,8 +137,8 @@ export function NodeContainers({ node }: { node: Server }) {
               </button>
             ))}
           </div>
-          <IconButton label="Refresh" onClick={() => void (tab === "images" ? images.refetch() : tab === "stacks" ? stacks.refetch() : list.refetch())}>
-            <RefreshCw className={`size-4 ${list.isFetching || images.isFetching || stacks.isFetching ? "animate-spin" : ""}`} />
+          <IconButton label="Refresh" onClick={() => void (tab === "stacks" ? stacks.refetch() : list.refetch())}>
+            <RefreshCw className={`size-4 ${list.isFetching || stacks.isFetching ? "animate-spin" : ""}`} />
           </IconButton>
         </div>
       }
@@ -165,7 +159,7 @@ export function NodeContainers({ node }: { node: Server }) {
             />
           )}
         </>
-      ) : tab === "containers" ? (
+      ) : (
         <>
           <div className="flex items-center gap-2 border-b border-line px-4 py-2">
             <Search className="size-4 text-faint" />
@@ -237,50 +231,6 @@ export function NodeContainers({ node }: { node: Server }) {
                   </tr>
                 );
               })}
-            </Table>
-          )}
-        </>
-      ) : (
-        <>
-          <form
-            className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              run("pull");
-            }}
-          >
-            <Input className="max-w-sm" value={image} onChange={(e) => setImage(e.target.value)} placeholder="nginx:1.27 or ghcr.io/org/app:tag" pattern="[A-Za-z0-9][A-Za-z0-9/:._@\-]*" required />
-            <Button disabled={act.isPending} title={act.isPending ? "Another container action is running" : undefined}>
-              {act.isPending ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />} Pull image
-            </Button>
-          </form>
-          {images.data?.status === "failed" && <ErrorNote error={images.data.error ?? "Listing the images failed"} />}
-          <ErrorNote error={images.error} />
-          {(images.data?.result ?? []).length === 0 ? (
-            images.isFetching ? (
-              <Skeleton rows={3} />
-            ) : (
-              <Empty icon={<Boxes className="size-5" />} title="No images">
-                Pull one above, or create a container; Docker pulls its image.
-              </Empty>
-            )
-          ) : (
-            <Table head={["Image", "Id", "Size"]}>
-              {(images.data?.result ?? []).map((i) => (
-                <tr key={i.id}>
-                  <Td>
-                    <div className="flex flex-wrap gap-1">
-                      {(i.tags?.length ? i.tags : ["<none>"]).map((t) => (
-                        <Badge key={t}>{t}</Badge>
-                      ))}
-                    </div>
-                  </Td>
-                  <Td>
-                    <Mono>{i.id}</Mono>
-                  </Td>
-                  <Td className="font-mono text-[11px] text-muted tabular-nums">{fmtBytes(i.size)}</Td>
-                </tr>
-              ))}
             </Table>
           )}
         </>

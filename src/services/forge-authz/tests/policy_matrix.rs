@@ -754,3 +754,16 @@ fn docker_resources_are_for_operators() {
         assert!(!allowed(&engine, auditor, a, &node, true), "{a:?}");
     }
 }
+
+/// Registries hold credentials (D-158): administrators only, with MFA.
+#[test]
+fn registry_manage_is_admin_only_with_mfa() {
+    let engine = PolicyEngine::new().unwrap();
+    let ws = ResourceRef::new(EntityRef::new(EntityKind::Workspace, "a"), vec![]);
+    let (admin, op) = (UserId::new(), UserId::new());
+    bind(&engine, admin, Role::WorkspaceAdmin, workspace("a"));
+    bind(&engine, op, Role::Operator, workspace("a"));
+    assert!(!allowed(&engine, admin, Action::RegistryManage, &ws, false));
+    assert!(allowed(&engine, admin, Action::RegistryManage, &ws, true));
+    assert!(!allowed(&engine, op, Action::RegistryManage, &ws, true));
+}

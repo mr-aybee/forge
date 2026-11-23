@@ -26,7 +26,7 @@ For how placement, the policy and port binding work, see
 
 ## Create a stack
 
-1. Open a node, select the **Containers** tab, then **Create** → **Create from
+1. Open a node, select the **Docker** tab (**Containers**), then **Create** → **Create from
    Compose**. The **New stack** page opens at `/stacks/new`, with that node and
    its environment already chosen. The list of all stacks is at `/stacks`; it is
    not in the sidebar.

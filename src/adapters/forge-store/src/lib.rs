@@ -33,6 +33,7 @@ mod pins;
 mod plugins;
 mod projects;
 pub mod provision;
+mod registries;
 mod resolver;
 mod row;
 mod secrets;

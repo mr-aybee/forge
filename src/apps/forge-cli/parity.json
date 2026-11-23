@@ -378,7 +378,11 @@
     "GET /api/v1/servers/{id}/docker/networks": "Docker images, volumes and networks (D-157); the node's Docker tab, `forge api call` for scripts",
     "GET /api/v1/servers/{id}/docker/disk-usage": "Docker images, volumes and networks (D-157); the node's Docker tab, `forge api call` for scripts",
     "GET /api/v1/servers/{id}/docker/events": "Docker images, volumes and networks (D-157); the node's Docker tab, `forge api call` for scripts",
-    "POST /api/v1/servers/{id}/docker/ops": "Docker images, volumes and networks (D-157); the node's Docker tab, `forge api call` for scripts"
+    "POST /api/v1/servers/{id}/docker/ops": "Docker images, volumes and networks (D-157); the node's Docker tab, `forge api call` for scripts",
+    "GET /api/v1/registries": "Container registries (D-158); Settings → Registries, `forge api call` for scripts",
+    "POST /api/v1/registries": "Container registries (D-158); Settings → Registries, `forge api call` for scripts",
+    "PUT /api/v1/registries/{id}": "Container registries (D-158); Settings → Registries, `forge api call` for scripts",
+    "DELETE /api/v1/registries/{id}": "Container registries (D-158); Settings → Registries, `forge api call` for scripts"
   },
   "excluded": {
     "POST /api/events/raw": "Seq log ingest for services, authenticated by an ingest key, not by a user",

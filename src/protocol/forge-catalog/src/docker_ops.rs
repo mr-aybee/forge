@@ -167,11 +167,46 @@ fn labels_ok(l: &BTreeMap<String, String>) -> bool {
             .all(|(k, v)| name_ok(k) && !k.starts_with("forge.") && v.len() <= 1024 && !v.chars().any(char::is_control))
 }
 
-fn cidr_ok(c: &str) -> bool {
-    let Some((ip, len)) = c.split_once('/') else { return false };
-    let Ok(ip) = ip.parse::<std::net::IpAddr>() else { return false };
-    let max = if ip.is_ipv4() { 32 } else { 128 };
-    len.parse::<u8>().is_ok_and(|n| (8..=max).contains(&n))
+/// A network subnet: IPv4 /16 to /30 or IPv6 /48 to /124, never loopback,
+/// link-local, multicast or unspecified (a wide subnet would take routes
+/// from the node).
+pub fn subnet(c: &str) -> Option<(std::net::IpAddr, u8)> {
+    let (ip, len) = c.split_once('/')?;
+    let ip: std::net::IpAddr = ip.parse().ok()?;
+    let len: u8 = len.parse().ok()?;
+    let ok = match ip {
+        std::net::IpAddr::V4(v) => {
+            (16..=30).contains(&len)
+                && !v.is_loopback()
+                && !v.is_link_local()
+                && !v.is_multicast()
+                && !v.is_unspecified()
+        }
+        std::net::IpAddr::V6(v) => {
+            (48..=124).contains(&len)
+                && !v.is_loopback()
+                && !v.is_multicast()
+                && !v.is_unspecified()
+                && (v.segments()[0] & 0xffc0) != 0xfe80
+        }
+    };
+    ok.then_some((ip, len))
+}
+
+/// `ip` lies in `net`/`len` (same family).
+#[must_use]
+pub fn contains(net: std::net::IpAddr, len: u8, ip: std::net::IpAddr) -> bool {
+    match (net, ip) {
+        (std::net::IpAddr::V4(n), std::net::IpAddr::V4(i)) => {
+            let mask = u32::MAX.checked_shl(32 - u32::from(len)).unwrap_or(0);
+            (u32::from(n) & mask) == (u32::from(i) & mask)
+        }
+        (std::net::IpAddr::V6(n), std::net::IpAddr::V6(i)) => {
+            let mask = u128::MAX.checked_shl(128 - u32::from(len)).unwrap_or(0);
+            (u128::from(n) & mask) == (u128::from(i) & mask)
+        }
+        _ => false,
+    }
 }
 
 /// Registry auth is base64url JSON, bounded.
@@ -288,12 +323,21 @@ impl DockerOp {
                 if network_protected(name) {
                     return Err(format!("the network name `{name}` is reserved"));
                 }
-                name_ok(name)
-                    && labels_ok(labels)
-                    && subnet.as_deref().is_none_or(cidr_ok)
-                    && gateway.as_deref().is_none_or(|g| g.parse::<std::net::IpAddr>().is_ok())
-                    && (gateway.is_none() || subnet.is_some())
-                    && (!attachable || *driver == NetworkDriver::Overlay)
+                let net = match subnet.as_deref() {
+                    Some(c) => match self::subnet(c) {
+                        Some(n) => Some(n),
+                        None => {
+                            return Err("the subnet is IPv4 /16 to /30 (or IPv6 /48 to /124), not loopback, link-local or multicast".into());
+                        }
+                    },
+                    None => None,
+                };
+                let gateway_ok = match (gateway.as_deref(), net) {
+                    (None, _) => true,
+                    (Some(g), Some((n, len))) => g.parse().is_ok_and(|ip| contains(n, len, ip)),
+                    (Some(_), None) => false,
+                };
+                name_ok(name) && labels_ok(labels) && gateway_ok && (!attachable || *driver == NetworkDriver::Overlay)
             }
             Self::NetworkConnect { network, container } | Self::NetworkDisconnect { network, container, .. } => {
                 if network_protected(network) {
@@ -339,6 +383,14 @@ mod tests {
         assert!(create("app", Some("10.30.0.0/24"), false, NetworkDriver::Bridge).validate().is_ok());
         assert!(create("forge-x", None, false, NetworkDriver::Bridge).validate().is_err());
         assert!(create("app", Some("10.30.0.0"), false, NetworkDriver::Bridge).validate().is_err());
+        assert!(create("app", Some("10.0.0.0/8"), false, NetworkDriver::Bridge).validate().is_err(), "too wide");
+        assert!(create("app", Some("127.0.0.0/16"), false, NetworkDriver::Bridge).validate().is_err());
+        assert!(create("app", Some("169.254.0.0/16"), false, NetworkDriver::Bridge).validate().is_err());
+        let mut gw = create("app", Some("10.30.0.0/24"), false, NetworkDriver::Bridge);
+        if let DockerOp::NetworkCreate { gateway, .. } = &mut gw {
+            *gateway = Some("10.31.0.1".into());
+        }
+        assert!(gw.validate().is_err(), "the gateway lies in the subnet");
         assert!(create("app", None, true, NetworkDriver::Bridge).validate().is_err(), "attachable is overlay only");
     }
 

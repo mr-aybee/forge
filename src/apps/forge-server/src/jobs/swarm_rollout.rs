@@ -210,7 +210,8 @@ impl DeployJob {
                 let def = self.swarm_def(ctx, ro, &f).await?;
                 let net = SwarmOp::EnsureNetwork { environment_id: r.app.environment_id.to_string() };
                 self.swarm_op(ctx, cluster, &format!("network_op_{index}"), &net).await?;
-                let apply = SwarmOp::ServiceApply { def: Box::new(def) };
+                let registry_auth = self.registries.auth_for(r.app.workspace_id, &def.image).await?;
+                let apply = SwarmOp::ServiceApply { def: Box::new(def), registry_auth };
                 self.swarm_op(ctx, cluster, &format!("apply_op_{index}"), &apply).await?;
                 let line = format!("release {} applied to {} ({replicas} tasks)", d.release_number, slot_name(slot));
                 self.event(d.id, "info", None, line).await;
@@ -384,7 +385,8 @@ impl DeployJob {
             let replicas = previous.spec["swarm"]["replicas"].as_u64().map_or(1, |n| u32::try_from(n).unwrap_or(1));
             let f = DefFor { release: &previous, slot: "", replicas, update: None };
             let def = self.swarm_def(ctx, ro, &f).await?;
-            let apply = SwarmOp::ServiceApply { def: Box::new(def) };
+            let registry_auth = self.registries.auth_for(r.app.workspace_id, &def.image).await?;
+            let apply = SwarmOp::ServiceApply { def: Box::new(def), registry_auth };
             self.swarm_op(ctx, cluster, KEY_RESTORE_APPLY, &apply).await?;
             return Ok(true);
         }

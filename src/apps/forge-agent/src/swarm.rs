@@ -110,11 +110,12 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
             }
             Ok(json!({ "network": name }))
         }
-        SwarmOp::ServiceApply { def } => {
+        SwarmOp::ServiceApply { def, registry_auth } => {
             let spec = def.engine_spec();
+            let auth = registry_auth.as_ref().map(|a| a.0.as_str());
             match owned(&def.service_id, &def.slot).await? {
                 None => {
-                    let created = api("POST", "/services/create", Some(&spec), QUICK).await?.unwrap_or(Value::Null);
+                    let created = api_auth("POST", "/services/create", &spec, auth).await?;
                     Ok(json!({ "id": created["ID"], "created": true }))
                 }
                 Some(cur) => {
@@ -126,7 +127,7 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
                     }
                     let version =
                         cur["Version"]["Index"].as_u64().ok_or("Docker did not report the service version")?;
-                    api("POST", &format!("/services/{id}/update?version={version}"), Some(&spec), QUICK).await?;
+                    api_auth("POST", &format!("/services/{id}/update?version={version}"), &spec, auth).await?;
                     Ok(json!({ "id": id, "created": false }))
                 }
             }
@@ -173,6 +174,18 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
             Ok(json!({ "logs": crate::docker::demux(&bytes) }))
         }
     }
+}
+
+/// A service create or update with Docker's `X-Registry-Auth`, so the nodes
+/// that run the tasks can pull a private image (`--with-registry-auth`).
+async fn api_auth(method: &str, path: &str, body: &Value, auth: Option<&str>) -> Result<Value, String> {
+    let socket = std::path::Path::new(crate::docker::SOCKET);
+    let (status, bytes) = crate::docker::call_with_registry_auth(socket, method, path, Some(body), auth, QUICK).await?;
+    if !(200..300).contains(&status) {
+        return Err(crate::docker::docker_error(status, &bytes));
+    }
+    // An update answers with warnings only; the create's id is read when present.
+    Ok(serde_json::from_slice(&bytes).unwrap_or(Value::Null))
 }
 
 /// The Swarm service of Forge service `service_id`, or `None` when there is

@@ -191,11 +191,15 @@ const nodes = createRoute({
 });
 const addNode = createRoute({ getParentRoute: parent, path: "/nodes/add", component: lazyRouteComponent(() => import("../pages/AddNode"), "AddNode") });
 const NODE_TABS = ["overview", "processes", "services", "packages", "containers", "files", "terminal", "credentials", "details"] as const;
+export const DOCKER_TABS = ["containers", "images", "volumes", "networks", "events", "disk"] as const;
+export type DockerTab = (typeof DOCKER_TABS)[number];
 const node = createRoute({
   getParentRoute: parent,
   path: "/nodes/$nodeId",
-  validateSearch: (s: Record<string, unknown>): { tab?: (typeof NODE_TABS)[number]; root?: string } => ({
+  validateSearch: (s: Record<string, unknown>): { tab?: (typeof NODE_TABS)[number]; root?: string; docker?: DockerTab } => ({
     tab: NODE_TABS.find((t) => t === s.tab),
+    // Docker tab: which sub-tab (containers when absent).
+    docker: DOCKER_TABS.find((t) => t === s.docker),
     // Files tab: open this file root (id) first.
     root: typeof s.root === "string" && s.root ? s.root : undefined,
   }),

@@ -17,10 +17,15 @@ async fn docker_resources_are_checked_guarded_and_audited() {
     let (_, tok) = admin.post("/api/v1/enrollment-tokens", json!({"ttl_minutes": 10})).await;
     let dir = tempfile::tempdir().unwrap();
     let facts = HostFacts { hostname: "lab-a".into(), os: "linux".into(), arch: "x86_64".into() };
-    let id = enroll(&StatePaths::new(dir.path()), AgentConfig::new(h.agent_url.clone()), tok["token"].as_str().unwrap(), facts)
-        .await
-        .unwrap()
-        .server_id;
+    let id = enroll(
+        &StatePaths::new(dir.path()),
+        AgentConfig::new(h.agent_url.clone()),
+        tok["token"].as_str().unwrap(),
+        facts,
+    )
+    .await
+    .unwrap()
+    .server_id;
     let ops = format!("/api/v1/servers/{id}/docker/ops");
     let ws = format!("workspace:{}", h.default_org);
 
@@ -45,4 +50,53 @@ async fn docker_resources_are_checked_guarded_and_audited() {
 
     let (_, audit) = admin.get("/api/v1/audit?limit=200").await;
     assert!(audit.to_string().contains("docker.image_pull"), "{audit}");
+}
+
+/// Registries (D-158): administrators with MFA manage them; the secret never
+/// comes back; pushes go only to registries added in Forge, with their
+/// credentials added on the node, never stored in the job.
+#[tokio::test]
+async fn registries_hold_secrets_and_gate_pushes() {
+    let h = start().await;
+    let mut admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+    let ws = format!("workspace:{}", h.default_org);
+    let body = json!({"name": "GitHub", "kind": "ghcr", "host": "https://GHCR.io/", "username": "bot", "secret": "ghp_s3cret"});
+
+    let (s, _) = admin.post("/api/v1/registries", body.clone()).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "MFA first");
+    let mut op = user_with_role(&h, &admin, "op2@example.com", "operator", &ws).await;
+    crate::common::step_up(&mut op).await;
+    let (s, _) = op.post("/api/v1/registries", body.clone()).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "operators cannot hold registry secrets");
+
+    crate::common::step_up(&mut admin).await;
+    let (s, r) = admin.post("/api/v1/registries", body.clone()).await;
+    assert_eq!(s, StatusCode::CREATED, "{r}");
+    assert_eq!(r["host"], "ghcr.io");
+    let (s, _) = admin.post("/api/v1/registries", body).await;
+    assert_eq!(s, StatusCode::CONFLICT, "one registry per host");
+    let (s, _) = admin
+        .post("/api/v1/registries", json!({"name": "Hub", "kind": "docker_hub", "host": "example.com", "secret": "x"}))
+        .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    let (_, list) = admin.get("/api/v1/registries").await;
+    assert_eq!(list[0]["name"], "GitHub");
+
+    let (_, tok) = admin.post("/api/v1/enrollment-tokens", json!({"ttl_minutes": 10})).await;
+    let dir = tempfile::tempdir().unwrap();
+    let facts = HostFacts { hostname: "lab-b".into(), os: "linux".into(), arch: "x86_64".into() };
+    let id = enroll(&StatePaths::new(dir.path()), AgentConfig::new(h.agent_url.clone()), tok["token"].as_str().unwrap(), facts)
+        .await
+        .unwrap()
+        .server_id;
+    let ops = format!("/api/v1/servers/{id}/docker/ops");
+    let (s, e) = admin.post(&ops, json!({"op": "image_push", "image": "attacker.example/x:1"})).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{e}");
+    let (s, job) = admin.post(&ops, json!({"op": "image_push", "image": "ghcr.io/acme/app:1"})).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{job}");
+
+    let (_, audit) = admin.get("/api/v1/audit?limit=200").await;
+    for text in [list.to_string(), r.to_string(), job.to_string(), audit.to_string()] {
+        assert!(!text.contains("ghp_s3cret"), "the secret leaked: {text}");
+    }
 }

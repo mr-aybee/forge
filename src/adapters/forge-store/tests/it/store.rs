@@ -682,3 +682,34 @@ async fn swarm_rows_round_trip_and_go_with_the_cluster() {
     assert!(store.get_swarm(cluster.id).await.unwrap().is_none());
     assert!(store.get_member(server.id).await.unwrap().is_none());
 }
+
+/// Registries (D-158): one per host per workspace, the sealed secret kept as
+/// given.
+#[tokio::test]
+async fn registries_round_trip_one_per_host() {
+    use forge_core::registries::{Registry, RegistryKind, RegistryRepository};
+    let (store, _d) = store().await;
+    let (ws, _) = seed_workspace(&store).await;
+    let mut r = Registry {
+        id: RegistryId::new(),
+        workspace_id: ws.id,
+        name: "GitHub".into(),
+        kind: RegistryKind::Ghcr,
+        host: "ghcr.io".into(),
+        username: "bot".into(),
+        secret_sealed: "sealed".into(),
+        created_by: Principal::User(UserId::new()),
+        created_at: Timestamp(1),
+        updated_at: Timestamp(1),
+    };
+    store.create_registry(&r).await.unwrap();
+    let dup = Registry { id: RegistryId::new(), ..r.clone() };
+    assert!(matches!(store.create_registry(&dup).await, Err(DomainError::Conflict(_))));
+    r.username = "robot".into();
+    r.updated_at = Timestamp(2);
+    store.update_registry(&r).await.unwrap();
+    assert_eq!(store.get_registry(r.id).await.unwrap(), Some(r.clone()));
+    assert_eq!(store.list_registries(ws.id).await.unwrap(), vec![r.clone()]);
+    store.delete_registry(r.id).await.unwrap();
+    assert!(store.get_registry(r.id).await.unwrap().is_none());
+}

@@ -5610,3 +5610,11 @@ HA is a property, not a strategy: the service's Swarm view scores replicas, spre
 - Registry credentials never pass through this API, because job payloads are stored. Private registries come with the registry model.
 
 **Why not the Engine API proxy (D-125)?** The proxy needs the node's mutual-TLS endpoint, which is an opt-in that restarts dockerd. The typed set works on every node, and its smaller surface is easier to review. The action names have a `docker.` prefix because `network.manage` is a retired action, and reusing it would quietly grant the new rights to old stored profiles.
+
+## D-158 Container registries
+
+**Decision.** A workspace keeps container registries (`docker_hub`, `ghcr`, `gitlab`, `ecr`, `custom`) with a host, a user name and a secret. The secret is sealed with the envelope under `registry:<id>`; no API answer, log, audit entry or job payload carries it. When Forge pulls, pushes or deploys an image, it matches the image's host (Docker Hub for references without one) to a registry. It then adds Docker's `X-Registry-Auth` to the transient signed command only: `docker.op` steps, Swarm service applies (`--with-registry-auth`) and Swarm rollouts.
+
+Managing registries needs `registry.manage`: administrators, with MFA. Pushes go only to registries added in Forge, so an operator cannot send an image to an arbitrary registry.
+
+**Not yet.** ECR tokens expire after 12 hours and are not refreshed automatically; update the secret, or use a custom registry with a long-lived credential. Compose stacks do not use registries yet.

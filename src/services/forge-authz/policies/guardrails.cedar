@@ -28,6 +28,7 @@ forbid (
     Forge::Action::"file.admin",
     Forge::Action::"stack.privileged",
     Forge::Action::"swarm.manage",
+    Forge::Action::"registry.manage",
     Forge::Action::"certificate.use",
     Forge::Action::"container.inspect_env",
     Forge::Action::"notification.manage"

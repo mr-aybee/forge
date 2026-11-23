@@ -114,6 +114,8 @@ pub struct Services {
     pub files: Arc<forge_files::FileService>,
     /// Docker Swarm in Swarm clusters (D-154).
     pub swarm: Arc<crate::swarm::SwarmService>,
+    /// Container registries and their sealed credentials (D-158).
+    pub registries: Arc<crate::registries::RegistryService>,
     /// Docker images, volumes and networks on nodes (D-157).
     pub docker_resources: Arc<crate::docker_resources::DockerResources>,
     /// Bucket grants: one person's access to one bucket of a store (D-108).
@@ -324,6 +326,11 @@ impl Services {
             deploys: Arc::new(store.clone()),
         });
         registry.register(app_job.clone());
+        let registries = Arc::new(crate::registries::RegistryService {
+            repo: Arc::new(store.clone()),
+            envelope: envelope.clone(),
+            clock: clock.clone(),
+        });
         let node_rpc = crate::node_rpc::NodeRpc { hub: hub.clone(), signer: signer.clone(), clock: clock.clone() };
         let docker_resources = Arc::new(crate::docker_resources::DockerResources {
             rpc: node_rpc.clone(),
@@ -374,6 +381,7 @@ impl Services {
             swarm: swarm.clone(),
             swarms: Arc::new(store.clone()),
             ops: node_ops.clone(),
+            registries: registries.clone(),
         }));
         let docker = Arc::new(crate::docker_engine::DockerEngines::new(
             Arc::new(store.clone()),
@@ -388,8 +396,12 @@ impl Services {
             services: Arc::new(store.clone()),
             deploys: Arc::new(store.clone()),
             envelope: envelope.clone(),
+            registries: registries.clone(),
         }));
-        registry.register(Arc::new(crate::jobs::docker_op::DockerOpJob { ops: node_ops.clone() }));
+        registry.register(Arc::new(crate::jobs::docker_op::DockerOpJob {
+            ops: node_ops.clone(),
+            registries: registries.clone(),
+        }));
         registry.register(Arc::new(crate::jobs::swarm::SwarmMemberJob {
             ops: node_ops.clone(),
             swarms: Arc::new(store.clone()),
@@ -631,6 +643,7 @@ impl Services {
             files,
             swarm,
             docker_resources,
+            registries,
             bucket_grants,
             health_secrets,
             notifier,

@@ -8,7 +8,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use forge_catalog::docker_ops::DockerOp;
 use forge_core::model::NewJob;
-use forge_core::{EntityKind, EntityRef, ServerId};
+use forge_core::{Action, EntityKind, EntityRef, ServerId};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -91,18 +91,38 @@ pub async fn op(
     Path(id): Path<ServerId>,
     Json(DockerOpInput { op }): Json<DockerOpInput>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
+    // Authorized first, so a refused request is audited as a denial too.
+    caller.authorize(action_for(&op), server_ref(id)).await?;
     if let DockerOp::ImagePull { registry_auth: Some(_), .. } | DockerOp::ImagePush { registry_auth: Some(_), .. } = &op
     {
         return Err(ApiError::bad_request("registry credentials are not accepted here; add the registry in Forge"));
     }
     op.validate().map_err(ApiError::bad_request)?;
-    let action = action_for(&op);
-    caller.authorize(action, server_ref(id)).await?;
     let ws = state.docker_resources.workspace(id).await?;
+    // Pushes go only to registries added in Forge: an image never leaves for
+    // a registry nobody approved.
+    if let DockerOp::ImagePush { image, .. } = &op
+        && state.registries.auth_for(ws, image).await?.is_none()
+    {
+        return Err(ApiError::bad_request(format!(
+            "push only to a registry added in Forge (Settings → Registries); `{}` is not one",
+            forge_core::registries::image_host(image)
+        )));
+    }
     let audit = format!("docker.{}", op.name());
     let details = json!({ "op": op.name(), "request": redacted(&op) });
+    let principal = caller.principal().to_string();
     if op.read_only() {
-        return Ok((StatusCode::OK, Json(state.docker_resources.run(id, &caller.principal().to_string(), &op).await?)));
+        let mut out = state.docker_resources.run(id, &principal, &op).await?;
+        if matches!(op, DockerOp::ImageInspect { .. }) && !caller.can(Action::ContainerInspectEnv, server_ref(id)).await
+        {
+            // Environment values often hold build-time secrets: keys only.
+            hide_env_values(&mut out);
+        }
+        if op.name().ends_with("_inspect") {
+            caller.audit(&audit, &server_ref(id), Some(ws), details).await;
+        }
+        return Ok((StatusCode::OK, Json(out)));
     }
     if is_slow(&op) {
         let job = state
@@ -118,11 +138,19 @@ pub async fn op(
                     .map_err(forge_core::DomainError::internal)?,
                 max_attempts: 2,
             })
-            .await?;
-        caller.audit(&audit, &server_ref(id), Some(ws), json!({ "details": details, "job_id": job.id })).await;
-        return Ok((StatusCode::ACCEPTED, Json(json!(job))));
+            .await;
+        return match job {
+            Ok(job) => {
+                caller.audit(&audit, &server_ref(id), Some(ws), json!({ "details": details, "job_id": job.id })).await;
+                Ok((StatusCode::ACCEPTED, Json(json!(job))))
+            }
+            Err(e) => {
+                caller.audit_failed(&audit, &server_ref(id), Some(ws), details, &e.to_string()).await;
+                Err(e.into())
+            }
+        };
     }
-    match state.docker_resources.run(id, &caller.principal().to_string(), &op).await {
+    match state.docker_resources.run(id, &principal, &op).await {
         Ok(out) => {
             caller.audit(&audit, &server_ref(id), Some(ws), details).await;
             Ok((StatusCode::OK, Json(out)))
@@ -130,6 +158,15 @@ pub async fn op(
         Err(e) => {
             caller.audit_failed(&audit, &server_ref(id), Some(ws), details, &e.to_string()).await;
             Err(e.into())
+        }
+    }
+}
+
+/// Replaces environment values with nothing, keeping the keys.
+fn hide_env_values(detail: &mut Value) {
+    if let Some(env) = detail["env"].as_array_mut() {
+        for e in env {
+            e["value"] = Value::Null;
         }
     }
 }

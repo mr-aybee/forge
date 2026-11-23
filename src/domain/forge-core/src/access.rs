@@ -220,6 +220,10 @@ pub enum Action {
     /// Create, remove, connect and prune Docker networks on a node (D-157).
     #[serde(rename = "docker.network.manage")]
     NetworkManage,
+    /// Add, change and remove container registries and their credentials
+    /// (D-158). Administrators, MFA.
+    #[serde(rename = "registry.manage")]
+    RegistryManage,
     /// Send an uploaded TLS certificate's private key to an edge node when an
     /// endpoint is applied (administrators, MFA).
     #[serde(rename = "certificate.use")]
@@ -227,7 +231,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 53] = [
+    pub const ALL: [Action; 54] = [
         Action::View,
         Action::AuditRead,
         Action::WorkspaceCreate,
@@ -280,6 +284,7 @@ impl Action {
         Action::ImageManage,
         Action::VolumeManage,
         Action::NetworkManage,
+        Action::RegistryManage,
         Action::CertificateUse,
     ];
 
@@ -338,6 +343,7 @@ impl Action {
             Action::ImageManage => "docker.image.manage",
             Action::VolumeManage => "docker.volume.manage",
             Action::NetworkManage => "docker.network.manage",
+            Action::RegistryManage => "registry.manage",
             Action::CertificateUse => "certificate.use",
         }
     }

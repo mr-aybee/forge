@@ -17,6 +17,26 @@ use std::net::IpAddr;
 
 use serde::{Deserialize, Serialize};
 
+/// Registry credentials as Docker's `X-Registry-Auth` value: never printed.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct RegistryAuth(pub String);
+
+impl std::fmt::Debug for RegistryAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RegistryAuth(***)")
+    }
+}
+
+impl RegistryAuth {
+    /// Base64url text, bounded.
+    #[must_use]
+    pub fn valid(&self) -> bool {
+        self.0.len() <= 16 * 1024
+            && self.0.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'=' | b'+' | b'/'))
+    }
+}
+
 /// Docker's default swarm management port.
 pub const DEFAULT_PORT: u16 = 2377;
 const MAX_LABELS: usize = 64;
@@ -123,6 +143,10 @@ pub enum SwarmOp {
     /// updated only when it carries the same Forge service id.
     ServiceApply {
         def: Box<crate::swarm_service::ServiceDef>,
+        /// Docker's `X-Registry-Auth` for a private image, passed on to the
+        /// nodes that run the tasks (`--with-registry-auth`).
+        #[serde(default)]
+        registry_auth: Option<RegistryAuth>,
     },
     ServiceStatus {
         service_id: String,
@@ -288,7 +312,12 @@ impl SwarmOp {
                 slot_checked(service_id, slot)?;
                 if *tail > 10_000 { Err("at most 10000 log lines".into()) } else { Ok(()) }
             }
-            Self::ServiceApply { def } => def.validate(),
+            Self::ServiceApply { def, registry_auth } => {
+                if registry_auth.as_ref().is_some_and(|a| !a.valid()) {
+                    return Err("invalid registry credentials".into());
+                }
+                def.validate()
+            }
             Self::Status {} | Self::Leave { .. } | Self::JoinTokens {} | Self::Nodes {} => Ok(()),
         }
     }

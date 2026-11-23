@@ -24,6 +24,7 @@ pub mod permissions;
 pub mod pins;
 pub mod ports;
 pub mod public_address;
+pub mod registries;
 pub mod remote;
 pub mod silences;
 pub mod spool;

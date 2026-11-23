@@ -75,6 +75,8 @@ typed_id!(
     SilenceId,
     /// Compose stack identifier (issue #7).
     StackId,
+    /// Container registry identifier (D-158).
+    RegistryId,
     /// Human or service user identifier.
     UserId,
     /// Role binding identifier (one Cedar template link).

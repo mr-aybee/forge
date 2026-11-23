@@ -23,7 +23,8 @@ pub struct NodeRpc {
 pub enum RpcError {
     #[error("the node is not connected: {0}")]
     Unreachable(String),
-    #[error("the node did not answer in time")]
+    /// The command may still have run on the node.
+    #[error("the node did not answer in time; the change may still have happened, check before trying again")]
     Timeout,
     /// The node ran the command and reported this error.
     #[error("{0}")]

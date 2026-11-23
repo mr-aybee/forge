@@ -45,6 +45,7 @@ mod plugins;
 mod processes;
 mod projects;
 mod reauth;
+mod registries;
 pub(crate) mod remote_sessions;
 mod routing;
 pub(crate) mod schema_types;
@@ -183,6 +184,8 @@ pub fn router(state: AppState) -> Router {
         .route("/clusters/{id}", get(clusters::get).put(clusters::update).delete(clusters::delete))
         .route("/clusters/{id}/profile", get(ingress::get).put(ingress::put))
         .route("/clusters/{id}/swarm", get(swarm::get))
+        .route("/registries", get(registries::list).post(registries::create))
+        .route("/registries/{id}", put(registries::update).delete(registries::delete))
         .route("/servers/{id}/docker/images", get(docker_resources::images))
         .route("/servers/{id}/docker/volumes", get(docker_resources::volumes))
         .route("/servers/{id}/docker/networks", get(docker_resources::networks))

@@ -79,6 +79,8 @@ pub struct DeployJob {
     pub swarm: Arc<crate::swarm::SwarmService>,
     pub swarms: Arc<dyn forge_core::swarm::SwarmRepository>,
     pub ops: super::node_op::NodeOps,
+    /// Credentials for private images, resolved per step (never stored).
+    pub registries: Arc<crate::registries::RegistryService>,
 }
 
 /// Why a rollout stopped.

@@ -87,6 +87,8 @@ pub struct SwarmServiceJob {
     pub swarms: Arc<dyn SwarmRepository>,
     pub services: Arc<dyn ServiceRepository>,
     pub deploys: Arc<dyn forge_core::deploy::DeploymentRepository>,
+    /// Credentials for private images, resolved per step (never stored).
+    pub registries: Arc<crate::registries::RegistryService>,
     pub envelope: Envelope,
 }
 
@@ -182,7 +184,8 @@ impl SwarmServiceJob {
                          stack.privileged (an administrator with MFA): deploy again as one"
                     )));
                 }
-                SwarmOp::ServiceApply { def: Box::new(def) }
+                let registry_auth = self.registries.auth_for(app.workspace_id, &def.image).await.map_err(retry)?;
+                SwarmOp::ServiceApply { def: Box::new(def), registry_auth }
             }
             ServiceAction::Scale { replicas } => {
                 SwarmOp::ServiceScale { service_id: sid, slot: p.slot.clone(), replicas }

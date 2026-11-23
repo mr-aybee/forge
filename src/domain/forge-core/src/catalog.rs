@@ -168,6 +168,12 @@ impl Action {
             Action::NetworkManage => {
                 info("Containers", "Manage networks", "Create, remove, connect and prune Docker networks.", Write)
             }
+            Action::RegistryManage => info(
+                "Containers",
+                "Manage registries",
+                "Add, change and remove container registries and their credentials.",
+                Admin,
+            ),
             Action::Deploy => info("Services", "Deploy", "Deploy and update services.", Write),
             Action::DeployApprove => info(
                 "Services",

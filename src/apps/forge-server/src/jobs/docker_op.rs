@@ -2,7 +2,8 @@
 //! D-157). Payload: `{"server_id", "op"}`. One step sends the operation and
 //! waits for it. Pulls and prunes are safe to repeat; a repeated push sends
 //! the same image again. Registry credentials never go into the payload
-//! (it is stored); the API refuses them.
+//! (it is stored): the API refuses them, and the step adds the registry's
+//! credentials from Forge to the transient command.
 
 use std::time::Duration;
 
@@ -28,6 +29,8 @@ pub struct Payload {
 #[derive(Debug)]
 pub struct DockerOpJob {
     pub ops: NodeOps,
+    /// Credentials for pulls and pushes, resolved per step (never stored).
+    pub registries: std::sync::Arc<crate::registries::RegistryService>,
 }
 
 #[async_trait]
@@ -50,7 +53,18 @@ impl JobHandler for DockerOpJob {
     async fn run_step(&self, _index: usize, ctx: &mut StepContext) -> Result<(), StepError> {
         let p: Payload = serde_json::from_value(ctx.job.payload.clone())
             .map_err(|e| StepError::Fatal(format!("bad payload: {e}")))?;
-        let command = crate::docker_resources::command(&p.op).map_err(|e| StepError::Fatal(e.to_string()))?;
+        let mut op = p.op.clone();
+        if let (DockerOp::ImagePull { image, registry_auth } | DockerOp::ImagePush { image, registry_auth }, Some(ws)) =
+            (&mut op, ctx.job.workspace_id)
+        {
+            *registry_auth = self
+                .registries
+                .auth_for(ws, image)
+                .await
+                .map_err(|e| StepError::Retryable(e.to_string()))?
+                .map(|a| a.0);
+        }
+        let command = crate::docker_resources::command(&op).map_err(|e| StepError::Fatal(e.to_string()))?;
         let out = self.ops.run(ctx, p.server_id, "docker_op", command, WAIT).await?;
         ctx.set_state("result", out);
         Ok(())
