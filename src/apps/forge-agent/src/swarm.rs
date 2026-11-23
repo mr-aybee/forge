@@ -8,7 +8,9 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use forge_catalog::swarm::{Availability, JoinTokens, SwarmNode, SwarmOp, SwarmRole, SwarmStatus};
+use forge_catalog::swarm::{
+    Availability, JoinTokens, SwarmNode, SwarmOp, SwarmRole, SwarmServiceStatus, SwarmStatus, SwarmTask,
+};
 use serde_json::{Value, json};
 
 use crate::docker::api;
@@ -90,6 +92,143 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
             api("DELETE", &format!("/nodes/{node_id}?force={force}"), None, QUICK).await?;
             Ok(json!({ "removed": node_id }))
         }
+        SwarmOp::EnsureNetwork { name } => {
+            if api("GET", &format!("/networks/{name}"), None, QUICK).await?.is_none() {
+                let body = json!({
+                    "Name": name, "Driver": "overlay", "Attachable": true, "CheckDuplicate": true,
+                    "Labels": { forge_catalog::swarm_service::MANAGED_LABEL: "true" },
+                });
+                api("POST", "/networks/create", Some(&body), QUICK).await?;
+            }
+            Ok(json!({ "network": name }))
+        }
+        SwarmOp::ServiceApply { spec } => {
+            let name = spec["Name"].as_str().unwrap_or_default();
+            match api("GET", &format!("/services/{name}"), None, QUICK).await? {
+                None => {
+                    let created = api("POST", "/services/create", Some(spec), QUICK).await?.unwrap_or(Value::Null);
+                    Ok(json!({ "id": created["ID"], "created": true }))
+                }
+                Some(cur) => {
+                    let version =
+                        cur["Version"]["Index"].as_u64().ok_or("Docker did not report the service version")?;
+                    let id = cur["ID"].as_str().unwrap_or(name);
+                    api("POST", &format!("/services/{id}/update?version={version}"), Some(spec), QUICK).await?;
+                    Ok(json!({ "id": id, "created": false }))
+                }
+            }
+        }
+        SwarmOp::ServiceStatus { name } => to_value(&service_status(name).await?),
+        SwarmOp::ServiceScale { name, replicas } => {
+            change_service(
+                name,
+                |spec| {
+                    if spec["Mode"]["Replicated"].is_object() {
+                        spec["Mode"]["Replicated"]["Replicas"] = json!(replicas);
+                        Ok(())
+                    } else {
+                        Err("a global service runs one task per node; it cannot be scaled".to_owned())
+                    }
+                },
+                "",
+            )
+            .await
+        }
+        SwarmOp::ServiceRestart { name } => {
+            change_service(
+                name,
+                |spec| {
+                    let n = spec["TaskTemplate"]["ForceUpdate"].as_u64().unwrap_or(0);
+                    spec["TaskTemplate"]["ForceUpdate"] = json!(n + 1);
+                    Ok(())
+                },
+                "",
+            )
+            .await
+        }
+        SwarmOp::ServiceRollback { name } => change_service(name, |_| Ok(()), "&rollback=previous").await,
+        SwarmOp::ServiceRemove { name } => {
+            api("DELETE", &format!("/services/{name}"), None, QUICK).await?;
+            Ok(json!({ "removed": name }))
+        }
+        SwarmOp::ServiceLogs { name, tail } => {
+            let path = format!("/services/{name}/logs?stdout=1&stderr=1&timestamps=1&tail={tail}");
+            let (status, bytes) =
+                crate::docker::call_at(std::path::Path::new(crate::docker::SOCKET), "GET", &path, None, QUICK).await?;
+            if !(200..300).contains(&status) {
+                return Err(crate::docker::docker_error(status, &bytes));
+            }
+            Ok(json!({ "logs": crate::docker::demux(&bytes) }))
+        }
+    }
+}
+
+/// Reads the service, lets `edit` change its spec, and writes it back at the
+/// version read (`extra` adds query parameters, e.g. a rollback).
+async fn change_service(
+    name: &str,
+    edit: impl FnOnce(&mut Value) -> Result<(), String>,
+    extra: &str,
+) -> Result<Value, String> {
+    let cur = api("GET", &format!("/services/{name}"), None, QUICK)
+        .await?
+        .ok_or_else(|| format!("service {name} not found"))?;
+    let version = cur["Version"]["Index"].as_u64().ok_or("Docker did not report the service version")?;
+    let id = cur["ID"].as_str().unwrap_or(name).to_owned();
+    if cur["Spec"]["Labels"][forge_catalog::swarm_service::MANAGED_LABEL] != "true" {
+        return Err(format!("service {name} is not managed by Forge"));
+    }
+    let mut spec = cur["Spec"].clone();
+    edit(&mut spec)?;
+    api("POST", &format!("/services/{id}/update?version={version}{extra}"), Some(&spec), QUICK).await?;
+    Ok(json!({ "id": id }))
+}
+
+/// `filters={"service":{"<name>":true}}`, percent-encoded (names are
+/// checked to letters, digits, `-`, `_` and `.`).
+fn task_filter(name: &str) -> String {
+    format!("%7B%22service%22%3A%7B%22{name}%22%3Atrue%7D%7D")
+}
+
+async fn service_status(name: &str) -> Result<SwarmServiceStatus, String> {
+    let Some(svc) = api("GET", &format!("/services/{name}"), None, QUICK).await? else {
+        return Ok(SwarmServiceStatus::default());
+    };
+    let tasks = api("GET", &format!("/tasks?filters={}", task_filter(name)), None, QUICK).await?.unwrap_or(Value::Null);
+    Ok(status_from(&svc, &tasks))
+}
+
+/// A service and its tasks as the console shows them.
+pub(crate) fn status_from(svc: &Value, tasks: &Value) -> SwarmServiceStatus {
+    let tasks: Vec<SwarmTask> = tasks.as_array().map(|a| a.iter().map(task_view).collect()).unwrap_or_default();
+    let replicated = svc["Spec"]["Mode"]["Replicated"].is_object();
+    SwarmServiceStatus {
+        exists: true,
+        id: svc["ID"].as_str().unwrap_or_default().to_owned(),
+        mode: if replicated { "replicated" } else { "global" }.to_owned(),
+        desired: if replicated {
+            svc["Spec"]["Mode"]["Replicated"]["Replicas"].as_u64().unwrap_or(0)
+        } else {
+            tasks.iter().filter(|t| t.desired_state == "running").count() as u64
+        },
+        running: tasks.iter().filter(|t| t.state == "running" && t.desired_state == "running").count() as u64,
+        update_state: svc["UpdateStatus"]["State"].as_str().unwrap_or_default().to_owned(),
+        update_message: svc["UpdateStatus"]["Message"].as_str().unwrap_or_default().to_owned(),
+        image: svc["Spec"]["TaskTemplate"]["ContainerSpec"]["Image"].as_str().unwrap_or_default().to_owned(),
+        tasks,
+    }
+}
+
+fn task_view(t: &Value) -> SwarmTask {
+    SwarmTask {
+        id: t["ID"].as_str().unwrap_or_default().to_owned(),
+        node_id: t["NodeID"].as_str().unwrap_or_default().to_owned(),
+        slot: t["Slot"].as_u64().unwrap_or(0),
+        state: t["Status"]["State"].as_str().unwrap_or("unknown").to_owned(),
+        desired_state: t["DesiredState"].as_str().unwrap_or_default().to_owned(),
+        error: t["Status"]["Err"].as_str().unwrap_or_default().to_owned(),
+        image: t["Spec"]["ContainerSpec"]["Image"].as_str().unwrap_or_default().to_owned(),
+        updated_at: t["UpdatedAt"].as_str().unwrap_or_default().to_owned(),
     }
 }
 
@@ -247,5 +386,24 @@ mod tests {
     fn tokens_never_leak_through_errors() {
         let e = without_token("Docker: join failed for SWMTKN-1-abc-def", "SWMTKN-1-abc-def");
         assert!(!e.contains("SWMTKN"));
+    }
+
+    #[test]
+    fn service_status_counts_running_tasks() {
+        let svc = json!({"ID": "s1", "Spec": {"Mode": {"Replicated": {"Replicas": 3}},
+            "TaskTemplate": {"ContainerSpec": {"Image": "nginx:1.27"}}},
+            "UpdateStatus": {"State": "updating", "Message": "update in progress"}});
+        let tasks = json!([
+            {"ID": "t1", "NodeID": "n1", "Slot": 1, "DesiredState": "running", "Status": {"State": "running"}},
+            {"ID": "t2", "NodeID": "n2", "Slot": 2, "DesiredState": "running", "Status": {"State": "starting"}},
+            {"ID": "t3", "NodeID": "n2", "Slot": 3, "DesiredState": "shutdown", "Status": {"State": "failed", "Err": "exit 1"}}
+        ]);
+        let s = status_from(&svc, &tasks);
+        assert!(s.exists);
+        assert_eq!((s.desired, s.running), (3, 1));
+        assert_eq!(s.update_state, "updating");
+        assert_eq!(s.tasks[2].error, "exit 1");
+        assert_eq!(s.image, "nginx:1.27");
+        assert_eq!(task_filter("prod-web"), "%7B%22service%22%3A%7B%22prod-web%22%3Atrue%7D%7D");
     }
 }

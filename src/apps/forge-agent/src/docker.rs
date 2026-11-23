@@ -151,7 +151,7 @@ fn short(id: &str) -> String {
 }
 
 /// Demultiplexes Docker's stdout/stderr log stream (non-TTY containers).
-fn demux(raw: &[u8]) -> String {
+pub(crate) fn demux(raw: &[u8]) -> String {
     let mut out = Vec::new();
     let mut i = 0;
     let framed = raw.len() >= 8 && matches!(raw[0], 0..=2) && raw[1..4] == [0, 0, 0];
