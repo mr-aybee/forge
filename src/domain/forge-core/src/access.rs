@@ -206,6 +206,11 @@ pub enum Action {
     /// Docker socket, binds outside approved roots); MFA, administrators.
     #[serde(rename = "stack.privileged")]
     StackPrivileged,
+    /// Create, join and leave a Docker Swarm, and change swarm nodes (role,
+    /// availability, labels, removal) in a Swarm cluster (D-154).
+    /// Administrators, MFA.
+    #[serde(rename = "swarm.manage")]
+    SwarmManage,
     /// Send an uploaded TLS certificate's private key to an edge node when an
     /// endpoint is applied (administrators, MFA).
     #[serde(rename = "certificate.use")]
@@ -213,7 +218,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 49] = [
+    pub const ALL: [Action; 50] = [
         Action::View,
         Action::AuditRead,
         Action::WorkspaceCreate,
@@ -262,6 +267,7 @@ impl Action {
         Action::FileNode,
         Action::StackManage,
         Action::StackPrivileged,
+        Action::SwarmManage,
         Action::CertificateUse,
     ];
 
@@ -316,6 +322,7 @@ impl Action {
             Action::FileNode => "file.node",
             Action::StackManage => "stack.manage",
             Action::StackPrivileged => "stack.privileged",
+            Action::SwarmManage => "swarm.manage",
             Action::CertificateUse => "certificate.use",
         }
     }

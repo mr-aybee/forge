@@ -153,6 +153,12 @@ impl Action {
                 "Deploy stacks with privileged settings (host network, mounts, capabilities).",
                 Admin,
             ),
+            Action::SwarmManage => info(
+                "Containers",
+                "Manage Docker Swarm",
+                "Create and join swarms, and drain, promote, demote or remove swarm nodes.",
+                Admin,
+            ),
             Action::Deploy => info("Services", "Deploy", "Deploy and update services.", Write),
             Action::DeployApprove => info(
                 "Services",

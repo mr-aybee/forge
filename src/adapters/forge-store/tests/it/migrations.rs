@@ -137,5 +137,6 @@ async fn the_baseline_and_later_migrations_apply_on_a_fresh_database() {
     .fetch_one(store.pool())
     .await
     .unwrap();
-    assert_eq!(objects, 149, "tables and indexes of the baseline");
+    // 149 from the baseline, + 2 tables and 1 index from 0003 (swarm).
+    assert_eq!(objects, 152, "tables and indexes after all migrations");
 }

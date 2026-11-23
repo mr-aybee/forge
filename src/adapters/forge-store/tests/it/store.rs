@@ -616,3 +616,63 @@ async fn bucket_grants_round_trip_and_go_with_their_store() {
     assert!(s.list_live_bucket_grants(bob.id, Timestamp(0)).await.unwrap().is_empty());
     assert_eq!(ids(s.list_live_bucket_grants(ada.id, Timestamp(0)).await.unwrap()), [read.id]);
 }
+
+/// Swarm state (D-154): one swarm row per cluster, one member row per node,
+/// sealed tokens kept as given; both go when the cluster is deleted.
+#[tokio::test]
+async fn swarm_rows_round_trip_and_go_with_the_cluster() {
+    use forge_core::swarm::{ClusterSwarm, MemberRole, MemberState, SwarmMember, SwarmRepository};
+    let (store, _d) = store().await;
+    let (ws, _) = seed_workspace(&store).await;
+    let cluster = cluster_in(ws.id, "swarm-eu");
+    store.create_cluster(&cluster).await.unwrap();
+    let swarm = ClusterSwarm {
+        cluster_id: cluster.id,
+        swarm_id: "s1".into(),
+        port: 2377,
+        default_addr_pool: vec!["10.20.0.0/16".into()],
+        autolock: true,
+        tokens_sealed: Some("sealed".into()),
+        updated_at: Timestamp(1),
+    };
+    store.put_swarm(&swarm).await.unwrap();
+    assert_eq!(store.get_swarm(cluster.id).await.unwrap(), Some(swarm.clone()));
+    let server = Server {
+        role: forge_core::model::NodeRole::Worker,
+        display_name: None,
+        id: ServerId::new(),
+        workspace_id: ws.id,
+        environment_id: None,
+        cluster_id: Some(cluster.id),
+        hostname: "lab-a".into(),
+        os: "linux".into(),
+        arch: "x86_64".into(),
+        agent_version: "0.1.0".into(),
+        status: AgentStatus::Pending,
+        last_seen_at: None,
+        cert_serial: None,
+        cert_not_after: None,
+        created_at: Timestamp(1),
+    };
+    store.create_server(&server).await.unwrap();
+    let mut m = SwarmMember {
+        server_id: server.id,
+        cluster_id: cluster.id,
+        node_id: String::new(),
+        role: MemberRole::Manager,
+        advertise_addr: String::new(),
+        manager_addr: String::new(),
+        state: MemberState::Joining,
+        error: String::new(),
+        updated_at: Timestamp(2),
+    };
+    store.put_member(&m).await.unwrap();
+    m.state = MemberState::Joined;
+    m.node_id = "n1".into();
+    store.put_member(&m).await.unwrap();
+    assert_eq!(store.list_members(cluster.id).await.unwrap(), vec![m.clone()]);
+    assert_eq!(store.get_member(server.id).await.unwrap(), Some(m));
+    store.delete_cluster(cluster.id).await.unwrap();
+    assert!(store.get_swarm(cluster.id).await.unwrap().is_none());
+    assert!(store.get_member(server.id).await.unwrap().is_none());
+}

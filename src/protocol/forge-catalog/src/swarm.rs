@@ -67,8 +67,10 @@ impl Availability {
 pub enum SwarmOp {
     Status {},
     Init {
-        /// Address other nodes reach this manager on.
-        advertise_addr: IpAddr,
+        /// Address or interface other nodes reach this manager on; `None`
+        /// lets Docker choose (works when the node has one address).
+        #[serde(default)]
+        advertise_addr: Option<String>,
         #[serde(default = "default_port")]
         port: u16,
         /// Address pools for overlay networks (CIDR); empty: Docker's default.
@@ -82,7 +84,8 @@ pub enum SwarmOp {
         /// Managers to contact (`ip:port`).
         remote_addrs: Vec<String>,
         join_token: String,
-        advertise_addr: IpAddr,
+        #[serde(default)]
+        advertise_addr: Option<String>,
     },
     Leave {
         /// Needed for the last manager, which dissolves the swarm.
@@ -147,8 +150,16 @@ fn label_ok(k: &str, v: &str) -> bool {
         && !v.chars().any(char::is_control)
 }
 
-fn addr_ok(a: &IpAddr) -> bool {
-    !a.is_unspecified() && !a.is_multicast()
+/// An IP address other nodes can reach, or a network interface name.
+fn addr_ok(a: Option<&str>) -> bool {
+    let Some(a) = a else { return true };
+    match a.parse::<IpAddr>() {
+        Ok(ip) => !ip.is_unspecified() && !ip.is_multicast() && !ip.is_loopback(),
+        Err(_) => {
+            (1..=15).contains(&a.len())
+                && a.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+        }
+    }
 }
 
 impl SwarmOp {
@@ -156,8 +167,8 @@ impl SwarmOp {
     pub fn validate(&self) -> Result<(), String> {
         match self {
             Self::Init { advertise_addr, port, default_addr_pool, .. } => {
-                if !addr_ok(advertise_addr) {
-                    return Err("the advertise address must be one of the node's addresses".into());
+                if !addr_ok(advertise_addr.as_deref()) {
+                    return Err("the advertise address must be a reachable IP address or an interface name".into());
                 }
                 if *port < 1024 {
                     return Err("the swarm port must be 1024 or higher".into());
@@ -174,8 +185,8 @@ impl SwarmOp {
                 if !token_ok(join_token) {
                     return Err("not a swarm join token".into());
                 }
-                if !addr_ok(advertise_addr) {
-                    return Err("the advertise address must be one of the node's addresses".into());
+                if !addr_ok(advertise_addr.as_deref()) {
+                    return Err("the advertise address must be a reachable IP address or an interface name".into());
                 }
                 Ok(())
             }
@@ -268,27 +279,31 @@ mod tests {
 
     const TOKEN: &str = "SWMTKN-1-3pu6hszjas19xyp7ghgosyx9k8atbfcr8p2is99znpy26u2lkl-1awxwuwd3z9j1z3puu7rcgdbx";
 
-    fn ip(s: &str) -> IpAddr {
-        s.parse().unwrap()
-    }
-
     #[test]
     fn init_checks_address_port_and_pools() {
         let ok = SwarmOp::Init {
-            advertise_addr: ip("192.0.2.10"),
+            advertise_addr: Some("192.0.2.10".into()),
             port: 2377,
             default_addr_pool: vec!["10.20.0.0/16".into()],
             autolock: false,
         };
         assert!(ok.validate().is_ok());
-        let any =
-            SwarmOp::Init { advertise_addr: ip("0.0.0.0"), port: 2377, default_addr_pool: vec![], autolock: false };
+        let any = SwarmOp::Init {
+            advertise_addr: Some("0.0.0.0".into()),
+            port: 2377,
+            default_addr_pool: vec![],
+            autolock: false,
+        };
         assert!(any.validate().is_err());
-        let low =
-            SwarmOp::Init { advertise_addr: ip("192.0.2.10"), port: 80, default_addr_pool: vec![], autolock: false };
+        let low = SwarmOp::Init {
+            advertise_addr: Some("192.0.2.10".into()),
+            port: 80,
+            default_addr_pool: vec![],
+            autolock: false,
+        };
         assert!(low.validate().is_err());
         let pool = SwarmOp::Init {
-            advertise_addr: ip("192.0.2.10"),
+            advertise_addr: Some("192.0.2.10".into()),
             port: 2377,
             default_addr_pool: vec!["10.0.0.0".into()],
             autolock: false,
@@ -301,7 +316,7 @@ mod tests {
         let join = |remote: &str, token: &str| SwarmOp::Join {
             remote_addrs: vec![remote.into()],
             join_token: token.into(),
-            advertise_addr: ip("192.0.2.11"),
+            advertise_addr: Some("eth0".into()),
         };
         assert!(join("192.0.2.10:2377", TOKEN).validate().is_ok());
         assert!(join("192.0.2.10", TOKEN).validate().is_err(), "a port is required");

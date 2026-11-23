@@ -29,6 +29,7 @@ pub mod silences;
 pub mod spool;
 pub mod stacks;
 pub mod storage;
+pub mod swarm;
 pub mod tags;
 pub mod tunnels;
 

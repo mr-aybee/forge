@@ -28,9 +28,11 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
             }
             let mut body = json!({
                 "ListenAddr": format!("0.0.0.0:{port}"),
-                "AdvertiseAddr": format!("{advertise_addr}:{port}"),
                 "Spec": { "EncryptionConfig": { "AutoLockManagers": autolock } },
             });
+            if let Some(a) = advertise_addr {
+                body["AdvertiseAddr"] = json!(format!("{a}:{port}"));
+            }
             if !default_addr_pool.is_empty() {
                 body["DefaultAddrPool"] = json!(default_addr_pool);
             }
@@ -42,12 +44,14 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
             if now.state == "active" {
                 return to_value(&now);
             }
-            let body = json!({
+            let mut body = json!({
                 "ListenAddr": "0.0.0.0:2377",
-                "AdvertiseAddr": advertise_addr.to_string(),
                 "RemoteAddrs": remote_addrs,
                 "JoinToken": join_token,
             });
+            if let Some(a) = advertise_addr {
+                body["AdvertiseAddr"] = json!(a);
+            }
             api("POST", "/swarm/join", Some(&body), CONSENSUS).await.map_err(|e| without_token(&e, join_token))?;
             to_value(&status().await)
         }

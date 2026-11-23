@@ -237,6 +237,10 @@ namespace Forge {
   action "stack.privileged" in ["role:platform_admin", "role:workspace_admin"]
     appliesTo { principal: [User], resource: [Environment, Cluster], context: RequestContext };
 
+  // Docker Swarm membership and nodes in a Swarm cluster (D-154): MFA guardrail.
+  action "swarm.manage" in ["role:platform_admin", "role:workspace_admin"]
+    appliesTo { principal: [User], resource: [Cluster, Server], context: RequestContext };
+
   // An uploaded certificate's private key leaves the vault for an edge node
   // (endpoint apply). Administrators, MFA. On a server: its workspace's
   // administrators (the job runner re-checks it on the edge).

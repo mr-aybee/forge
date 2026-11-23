@@ -80,6 +80,13 @@ impl ClusterRepository for Store {
 
     async fn delete_cluster(&self, id: ClusterId) -> DomainResult<()> {
         let mut tx = self.pool().begin().await.map_err(db_err)?;
+        // The swarm rows go with the cluster (the API refuses while nodes
+        // are still in the swarm).
+        for sql in
+            ["DELETE FROM swarm_members WHERE cluster_id = $1", "DELETE FROM cluster_swarms WHERE cluster_id = $1"]
+        {
+            sqlx::query(sql).bind(id.to_string()).execute(&mut *tx).await.map_err(db_err)?;
+        }
         sqlx::query("UPDATE servers SET cluster_id = NULL WHERE cluster_id = $1")
             .bind(id.to_string())
             .execute(&mut *tx)

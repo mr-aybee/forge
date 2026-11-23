@@ -43,6 +43,7 @@ mod silences;
 mod sites;
 mod ssh;
 mod stacks;
+mod swarm;
 mod tags;
 mod tenancy;
 mod tunnels;
