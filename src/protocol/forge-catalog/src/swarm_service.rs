@@ -389,7 +389,7 @@ fn mount(v: &str) -> Result<MountDef, String> {
     })
 }
 
-fn volume_name_ok(n: &str) -> bool {
+pub(crate) fn volume_name_ok(n: &str) -> bool {
     (1..=64).contains(&n.len())
         && n.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric())
         && n.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))

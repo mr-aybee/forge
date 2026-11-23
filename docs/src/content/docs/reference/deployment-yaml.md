@@ -119,7 +119,7 @@ Write them in camelCase (`listenPort`, `cpuMillis`, `memoryMb`,
 | `workingDir` | systemd | Working directory (default: the release folder for `git`/`archive`, else the app folder) |
 | `listenPort` | systemd | TCP port the process listens on. In a slot, the process gets its own port in `$PORT` instead |
 | `ports` | container | `[ip:]host:container[/udp]` mappings |
-| `volumes` | container | `host:container[:ro]` bind mounts |
+| `volumes` | container | `/host/path:/container/path[:ro]` bind mounts, or `volume-name:/container/path[:ro]` named Docker volumes (letters, digits, `_`, `.`, `-`; never privileged) |
 | `restart` | systemd, container | Restart when it exits |
 | `cpuMillis`, `memoryMb` | all | Limits (`0` = none) |
 | `dependencies` | systemd | App Store runtimes to install first |

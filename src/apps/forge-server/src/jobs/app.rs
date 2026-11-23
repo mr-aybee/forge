@@ -124,7 +124,8 @@ pub fn privileged_mounts(spec: &AppSpec, roots: &[String]) -> Vec<String> {
     spec.volumes
         .iter()
         .filter(|v| {
-            let host = v.split(':').next().unwrap_or_default();
+            // A named volume is Docker's storage, never a host folder.
+            let Some(host) = forge_catalog::apps::volume_host_path(v) else { return false };
             normalize_abs(host).is_none_or(|h| !allowed.iter().any(|r| within(&h, r)))
         })
         .cloned()
@@ -662,6 +663,8 @@ mod tests {
         }
         // Without approved roots only the app folder is plain.
         assert_eq!(privileged_mounts(&container(&["/srv/data/api:/d"]), &[]).len(), 1);
+        // A named volume is Docker storage, not a host folder: never privileged.
+        assert!(privileged_mounts(&container(&["pgdata:/var/lib/postgresql/data"]), &[]).is_empty());
         // Native apps have no volumes.
         let native: AppSpec = serde_json::from_value(json!({
             "environment": "uat", "name": "api", "runtime": "systemd", "command": "x"

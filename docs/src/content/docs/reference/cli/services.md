@@ -521,7 +521,7 @@ missing one exits with `2` and names the flag.
 | `--env <KEY=VALUE>` | `KEY=VALUE`; repeatable | none | no | A variable. `KEY` is letters, digits and `_` and does not start with a digit. The value may be empty and may contain `=`. Sets or replaces that variable and keeps the file's others | `--env MODE=prod` |
 | `--secret-env <KEY[=@FILE]>` | `KEY` or `KEY=@<path>`; repeatable | none | no | A secret variable. See [Secret variables](#secret-variables) | `--secret-env API_TOKEN` |
 | `--listen-port <LISTEN_PORT>` | integer, 1 to 65535 | none | no | The TCP port a native service listens on. Forge's default health check connects to it | `--listen-port 8080` |
-| `--volume <VOLUME>` | `HOST_PATH:CONTAINER_PATH[:ro]`; repeatable | none | no | A container volume. Given at all, the flags replace the file's whole `volumes` list | `--volume /srv/forge/apps/shop-prod/web/html:/usr/share/nginx/html:ro` |
+| `--volume <VOLUME>` | `HOST_PATH:CONTAINER_PATH[:ro]` or `VOLUME_NAME:CONTAINER_PATH[:ro]`; repeatable | none | no | A container volume. Given at all, the flags replace the file's whole `volumes` list | `--volume /srv/forge/apps/shop-prod/web/html:/usr/share/nginx/html:ro` |
 | `--restart <BOOL>` | `true` or `false` | the server's default, `true` | no | Restart it when it stops | `--restart false` |
 
 Fields without a flag need `--file`: `working_dir`, `env_files`,
@@ -662,7 +662,7 @@ forge services update [OPTIONS] <SERVICE>
 | `--secret-env <KEY[=@FILE]>` | `KEY` or `KEY=@<path>`; repeatable | keep | no | Sets or replaces one secret variable; the value comes from stdin or a file, never from the command line. See [Secret variables](#secret-variables) | `--secret-env API_TOKEN=@token.txt` |
 | `--unset-env <KEY>` | variable name; repeatable | none | no | Removes one variable. Exits with `2` when the service has no such variable | `--unset-env OLD_FLAG` |
 | `--listen-port <LISTEN_PORT>` | integer, 1 to 65535 | keep | no | The TCP port a native service listens on | `--listen-port 8080` |
-| `--volume <VOLUME>` | `HOST_PATH:CONTAINER_PATH[:ro]`; repeatable | keep | no | Container volumes. Given at all, the flags replace the whole list | `--volume /srv/data:/data` |
+| `--volume <VOLUME>` | `HOST_PATH:CONTAINER_PATH[:ro]` or `VOLUME_NAME:CONTAINER_PATH[:ro]`; repeatable | keep | no | Container volumes. Given at all, the flags replace the whole list | `--volume /srv/data:/data` |
 | `--restart <BOOL>` | `true` or `false` | keep | no | Restart it when it stops | `--restart false` |
 | `--environment <ENVIRONMENT>` | environment id or name | — | no | Look the name up in this environment only. It does not move the service | `--environment shop-prod` |
 | `--yes` | flag | off | no | Skip the confirmation prompt | `--yes` |
@@ -1235,7 +1235,7 @@ mismatch.
 | `command` | string | `""` | `--command` | One line. Required for a systemd service; for a container it replaces the image's command |
 | `image` | string | `""` | `--image` | Required for a container |
 | `ports` | list of strings | `[]` | `--port` | Container: `[IP:]HOST:CONTAINER[/tcp\|udp]` |
-| `volumes` | list of strings | `[]` | `--volume` | Container: `HOST_PATH:CONTAINER_PATH[:ro]`. See [Configuration sections](/docs/guides/services/#configuration-sections) for which host paths need `stack.privileged` |
+| `volumes` | list of strings | `[]` | `--volume` | Container: `HOST_PATH:CONTAINER_PATH[:ro]` (a host folder) or `VOLUME_NAME:CONTAINER_PATH[:ro]` (a named Docker volume, which never needs `stack.privileged`). See [Configuration sections](/docs/guides/services/#configuration-sections) for which host paths need `stack.privileged` |
 | `listen_port` | integer, 1 to 65535, or `null` | `null` | `--listen-port` | Native service only: the TCP port it listens on |
 | `restart` | bool | `true` | `--restart` | Restart it when it stops |
 | `env` | list of `{key, value, secret}` | `[]` | `--env`, `--secret-env`, `--unset-env` | Variables. `secret` defaults to `false`. In an update, a secret without a `value` keeps its stored value |
