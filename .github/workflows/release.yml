@@ -11,7 +11,7 @@ name: Release
 # signed and verified, and the result is kept as the `release-assets`
 # artifact for review, but nothing is published.
 #
-# Each release publishes self-contained packages for Linux and Windows, the raw binaries the self-updater
+# Each release publishes self-contained packages for Linux (Windows is paused), the raw binaries the self-updater
 # downloads, the `forge` CLI per platform (forge-cli-<target>[.exe]), the
 # bootstrap installers (get-forge.sh, get-forge.ps1), SHA256SUMS and its
 # Ed25519 signature. Asset names are a public contract: install.sh,
@@ -160,8 +160,9 @@ jobs:
       matrix:
         # Both Linux targets build in the `cross` images: their musl GCC
         # toolchains compile DuckDB's bundled C++ (musl-tools on the host has
-        # no C++ compiler).
-        include: ${{ fromJSON('[{"target":"x86_64-unknown-linux-musl","os":"linux","exe":"","file":"x86-64"},{"target":"aarch64-unknown-linux-musl","os":"linux","exe":"","file":"ARM aarch64"},{"target":"x86_64-pc-windows-msvc","os":"windows","exe":".exe","file":""}]') }}
+        # no C++ compiler). Windows builds are paused for now; to restore
+        # them, add {"target":"x86_64-pc-windows-msvc","os":"windows","exe":".exe","file":""}.
+        include: ${{ fromJSON('[{"target":"x86_64-unknown-linux-musl","os":"linux","exe":"","file":"x86-64"},{"target":"aarch64-unknown-linux-musl","os":"linux","exe":"","file":"ARM aarch64"}]') }}
     runs-on: ${{ matrix.os == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4

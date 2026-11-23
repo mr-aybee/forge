@@ -115,8 +115,9 @@ jobs:
   rust-windows:
     name: Rust (Windows)
     needs: plan
-    # Windows-only code lives in the agent.
-    if: needs.plan.outputs.full == 'true' || needs.plan.outputs.agent == 'true'
+    # Windows-only code lives in the agent. Disabled for now: Windows support
+    # is paused until it is fixed and re-enabled deliberately.
+    if: false
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
