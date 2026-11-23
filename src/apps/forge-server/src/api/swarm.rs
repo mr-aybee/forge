@@ -86,6 +86,17 @@ pub async fn join(
     Path(id): Path<ClusterId>,
     Json(req): Json<JoinInput>,
 ) -> ApiResult<(StatusCode, Json<JoinStarted>)> {
+    Ok((StatusCode::ACCEPTED, Json(start_join(&state, &caller, id, req).await?)))
+}
+
+/// Checks, authorizes and starts a join (also used when a node is assigned
+/// to a Swarm cluster with a swarm role).
+pub(super) async fn start_join(
+    state: &AppState,
+    caller: &Caller,
+    id: ClusterId,
+    req: JoinInput,
+) -> ApiResult<JoinStarted> {
     caller.authorize(Action::SwarmManage, cluster_ref(id)).await?;
     // Validated like the node will: address and pools.
     forge_catalog::swarm::SwarmOp::Init {
@@ -99,7 +110,7 @@ pub async fn join(
     state.swarm.begin_join(id, req.server_id, req.role, req.advertise_addr.as_deref()).await?;
     // Docker Engine first on a node that says it has none (package.manage).
     let principal = caller.principal().to_string();
-    let missing = crate::container_runtime::nodes_without_engine(&state, &principal, &[req.server_id]).await?;
+    let missing = crate::container_runtime::nodes_without_engine(state, &principal, &[req.server_id]).await?;
     let mut installs = Vec::new();
     if !missing.is_empty() {
         let install = super::packages::InstallRequest {
@@ -108,7 +119,7 @@ pub async fn join(
             params: BTreeMap::new(),
             server_ids: missing,
         };
-        installs = super::packages::start_install(&state, &caller, install).await?.into_iter().map(|s| s.job).collect();
+        installs = super::packages::start_install(state, caller, install).await?.into_iter().map(|s| s.job).collect();
     }
     let payload = Payload {
         cluster_id: id,
@@ -119,7 +130,7 @@ pub async fn join(
         init: InitSettings { default_addr_pool: req.default_addr_pool, autolock: req.autolock },
         force: false,
     };
-    let job = submit(&state, &caller, id, &payload).await?;
+    let job = submit(state, caller, id, &payload).await?;
     caller
         .audit(
             AUDIT_JOIN,
@@ -128,7 +139,7 @@ pub async fn join(
             json!({ "server_id": req.server_id, "role": req.role.as_str(), "job_id": job.id }),
         )
         .await;
-    Ok((StatusCode::ACCEPTED, Json(JoinStarted { job, installs })))
+    Ok(JoinStarted { job, installs })
 }
 
 #[derive(Debug, Deserialize)]

@@ -197,6 +197,11 @@ pub struct AssignNode {
     #[serde(default)]
     #[schemars(with = "Option<String>")]
     pub environment_id: Option<EnvironmentId>,
+    /// With a Swarm `cluster_id`: join the node to the cluster's swarm in this
+    /// role right away (`swarm.manage`, MFA). Absent: assign only.
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub swarm_role: Option<forge_core::swarm::MemberRole>,
 }
 
 /// `PATCH /servers/{id}`: move a node into a cluster and/or environment.
@@ -272,6 +277,16 @@ pub async fn assign(
             json!({ "cluster_id": req.cluster_id, "environment_id": req.environment_id }),
         )
         .await;
+    if let (Some(c), Some(role)) = (req.cluster_id, req.swarm_role) {
+        let join = super::swarm::JoinInput {
+            server_id: id,
+            role,
+            advertise_addr: None,
+            default_addr_pool: Vec::new(),
+            autolock: false,
+        };
+        super::swarm::start_join(&state, &caller, c, join).await?;
+    }
     Ok(Json(state.store.get_server(id).await?))
 }
 
@@ -287,6 +302,12 @@ fn is_edge(profile: &Value, node: ServerId) -> bool {
 /// Roles a node has in its cluster that must move before the node does.
 async fn handover_blockers(state: &AppState, node: ServerId, cluster: ClusterId) -> ApiResult<()> {
     let mut roles = Vec::new();
+    if let Some(m) = forge_core::swarm::SwarmRepository::get_member(&state.store, node).await?
+        && m.cluster_id == cluster
+        && m.state != forge_core::swarm::MemberState::Failed
+    {
+        roles.push("Docker Swarm member (Cluster → Swarm → Leave)");
+    }
     if let Some(p) = forge_core::ports::ClusterProfileRepository::get_cluster_profile(&state.store, cluster).await?
         && is_edge(&p.profile, node)
     {

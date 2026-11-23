@@ -171,6 +171,20 @@ impl SwarmService {
         if !has_swarm && role != MemberRole::Manager {
             return Err(invalid("the first node of a swarm must be a manager"));
         }
+        // Only one node creates the swarm: until it has, others wait (two
+        // first managers would make two separate swarms).
+        if !has_swarm
+            && self
+                .swarms
+                .list_members(cluster)
+                .await?
+                .iter()
+                .any(|m| m.server_id != server && m.state != MemberState::Failed)
+        {
+            return Err(DomainError::Conflict(
+                "the swarm is still being created; add more nodes once the first node has joined".into(),
+            ));
+        }
         self.swarms
             .put_member(&SwarmMember {
                 server_id: server,

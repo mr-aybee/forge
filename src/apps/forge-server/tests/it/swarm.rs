@@ -14,11 +14,16 @@ async fn node(h: &crate::common::Harness, admin: &Client, name: &str, cluster: &
     let (_, tok) = admin.post("/api/v1/enrollment-tokens", json!({"ttl_minutes": 10})).await;
     let dir = tempfile::tempdir().unwrap();
     let facts = HostFacts { hostname: name.into(), os: "linux".into(), arch: "x86_64".into() };
-    let id = enroll(&StatePaths::new(dir.path()), AgentConfig::new(h.agent_url.clone()), tok["token"].as_str().unwrap(), facts)
-        .await
-        .unwrap()
-        .server_id
-        .to_string();
+    let id = enroll(
+        &StatePaths::new(dir.path()),
+        AgentConfig::new(h.agent_url.clone()),
+        tok["token"].as_str().unwrap(),
+        facts,
+    )
+    .await
+    .unwrap()
+    .server_id
+    .to_string();
     let (s, b) =
         admin.call(Method::PATCH, &format!("/api/v1/servers/{id}"), Some(json!({"cluster_id": cluster["id"]}))).await;
     assert_eq!(s, StatusCode::OK, "{b}");
@@ -39,7 +44,8 @@ async fn swarm_membership_is_checked_guarded_and_tracked() {
     let (s, _) = admin.post(&members, json!({"server_id": a, "role": "manager"})).await;
     assert_eq!(s, StatusCode::FORBIDDEN);
     // Operators may not manage swarms at all.
-    let mut op = user_with_role(&h, &admin, "op@example.com", "operator", &format!("workspace:{}", h.default_org)).await;
+    let mut op =
+        user_with_role(&h, &admin, "op@example.com", "operator", &format!("workspace:{}", h.default_org)).await;
     step_up(&mut op).await;
     let (s, _) = op.post(&members, json!({"server_id": a, "role": "manager"})).await;
     assert_eq!(s, StatusCode::FORBIDDEN);
@@ -75,6 +81,21 @@ async fn swarm_membership_is_checked_guarded_and_tracked() {
     assert!(view["swarm"].is_null(), "no swarm until the first node joined");
     assert!(view.to_string().find("SWMTKN").is_none(), "tokens never leave the server");
 
+    // A swarm member cannot move to another cluster; it leaves the swarm first.
+    let (s, e) =
+        admin.call(Method::PATCH, &format!("/api/v1/servers/{a}"), Some(json!({"cluster_id": plain["id"]}))).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{e}");
+    assert!(e.to_string().contains("Swarm"), "{e}");
+
+    // Assigning a node with a swarm role joins it right away.
+    let (s, e) = admin
+        .call(
+            Method::PATCH,
+            &format!("/api/v1/servers/{b}"),
+            Some(json!({"cluster_id": swarm["id"], "swarm_role": "manager"})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CONFLICT, "the first node's join still runs, so a second manager has no swarm yet: {e}");
     // Joins and denials are audited.
     let (_, audit) = admin.get("/api/v1/audit?limit=200").await;
     assert!(audit.to_string().contains("swarm.member.join"), "{audit}");

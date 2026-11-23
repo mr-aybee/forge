@@ -1,0 +1,94 @@
+---
+title: Run a Docker Swarm cluster
+description: Create a Swarm cluster, turn its nodes into a Docker Swarm, and manage managers, workers, drain and labels from Forge.
+sidebar:
+  order: 7
+---
+
+This guide shows you how to create a cluster in Docker Swarm mode, add nodes
+to its swarm, and manage those nodes. For how the two cluster modes differ,
+see [Cluster modes](/docs/concepts/clusters/#cluster-modes).
+
+## Before you begin
+
+- You need the `swarm.manage` action on the cluster. The **Workspace admin**
+  and **Platform admin** roles have it. It is MFA-guarded, so Forge asks you to
+  confirm with your authenticator.
+- To start a Docker Engine install on a node that has none, you also need
+  `package.manage`.
+- Nodes must run Linux (Debian/Ubuntu or a RHEL-like distribution). Windows
+  nodes cannot join a swarm.
+- Nodes must reach each other on TCP 2377 (management), TCP and UDP 7946
+  (node communication), and UDP 4789 (overlay traffic).
+
+## Steps
+
+1. Go to **Clusters** → **New cluster**. Enter a name, set **Mode** to
+   **Docker Swarm**, then select **Create cluster**. You cannot change the
+   mode later.
+2. Assign your Linux nodes to the cluster: on each node, open **Settings** →
+   **Cluster**, or use `PATCH /servers/{id}` with `cluster_id`.
+3. Open the cluster and select the **Swarm** tab. Select **Create swarm**.
+4. Pick the first node. It becomes the swarm's first manager. Optionally set:
+   - **Advertise address**: the IP address or interface other nodes reach it
+     on. Leave it empty when the node has one address.
+   - **Address pools**: CIDR ranges for overlay networks.
+   - **Autolock**: locks manager keys at rest. After a Docker restart you must
+     unlock the swarm on that node.
+
+   Then select **Add node**.
+5. Wait for the member to show **joined**. If the node had no Docker Engine,
+   Forge installs it first and then joins the node.
+6. Add the other nodes with **Add node**, as **manager** or **worker**.
+   For a swarm that survives a manager failure, run 3 managers (or 5 to
+   survive two).
+
+:::tip
+You can join a node while you assign it: send `"swarm_role": "worker"` (or
+`"manager"`) with `cluster_id` in `PATCH /servers/{id}`.
+:::
+
+## Manage nodes
+
+Use the row menu of a member on the **Swarm** tab:
+
+| Action | Effect |
+| --- | --- |
+| **Promote** / **Demote** | Makes a worker a manager, or the other way round. The last manager cannot be demoted |
+| **Drain** | Moves the node's tasks to other nodes and schedules no new ones. Use it before maintenance |
+| **Pause** | Keeps running tasks and schedules no new ones |
+| **Activate** | Schedules tasks on the node again |
+| **Edit labels** | Sets node labels that placement constraints can use, such as `zone=a` |
+| **Leave** | Drains the node, makes it leave the swarm and removes it from the node list |
+
+**Rotate join tokens** issues new worker and manager tokens. Nodes already in
+the swarm keep working; only new joins need the new token, and Forge keeps it
+for you.
+
+:::caution
+A node in the swarm cannot move to another cluster. Make it **Leave** first.
+The last manager can leave only when no other node is left.
+:::
+
+## Verify
+
+- The **Swarm** tab lists every node as **joined**, and the node cards show
+  **ready** with the right role.
+- The manager count shows how many manager failures the swarm tolerates.
+- On a manager node, `docker node ls` lists the same nodes.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| The member stays **joining** | Docker Engine is still installing, or the node is offline | Check the install job on the node, and that the node is online |
+| **failed**: `the node is already in another Docker Swarm` | The node joined a swarm outside Forge | Run `docker swarm leave --force` on the node, then add it again |
+| **failed**: join timed out | Firewall blocks TCP 2377, TCP/UDP 7946 or UDP 4789 between nodes | Open the ports, then **Leave** with **Force** and add the node again |
+| `no swarm manager answered` | Every manager is offline | Bring a manager online; the live node list comes back on its own |
+| `the swarm is still being created` | The first node has not joined yet | Wait until the first node shows **joined**, then add more nodes |
+
+## Next steps
+
+- [Cluster modes](/docs/concepts/clusters/#cluster-modes)
+- [REST API: Docker Swarm](/docs/reference/rest-api/#docker-swarm)
+- [Deploy a compose stack](/docs/guides/compose-stacks/)

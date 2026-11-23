@@ -133,7 +133,7 @@ const clusters = createRoute({
   validateSearch: (s: Record<string, unknown>): ClustersSearch => ({ q: optStr(s.q), status: optOneOf(s.status, CLUSTER_STATES), view: optOneOf(s.view, CLUSTER_VIEWS) }),
   component: lazyRouteComponent(() => import("../pages/Clusters"), "Clusters"),
 });
-export const CLUSTER_TABS = ["overview", "network", "containers"] as const;
+export const CLUSTER_TABS = ["overview", "network", "containers", "swarm"] as const;
 export type ClusterTab = (typeof CLUSTER_TABS)[number];
 const cluster = createRoute({
   getParentRoute: parent,
