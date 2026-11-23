@@ -34,6 +34,7 @@ mod compression;
 mod console_access;
 mod container_shell;
 mod device_login;
+mod docker_resources;
 mod edge_security;
 mod elevated_tokens;
 mod environments;

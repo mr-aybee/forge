@@ -735,3 +735,22 @@ fn swarm_manage_is_admin_only_with_mfa() {
         assert!(!allowed(&engine, u, Action::SwarmManage, &cl, true));
     }
 }
+
+/// Docker resources on a node (D-157): administrators and operators, no MFA;
+/// developers and auditors cannot.
+#[test]
+fn docker_resources_are_for_operators() {
+    let engine = PolicyEngine::new().unwrap();
+    let node = ResourceRef::new(EntityRef::new(EntityKind::Server, "lab-a"), vec![workspace("a")]);
+    let (admin, op, dev, auditor) = (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+    bind(&engine, admin, Role::WorkspaceAdmin, workspace("a"));
+    bind(&engine, op, Role::Operator, workspace("a"));
+    bind(&engine, dev, Role::Developer, workspace("a"));
+    bind(&engine, auditor, Role::Auditor, workspace("a"));
+    for a in [Action::ImageManage, Action::VolumeManage, Action::NetworkManage] {
+        assert!(allowed(&engine, admin, a, &node, false), "{a:?}");
+        assert!(allowed(&engine, op, a, &node, false), "{a:?}");
+        assert!(!allowed(&engine, dev, a, &node, true), "{a:?}");
+        assert!(!allowed(&engine, auditor, a, &node, true), "{a:?}");
+    }
+}

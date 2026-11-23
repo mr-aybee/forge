@@ -237,6 +237,14 @@ namespace Forge {
   action "stack.privileged" in ["role:platform_admin", "role:workspace_admin"]
     appliesTo { principal: [User], resource: [Environment, Cluster], context: RequestContext };
 
+  // Docker images, volumes and networks on a node (D-157).
+  action "docker.image.manage" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+  action "docker.volume.manage" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+  action "docker.network.manage" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+
   // Docker Swarm membership and nodes in a Swarm cluster (D-154): MFA guardrail.
   action "swarm.manage" in ["role:platform_admin", "role:workspace_admin"]
     appliesTo { principal: [User], resource: [Cluster, Server], context: RequestContext };

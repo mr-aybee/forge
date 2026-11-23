@@ -8,6 +8,7 @@ pub mod app;
 pub mod deploy;
 mod diagnostics;
 pub mod docker_endpoint;
+pub mod docker_op;
 pub mod node_bootstrap;
 pub mod node_op;
 pub mod package;

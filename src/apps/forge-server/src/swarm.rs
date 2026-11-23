@@ -14,12 +14,11 @@ use forge_core::model::{Cluster, ClusterMode};
 use forge_core::ports::{ClusterRepository, ServerRepository, TenancyRepository};
 use forge_core::swarm::{ClusterSwarm, MemberRole, MemberState, SwarmMember, SwarmRepository};
 use forge_core::{Clock, ClusterId, DomainError, DomainResult, EnvironmentId, ServerId};
+use forge_proto::Command;
 use forge_proto::messages::SwarmAction;
-use forge_proto::{Command, CommandSigner};
 use forge_secrets::Envelope;
 use serde::Serialize;
 
-use crate::agent_hub::CommandQueue;
 use crate::jobs::swarm::tokens_aad;
 
 /// How long a quick operation may take on the manager.
@@ -88,8 +87,7 @@ pub struct SwarmService {
     pub tenancy: Arc<dyn TenancyRepository>,
     pub files: Arc<dyn forge_core::files::FileRepository>,
     pub deploys: Arc<dyn forge_core::deploy::DeploymentRepository>,
-    pub hub: Arc<CommandQueue>,
-    pub signer: Arc<CommandSigner>,
+    pub rpc: crate::node_rpc::NodeRpc,
     pub envelope: Envelope,
     pub clock: Arc<dyn Clock>,
     /// Recent live node lists per cluster (see `live_nodes`).
@@ -492,14 +490,10 @@ impl SwarmService {
     /// One signed swarm command to a node, waiting for its answer.
     async fn rpc(&self, server: ServerId, principal: &str, op: &SwarmOp) -> Result<serde_json::Value, String> {
         let op_json = serde_json::to_string(op).map_err(|e| e.to_string())?;
-        let command = Command::SwarmAction(SwarmAction { op_json });
-        let (body, signed) = self.signer.issue(&server.to_string(), principal, command, self.clock.now(), QUICK);
-        self.hub.enqueue(server, &body.operation_id, signed)?;
-        let result = self.hub.wait(&body.operation_id, QUICK).await.ok_or("the manager did not answer in time")?;
-        if !result.ok {
-            return Err(result.error);
-        }
-        serde_json::from_str(&result.output).map_err(|e| format!("the manager's answer is not JSON: {e}"))
+        self.rpc
+            .call(server, principal, Command::SwarmAction(SwarmAction { op_json }), QUICK)
+            .await
+            .map_err(|e| e.to_string())
     }
 }
 

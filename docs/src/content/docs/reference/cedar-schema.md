@@ -115,6 +115,9 @@ out at every assignable scope.
 | `stack.manage` | ✓ | ✓ | ✓ | ✓ | | | |
 | `stack.privileged` † | ✓ | ✓ | | | | | |
 | `swarm.manage` † | ✓ | ✓ | | | | | |
+| `docker.image.manage` | ✓ | ✓ | ✓ | | | | |
+| `docker.volume.manage` | ✓ | ✓ | ✓ | | | | |
+| `docker.network.manage` | ✓ | ✓ | ✓ | | | | |
 | `certificate.use` † | ✓ | ✓ | | | | | |
 | `secret.read` † | ✓ | ✓ | | | | | |
 | `secret.manage` † (on the platform: create, change and delete credential vault items) | ✓ | | | | | | |

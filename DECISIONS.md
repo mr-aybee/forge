@@ -5599,3 +5599,14 @@ HA is a property, not a strategy: the service's Swarm view scores replicas, spre
 **Why.** Swarm already does rolling updates well, so Forge uses its update config instead of driving tasks itself. Swarm cannot split traffic between two versions of one service, so Blue-Green and Canary use two services and the weighted routing that node rollouts already use (slot records and the edge), which keeps one model for both cluster modes.
 
 **Trade-offs.** Blue-Green and Canary need a site in front of the service. Slotted and unslotted services do not switch strategies in place. Failure handling moves traffic back to the old slot, or lets Swarm roll the service back.
+
+## D-157 Docker images, volumes and networks through the node's helper
+
+**Decision.** Every node's Docker images, volumes and networks can be managed from Forge through a closed, typed operation set (`forge_catalog::docker_ops::DockerOp`). The node's root helper runs it over the local Engine API. Reads need `server.manage`. Changes need `docker.image.manage`, `docker.volume.manage` or `docker.network.manage`, held by administrators and operators. Pulls, pushes and prunes run as `docker.op` jobs; everything else answers at once. Every change is audited as `docker.<op>`.
+
+**Limits.**
+- Volumes are created with the local driver and without options, and networks as plain bridge or overlay. Driver options can bind host paths, so they are never accepted.
+- Docker's networks (`bridge`, `host`, `none`, `ingress`, `docker_gwbridge`) and Forge's (`forge-*` or labelled `forge.managed`) cannot be removed, connected or pruned. The node resolves an id to the network's name before it checks.
+- Registry credentials never pass through this API, because job payloads are stored. Private registries come with the registry model.
+
+**Why not the Engine API proxy (D-125)?** The proxy needs the node's mutual-TLS endpoint, which is an opt-in that restarts dockerd. The typed set works on every node, and its smaller surface is easier to review. The action names have a `docker.` prefix because `network.manage` is a retired action, and reusing it would quietly grant the new rights to old stored profiles.

@@ -1602,6 +1602,43 @@ with `details.reason` and `details.detail`.
 | `icon` | string | none | Data URL (PNG, JPEG, WebP, GIF or SVG), up to 128 KB; `""` removes it |
 | `mode` | `default` or `swarm` | `default` | Set on `POST` only. On `PUT` it may be omitted or repeated; a different value returns `400`. See [Cluster modes](/docs/concepts/clusters/#cluster-modes) |
 
+### Docker images, volumes and networks
+
+On any Linux node with Docker Engine. The node's root helper runs each
+operation; nothing needs the Docker TLS endpoint.
+
+| Method | Path | Permission |
+| --- | --- | --- |
+| GET | `/servers/{id}/docker/images` | `server.manage` on the node: `[{id, full_id, tags, digests, size, created, containers, dangling}]` |
+| GET | `/servers/{id}/docker/volumes` | `server.manage`: `[{name, driver, mountpoint, scope, created, labels, managed}]` |
+| GET | `/servers/{id}/docker/networks` | `server.manage`: `[{id, name, driver, scope, internal, attachable, subnets, containers, protected}]` |
+| GET | `/servers/{id}/docker/disk-usage` | `server.manage`: `{images, containers, volumes, build_cache}`, each `{count, bytes}` |
+| GET | `/servers/{id}/docker/events?since_secs=` | `server.manage`: up to 1000 recent events, newest first (`since_secs` at most 86400, default 300) |
+| POST | `/servers/{id}/docker/ops` | By operation (below). `200` with the node's answer, or `202` with a `docker.op` job for pulls, pushes and prunes |
+
+**Operations** (`{"op": "<name>", …}`):
+
+| `op` | Fields | Permission |
+| --- | --- | --- |
+| `image_inspect`, `image_history` | `id` | `server.manage` |
+| `image_remove` | `id`, `force` | `docker.image.manage` |
+| `image_tag` | `id`, `repo`, `tag` | `docker.image.manage` |
+| `image_pull`, `image_push` | `image` | `docker.image.manage` (job) |
+| `image_prune` | `all` (default: dangling only) | `docker.image.manage` (job) |
+| `volume_inspect` | `name` | `server.manage` |
+| `volume_create` | `name`, `labels` (local driver, no options) | `docker.volume.manage` |
+| `volume_remove` | `name`, `force` | `docker.volume.manage` |
+| `volume_prune` | | `docker.volume.manage` (job) |
+| `network_inspect` | `id` | `server.manage` |
+| `network_create` | `name`, `driver` (`bridge`/`overlay`), `subnet`, `gateway`, `internal`, `attachable` (overlay only), `labels` | `docker.network.manage` |
+| `network_remove` | `id` | `docker.network.manage` |
+| `network_connect`, `network_disconnect` | `network`, `container` (`force` for disconnect) | `docker.network.manage` |
+| `network_prune` | (Forge's networks are kept) | `docker.network.manage` (job) |
+
+`400` for registry credentials (`registry_auth`), driver options, reserved
+labels (`forge.*`) and Docker's or Forge's own networks (`bridge`, `host`,
+`none`, `ingress`, `docker_gwbridge`, `forge-*`).
+
 ### Docker Swarm
 
 Swarm clusters only (`mode: swarm`). Joins and leaves start a `swarm.member`

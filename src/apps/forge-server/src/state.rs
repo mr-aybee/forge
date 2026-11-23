@@ -114,6 +114,8 @@ pub struct Services {
     pub files: Arc<forge_files::FileService>,
     /// Docker Swarm in Swarm clusters (D-154).
     pub swarm: Arc<crate::swarm::SwarmService>,
+    /// Docker images, volumes and networks on nodes (D-157).
+    pub docker_resources: Arc<crate::docker_resources::DockerResources>,
     /// Bucket grants: one person's access to one bucket of a store (D-108).
     pub bucket_grants: crate::bucket_grants::BucketGrants,
     /// Vault-backed header values for health checks, handed to nodes (D-111).
@@ -322,6 +324,11 @@ impl Services {
             deploys: Arc::new(store.clone()),
         });
         registry.register(app_job.clone());
+        let node_rpc = crate::node_rpc::NodeRpc { hub: hub.clone(), signer: signer.clone(), clock: clock.clone() };
+        let docker_resources = Arc::new(crate::docker_resources::DockerResources {
+            rpc: node_rpc.clone(),
+            servers: Arc::new(store.clone()),
+        });
         let swarm = Arc::new(crate::swarm::SwarmService {
             swarms: Arc::new(store.clone()),
             servers: Arc::new(store.clone()),
@@ -329,8 +336,7 @@ impl Services {
             tenancy: Arc::new(store.clone()),
             files: Arc::new(store.clone()),
             deploys: Arc::new(store.clone()),
-            hub: hub.clone(),
-            signer: signer.clone(),
+            rpc: node_rpc.clone(),
             envelope: envelope.clone(),
             clock: clock.clone(),
             node_cache: std::sync::Mutex::default(),
@@ -383,6 +389,7 @@ impl Services {
             deploys: Arc::new(store.clone()),
             envelope: envelope.clone(),
         }));
+        registry.register(Arc::new(crate::jobs::docker_op::DockerOpJob { ops: node_ops.clone() }));
         registry.register(Arc::new(crate::jobs::swarm::SwarmMemberJob {
             ops: node_ops.clone(),
             swarms: Arc::new(store.clone()),
@@ -623,6 +630,7 @@ impl Services {
             health,
             files,
             swarm,
+            docker_resources,
             bucket_grants,
             health_secrets,
             notifier,

@@ -18,6 +18,7 @@ mod containers;
 pub mod deployments;
 pub(crate) mod device;
 mod docker;
+mod docker_resources;
 mod events;
 pub(crate) mod fabric;
 pub(crate) mod fabric_reconcile;
@@ -182,6 +183,12 @@ pub fn router(state: AppState) -> Router {
         .route("/clusters/{id}", get(clusters::get).put(clusters::update).delete(clusters::delete))
         .route("/clusters/{id}/profile", get(ingress::get).put(ingress::put))
         .route("/clusters/{id}/swarm", get(swarm::get))
+        .route("/servers/{id}/docker/images", get(docker_resources::images))
+        .route("/servers/{id}/docker/volumes", get(docker_resources::volumes))
+        .route("/servers/{id}/docker/networks", get(docker_resources::networks))
+        .route("/servers/{id}/docker/disk-usage", get(docker_resources::disk_usage))
+        .route("/servers/{id}/docker/events", get(docker_resources::events))
+        .route("/servers/{id}/docker/ops", post(docker_resources::op))
         .route("/clusters/{id}/swarm/members", post(swarm::join))
         .route("/clusters/{id}/swarm/members/{server}", patch(swarm::update_node).delete(swarm::leave))
         .route("/clusters/{id}/swarm/tokens/rotate", post(swarm::rotate_tokens))

@@ -211,6 +211,15 @@ pub enum Action {
     /// Administrators, MFA.
     #[serde(rename = "swarm.manage")]
     SwarmManage,
+    /// Pull, push, tag, remove and prune Docker images on a node (D-157).
+    #[serde(rename = "docker.image.manage")]
+    ImageManage,
+    /// Create, remove and prune Docker volumes on a node (D-157).
+    #[serde(rename = "docker.volume.manage")]
+    VolumeManage,
+    /// Create, remove, connect and prune Docker networks on a node (D-157).
+    #[serde(rename = "docker.network.manage")]
+    NetworkManage,
     /// Send an uploaded TLS certificate's private key to an edge node when an
     /// endpoint is applied (administrators, MFA).
     #[serde(rename = "certificate.use")]
@@ -218,7 +227,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 50] = [
+    pub const ALL: [Action; 53] = [
         Action::View,
         Action::AuditRead,
         Action::WorkspaceCreate,
@@ -268,6 +277,9 @@ impl Action {
         Action::StackManage,
         Action::StackPrivileged,
         Action::SwarmManage,
+        Action::ImageManage,
+        Action::VolumeManage,
+        Action::NetworkManage,
         Action::CertificateUse,
     ];
 
@@ -323,6 +335,9 @@ impl Action {
             Action::StackManage => "stack.manage",
             Action::StackPrivileged => "stack.privileged",
             Action::SwarmManage => "swarm.manage",
+            Action::ImageManage => "docker.image.manage",
+            Action::VolumeManage => "docker.volume.manage",
+            Action::NetworkManage => "docker.network.manage",
             Action::CertificateUse => "certificate.use",
         }
     }

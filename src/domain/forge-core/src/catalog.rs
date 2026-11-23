@@ -159,6 +159,15 @@ impl Action {
                 "Create and join swarms, and drain, promote, demote or remove swarm nodes.",
                 Admin,
             ),
+            Action::ImageManage => {
+                info("Containers", "Manage images", "Pull, push, tag, remove and prune Docker images.", Write)
+            }
+            Action::VolumeManage => {
+                info("Containers", "Manage volumes", "Create, remove and prune Docker volumes.", Write)
+            }
+            Action::NetworkManage => {
+                info("Containers", "Manage networks", "Create, remove, connect and prune Docker networks.", Write)
+            }
             Action::Deploy => info("Services", "Deploy", "Deploy and update services.", Write),
             Action::DeployApprove => info(
                 "Services",
