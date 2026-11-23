@@ -1,0 +1,18 @@
+# A disposable "VM" for the container platform lab: Debian with its OWN
+# Docker Engine (dockerd runs inside the container), so several of them can
+# form a real Docker Swarm. Needs --privileged. The Forge agent is installed
+# from the control plane at first start (install.sh, no-systemd path).
+FROM docker:29-dind AS engine
+
+FROM debian:trixie-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl procps util-linux passwd iproute2 iptables kmod pigz xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+# Static engine binaries and the CLI + Compose plugin from the official image.
+COPY --from=engine /usr/local/bin/ /usr/local/bin/
+COPY --from=engine /usr/local/libexec/docker/cli-plugins/ /usr/local/libexec/docker/cli-plugins/
+COPY node-entrypoint.sh /usr/local/sbin/forge-lab-node
+RUN chmod 0755 /usr/local/sbin/forge-lab-node && rm -f /usr/local/bin/dockerd-entrypoint.sh
+VOLUME /var/lib/docker
+ENTRYPOINT ["/usr/local/sbin/forge-lab-node"]
