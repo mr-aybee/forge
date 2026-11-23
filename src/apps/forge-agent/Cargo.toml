@@ -1,0 +1,93 @@
+[package]
+name = "forge-agent"
+description = "Orbyn Forge node agent (Linux and Windows) and its privileged helper."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "forge-agent"
+path = "src/main.rs"
+
+[[bin]]
+name = "forge-agent-helper"
+path = "src/bin/forge-agent-helper.rs"
+
+[dependencies]
+forge-core.workspace = true
+forge-proto.workspace = true
+forge-catalog.workspace = true
+forge-pki.workspace = true
+forge-secrets.workspace = true
+forge-sdk.workspace = true
+tokio.workspace = true
+hyper.workspace = true
+hyper-util = { workspace = true, features = ["client"] }
+http.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+rustls-pki-types.workspace = true
+# The machine's trusted roots, for HTTPS health checks that verify the
+# certificate (#12). Apache-2.0/ISC/MIT, already in the tree through reqwest.
+rustls-native-certs = "0.8"
+prost.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+sysinfo.workspace = true
+base64.workspace = true
+ring.workspace = true
+url.workspace = true
+hex.workspace = true
+regex.workspace = true
+zip.workspace = true
+tar.workspace = true
+flate2.workspace = true
+zstd.workspace = true
+uuid.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus.workspace = true
+# Confines the file worker to the app's folder and store (D-083 phase 2).
+# MIT OR Apache-2.0, safe API over the Landlock syscalls, well under 1 MB.
+landlock = "0.4.7"
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+# dockerd's key and CSR for the Docker TLS endpoint (D-125); already in the tree.
+rcgen.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+# Windows service host (D-079): dispatcher, control handler and service
+# creation without our own unsafe code. MIT/Apache-2.0, ~29 KB.
+windows-service = "0.8.1"
+ring.workspace = true
+
+[features]
+# Lets the health-check worker run without Landlock. Only for the
+# root-gated test on a kernel without Landlock (tests/health_exec_root.rs);
+# never enabled in a release build.
+test-unconfined = []
+
+[dev-dependencies]
+# Paused time for the tests of queueing and waiting.
+tokio = { workspace = true, features = ["test-util"] }
+tempfile.workspace = true
+# The spool upload end to end against the real worker listener (D-142).
+forge-analytics-worker.workspace = true
+forge-analytics-proto.workspace = true
+
+[lints]
+workspace = true

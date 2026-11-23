@@ -1,0 +1,21 @@
+[plugin]
+id = "orbyn.uptime-probe"
+name = "Uptime probe"
+version = "0.1.0"
+publisher = "orbyn"
+forge_api = ">=0.1.0, <0.2.0"
+description = "Reports whether the server `web-01` has an online agent. Demonstrates a typed host call."
+
+[runtime]
+export = "run"
+location = "central"
+
+[permissions]
+requested = ["host:log", "host:server-online"]
+
+[budgets]
+fuel = 5000000
+memory_mb = 4
+timeout_ms = 1000
+max_output_bytes = 4096
+concurrency = 2

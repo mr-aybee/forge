@@ -1,0 +1,312 @@
+---
+title: Connect AI agents
+description: Turn on Forge's MCP endpoint and connect Claude, ChatGPT, Gemini CLI, Codex CLI or Cursor as a connector, and approve the changes it asks for.
+sidebar:
+  order: 21
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+This guide turns on Forge's MCP endpoint, connects an AI agent to it,
+shows how to approve the changes the agent asks for, and how to check and
+revoke the connection. For how sign-in, modes, approvals and tool calls
+work, see [MCP connectors](/docs/concepts/mcp-connectors/). For every
+tool and field, see the [MCP reference](/docs/reference/mcp/).
+
+## Before you begin
+
+- To turn the endpoint on: you can edit `forge.toml` and restart Forge
+  on the control node.
+- To connect an agent: you have a Forge account. The agent gets your
+  permissions and no more, so it can do only what you can do in the
+  console.
+- To approve what an agent asks for: you connected that agent, and you
+  approve in the Forge console in a browser. When the change is under the
+  MFA guardrail and the server requires MFA, you also need MFA set up on
+  your account.
+- To see and revoke everyone's connections: `user.manage` on the
+  workspace (role **Platform admin** or **Admin**).
+- Forge's `public_url` is the exact HTTPS URL the agent uses, such as
+  `https://forge.example.com`, and Forge is served at the root of that host
+  name.
+- Cloud connectors (claude.ai, Claude Desktop custom connectors,
+  ChatGPT) need Forge reachable from the internet over HTTPS. Agents that
+  run on your machine (Claude Code, Gemini CLI, Codex CLI, Cursor) need only
+  to reach Forge from that machine.
+- A TLS reverse proxy in front of Forge forwards every path to it,
+  including `/mcp`, `/oauth/` and `/.well-known/`. Forwarding only
+  `/api/` breaks sign-in. For example, with Caddy:
+
+  ```
+  forge.example.com {
+      reverse_proxy 127.0.0.1:8080
+  }
+  ```
+
+:::caution
+With MCP on, anyone who reaches Forge can register a connector. Registering
+grants nothing: a signed-in person must approve each connection on the
+consent page. Agents can still act on text they read from your systems.
+Give each agent the lowest mode that does the job. See
+[Tool results are data](/docs/concepts/mcp-connectors/#tool-results-are-data).
+:::
+
+## Turn on the MCP endpoint
+
+1. Add an `[mcp]` section to `forge.toml` (`/etc/forge/forge.toml` on Linux,
+   `C:\ProgramData\Orbyn Forge\forge.toml` on Windows):
+
+   ```toml
+   public_url = "https://forge.example.com"
+
+   [mcp]
+   enabled = true
+   # Highest mode anyone can give an agent: "read_only", "ask" or "auto".
+   max_mode = "auto"
+   ```
+
+   Or set `FORGE_MCP_ENABLED=1` and `FORGE_MCP_MAX_MODE=read_only` in the
+   service environment. See [Configuration](/docs/reference/configuration/#mcp-connectors).
+
+2. Restart Forge.
+
+   <Tabs>
+   <TabItem label="Linux">
+   ```sh
+   sudo systemctl restart forge-server
+   ```
+   </TabItem>
+   <TabItem label="Windows">
+   ```powershell
+   Stop-ScheduledTask -TaskName "Orbyn Forge"
+   Start-ScheduledTask -TaskName "Orbyn Forge"
+   ```
+   </TabItem>
+   </Tabs>
+
+3. Check that the endpoint answers:
+
+   ```sh
+   curl -s https://<forge-host>/.well-known/oauth-protected-resource/mcp
+   ```
+
+   The response names `"resource": "https://<forge-host>/mcp"`. A `404`
+   means MCP is still off.
+
+## Add Forge to your agent
+
+The MCP server URL is `https://<forge-host>/mcp` for every agent. The
+examples below show where each agent takes it. Menus and file formats are
+the agents' own and can change; if yours differ, look for the option to add
+a custom or remote MCP server with a URL. No agent needs a client id,
+secret or API key: they register and sign in by themselves.
+
+<Tabs>
+<TabItem label="Claude">
+In claude.ai or Claude Desktop, add a custom connector in the connector
+settings and enter the URL `https://<forge-host>/mcp`. Leave the OAuth
+client fields empty. Then connect it; Claude opens the Forge sign-in page.
+
+Custom connectors run from Anthropic's cloud, also in Claude Desktop, so
+Forge must be reachable from the internet.
+</TabItem>
+<TabItem label="Claude Code">
+```sh
+claude mcp add --transport http forge https://<forge-host>/mcp
+```
+
+In Claude Code, run `/mcp`, select `forge` and sign in. Claude Code opens
+the Forge sign-in page in your browser.
+</TabItem>
+<TabItem label="ChatGPT">
+In ChatGPT, turn on developer mode in the connector settings if your plan
+requires it, then create a connector with the MCP server URL
+`https://<forge-host>/mcp` and OAuth authentication. ChatGPT opens the
+Forge sign-in page when you connect.
+
+ChatGPT connects from OpenAI's cloud, so Forge must be reachable from the
+internet.
+</TabItem>
+<TabItem label="Gemini CLI">
+Add the server to `~/.gemini/settings.json` (or `.gemini/settings.json` in
+a project):
+
+```json
+{
+  "mcpServers": {
+    "forge": {
+      "httpUrl": "https://<forge-host>/mcp"
+    }
+  }
+}
+```
+
+Start Gemini CLI and run `/mcp auth forge` to sign in.
+</TabItem>
+<TabItem label="Codex CLI">
+Add the server to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.forge]
+url = "https://<forge-host>/mcp"
+```
+
+Then sign in with `codex mcp login forge`. Remote HTTP servers need a
+recent Codex version; versions that support only local (stdio) servers
+need a stdio-to-HTTP bridge. See the Codex documentation for the version
+you run.
+</TabItem>
+<TabItem label="Cursor">
+Add the server to `~/.cursor/mcp.json`, or to `.cursor/mcp.json` in a
+project:
+
+```json
+{
+  "mcpServers": {
+    "forge": {
+      "url": "https://<forge-host>/mcp"
+    }
+  }
+}
+```
+
+In Cursor's MCP settings, select the login prompt next to `forge` to sign
+in.
+</TabItem>
+</Tabs>
+
+## Approve the connection
+
+1. In the browser window the agent opened, sign in to Forge if asked. MFA,
+   passkeys and SSO work as usual.
+2. The consent page **Connect an app to Forge** opens. Check:
+   - **Name given by the app**, with its client ID. Any app can choose
+     this name.
+   - **Where you go next**: "After you approve, you go to" shows the host
+     the browser returns to, such as `claude.ai` or `127.0.0.1:33418`,
+     with the full redirect URI below it. Approve only if you recognise it.
+   - **Connect as**: the Forge account the agent acts as.
+3. Under **What it may do**, choose a mode:
+   - **Read-only**: only looks: lists, reads and logs.
+   - **Ask** (the default, and the recommended mode for an agent that
+     should change things): looks freely; every change waits for your
+     approval in Forge.
+   - **Auto**: also runs reversible changes, such as restarting stack
+     services or cancelling jobs, without asking. Destructive changes and
+     changes that need MFA still wait for your approval.
+
+   Only the modes your administrator allows appear.
+4. Select **Approve**. To refuse, select **Deny**.
+
+The browser returns to the agent, which finishes signing in.
+
+:::note
+In **Ask** and **Auto**, a change that waits for approval does not run
+until you approve it on the **Approvals** page. When you approve, Forge
+runs it as you, with your permissions and your MFA, never with the agent's
+token. See [How approvals work](/docs/concepts/mcp-connectors/#how-approvals-work).
+:::
+
+## Verify
+
+- The agent lists Forge's tools, all named `forge_…`, such as
+  `forge_list_nodes`. Ask it to list your nodes.
+- Go to **Profile → Tokens & API keys** → **Connected apps**. The connection appears with
+  its **App**, **Mode**, **Connected**, **Last used** and **Status**.
+- **Operations → Audit log** shows `connector.approve` with the connector's name, redirect
+  host and mode. Changes the agent makes in **Auto** mode show your user as
+  the actor and a `via` field that names the connector, its connection and
+  its mode.
+
+## Approve what an agent asks for
+
+In **Ask** mode every change the agent asks for waits for you; in **Auto**
+mode destructive changes and changes that need MFA do. The agent tells you
+the approval id and a link to `https://<forge-host>/approvals?id=<approval-id>`.
+You have 15 minutes to decide.
+
+1. Open the link, which opens the request directly, or select **Approvals**
+   under **Administration** in the sidebar. The count next to
+   it shows how many requests wait for you. **Waiting for you** lists your
+   pending requests; **Recent** lists decided and expired ones.
+2. Select a request. Check:
+   - **Requester**: the connector that asked.
+   - **Tool** and the **Request**: the method, the URI and the
+     **Arguments** that will run.
+   - **Expires in**: the time left.
+3. Read the request as data from an AI agent. Approve only what you would do
+   yourself in the console, whatever the agent said it would do.
+4. Select **Approve and run** to run the request once, as you. To refuse,
+   select **Deny**; nothing runs.
+5. If the request needs MFA and your session is not MFA-verified, Forge asks
+   you to verify it's you. Enter your code or use your passkey, then
+   approve again.
+
+:::caution
+Approving runs the request with your permissions and your MFA, and the audit
+log records it under your name. An agent can be misled by text it read, such
+as a log line or a file. Check the target node, stack or job and every
+argument before you approve.
+:::
+
+### Verify
+
+- The request shows **Ran** with its **Result**, or **Ran and failed** with
+  the error. **Recent** lists it as executed or failed.
+- Ask the agent for the outcome. It calls `forge_approval_status` and gets
+  `executed` with the result, or `failed`, `denied` or `expired`.
+- **Operations → Audit log** shows `mcp.approval.request` when the agent asked,
+  `mcp.approval.decide` when you decided, and the change itself with your
+  user as actor and a `via` field that names the approval and the
+  connector.
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| **This request was already decided or has expired.** (`409 conflict`) | More than 15 minutes passed, or the request was already approved or denied, for example in another tab | Nothing ran for an expired request. Ask the agent to ask again |
+| The agent reports `too many requests are waiting for approval` | 10 requests from this connection are pending | Approve or deny the waiting requests on the **Approvals** page, or let them expire, then have the agent try again |
+| Approving fails with `403` `step_up_required` | The change is under the MFA guardrail, the server requires MFA, and your session is not MFA-verified | Verify with your authenticator code or passkey and approve again. Set up MFA first if your account has none |
+| **Approve and run** and **Deny** are greyed out with **Only the person whose connector asked can decide.** | You are an administrator viewing someone else's request | Ask the person who connected the agent to decide |
+| `403` `approve requests in the Forge console` | You called the approve or deny endpoint with an API key, an app or CLI token, or a connector token | Approve in the console in a browser |
+| The request shows **Ran and failed** | The change ran as you and the handler refused it or it failed, for example because you lack the permission | Read the error. Fix the cause, then let the agent ask again |
+
+## Revoke a connection
+
+1. Go to **Profile → Tokens & API keys** → **Connected apps**.
+2. Open the row menu of the connection and select **Revoke**, then confirm.
+
+Its access and refresh tokens stop working at once; the agent must sign in
+and be approved again. Forge records `connector.revoke`.
+
+Administrators (`user.manage`) can turn on **Show everyone's** to list every
+user's connections, with a **User** column, and revoke any of them. The
+**Registered connectors** panel lists every app that registered with Forge.
+Selecting **Revoke** there blocks the app and ends every connection made
+with it (`oauth.client.revoke`).
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `401` from `/mcp` with `WWW-Authenticate: Bearer resource_metadata="…"` | The agent has no token, its token expired, or the connection was revoked | Sign in again from the agent (reconnect or re-authenticate the server) |
+| `401` from `/mcp` with an API key or an app token | `/mcp` accepts only tokens issued to a connector | Add Forge as a connector and sign in through the browser |
+| `404` at `/mcp` or `/.well-known/oauth-protected-resource/mcp`, or **Connected apps** says AI connectors are turned off | MCP is not enabled | Set `[mcp] enabled = true` and restart Forge |
+| The agent cannot reach Forge, or a cloud connector times out | Forge is not reachable from where the agent runs | For claude.ai and ChatGPT, publish Forge over public HTTPS; otherwise use an agent on a machine that reaches Forge |
+| Sign-in fails after discovery, or links point to `http://localhost` | `public_url` is not the URL the agent uses, or the proxy forwards only some paths | Set `public_url` to the exact HTTPS URL, forward every path, restart |
+| Registration fails with `invalid_redirect_uri` | The agent's redirect URI is not allowed: `http` on a non-loopback host, a fragment, a wildcard, user info or a blocked scheme | Use an agent version with an `https`, loopback or app-scheme redirect URI. See [Redirect URI rules](/docs/reference/mcp/#redirect-uri-rules) |
+| Registration fails with `429 throttled` | The hourly registration cap is reached | Wait, or raise `[mcp] registrations_per_hour` |
+| **This sign-in request expired or was already answered** | The consent page waited more than 10 minutes, was already answered, or Forge restarted | Start the connection again from the agent |
+| `403 origin not allowed` | A browser-based client sends an `Origin` that is not Forge's own | Use a client that connects server-to-server or from your machine |
+| A tool fails with `this connection is read-only` | The connection's mode is **Read-only** | Revoke the connection in **Profile → Tokens & API keys** → **Connected apps** and connect again with **Ask** or **Auto**, if your administrator allows it |
+| A tool returns `status: pending` and an approval link instead of a result | The change waits for your approval (**Ask** mode, or a destructive or MFA-guarded tool in **Auto**) | Decide it on the **Approvals** page. See [Approve what an agent asks for](#approve-what-an-agent-asks-for) |
+| A tool fails with `not allowed: …` | You lack the permission in Forge | Ask an administrator for the role; the agent has your permissions only |
+| A tool fails with `too many tool calls` | The connection's rate or concurrency limit was reached | Wait a moment; see [Limits](/docs/reference/mcp/#limits) |
+
+## Next steps
+
+- [MCP connectors](/docs/concepts/mcp-connectors/): sign-in, modes and how tool
+  calls are checked.
+- [MCP reference](/docs/reference/mcp/): every tool, argument, limit and error.
+- [Roles and access](/docs/guides/roles-and-access/): decide what the people
+  who connect agents may do.

@@ -1,0 +1,32 @@
+[package]
+name = "forge-store"
+description = "SQL persistence for Orbyn Forge: SQLite (default) or PostgreSQL, one set of migrations."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# Enable the PostgreSQL driver for large installs. The same migrations and
+# queries run on both backends.
+postgres = ["sqlx/postgres"]
+
+[dependencies]
+forge-core.workspace = true
+sqlx.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+# For the async lock around observation writes; already in the server.
+tokio.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

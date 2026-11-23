@@ -1,0 +1,260 @@
+// Orbyn Forge authorization schema (Cedar).
+//
+// Resource hierarchy (child `in` parent):
+//   Platform <- Workspace <- Project <- Environment <- Server/Job
+//   Platform <- Workspace <- Environment <- Server/Job   (legacy, unassigned)
+//   Platform <- Workspace <- Tenant
+//   Platform <- Workspace <- Cluster <- Server/Job
+// Servers and jobs may also sit directly under a Workspace. An environment is
+// placed in a cluster, but the cluster is not its authorization parent
+// (D-056): a binding on a cluster covers its nodes, not its environments.
+//
+// Roles are action groups. A role binding links the matching role template
+// (policies/roles.cedar) with principal = the user and resource = the scope,
+// so "developer on environment N" grants developer actions on N and everything in N.
+
+namespace Forge {
+  entity Platform;
+  entity Workspace in [Platform];
+  entity Tenant in [Workspace];
+  // A project is the product; its environments are environments (D-102).
+  // A binding on a project covers every environment in it.
+  entity Project in [Workspace];
+  entity Environment in [Project, Workspace];
+  // A cluster is a named group of nodes inside a workspace.
+  entity Cluster in [Workspace];
+  entity Server in [Environment, Cluster, Workspace];
+  // Service: a job on one service, such as a restart (#13).
+  entity Job in [Environment, Workspace, Cluster, Server, Platform, Service];
+  entity Service in [Environment, Workspace];
+  entity Plugin in [Platform];
+  entity AuditLog in [Workspace, Platform];
+  // A user group (#13): a profile assigned to a group grants every member.
+  entity Group;
+  entity User in [Group];
+
+  type RequestContext = {
+    // Session has completed MFA (or a recent step-up).
+    mfa: Bool,
+  };
+
+  // ---- role groups ---------------------------------------------------
+  action "role:platform_admin";
+  action "role:workspace_admin";
+  action "role:operator";
+  action "role:developer";
+  action "role:dba";
+  action "role:auditor";
+  action "role:customer";
+
+  // ---- Phase 1 actions -----------------------------------------------
+  // Service: a grant on one service lets its holder see it (#13).
+  action "view" in ["role:platform_admin", "role:workspace_admin", "role:operator", "role:developer", "role:dba", "role:auditor", "role:customer"]
+    appliesTo { principal: [User], resource: [Platform, Workspace, Tenant, Project, Environment, Server, Job, Plugin, AuditLog, Cluster, Service], context: RequestContext };
+
+  action "audit.read" in ["role:platform_admin", "role:workspace_admin", "role:auditor"]
+    appliesTo { principal: [User], resource: [Platform, Workspace, AuditLog], context: RequestContext };
+
+  // Alerts (#11, D-087): see alarms and rules of a workspace; manage rules,
+  // acknowledge alarms and add notes. Rules, alarms, policies and deliveries
+  // are authorized on the workspace. A silence (D-112) is authorized on what
+  // its scope names, so both actions also apply to a cluster, an environment, a
+  // node and a service: an operator of one environment can silence that
+  // environment's alarms and nothing wider.
+  action "alert.view" in ["role:platform_admin", "role:workspace_admin", "role:operator", "role:developer", "role:dba", "role:auditor"]
+    appliesTo { principal: [User], resource: [Platform, Workspace, Cluster, Environment, Server, Service], context: RequestContext };
+
+  action "alert.manage" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Platform, Workspace, Cluster, Environment, Server, Service], context: RequestContext };
+
+  // Notification channels (#11, D-110): where alarm messages leave Forge.
+  // Administrators only, and under the MFA guardrail: a channel is an
+  // outbound destination.
+  action "notification.manage" in ["role:platform_admin", "role:workspace_admin"]
+    appliesTo { principal: [User], resource: [Platform, Workspace], context: RequestContext };
+
+  action "workspace.create" in ["role:platform_admin"]
+    appliesTo { principal: [User], resource: [Platform], context: RequestContext };
+
+  action "system.update" in ["role:platform_admin"]
+    appliesTo { principal: [User], resource: [Platform], context: RequestContext };
+
+  // Analytics retention and resource limits (D-136). Shortening retention
+  // deletes data, so it sits under the MFA guardrail.
+  action "analytics.configure" in ["role:platform_admin"]
+    appliesTo { principal: [User], resource: [Platform], context: RequestContext };
+
+  action "workspace.manage" in ["role:platform_admin", "role:workspace_admin"]
+    appliesTo { principal: [User], resource: [Workspace, Tenant, Project, Environment, Cluster], context: RequestContext };
+
+  // Every assignable scope (#13): access can be handed out at an app
+  // group, a node or a single service, by whoever manages users above it.
+  action "user.manage" in ["role:platform_admin", "role:workspace_admin"]
+    appliesTo { principal: [User], resource: [Platform, Workspace, Tenant, Project, Environment, Cluster, Server, Service], context: RequestContext };
+
+  action "server.enroll" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Workspace, Environment, Cluster], context: RequestContext };
+
+  // Onboard a node from SSH credentials (credential use is sensitive: MFA guardrail).
+  action "node.onboard" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Workspace, Cluster, Environment], context: RequestContext };
+
+  action "server.manage" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+
+  action "server.command" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+
+  // Rename a node: console name and DNS label (D-084). Renames resync
+  // every node's hosts file.
+  action "server.rename" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+
+  // End processes (one or a whole tree) and change process priority on a
+  // node (root-equivalent: MFA guardrail).
+  action "process.manage" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+
+  // Port tunnels (D-091, D-100): forward a local port to a service's port on
+  // a node. On an environment or service: that environment's services (apps,
+  // stack services), so developers reach what they deploy. On a server: the
+  // App Store packages installed there. Reaches services that are not
+  // exposed, so MFA guardrail. SSH targets use `terminal.open`.
+  action "network.tunnel" in ["role:platform_admin", "role:workspace_admin", "role:operator", "role:developer"]
+    appliesTo { principal: [User], resource: [Server, Environment, Service], context: RequestContext };
+
+  // Any port of a node, listed in the service catalogue or not (D-100): an
+  // administrator exception, audited as a raw tunnel. MFA guardrail.
+  action "network.tunnel.any" in ["role:platform_admin", "role:workspace_admin"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+
+  // Install/remove/start/stop App Store packages (runs as root: MFA guardrail).
+  action "package.manage" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+
+  // Nginx sites and DNS records served by a node (custom config: MFA guardrail).
+  action "proxy.manage" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+
+  // Container lifecycle and image pulls on a node's Docker engine.
+  action "container.manage" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+
+  // Environment values of a container on `inspect` (often secrets): MFA guardrail.
+  action "container.inspect_env" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+
+  // Interactive shell inside a container (`docker exec`) as the node's
+  // terminal account. Not under the MFA guardrail by choice (D-100): a
+  // privileged container still reaches the host.
+  action "container.exec" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+
+  action "job.create" in ["role:platform_admin", "role:workspace_admin", "role:operator", "role:developer", "role:dba"]
+    appliesTo { principal: [User], resource: [Platform, Workspace, Environment, Server, Job, Cluster, Service], context: RequestContext };
+
+  // Object stores on a node: install, lifecycle, buckets and access keys
+  // (runs as root on the node: MFA guardrail).
+  // Managed stores are checked on their member nodes; connected (external)
+  // stores, which have no node, on their workspace.
+  action "storage.manage" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server, Workspace], context: RequestContext };
+
+  // Browse, upload, download and delete objects in an object store. On a
+  // environment: the stores that environment owns (D-107). A managed store is
+  // also reached, as before, through a role on its member node, and a
+  // connected store through a role on the workspace.
+  action "storage.data" in ["role:platform_admin", "role:workspace_admin", "role:operator", "role:developer"]
+    appliesTo { principal: [User], resource: [Server, Workspace, Environment], context: RequestContext };
+
+  // File explorer on a node. Reads need no MFA; writes, deletes and
+  // administration (approving roots) need MFA (guardrail). Protected paths
+  // stay closed to all. Which directories a user reaches depends on the
+  // root: the whole node also needs `file.node`.
+  action "file.read" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+
+  action "file.write" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+
+  action "file.delete" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+
+  action "file.admin" in ["role:platform_admin", "role:workspace_admin"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+
+  // The whole-node file root (`/`, every drive), minus protected paths.
+  // Others see only approved service and container directories.
+  action "file.node" in ["role:platform_admin", "role:workspace_admin"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+
+  action "job.cancel" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Job], context: RequestContext };
+
+  action "plugin.manage" in ["role:platform_admin"]
+    appliesTo { principal: [User], resource: [Platform, Plugin], context: RequestContext };
+
+  action "plugin.invoke" in ["role:platform_admin", "role:workspace_admin", "role:operator", "role:developer"]
+    appliesTo { principal: [User], resource: [Platform, Plugin, Workspace, Environment, Server, Cluster], context: RequestContext };
+
+  // ---- Terminals, deployments, stacks, certificates and secrets ------
+  // Read health checks and observations (D-085). Same roles as view.
+  action "health.view" in ["role:platform_admin", "role:workspace_admin", "role:operator", "role:developer", "role:dba", "role:auditor", "role:customer"]
+    appliesTo { principal: [User], resource: [Platform, Workspace, Environment, Cluster, Server, Service], context: RequestContext };
+
+  // Change a service's health checks (D-085). Like deploy.
+  action "health.configure" in ["role:platform_admin", "role:workspace_admin", "role:operator", "role:developer"]
+    appliesTo { principal: [User], resource: [Environment, Service], context: RequestContext };
+
+  // Health checks that run code on the node (exec, shell). MFA guardrail.
+  action "health.command" in ["role:platform_admin", "role:workspace_admin", "role:operator", "role:developer"]
+    appliesTo { principal: [User], resource: [Environment, Service], context: RequestContext };
+
+  // Service logs (D-128). Logs often hold personal data: not customers.
+  action "log.read" in ["role:platform_admin", "role:workspace_admin", "role:operator", "role:developer", "role:dba", "role:auditor"]
+    appliesTo { principal: [User], resource: [Platform, Workspace, Environment, Service], context: RequestContext };
+
+  // Create and revoke log ingest keys (D-128). Like health.configure.
+  action "log.manage" in ["role:platform_admin", "role:workspace_admin", "role:operator", "role:developer"]
+    appliesTo { principal: [User], resource: [Environment, Service], context: RequestContext };
+
+  action "terminal.open" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+
+  // Service: deploy, start, stop and restart one service only (#13).
+  action "deploy" in ["role:platform_admin", "role:workspace_admin", "role:operator", "role:developer"]
+    appliesTo { principal: [User], resource: [Environment, Cluster, Service], context: RequestContext };
+  // Approve or reject a deployment that waits for an approval (strategy
+  // approval gates, manual strategy batches). Not developers.
+  action "deploy.approve" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Environment, Cluster, Service], context: RequestContext };
+
+  // Compose stacks (issue #7). Privileged stacks (host access) need their
+  // own administrator permission and MFA.
+  action "stack.manage" in ["role:platform_admin", "role:workspace_admin", "role:operator", "role:developer"]
+    appliesTo { principal: [User], resource: [Environment, Cluster], context: RequestContext };
+
+  action "stack.privileged" in ["role:platform_admin", "role:workspace_admin"]
+    appliesTo { principal: [User], resource: [Environment, Cluster], context: RequestContext };
+
+  // An uploaded certificate's private key leaves the vault for an edge node
+  // (endpoint apply). Administrators, MFA. On a server: its workspace's
+  // administrators (the job runner re-checks it on the edge).
+  action "certificate.use" in ["role:platform_admin", "role:workspace_admin"]
+    appliesTo { principal: [User], resource: [Workspace, Server], context: RequestContext };
+
+  // Access profiles and service accounts (D-086), explicit tunnel grants
+  // (D-100). Administrators, MFA.
+  action "access.manage" in ["role:platform_admin", "role:workspace_admin"]
+    appliesTo { principal: [User], resource: [Platform, Workspace], context: RequestContext };
+
+  action "secret.read" in ["role:platform_admin", "role:workspace_admin"]
+    appliesTo { principal: [User], resource: [Workspace, Environment], context: RequestContext };
+
+  // Create, change and delete credential vault items. Platform admins, MFA.
+  action "secret.manage" in ["role:platform_admin"]
+    appliesTo { principal: [User], resource: [Platform], context: RequestContext };
+
+  action "db.admin" in ["role:platform_admin", "role:workspace_admin", "role:dba"]
+    appliesTo { principal: [User], resource: [Workspace, Environment, Server], context: RequestContext };
+}

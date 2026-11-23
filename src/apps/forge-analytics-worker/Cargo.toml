@@ -1,0 +1,51 @@
+[package]
+name = "forge-analytics-worker"
+description = "Orbyn Forge analytics worker: owns analytics ingest, buffers, queries, retention and the embedded engine; supervised by forge-server."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "forge-analytics-worker"
+path = "src/main.rs"
+
+[dependencies]
+forge-core.workspace = true
+forge-analytics.workspace = true
+forge-analytics-duckdb.workspace = true
+forge-analytics-proto.workspace = true
+forge-proto.workspace = true
+forge-secrets.workspace = true
+forge-pki.workspace = true
+# The agent upload listener (D-142): HTTP/2 over mTLS, like the agent hub.
+hyper.workspace = true
+hyper-util = { workspace = true, features = ["server"] }
+http.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+rustls-pki-types.workspace = true
+hex.workspace = true
+# Reads the agents' spool files (zstd NDJSON); already in the tree.
+zstd.workspace = true
+async-trait.workspace = true
+prost.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tokio = { workspace = true, features = ["io-std"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

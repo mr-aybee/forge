@@ -1,0 +1,42 @@
+---
+title: Orbyn Forge
+description: One login, one permission model, one audit trail, one service view — across every server, runtime and environment.
+template: splash
+hero:
+  image:
+    file: ../../assets/forge-mark.svg
+    alt: Orbyn Forge logo
+  tagline: A lightweight, secure orchestration layer for Windows and Linux. It drives proven engines — Docker, Nginx, Caddy, PowerDNS, guacd, database servers — instead of rewriting them.
+  actions:
+    - text: Quickstart
+      link: /docs/getting-started/quickstart/
+      icon: right-arrow
+    - text: Architecture
+      link: /docs/concepts/architecture/
+      variant: minimal
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+<CardGrid>
+  <Card title="Secure by construction" icon="approve-check">
+    Cedar policies enforced at the API, the job runner, the agent and the plugin host. Hash-chained, signed audit log.
+  </Card>
+  <Card title="Agents dial out" icon="rocket">
+    Managed servers need no inbound ports. mTLS with per-agent certificates and signed, replay-protected commands.
+  </Card>
+  <Card title="Durable jobs" icon="random">
+    Every operation is a resumable job with leases and fencing tokens. Kill the control plane mid-job; it carries on.
+  </Card>
+  <Card title="Light" icon="star">
+    One binary plus SQLite. No Redis, no broker, no microservices. Agent idle RSS target ≤ 25 MB.
+  </Card>
+  <Card title="Sandboxed plugins" icon="puzzle">
+    Signed WebAssembly components with fuel, memory and time budgets. Effective permission = user ∩ plugin ∩ policy.
+  </Card>
+  <Card title="One app, many panels" icon="laptop">
+    `/api/version` and `/api/capabilities` let one desktop or mobile app manage panels of different versions.
+  </Card>
+</CardGrid>
+
+Read the [Security overview](/docs/security/) to see how Forge protects your fleet and what is still open.

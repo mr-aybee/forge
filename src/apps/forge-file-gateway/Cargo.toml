@@ -1,0 +1,27 @@
+[package]
+name = "forge-file-gateway"
+description = "Forge-managed SFTP gateway: temporary access grants served over SSH (SFTP only), every operation through the file service."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+forge-core.workspace = true
+forge-files.workspace = true
+forge-secrets.workspace = true
+russh.workspace = true
+russh-sftp.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+ring.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

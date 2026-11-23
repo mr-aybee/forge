@@ -1,0 +1,154 @@
+[workspace]
+resolver = "3"
+members = ["src/domain/*", "src/services/*", "src/adapters/*", "src/protocol/*", "src/apps/*", "src/tools/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "Apache-2.0"
+publish = false
+repository = "https://github.com/orbyn/forge"
+
+[workspace.dependencies]
+# internal
+forge-core = { path = "src/domain/forge-core" }
+forge-authz = { path = "src/services/forge-authz" }
+forge-ssh = { path = "src/adapters/forge-ssh" }
+forge-store = { path = "src/adapters/forge-store" }
+forge-analytics = { path = "src/adapters/forge-analytics" }
+forge-analytics-duckdb = { path = "src/adapters/forge-analytics-duckdb" }
+forge-s3 = { path = "src/adapters/forge-s3" }
+forge-jobs = { path = "src/services/forge-jobs" }
+forge-audit = { path = "src/services/forge-audit" }
+forge-rules = { path = "src/services/forge-rules" }
+forge-alerts = { path = "src/services/forge-alerts" }
+forge-files = { path = "src/services/forge-files" }
+forge-health = { path = "src/services/forge-health" }
+forge-file-gateway = { path = "src/apps/forge-file-gateway" }
+forge-pki = { path = "src/services/forge-pki" }
+forge-docker = { path = "src/adapters/forge-docker" }
+forge-proto = { path = "src/protocol/forge-proto" }
+forge-analytics-proto = { path = "src/protocol/forge-analytics-proto" }
+forge-analytics-worker = { path = "src/apps/forge-analytics-worker" }
+forge-secrets = { path = "src/services/forge-secrets" }
+forge-identity = { path = "src/services/forge-identity" }
+forge-plugin-host = { path = "src/services/forge-plugin-host" }
+forge-sdk = { path = "src/protocol/forge-sdk" }
+forge-catalog = { path = "src/protocol/forge-catalog" }
+forge-agent = { path = "src/apps/forge-agent" }
+
+# async / http
+tokio = { version = "1.47", features = ["rt", "rt-multi-thread", "macros", "net", "time", "sync", "signal", "process", "io-util", "fs"] }
+futures = { version = "0.3", default-features = false, features = ["std"] }
+async-trait = "0.1"
+axum = { version = "0.8", features = ["ws", "macros"] }
+tower = { version = "0.5", features = ["util", "limit", "timeout"] }
+tower-http = { version = "0.6", features = ["trace", "fs", "limit", "set-header", "compression-br", "compression-zstd", "compression-gzip"] }
+hyper = { version = "1", features = ["http1", "http2", "server", "client"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "http2"] }
+http-body-util = "0.1"
+http = "1"
+bytes = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "http2", "cookies", "stream"] }
+quick-xml = { version = "0.41", features = ["serialize"] }
+
+# tls / crypto
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls-pki-types = "1"
+# SMTP for email notifications; server only, rustls on ring, no OpenSSL (D-113).
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls", "ring", "rustls-native-certs"] }
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem", "x509-parser"] }
+x509-parser = "0.16"
+time = "0.3"
+ring = "0.17"
+argon2 = "0.5"
+subtle = "2.6"
+
+# data
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Compose files (issue #7, D-058): YAML 1.2 with merge keys and an alias/depth budget; server only.
+serde-saphyr = { version = "=2.1.1", default-features = false, features = ["deserialize"] }
+toml = "0.8"
+prost = "0.13"
+uuid = { version = "1.10", features = ["v4", "v7", "serde"] }
+hex = "0.4"
+base64 = "0.22"
+semver = { version = "1", features = ["serde"] }
+url = "2"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "any", "sqlite", "migrate", "macros"] }
+
+# policy / identity
+cedar-policy = "4"
+russh = { version = "0.65", default-features = false, features = ["ring", "flate2"] }
+openidconnect = { version = "4", default-features = false, features = ["reqwest"] }
+
+# wasm
+wasmtime = { version = "49", default-features = false, features = ["runtime", "cranelift", "component-model", "wat", "std", "anyhow"] }
+
+# platform
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy"] }
+windows-sys = { version = "0.59", features = ["Win32_System_Services", "Win32_Foundation"] }
+# Directory-relative, no-follow file access for the agent file explorer.
+# SFTP subsystem for the Forge-managed file gateway (Apache-2.0; D-051).
+russh-sftp = { version = "3.0.1", default-features = false }
+# Archives for the file explorer (D-057): zip and tar, deflate through flate2.
+zip = { version = "9.5.1", default-features = false, features = ["deflate-flate2"] }
+tar = { version = "0.4.46", default-features = false }
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+zstd = { version = "0.14", default-features = false }
+# File search patterns in the agent (already in the tree through other crates).
+regex = { version = "1", default-features = false, features = ["std", "perf", "unicode"] }
+rustix = { version = "1.1", default-features = false, features = ["std", "fs", "process", "thread"] }
+sysinfo = { version = "0.33", default-features = false, features = ["system", "disk", "network", "user"] }
+
+# errors / logs / cli
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+tempfile = "3"
+# The DuckDB analytics store (D-143): MIT, bundled C++ build, worker only.
+duckdb = { version = "1.20001", default-features = false, features = ["bundled", "json"] }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+dbg_macro = "warn"
+todo = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+# Size-optimised profile for the node agent (`cargo build --profile agent -p forge-agent`).
+# Optimized but quick to build: scale tests and local profiling.
+[profile.perf]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
+panic = "unwind"
+strip = "none"
+
+[profile.agent]
+inherits = "release"
+opt-level = "s"
+
+# Line tables are enough for backtraces and keep Windows PDBs under the
+# linker's module limit (LNK1140) with this many dependencies.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

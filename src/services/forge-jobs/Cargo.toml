@@ -1,0 +1,27 @@
+[package]
+name = "forge-jobs"
+description = "Durable job engine: leases, fencing tokens, idempotency, resumable steps, retry with backoff."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+forge-core.workspace = true
+forge-secrets.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+forge-store.workspace = true
+forge-authz.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

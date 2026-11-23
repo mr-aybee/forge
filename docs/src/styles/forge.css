@@ -1,0 +1,100 @@
+/*
+ * Applies the Orbyn Forge brand (website/src/styles/tokens.css) to Starlight
+ * so the docs and forge.orbyntech.com look like one site.
+ */
+@import "../../../website/src/styles/tokens.css";
+
+:root {
+  --sl-font: var(--forge-font-sans);
+  --sl-font-mono: var(--forge-font-mono);
+  --sl-content-width: 48rem;
+  --sl-nav-height: 4rem;
+}
+
+/* Dark (Starlight's default palette names). */
+:root,
+::backdrop {
+  --sl-color-accent-low: #0f3346;
+  --sl-color-accent: #2aa5c2;
+  --sl-color-accent-high: #8fdcf0;
+  --sl-color-white: #ffffff;
+  --sl-color-gray-1: #e6f1f7;
+  --sl-color-gray-2: #c0d2dd;
+  --sl-color-gray-3: #93a9b8;
+  --sl-color-gray-4: #5d7486;
+  --sl-color-gray-5: #1b3446;
+  --sl-color-gray-6: #0c1f2e;
+  --sl-color-black: #07141f;
+}
+
+:root[data-theme="light"],
+[data-theme="light"] ::backdrop {
+  --sl-color-accent-low: #dff4f9;
+  --sl-color-accent: #0b8fac;
+  --sl-color-accent-high: #0a4f62;
+  --sl-color-white: #0d2233;
+  --sl-color-gray-1: #172c3d;
+  --sl-color-gray-2: #2c4254;
+  --sl-color-gray-3: #4b6072;
+  --sl-color-gray-4: #7d91a2;
+  --sl-color-gray-5: #e1e9ef;
+  --sl-color-gray-6: #f0f5f8;
+  --sl-color-gray-7: #f9fbfc;
+  --sl-color-black: #ffffff;
+}
+
+header.header {
+  backdrop-filter: blur(12px);
+  background: color-mix(in srgb, var(--sl-color-bg-nav) 85%, transparent);
+  border-bottom-color: var(--forge-border);
+}
+
+.site-title {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3,
+h1#_top {
+  letter-spacing: -0.02em;
+}
+
+.sl-markdown-content :is(pre, .expressive-code .frame) {
+  border-radius: var(--forge-radius-sm);
+}
+
+.sl-markdown-content table {
+  border-radius: var(--forge-radius-sm);
+  overflow: hidden;
+}
+
+.card {
+  border-radius: var(--forge-radius);
+}
+
+/* Splash (docs home) hero glow, matching the website hero. */
+.hero {
+  position: relative;
+}
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: -4rem -50vw 0;
+  background: radial-gradient(600px 300px at 50% 0%, var(--forge-glow), transparent 70%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.sl-link-button.primary {
+  border-radius: 999px;
+}
+.sl-link-button {
+  border-radius: 999px;
+}
+
+/* Match the website header: 4rem tall, same muted nav links. */
+:root {
+  --sl-nav-height: 4rem;
+}

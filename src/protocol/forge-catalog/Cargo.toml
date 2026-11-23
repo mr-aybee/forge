@@ -1,0 +1,16 @@
+[package]
+name = "forge-catalog"
+description = "Orbyn Forge App Store catalog (package manifests, typed parameters, recipes) and service specs shared by the control plane and the node helper."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

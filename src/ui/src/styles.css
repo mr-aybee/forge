@@ -1,0 +1,456 @@
+@import "tailwindcss";
+
+/* Orbyn Forge design tokens. Light is the default; dark ("ocean") applies
+   only when the user picks it (html[data-theme="dark"]). */
+@theme {
+  --color-bg: #eef5f9;
+  --color-sidebar: #ffffff;
+  --color-panel: #ffffff;
+  --color-panel-2: #eef5fa;
+  --color-line: #d6e4ee;
+  --color-line-strong: #c4d1e2;
+  --color-fg: #172b45;
+  --color-muted: #5f7590;
+  --color-faint: #8a9bb2;
+  --color-accent: #1f6fc4;
+  --color-accent-2: #3bb8d6;
+  --color-accent-soft: #e2f0fb;
+  --color-ok: #16865f;
+  --color-ok-soft: #e3f5ee;
+  --color-warn: #b06d10;
+  --color-warn-soft: #fbf1df;
+  --color-bad: #c63d4f;
+  --color-bad-soft: #fbe8eb;
+  /* Extra hues for category badges (audit actions). */
+  --color-violet: #7048c8;
+  --color-violet-soft: #efe9fb;
+  --color-teal: #0f8a8a;
+  --color-teal-soft: #e0f4f3;
+  --color-sky: #1c7fb8;
+  --color-sky-soft: #e1f1fa;
+  --color-pink: #b8407e;
+  --color-pink-soft: #f9e6f0;
+  --color-orange: #c05a14;
+  --color-orange-soft: #fcebdc;
+  --color-indigo: #3f55c6;
+  --color-indigo-soft: #e6e9fa;
+  /* Access dashboard: grant states and resource levels. */
+  --color-grant: #16865f;
+  --color-grant-soft: #e3f5ee;
+  --color-grant-line: #9fd8c1;
+  --color-grant-add: #0f7a52;
+  --color-grant-add-soft: #d3f0e3;
+  --color-grant-remove: #c63d4f;
+  --color-grant-remove-soft: #fbe8eb;
+  --color-grant-narrow: #b06d10;
+  --color-grant-narrow-soft: #fbf1df;
+  --color-level-workspace: #3f55c6;
+  --color-level-workspace-soft: #e6e9fa;
+  --color-level-app: #7048c8;
+  --color-level-app-soft: #efe9fb;
+  --color-level-env: #0f8a8a;
+  --color-level-env-soft: #e0f4f3;
+  --color-level-service: #1c7fb8;
+  --color-level-service-soft: #e1f1fa;
+  --color-level-cluster: #c05a14;
+  --color-level-cluster-soft: #fcebdc;
+  --color-level-node: #b8407e;
+  --color-level-node-soft: #f9e6f0;
+  /* Console / terminal panels: dark in both themes. */
+  /* Log severity (Logs page): Fatal is a deeper magenta-red than Error. */
+  --color-fatal: #a3155f;
+  --color-fatal-soft: #f7dbe9;
+  --color-term: #06121f;
+  --color-term-2: #0b1b2d;
+  --color-term-fg: #d6e6f2;
+  --color-term-muted: #7f97ab;
+  --color-term-line: #1b2c40;
+  --color-term-prompt: #7fd3f0;
+  --color-term-bad: #ff8f9c;
+  --color-term-warn: #fcd34d;
+  --color-term-ok: #6ee7b7;
+  --font-sans: "Inter", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
+  --shadow-card: 0 1px 2px rgb(16 32 64 / 0.06), 0 2px 8px rgb(16 32 64 / 0.04);
+  --shadow-pop: 0 18px 60px rgb(10 25 50 / 0.18);
+  /* Motion: short, eased-out transitions; all switched off under reduced motion. */
+  --motion-fast: 120ms;
+  --motion-base: 160ms;
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+:root[data-theme="dark"] {
+  --color-bg: #061220;
+  --color-sidebar: #0b1425;
+  --color-panel: #0c1d33;
+  --color-panel-2: #11263f;
+  --color-line: #21334b;
+  --color-line-strong: #2c4361;
+  --color-fg: #e3ecf8;
+  --color-muted: #8a9db8;
+  --color-faint: #6c819f;
+  --color-accent: #5fb6ef;
+  --color-accent-2: #7fe0f0;
+  --color-accent-soft: #15325233;
+  --color-ok: #52d6b1;
+  --color-ok-soft: #39b8981a;
+  --color-warn: #edbc6c;
+  --color-warn-soft: #dba24b1a;
+  --color-bad: #ef8d98;
+  --color-bad-soft: #ef8d981a;
+  --color-violet: #b9a2f5;
+  --color-violet-soft: #9d7cf01f;
+  --color-teal: #5fd6cf;
+  --color-teal-soft: #3cc0b81c;
+  --color-sky: #7cc8f2;
+  --color-sky-soft: #4fb0e61c;
+  --color-pink: #f39ac6;
+  --color-pink-soft: #e872ad1c;
+  --color-orange: #f6ac72;
+  --color-orange-soft: #ef8f461c;
+  --color-indigo: #a3b1fa;
+  --color-indigo-soft: #7d8ff21f;
+  --color-grant: #52d6b1;
+  --color-grant-soft: #39b8981f;
+  --color-grant-line: #52d6b155;
+  --color-grant-add: #7ce6c6;
+  --color-grant-add-soft: #39b8982e;
+  --color-grant-remove: #ef8d98;
+  --color-grant-remove-soft: #ef8d9822;
+  --color-grant-narrow: #edbc6c;
+  --color-grant-narrow-soft: #dba24b1f;
+  --color-level-workspace: #a3b1fa;
+  --color-level-workspace-soft: #7d8ff224;
+  --color-level-app: #b9a2f5;
+  --color-level-app-soft: #9d7cf024;
+  --color-level-env: #5fd6cf;
+  --color-level-env-soft: #3cc0b820;
+  --color-level-service: #7cc8f2;
+  --color-level-service-soft: #4fb0e620;
+  --color-level-cluster: #f6ac72;
+  --color-level-cluster-soft: #ef8f4620;
+  --color-level-node: #f39ac6;
+  --color-level-node-soft: #e872ad20;
+  --color-fatal: #ff6fb5;
+  --color-fatal-soft: #ff4fa52b;
+  --shadow-card: 0 3px 10px rgb(0 0 0 / 0.25);
+  --shadow-pop: 0 24px 80px rgb(2 8 19 / 0.6);
+  color-scheme: dark;
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+:root[data-theme="dark"] body {
+  background: radial-gradient(ellipse at 70% 0, #0f3a5e66, transparent 55%), radial-gradient(ellipse at 0% 100%, #0d4a5a40, transparent 50%), var(--color-bg);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* After a mouse or touch press, buttons, tabs and links show no focus outline
+   (browsers sometimes do when a component moves focus on click). Keyboard use
+   clears data-input, so Tab still shows it. See app/inputModality.ts. */
+:root[data-input="pointer"] :is(button, a, [role="tab"], [role="button"], [role="menuitem"], [role="radio"], summary):focus-visible {
+  outline: none;
+}
+
+/* Form fields: one accent border and a soft ring, no outline drawn on top. */
+input:not([type="checkbox"]):not([type="radio"]):not([data-bare]):focus-visible,
+textarea:not([data-bare]):focus-visible,
+select:focus-visible {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+/* Bare inputs (`data-bare`) have no frame of their own: they sit inside a
+   box that already has a border (the search field of a menu, an input with
+   a fixed prefix or suffix, the command palette). The box shows the focus,
+   so no outline or ring is drawn around the input inside it. */
+input[data-bare]:focus-visible,
+textarea[data-bare]:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+:is(div, label):has(> input[data-bare]:focus-visible),
+:is(div, label):has(> textarea[data-bare]:focus-visible) {
+  border-color: var(--color-accent);
+}
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--color-accent);
+}
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+  outline-offset: 1px;
+}
+
+/* View changes: pages and tab panels fade and rise in. */
+@keyframes view-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.view-enter {
+  animation: view-enter var(--motion-base) var(--ease-out) both;
+}
+/* Tab and view switches (FadeSwitch), skeleton → content. */
+@keyframes fade-only {
+  from {
+    opacity: 0;
+  }
+}
+.fade-in {
+  animation: fade-only var(--motion-base) var(--ease-out) both;
+}
+/* Radix tab panels fade in as they mount. */
+[role="tabpanel"][data-state="active"] {
+  animation: fade-only var(--motion-base) var(--ease-out) both;
+}
+/* Pressable controls: a small press, eased colour and transform. */
+.press {
+  transition-property: color, background-color, border-color, box-shadow, transform, filter, opacity;
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--ease-out);
+}
+.press:enabled:active,
+a.press:active {
+  transform: scale(0.97);
+}
+/* Radix dialogs and drawers: fade/scale in and out by data-state. */
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes overlay-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+@keyframes dialog-out {
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+@keyframes drawer-in {
+  from {
+    transform: translateX(16px);
+    opacity: 0;
+  }
+}
+@keyframes drawer-out {
+  to {
+    transform: translateX(16px);
+    opacity: 0;
+  }
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px) scale(0.98);
+  }
+}
+@keyframes bar-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+.dlg-overlay[data-state="open"] {
+  animation: overlay-in var(--motion-base) var(--ease-out);
+}
+.dlg-overlay[data-state="closed"] {
+  animation: overlay-out var(--motion-fast) ease-in;
+}
+.dlg-content[data-state="open"] {
+  animation: dialog-in var(--motion-base) var(--ease-out);
+}
+.dlg-content[data-state="closed"] {
+  animation: dialog-out var(--motion-fast) ease-in;
+}
+.drawer-content[data-state="open"] {
+  animation: drawer-in var(--motion-base) var(--ease-out);
+}
+.drawer-content[data-state="closed"] {
+  animation: drawer-out var(--motion-fast) ease-in;
+}
+.pop-in[data-state="open"] {
+  animation: pop-in var(--motion-fast) var(--ease-out);
+}
+.bar-in {
+  animation: bar-in var(--motion-base) var(--ease-out) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .press:enabled:active,
+  a.press:active {
+    transform: none;
+  }
+  /* Spinners keep spinning: they are feedback, not decoration. */
+  .animate-spin {
+    animation-duration: 1s !important;
+    animation-iteration-count: infinite !important;
+  }
+}
+
+/* Card and section headers: a soft brand gradient that follows the theme. */
+:root {
+  --head-grad: linear-gradient(100deg, color-mix(in srgb, var(--color-accent) 10%, var(--color-panel)) 0%, color-mix(in srgb, var(--color-accent-2) 6%, var(--color-panel)) 55%, var(--color-panel) 100%);
+}
+:root[data-theme="dark"] {
+  --head-grad: linear-gradient(100deg, color-mix(in srgb, var(--color-accent) 16%, var(--color-panel)) 0%, color-mix(in srgb, var(--color-accent-2) 7%, var(--color-panel)) 55%, var(--color-panel) 100%);
+}
+.card-head {
+  background: var(--head-grad);
+}
+
+/* Ocean: deep navy → frost. Used for primary actions and brand surfaces. */
+.btn-primary {
+  background: linear-gradient(115deg, #0e3a74 0%, #1f6fc4 48%, #4cc3dd 100%);
+  box-shadow: 0 4px 14px rgb(31 111 196 / 0.25), inset 0 1px rgb(255 255 255 / 0.15);
+}
+
+.text-ocean {
+  background: linear-gradient(100deg, #1f6fc4, #4cc3dd);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* The sidebar is always deep ocean, in light and dark themes alike. Its
+   tokens are re-scoped so every component inside reads correctly. */
+.sidebar-ocean {
+  --color-sidebar: transparent;
+  --color-panel: #0f2440;
+  --color-panel-2: rgb(120 190 230 / 0.08);
+  --color-line: rgb(140 200 235 / 0.14);
+  --color-fg: #e6f3fb;
+  --color-muted: #a3c2d9;
+  --color-faint: #6f93ae;
+  --color-accent: #8fdcf0;
+  --color-accent-soft: rgb(110 205 235 / 0.14);
+  background:
+    radial-gradient(120% 60% at 0% 0%, rgb(76 195 221 / 0.18), transparent 60%),
+    linear-gradient(180deg, #071a33 0%, #0b2a4d 45%, #0e3b5c 80%, #12506b 100%);
+  color: var(--color-fg);
+  border-color: rgb(140 200 235 / 0.12);
+}
+
+/* Sidebar scrollbars: a thin glass thumb that brightens on hover, no track. */
+.nav-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(143 220 240 / 0.22) transparent;
+  scrollbar-gutter: stable;
+}
+.nav-scroll:hover {
+  scrollbar-color: rgb(143 220 240 / 0.45) transparent;
+}
+.nav-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.nav-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.nav-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgb(143 220 240 / 0.35), rgb(76 195 221 / 0.18));
+}
+.nav-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgb(143 220 240 / 0.6);
+}
+
+.ocean-hero {
+  background:
+    radial-gradient(80% 120% at 100% 0%, rgb(76 195 221 / 0.35), transparent 60%),
+    linear-gradient(135deg, #071a33 0%, #0e3a74 55%, #137a9a 100%);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+.animate-in {
+  animation: fade-in var(--motion-base) var(--ease-out);
+}
+
+/* A disabled primary button reads as disabled: flat, no gradient glow. */
+.btn-primary:disabled {
+  background: var(--color-panel-2);
+  color: var(--color-faint);
+  box-shadow: none;
+  border-color: var(--color-line);
+  filter: none;
+}
+
+/* Log and output consoles (.log-console): dark by default, light when the
+   user picks it (html[data-console="light"]). SSH terminals keep their own scheme. */
+.log-console {
+  --ansi-0: #4b5d70; --ansi-1: #ff8f9c; --ansi-2: #6ee7b7; --ansi-3: #fcd34d;
+  --ansi-4: #7cb7ff; --ansi-5: #e0a3ff; --ansi-6: #7fd3f0; --ansi-7: #d6e6f2;
+  --ansi-8: #7f97ab; --ansi-9: #ffb3bc; --ansi-10: #a7f3d0; --ansi-11: #fde68a;
+  --ansi-12: #a9d0ff; --ansi-13: #f0c8ff; --ansi-14: #b5e8f8; --ansi-15: #ffffff;
+  /* A thin accent rail on the left edge. */
+  border-left: 3px solid color-mix(in srgb, var(--color-accent) 70%, transparent);
+}
+:root[data-console="light"] .log-console {
+  --color-term: #eef1f4;
+  --color-term-2: #e3e7ec;
+  --color-term-fg: #0f172a;
+  --color-term-muted: #5b6b7f;
+  --color-term-line: #d3d9e0;
+  --color-term-prompt: #0369a1;
+  --color-term-bad: #c81e3a;
+  --color-term-warn: #a16207;
+  --color-term-ok: #047857;
+  --ansi-0: #334155; --ansi-1: #c81e3a; --ansi-2: #047857; --ansi-3: #a16207;
+  --ansi-4: #1d4ed8; --ansi-5: #9333ea; --ansi-6: #0e7490; --ansi-7: #475569;
+  --ansi-8: #64748b; --ansi-9: #e11d48; --ansi-10: #059669; --ansi-11: #b45309;
+  --ansi-12: #2563eb; --ansi-13: #a855f7; --ansi-14: #0891b2; --ansi-15: #0f172a;
+}
+
+/* A log event that just arrived through the live tail. */
+@keyframes log-fresh {
+  from {
+    background-color: var(--color-accent-soft);
+  }
+}
+.log-fresh {
+  animation: log-fresh 2.5s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .log-fresh {
+    animation: none;
+  }
+}

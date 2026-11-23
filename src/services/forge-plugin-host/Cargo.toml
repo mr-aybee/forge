@@ -1,0 +1,23 @@
+[package]
+name = "forge-plugin-host"
+description = "Plugin lifecycle, signature checks, permissions, budgets and quarantine for Orbyn Forge."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+forge-core.workspace = true
+forge-sdk.workspace = true
+forge-secrets.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+semver.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

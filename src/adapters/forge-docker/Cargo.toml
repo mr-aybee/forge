@@ -1,0 +1,31 @@
+[package]
+name = "forge-docker"
+description = "Docker Engine API over mutual TLS: the endpoint catalog, body guard and the control plane's client (D-125)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+tokio.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+rustls-pki-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+forge-pki.workspace = true
+forge-core.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+rustls.workspace = true

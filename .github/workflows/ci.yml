@@ -1,0 +1,195 @@
+name: CI
+
+# Build verification for pushes and pull requests. Light jobs only: the
+# heavy release builds (musl, packages, images) run in release.yml, for tags
+# and the release dry run. See docs: development/releases ("CI policy").
+#
+#   every push / PR         plan, Rust (Linux): fmt, clippy, build, tests
+#   when their paths change  PostgreSQL build, cargo deny + audit,
+#                            UI + website + docs builds (+ npm audit)
+#   "full" (every job above, whatever changed): pushes to master, PRs into
+#   master, "[full-ci]" in the commit message, or a manual run with "full"
+#
+# The Linux runners share one small server (8 vCPU, 15 GiB, other services
+# on it). At most two light jobs run at once (one per runner, and each run
+# has two lanes), each with `-j 2`, niced, under the host build lock
+# (scripts/ci/build.sh) that keeps them out of a release build's way. A new
+# commit cancels the older run of the same branch or pull request.
+
+on:
+  push:
+    branches: [develop, master]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "Run every light job, whatever changed"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # All jobs run on GitHub-hosted runners (free for public repositories).
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      full: ${{ steps.p.outputs.full }}
+      web: ${{ steps.p.outputs.web }}
+      store: ${{ steps.p.outputs.store }}
+      deps: ${{ steps.p.outputs.deps }}
+      agent: ${{ steps.p.outputs.agent }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: p
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BASE_REF: ${{ github.base_ref }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+          MSG: ${{ github.event.head_commit.message }}
+          FULL_INPUT: ${{ inputs.full }}
+        run: |
+          full=false
+          [ "$EVENT" = workflow_dispatch ] && [ "$FULL_INPUT" = true ] && full=true
+          [ "$REF" = refs/heads/master ] && [ "$EVENT" = push ] && full=true
+          [ "$EVENT" = pull_request ] && [ "$BASE_REF" = master ] && full=true
+          case "$MSG" in *"[full-ci]"*) full=true ;; esac
+
+          base="$PR_BASE"; [ -n "$base" ] || base="$BEFORE"
+          if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ] \
+             || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            changed="*"        # new branch, manual run or unknown base: treat everything as changed
+          else
+            changed=$(git diff --name-only "$base" HEAD)
+          fi
+          echo "Changed files:"; echo "$changed" | head -50
+
+          hit() { [ "$full" = true ] || [ "$changed" = "*" ] || echo "$changed" | grep -Eq "$1"; }
+          out() { if hit "$2"; then echo "$1=true"; else echo "$1=false"; fi >> "$GITHUB_OUTPUT"; }
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+          out web   '^(src/ui/|docs/|website/|LICENSE)'
+          out store '^(src/adapters/forge-store/|src/domain/|Cargo\.(toml|lock)$)'
+          out deps  '^(Cargo\.lock|deny\.toml|.*Cargo\.toml)$'
+          out agent '^(src/apps/forge-agent/|src/protocol/|src/domain/)'
+          cat "$GITHUB_OUTPUT"
+
+  # Lane A. Plan runs beside it, then lane B: deny/audit -> PostgreSQL -> web.
+  rust:
+    name: Rust (Linux)
+    timeout-minutes: 90
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: bash scripts/ci/build.sh light cargo clippy --workspace --all-targets -- -D warnings
+      # The forge-agent binary for the startup smoke test (it::agent_binary_smoke)
+      # and the analytics worker for the supervisor tests (it::analytics_worker).
+      - name: Build agent and analytics worker binaries
+        run: bash scripts/ci/build.sh light cargo build -p forge-agent -p forge-analytics-worker --bin forge-agent --bin forge-analytics-worker
+      - name: Test
+        run: bash scripts/ci/build.sh light cargo test --workspace
+        env:
+          FORGE_REQUIRE_AGENT_BIN: "1"
+          FORGE_REQUIRE_WORKER_BIN: "1"
+
+  rust-windows:
+    name: Rust (Windows)
+    needs: plan
+    # Windows-only code lives in the agent.
+    if: needs.plan.outputs.full == 'true' || needs.plan.outputs.agent == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      # The forge-agent binary for the startup smoke test (it::agent_binary_smoke)
+      # and the analytics worker for the supervisor tests (it::analytics_worker).
+      - name: Build agent and analytics worker binaries
+        run: cargo build -p forge-agent -p forge-analytics-worker --bin forge-agent --bin forge-analytics-worker
+      - name: Test
+        run: cargo test --workspace
+        env:
+          FORGE_REQUIRE_AGENT_BIN: "1"
+          FORGE_REQUIRE_WORKER_BIN: "1"
+
+  postgres:
+    name: Store on PostgreSQL
+    needs: [plan, supply-chain]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.store == 'true' }}
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build with PostgreSQL driver
+        run: bash scripts/ci/build.sh light cargo build -p forge-server --features postgres
+
+  supply-chain:
+    name: cargo deny + cargo audit
+    needs: plan
+    if: needs.plan.outputs.deps == 'true'
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo audit
+        run: |
+          command -v cargo-audit >/dev/null || bash scripts/ci/build.sh light cargo install --locked cargo-audit
+          cargo audit
+
+  web:
+    name: UI, website and docs
+    needs: [plan, postgres]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.web == 'true' }}
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: UI
+        working-directory: src/ui
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/build.sh" light sh -c 'npm ci && npm run build'
+      - name: Website
+        working-directory: website
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/build.sh" light sh -c 'npm ci && npm run build'
+      - name: Docs
+        working-directory: docs
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/build.sh" light sh -c 'npm ci && npm run build'
+      # Advisories in what ships to browsers (dev tooling excluded); high or
+      # critical fails the run.
+      - name: npm audit (UI, website and docs)
+        run: |
+          (cd src/ui && npm audit --omit=dev --audit-level=high)
+          (cd website && npm audit --omit=dev --audit-level=high)
+          (cd docs && npm audit --omit=dev --audit-level=high)

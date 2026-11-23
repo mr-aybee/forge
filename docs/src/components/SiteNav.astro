@@ -1,0 +1,44 @@
+---
+// Replaces Starlight's SocialIcons slot in the header with links back to the
+// website (forge.orbyntech.com), so the docs read as part of one site.
+import Default from "@astrojs/starlight/components/SocialIcons.astro";
+
+const links = [
+  { href: "/", label: "Home" },
+  { href: "/features/", label: "Features" },
+  { href: "/use-cases/", label: "Use cases" },
+];
+---
+
+<nav class="forge-site-nav" aria-label="Website">
+  {links.map((l) => <a href={l.href}>{l.label}</a>)}
+  <a class="forge-download" href="/download/">Download</a>
+</nav>
+<Default />
+
+<style>
+  .forge-site-nav {
+    display: none;
+    align-items: center;
+    gap: 0.25rem;
+    margin-inline-end: 0.5rem;
+  }
+  @media (min-width: 72rem) {
+    .forge-site-nav { display: flex; }
+  }
+  .forge-site-nav a {
+    color: var(--sl-color-gray-2);
+    text-decoration: none;
+    font-size: var(--sl-text-sm);
+    padding: 0.35rem 0.7rem;
+    border-radius: 999px;
+  }
+  .forge-site-nav a:hover { color: var(--sl-color-white); }
+  .forge-site-nav a.forge-download {
+    background: var(--forge-accent);
+    color: var(--forge-on-accent);
+    font-weight: 600;
+    margin-inline-start: 0.25rem;
+  }
+  .forge-site-nav a.forge-download:hover { background: var(--forge-accent-strong); }
+</style>

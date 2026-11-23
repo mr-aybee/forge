@@ -1,0 +1,350 @@
+// Reference definition of the Orbyn Forge agent protocol, v1.
+// The Rust types in crates/forge-proto/src/messages.rs are the source of
+// truth and must stay wire-compatible with this file (same tags and types).
+// Transport: HTTP/2 over mTLS, Content-Type: application/x-protobuf.
+
+syntax = "proto3";
+package forge.agent.v1;
+
+// POST /agent/v1/enroll (TLS, no client certificate yet)
+message EnrollRequest {
+  string token_secret = 1;
+  string csr_pem = 2;
+  string hostname = 3;
+  string os = 4;
+  string arch = 5;
+  string agent_version = 6;
+  // Terminal account the installer created (D-078); empty when none.
+  string terminal_account = 7;
+}
+
+message EnrollResponse {
+  string server_id = 1;
+  string cert_pem = 2;
+  string ca_pem = 3;
+  bytes command_public_key = 4;
+  uint32 heartbeat_interval_secs = 5;
+  string analytics_url = 6;  // the worker's agent listener; empty: analytics off
+}
+
+// POST /agent/v1/heartbeat (mTLS)
+message Heartbeat {
+  string agent_version = 1;
+  uint64 uptime_secs = 2;
+  uint64 rss_bytes = 3;
+  repeated CommandResult results = 4;
+  NodeMetrics metrics = 5;
+  // Live output of running commands since the last heartbeat.
+  repeated CommandProgress progress = 6;
+  // A command is streaming output: answer quickly.
+  bool streaming = 7;
+  // Lines collected from the node's Docker containers (re-sent until acknowledged).
+  // Old agents only: new agents write container lines to their spool.
+  ContainerLogBatch container_logs = 9;
+  // Present from agents that spool their telemetry (D-142).
+  SpoolStatus spool = 10;
+}
+
+enum ContainerStream {
+  CONTAINER_STREAM_UNSPECIFIED = 0;
+  CONTAINER_STREAM_STDOUT = 1;
+  CONTAINER_STREAM_STDERR = 2;
+}
+
+message ContainerLabels {
+  string forge_app = 1;        // forge.app: <environment>/<service>
+  string forge_stack = 2;      // forge.stack: <environment>/<stack>
+  string compose_project = 3;  // com.docker.compose.project
+  string compose_service = 4;  // com.docker.compose.service
+}
+
+message ContainerLogLine {
+  string container_id = 1;     // short id
+  string container_name = 2;
+  string image = 3;
+  ContainerLabels labels = 4;
+  ContainerStream stream = 5;
+  int64 ts_ms = 6;
+  string line = 7;             // at most 16 KiB
+}
+
+message ContainerLogBatch {
+  uint64 seq = 1;
+  repeated ContainerLogLine lines = 2;  // at most 2000
+  uint64 dropped = 3;          // lines dropped on the node since the last batch
+}
+
+message ContainerSample {
+  string container_id = 1;
+  string container_name = 2;
+  string image = 3;
+  ContainerLabels labels = 4;
+  float cpu_percent = 5;
+  uint64 mem_used_bytes = 6;
+  uint64 mem_limit_bytes = 7;
+  uint64 net_rx_bytes_per_sec = 8;
+  uint64 net_tx_bytes_per_sec = 9;
+  uint64 block_read_bytes_per_sec = 10;
+  uint64 block_write_bytes_per_sec = 11;
+  uint32 restarts = 12;
+}
+
+message ContainerTelemetryConfig {
+  bool enabled = 1;
+  repeated string exclude = 2;  // container name, or key=value for a label; at most 64
+}
+
+message CommandProgress {
+  string operation_id = 1;
+  string text = 2;
+}
+
+message HeartbeatResponse {
+  repeated SignedCommand commands = 1;
+  uint32 next_interval_secs = 2;
+  bool renew_certificate = 3;
+  ContainerTelemetryConfig container_telemetry = 4;
+  uint64 container_logs_ack = 5;  // seq of the stored container log batch; 0: none
+  AnalyticsAgentConfig analytics = 6;
+}
+
+// D-142: spool, local log listener and upload target. 0 keeps a default.
+message AnalyticsAgentConfig {
+  string url = 1;                 // https://host:55132 of the analytics worker
+  SpoolTuning spool = 2;
+  repeated IngestKey keys = 3;    // keys of services placed on this node, at most 4096
+  ListenerTuning listener = 4;
+}
+
+message IngestKey {
+  bytes hash = 1;                 // SHA-256 of the key
+  string service_id = 2;
+}
+
+message SpoolTuning {
+  uint64 max_bytes = 1;
+  uint64 min_free_bytes = 2;
+  uint64 max_age_secs = 3;
+  uint64 seal_bytes = 4;
+  uint64 seal_secs = 5;
+  uint32 zstd_level = 6;
+}
+
+message ListenerTuning {
+  uint64 max_body_bytes = 1;
+  uint32 rate_per_sec = 2;
+  bool rate_on_loopback = 3;
+  string extra_address = 4;       // mesh address hook; never a wildcard
+}
+
+message SpoolStatus {
+  uint64 files = 1;
+  uint64 bytes = 2;
+  uint64 dropped_files = 3;
+  uint64 dropped_bytes = 4;
+  uint64 oldest_age_secs = 5;
+  uint64 uploaded_files = 6;
+  uint64 refused_requests = 7;
+}
+
+// POST /agent/v1/spool on the worker (mTLS), body = one sealed file,
+// header x-forge-spool-file: <file stem>. 200 = stored (or stored before).
+message SpoolAck {
+  string file_id = 1;
+  uint64 rows = 2;
+  bool duplicate = 3;
+}
+
+// POST /agent/v1/renew (mTLS)
+message RenewRequest { string csr_pem = 1; }
+message RenewResponse { string cert_pem = 1; }
+
+// Vault-backed header values of one HTTP health check (D-111).
+// POST /agent/v1/health-secrets, mTLS. Values stay in the node's memory.
+message HealthSecretsRequest {
+  string environment = 1;
+  string app = 2;
+  string purpose = 3;
+  string check = 4;
+  int64 policy_revision = 5;
+}
+message HealthSecretHeader { string name = 1; string value = 2; }
+message HealthSecretsResponse {
+  bool granted = 1;
+  repeated HealthSecretHeader headers = 2;
+  uint32 ttl_secs = 3;
+  string denial = 4;
+}
+
+// A command is an encoded CommandBody plus an Ed25519 signature over it.
+message SignedCommand {
+  bytes body = 1;
+  bytes signature = 2;
+  string key_id = 3;
+}
+
+message CommandBody {
+  string operation_id = 1;
+  string server_id = 2;
+  int64 issued_at_ms = 3;
+  int64 expires_at_ms = 4;
+  bytes nonce = 5;
+  string principal = 6;
+  oneof command {
+    Ping ping = 10;
+    CollectFacts collect_facts = 11;
+    ServiceStatus service_status = 12;
+    PackageAction package_action = 13;
+    ContainerAction container_action = 14;
+    AppAction app_action = 15;
+    SiteAction site_action = 16;
+    DnsAction dns_action = 17;
+    NetProbe net_probe = 18;
+    IngressAction ingress_action = 19;
+    FabricAction fabric_action = 20;
+    StorageAction storage_action = 21;
+    FileAction file_action = 22;
+    // 23 was AccessAction (WireGuard remote access), retired; never reused.
+    AgentUpdate agent_update = 24;
+    CancelAction cancel_action = 25;
+    ProcessList process_list = 30;
+    StackAction stack_action = 31;
+    TerminalAccount terminal_account = 32;
+    // 35 was reserved for a dropped health command; 36 and 37 are skipped.
+    ContainerExecOpen container_exec_open = 39;
+  }
+}
+
+// A shell in a container through the agent and its root helper (D-114).
+// Bytes travel framed (`forge_proto::exec_frame`) on a stream the agent
+// dials back to /agent/v1/exec/<session_id> with `stream_token`.
+message ContainerExecOpen {
+  string session_id = 1;
+  string container = 2;
+  uint32 cols = 3;
+  uint32 rows = 4;
+  string stream_token = 5;
+  uint32 idle_secs = 6;
+  int64 expires_at_ms = 7;
+  uint32 lifetime_secs = 8;
+}
+
+message Ping {}
+message CollectFacts {}
+message ServiceStatus { string name = 1; }
+// Catalog recipe action run by the root helper (see forge-catalog).
+message PackageAction {
+  string package = 1;
+  string version = 2;
+  string action = 3;   // install | uninstall | start | stop | restart | status
+  map<string, string> params = 4;
+}
+
+// Docker Engine operation run by the root helper (closed set; no exec/run).
+message ContainerAction {
+  string op = 1;      // info | list | images | inspect | start | stop | restart | remove | logs | stats | pull
+  string id = 2;
+  string image = 3;
+  uint32 tail = 4;
+  string since = 5;   // logs: only lines after this Unix time (seconds, decimal), for live follow
+}
+
+// Service action; spec_json is a forge_catalog::AppSpec (validated by the helper).
+message AppAction {
+  string action = 1;  // deploy | start | stop | restart | status | logs | follow | run | remove
+  string spec_json = 2;
+  uint32 tail = 3;
+  string cursor = 4;  // follow: where the previous segment stopped
+}
+
+// Nginx site (forge_catalog::SiteSpec as JSON) and PowerDNS operations.
+message SiteAction {
+  string action = 1;  // apply | remove | status
+  string spec_json = 2;
+}
+message DnsAction { string op_json = 1; }
+// Cluster ingress profile and overlay network (forge_catalog::ingress::IngressOp as JSON).
+message IngressAction { string op_json = 1; }
+
+// Forge network fabric: WireGuard mesh (forge_catalog::fabric::FabricOp as JSON).
+message FabricAction { string op_json = 1; }
+
+// Object store instance operation (forge_catalog::storage::StoreOp as JSON).
+// An install carries the store's bootstrap credential: memory and mTLS only.
+message StorageAction { string op_json = 1; }
+
+// File explorer operation (forge_core::files::FileOp as JSON), confined to a
+// root and checked against the protected-path policy by the node.
+message FileAction { string op_json = 1; }
+
+// Compose stack operation (forge_catalog::stacks::StackOp, JSON).
+message StackAction { string op_json = 1; }
+
+// Create or keep a terminal account (root helper; D-078). Sudo only when asked.
+message TerminalAccount { string name = 1; bool sudo = 2; }
+
+// Stop a background operation still running on the agent (by operation id).
+message CancelAction { string operation_id = 1; }
+// Self-update: download, verify (SHA-256 below) and install this release
+// of the agent and helper; the helper rolls back if the new agent does not
+// reconnect.
+message AgentUpdate { string version = 1; string download_base = 2; string arch = 3; string agent_sha256 = 4; string helper_sha256 = 5; }
+// htop-like process snapshot (read-only): sort = cpu|mem|pid|time|name.
+message ProcessList { string sort = 1; uint32 limit = 2; string filter = 3; }
+
+// Reachability checks run from the node (ping, TCP-connect fallback).
+message NetProbe {
+  repeated string targets = 1;
+  uint32 count = 2;
+}
+
+message NodeMetrics {
+  float cpu_percent = 1;
+  uint64 mem_total_bytes = 2;
+  uint64 mem_used_bytes = 3;
+  uint64 swap_total_bytes = 4;
+  uint64 swap_used_bytes = 5;
+  uint64 disk_total_bytes = 6;
+  uint64 disk_used_bytes = 7;
+  uint64 net_rx_bytes_per_sec = 8;
+  uint64 net_tx_bytes_per_sec = 9;
+  float load1 = 10;
+  uint64 host_uptime_secs = 11;
+  uint32 cpu_count = 12;
+  repeated DiskVolume volumes = 13;
+  // Edge nodes: last minute of proxied traffic per endpoint (Nginx).
+  repeated SiteTraffic traffic = 14;
+  // Once a minute: every running Docker container (at most 256).
+  repeated ContainerSample containers = 16;
+}
+
+message SiteTraffic {
+  string site = 1;               // the endpoint's first domain ($server_name)
+  uint64 requests = 2;
+  uint64 in_bytes_per_sec = 3;   // clients -> edge
+  uint64 out_bytes_per_sec = 4;  // edge -> clients
+  repeated UpstreamTraffic upstreams = 5;
+}
+
+message UpstreamTraffic {
+  string address = 1;            // ip:port Nginx connected to
+  uint64 requests = 2;
+  uint64 sent_bytes_per_sec = 3;     // edge -> upstream
+  uint64 received_bytes_per_sec = 4; // upstream -> edge
+}
+
+message DiskVolume {
+  string mount_point = 1;
+  string device = 2;
+  string file_system = 3;
+  uint64 total_bytes = 4;
+  uint64 available_bytes = 5;
+  bool removable = 6;
+}
+
+message CommandResult {
+  string operation_id = 1;
+  bool ok = 2;
+  string output = 3;  // JSON
+  string error = 4;
+}

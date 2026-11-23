@@ -1,0 +1,77 @@
+# Disposable Forge nodes for local development. See
+# docs/src/content/docs/development/docker-nodes.md.
+#
+#   cp .env.example .env        # put one enrollment token per node in it
+#   docker compose up -d --build
+#   docker compose down -v      # remove the nodes and their identities
+#
+# Each node mounts the HOST's Docker socket: containers a node deploys run on
+# the host engine, and anyone who controls a node controls the host's Docker.
+name: forge-dev-nodes
+
+x-node: &node
+  build: .
+  image: forge-dev-node:local
+  restart: unless-stopped
+  environment:
+    FORGE_URL: ${FORGE_URL:-http://172.17.0.1:55130}
+  extra_hosts:
+    - "forge-host:host-gateway"
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+  networks: [forge-dev]
+
+services:
+  node-1:
+    <<: *node
+    hostname: dev-node-1
+    environment:
+      FORGE_URL: ${FORGE_URL:-http://172.17.0.1:55130}
+      FORGE_ENROLL_TOKEN: ${NODE1_TOKEN:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - node-1-agent:/var/lib/forge-agent
+      - node-1-helper:/var/lib/forge-agent-helper
+    networks:
+      forge-dev: { ipv4_address: 172.30.0.11 }
+
+  node-2:
+    <<: *node
+    hostname: dev-node-2
+    environment:
+      FORGE_URL: ${FORGE_URL:-http://172.17.0.1:55130}
+      FORGE_ENROLL_TOKEN: ${NODE2_TOKEN:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - node-2-agent:/var/lib/forge-agent
+      - node-2-helper:/var/lib/forge-agent-helper
+    networks:
+      forge-dev: { ipv4_address: 172.30.0.12 }
+
+  node-3:
+    <<: *node
+    hostname: dev-node-3
+    environment:
+      FORGE_URL: ${FORGE_URL:-http://172.17.0.1:55130}
+      FORGE_ENROLL_TOKEN: ${NODE3_TOKEN:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - node-3-agent:/var/lib/forge-agent
+      - node-3-helper:/var/lib/forge-agent-helper
+    networks:
+      forge-dev: { ipv4_address: 172.30.0.13 }
+
+networks:
+  forge-dev:
+    name: forge-dev
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  node-1-agent: {}
+  node-1-helper: {}
+  node-2-agent: {}
+  node-2-helper: {}
+  node-3-agent: {}
+  node-3-helper: {}

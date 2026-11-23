@@ -1,0 +1,90 @@
+[package]
+name = "forge-server"
+description = "Orbyn Forge control plane: REST API, WebSocket events, agent hub, jobs, plugins."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "forge-server"
+path = "src/main.rs"
+
+[features]
+# PostgreSQL is part of every build: the installer offers it (D-127).
+default = ["postgres"]
+postgres = ["forge-store/postgres"]
+
+[dependencies]
+forge-core.workspace = true
+forge-files.workspace = true
+forge-health.workspace = true
+forge-file-gateway.workspace = true
+forge-authz.workspace = true
+forge-store.workspace = true
+forge-analytics-proto.workspace = true
+forge-s3.workspace = true
+forge-jobs.workspace = true
+forge-audit.workspace = true
+forge-pki.workspace = true
+forge-proto.workspace = true
+forge-catalog.workspace = true
+forge-alerts.workspace = true
+forge-rules.workspace = true
+forge-secrets.workspace = true
+forge-identity.workspace = true
+forge-plugin-host.workspace = true
+forge-sdk.workspace = true
+forge-ssh.workspace = true
+forge-docker.workspace = true
+http-body-util.workspace = true
+tokio.workspace = true
+futures.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http.workspace = true
+bytes.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+rustls-pki-types.workspace = true
+x509-parser.workspace = true
+ring.workspace = true
+# Typed OpenAPI schemas (D-077): derive only, in the server alone (never
+# forge-core, which the agent shares). MIT.
+schemars = { version = "1.2", default-features = false, features = ["derive", "std"] }
+hex.workspace = true
+prost.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde-saphyr.workspace = true
+toml.workspace = true
+base64.workspace = true
+rustix.workspace = true
+flate2.workspace = true
+url.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+reqwest.workspace = true
+# SMTP for email notifications (D-113).
+lettre.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+
+[dev-dependencies]
+forge-agent.workspace = true
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
+russh.workspace = true
+russh-sftp.workspace = true
+rcgen.workspace = true
+tempfile.workspace = true
+sqlx.workspace = true
+
+[lints]
+workspace = true

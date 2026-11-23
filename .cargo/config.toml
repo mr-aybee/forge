@@ -1,0 +1,18 @@
+# Cargo settings for everyone who builds this repository.
+# Per-machine settings (sccache, cache location) do not belong here: Cargo
+# cannot make them conditional, and they would break CI and `cross` builds.
+# Put them in your user-level ~/.cargo/config.toml; see scripts/dev/build_env.py.
+
+# Windows: link with LLD, which ships with the Rust toolchain. It is much
+# faster than the MSVC linker on the large server binary and has no PDB module
+# limit (LNK1140). Release CI overrides this with
+# CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=link.exe so shipped binaries keep
+# the linker they were tested with.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"
+
+[alias]
+# Type-check everything without code generation or linking.
+ck = "check --workspace --all-targets"
+# The lint gate CI runs.
+lint = "clippy --workspace --all-targets -- -D warnings"

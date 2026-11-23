@@ -1,0 +1,23 @@
+# `cross` builds in a container; pass the build metadata the release
+# workflow sets (compiled in with option_env!).
+[build.env]
+passthrough = [
+    "FORGE_BUILD_SHA", "FORGE_BUILD_VERSION",
+    # Local quick builds (scripts/setup_testing/build_release.sh).
+    "CARGO_PROFILE_RELEASE_OPT_LEVEL", "CARGO_PROFILE_RELEASE_LTO",
+    "CARGO_PROFILE_RELEASE_CODEGEN_UNITS", "CARGO_PROFILE_RELEASE_INCREMENTAL",
+    # Set empty by callers: a host-wide `rustc-wrapper = "sccache"` in
+    # ~/.cargo/config.toml would otherwise apply inside the container,
+    # which has no sccache.
+    "RUSTC_WRAPPER",
+]
+
+# DuckDB's bundled C++ (forge-analytics-worker, D-143) needs a newer GCC
+# than the musl images of cross 0.2.5 (GCC 9.2). cross's `main` images use
+# crosstool-NG with GCC 14. Pinned by digest; update both together and
+# rebuild both targets (CI musl job, release.yml).
+[target.x86_64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/x86_64-unknown-linux-musl@sha256:de9ccd1ae2d7068f7a91d737a4a1b5464ee5ab06f9d22624f61c4ff0f754a8ac"
+
+[target.aarch64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-musl@sha256:db510fe1196e43156e0fdffbe5e5e42a2c95e72b4e5471d48a4916770e6f370b"

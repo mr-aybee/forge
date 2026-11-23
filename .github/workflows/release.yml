@@ -1,0 +1,453 @@
+name: Release
+
+# Push a tag to build, sign and publish a release (X.Y.Z must match the
+# workspace version in Cargo.toml):
+#   vX.Y.Z         stable release; the commit must be on master
+#   vX.Y.Z-rc-NN   GitHub pre-release (not "latest"); tag it on master too
+# The usual flow: develop green -> fast-forward master -> tag master.
+#
+# Manual runs (Actions -> Release -> Run workflow) rebuild an existing tag.
+# They are dry runs unless "publish" is ticked: everything is built, packaged,
+# signed and verified, and the result is kept as the `release-assets`
+# artifact for review, but nothing is published.
+#
+# Each release publishes self-contained packages for Linux and Windows, the raw binaries the self-updater
+# downloads, the `forge` CLI per platform (forge-cli-<target>[.exe]), the
+# bootstrap installers (get-forge.sh, get-forge.ps1), SHA256SUMS and its
+# Ed25519 signature. Asset names are a public contract: install.sh,
+# install.ps1, get-forge.*, forge-server's updater (update.rs) and
+# `forge update` (updatecmd.rs) depend on them.
+#
+# Secrets:  FORGE_RELEASE_KEY     base64 PKCS#8 release signing key
+#                                 (`forge-server release keygen`)
+# Runs on GitHub-hosted runners (free for public repositories). Releases are
+# published to this repository with the workflow's own GITHUB_TOKEN.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build, e.g. v0.1.0-rc-03. With publish unticked it need not exist: the branch you run on is built as that version"
+        required: true
+      publish:
+        description: "Publish to this repository's releases (unticked: dry run, assets kept as an artifact)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One run per tag. A tagged release is never cancelled; a newer dry run of
+# the same tag replaces an older one (latest wins).
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && !inputs.publish }}
+
+env:
+  # GitHub-hosted Linux runners have 4 vCPUs and 16 GiB. The cross container
+  # gets a memory cap so a runaway link fails the job with a clear error.
+  FORGE_CI_BUILD_JOBS: 4
+  CROSS_CONTAINER_OPTS: --memory=12g --memory-swap=12g
+  CARGO_TERM_COLOR: always
+  # .cargo/config.toml links with LLD on Windows for fast local builds.
+  # Shipped Windows binaries keep the MSVC linker.
+  CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: link.exe
+
+jobs:
+  version:
+    name: Check tag, version and signing key
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+      publish: ${{ steps.v.outputs.publish }}
+      ref: ${{ steps.v.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A dry run builds the branch it runs on; publishing builds the tag.
+          ref: ${{ (github.event_name == 'workflow_dispatch' && !inputs.publish) && github.sha || (inputs.tag || github.ref) }}
+          fetch-depth: 0   # the master check needs history
+      - id: v
+        name: Tag and version
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+          EVENT: ${{ github.event_name }}
+          PUBLISH_INPUT: ${{ inputs.publish }}
+        run: |
+          version="${TAG#v}"
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            prerelease=false
+          elif [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc-[0-9]+$ ]]; then
+            prerelease=true
+          else
+            echo "::error::tag $TAG is neither vX.Y.Z nor vX.Y.Z-rc-NN; delete it (git push origin :refs/tags/$TAG) and tag again"; exit 1
+          fi
+          git fetch -q origin master
+          if ! git merge-base --is-ancestor HEAD origin/master; then
+            if [ "$prerelease" = false ] && [ "$EVENT$PUBLISH_INPUT" != workflow_dispatchfalse ]; then
+              echo "::error::stable tag $TAG must point at a commit on master: merge to master first, then tag the master commit"; exit 1
+            fi
+            echo "::warning::$TAG is not on master. Release candidates are normally tagged on master after develop is merged."
+          fi
+          base="${version%%-*}"
+          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "$base" != "$cargo_version" ]; then
+            echo "::error::tag $TAG does not match the workspace version $cargo_version: set [workspace.package] version = \"$base\" in Cargo.toml, merge, and tag again"; exit 1
+          fi
+          publish=false
+          if [ "$EVENT" = push ] || [ "$PUBLISH_INPUT" = true ]; then publish=true; fi
+          {
+            echo "version=$version"
+            echo "tag=$TAG"
+            echo "prerelease=$prerelease"
+            echo "publish=$publish"
+            echo "ref=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+          echo "Release $version (pre-release: $prerelease, publish: $publish)"
+      # Fail in seconds, not after the builds: the secret must hold the key
+      # whose public half is compiled into Forge. ring's PKCS#8 v2 document
+      # ends with the 32-byte public key; the package job checks again by
+      # signing with the built server.
+      - name: Signing key matches RELEASE_PUBLIC_KEY
+        shell: bash
+        env:
+          FORGE_RELEASE_KEY: ${{ secrets.FORGE_RELEASE_KEY }}
+        run: |
+          want=$(sed -n 's/^pub const RELEASE_PUBLIC_KEY: &str = "\(.*\)";/\1/p' src/protocol/forge-sdk/src/release.rs)
+          [ -n "$want" ] || { echo "::error::RELEASE_PUBLIC_KEY not found in src/protocol/forge-sdk/src/release.rs"; exit 1; }
+          if [ -z "$FORGE_RELEASE_KEY" ]; then
+            echo "::error::the FORGE_RELEASE_KEY secret is not set: add it in Settings -> Secrets and variables -> Actions"; exit 1
+          fi
+          got=$(printf '%s' "$FORGE_RELEASE_KEY" | base64 -d 2>/dev/null | tail -c 32 | base64 -w0 | tr '+/' '-_' | tr -d '=')
+          if [ "$got" != "$want" ]; then
+            echo "::error::FORGE_RELEASE_KEY is not the key for RELEASE_PUBLIC_KEY ($want). Put the matching private key in the secret, or ship a release that rotates the key (see docs: development/releases)."; exit 1
+          fi
+          for f in scripts/packaging/get-forge.sh scripts/packaging/get-forge.ps1 docs/src/content/docs/getting-started/installation.mdx; do
+            grep -q "$want" "$f" || { echo "::error::$f does not pin RELEASE_PUBLIC_KEY $want"; exit 1; }
+          done
+          echo "Signing key matches $want"
+
+  ui:
+    name: Web console
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - working-directory: src/ui
+        run: bash ../../scripts/ci/build.sh light sh -c 'npm ci && npm run build'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-dist
+          path: src/ui/dist
+          retention-days: 3
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: [version, ui]
+    timeout-minutes: 300
+    strategy:
+      fail-fast: true
+      matrix:
+        # Both Linux targets build in the `cross` images: their musl GCC
+        # toolchains compile DuckDB's bundled C++ (musl-tools on the host has
+        # no C++ compiler).
+        include: ${{ fromJSON('[{"target":"x86_64-unknown-linux-musl","os":"linux","exe":"","file":"x86-64"},{"target":"aarch64-unknown-linux-musl","os":"linux","exe":"","file":"ARM aarch64"},{"target":"x86_64-pc-windows-msvc","os":"windows","exe":".exe","file":""}]') }}
+    runs-on: ${{ matrix.os == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: ui-dist
+          path: src/ui/dist
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Cross toolchain
+        if: matrix.os == 'linux'
+        shell: bash
+        run: |
+          command -v cross >/dev/null || cargo install --locked cross
+          docker info >/dev/null 2>&1 || { echo "::error::cross needs Docker: install it on the runner and add the runner user to the docker group"; exit 1; }
+      - name: Build
+        shell: bash
+        env:
+          FORGE_BUILD_SHA: ${{ github.sha }}
+          # The release version (e.g. 0.1.0-rc-03) is compiled in, so the
+          # self-updater knows which release it is running.
+          FORGE_BUILD_VERSION: ${{ needs.version.outputs.version }}
+          # A host-wide sccache wrapper does not exist inside the cross image.
+          RUSTC_WRAPPER: ""
+        run: |
+          # cross gets its own target dir: build scripts compiled by the host
+          # toolchain need a newer glibc than the cross image has.
+          if [ "${{ matrix.os }}" = linux ]; then
+            build="cross build"
+            # One cache per target: each cross image builds its own host tools.
+            export CARGO_TARGET_DIR="${FORGE_CI_TARGET_DIR:-$PWD/target/cross}/${{ matrix.target }}"
+          else
+            build="cargo build"
+          fi
+          echo "CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}" >> "$GITHUB_ENV"
+          # The heavy lock: nothing else compiles on the host meanwhile.
+          bash scripts/ci/build.sh heavy $build -j "$FORGE_CI_BUILD_JOBS" --locked --release --target ${{ matrix.target }} -p forge-server -p forge-agent -p forge-plugin-runner -p forge-analytics-worker
+          # The `forge` CLI in a second build in this job: it reuses the
+          # compiled dependencies, and building it separately keeps its extra
+          # features (zbus blocking API for the keyring) out of the server and
+          # agent binaries.
+          bash scripts/ci/build.sh heavy $build -j "$FORGE_CI_BUILD_JOBS" --locked --release --target ${{ matrix.target }} -p forge-cli
+      - name: Collect and check binaries
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          t=${{ matrix.target }}; x="${{ matrix.exe }}"
+          src="$CARGO_TARGET_DIR/$t/release"
+          mkdir -p out
+          cp "$src/forge-server$x" "out/forge-server-$t$x"
+          cp "$src/forge-plugin-runner$x" "out/forge-plugin-runner-$t$x"
+          cp "$src/forge-analytics-worker$x" "out/forge-analytics-worker-$t$x"
+          # The CLI: forge-cli-<target>[.exe], never under forge-agent-
+          # (the updater hands every forge-agent-* asset to nodes).
+          cp "$src/forge$x" "out/forge-cli-$t$x"
+          case "$t" in
+            x86_64-unknown-linux-musl)
+              cp "$src/forge-agent" out/forge-agent-linux-x86_64
+              cp "$src/forge-agent-helper" out/forge-agent-helper-linux-x86_64 ;;
+            aarch64-unknown-linux-musl)
+              cp "$src/forge-agent" out/forge-agent-linux-aarch64
+              cp "$src/forge-agent-helper" out/forge-agent-helper-linux-aarch64 ;;
+            x86_64-pc-windows-msvc)
+              cp "$src/forge-agent.exe" out/forge-agent-windows-x86_64.exe ;;
+          esac
+          if [ "${{ matrix.os }}" = linux ]; then
+            for f in out/*; do
+              desc=$(file -b "$f")
+              echo "$f: $desc"
+              case "$desc" in *"${{ matrix.file }}"*) ;; *) echo "::error::$f is not built for ${{ matrix.file }}"; exit 1 ;; esac
+              case "$desc" in *"statically linked"*|*"static-pie linked"*) ;; *) echo "::error::$f is not statically linked"; exit 1 ;; esac
+            done
+          fi
+          # The native binaries start, and the server reports the release
+          # version (the self-updater compares it; the worker reports its
+          # Cargo version).
+          if [ "$t" = x86_64-unknown-linux-musl ] || [ "$t" = x86_64-pc-windows-msvc ]; then
+            got=$("out/forge-server-$t$x" --version)
+            echo "$got"
+            case "$got" in *" $VERSION") ;; *) echo "::error::forge-server reports '$got', expected version $VERSION (is FORGE_BUILD_VERSION passed through Cross.toml?)"; exit 1 ;; esac
+            "out/forge-analytics-worker-$t$x" --version
+          fi
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.target }}
+          path: out/*
+          retention-days: 7
+
+  # The `forge` CLI for macOS (server and agent are not built for macOS).
+  # One Apple-silicon job builds both targets: Apple clang and the macOS SDK
+  # cover x86_64 too, and one job is half the minutes of two (macOS minutes
+  # count 10x on GitHub-hosted runners). Not code-signed or notarised.
+  cli-macos:
+    name: Build forge CLI (macOS)
+    needs: version
+    runs-on: macos-14
+    env:
+      # Same minimum for both architectures, also for the C code `ring` builds.
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: apple-darwin-cli
+      - name: Build
+        shell: bash
+        env:
+          # Compiled in, so `forge update` knows which release it is running.
+          FORGE_BUILD_VERSION: ${{ needs.version.outputs.version }}
+        run: cargo build --release --locked -p forge-cli --target aarch64-apple-darwin --target x86_64-apple-darwin
+      - name: Check and collect binaries
+        shell: bash
+        run: |
+          mkdir -p out
+          for arch in aarch64 x86_64; do
+            t="$arch-apple-darwin"; bin="target/$t/release/forge"
+            got=$(lipo -archs "$bin")
+            want=$arch; [ "$arch" = aarch64 ] && want=arm64
+            [ "$got" = "$want" ] || { echo "::error::$bin is built for '$got', expected '$want'"; exit 1; }
+            # Only system libraries; never OpenSSL (CLAUDE.md: ring is the one crypto provider).
+            libs=$(otool -L "$bin" | tail -n +2 | awk '{ print $1 }')
+            echo "$t links:"; echo "$libs"
+            if echo "$libs" | grep -vE '^(/usr/lib/|/System/Library/)' | grep -q .; then
+              echo "::error::$bin links a non-system library; check its dependencies for OpenSSL or Homebrew libraries"; exit 1
+            fi
+            cp "$bin" "out/forge-cli-$t"
+          done
+          ./out/forge-cli-aarch64-apple-darwin --version
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-apple-darwin-cli
+          path: out/*
+          retention-days: 7
+
+  package:
+    name: Package and sign
+    needs: [version, build, cli-macos]
+    # cli-macos is skipped without a macOS runner; package anyway.
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.build.result == 'success' && (needs.cli-macos.result == 'success' || needs.cli-macos.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          path: bin
+          merge-multiple: true
+      - name: Packages
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          bash scripts/packaging/package.sh bin assets "$VERSION"
+          # The bootstrap installers: download, verify and run install.sh/.ps1.
+          install -m 0755 scripts/packaging/get-forge.sh assets/get-forge.sh
+          cp scripts/packaging/get-forge.ps1 assets/get-forge.ps1
+      - name: Check the packages
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: bash scripts/packaging/check-release.sh assets "$VERSION"
+      - name: Checksums and signature
+        env:
+          FORGE_RELEASE_KEY: ${{ secrets.FORGE_RELEASE_KEY }}
+        run: |
+          cd assets
+          sha256sum * > SHA256SUMS
+          server=../bin/forge-server-x86_64-unknown-linux-musl
+          chmod +x "$server"
+          "$server" release sign SHA256SUMS > SHA256SUMS.sig
+          want=$(sed -n 's/^pub const RELEASE_PUBLIC_KEY: &str = "\(.*\)";/\1/p' ../src/protocol/forge-sdk/src/release.rs)
+          got=$("$server" release pubkey)
+          [ "$want" = "$got" ] || { echo "::error::FORGE_RELEASE_KEY does not match RELEASE_PUBLIC_KEY (compiled in: $want, from the secret: $got)"; exit 1; }
+          cat SHA256SUMS
+      # Verify the way a user does (get-forge.sh): OpenSSL and the pinned key.
+      - name: Verify the signature independently
+        run: |
+          command -v openssl >/dev/null || { echo "::error::openssl is needed to verify the signature; install it on the runner"; exit 1; }
+          sh scripts/packaging/get-forge.sh --verify-only assets
+      - name: Release notes
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG: ${{ needs.version.outputs.tag }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+          REPO: ${{ github.repository }}
+        run: bash scripts/packaging/release-notes.sh "$TAG" "$PRERELEASE" "$REPO" assets > release-notes.md && cat release-notes.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: |
+            assets/*
+            release-notes.md
+          retention-days: 14
+
+  publish:
+    name: Publish the release
+    needs: [version, package]
+    if: ${{ !cancelled() && needs.package.result == 'success' && needs.version.outputs.publish == 'true' }}
+    runs-on: ubuntu-latest
+    # Write access only here: creating the release in this repository.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release
+      - name: Publish
+        # Source and releases live in the same public repository.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+          REPO: ${{ github.repository }}
+        run: |
+          # A pre-release is never "latest": /releases/latest (the updater's
+          # feed and get-forge.sh's default) keeps pointing at the last stable.
+          flags=(--title "Orbyn Forge $VERSION" --notes-file release/release-notes.md)
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease --latest=false); else flags+=(--latest); fi
+          flags+=(--verify-tag)
+          if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+            gh release edit "$TAG" -R "$REPO" --notes-file release/release-notes.md
+          else
+            # As a draft first, so nobody downloads a half-uploaded release.
+            gh release create "$TAG" -R "$REPO" --draft "${flags[@]}"
+          fi
+          gh release upload "$TAG" -R "$REPO" release/assets/* --clobber
+          gh release edit "$TAG" -R "$REPO" --draft=false
+          gh release view "$TAG" -R "$REPO" --json url,isPrerelease,assets --jq '"\(.url) prerelease=\(.isPrerelease) assets=\(.assets|length)"'
+
+  # The website image (forge.orbyntech.com, docs at /docs/), after the
+  # release: pushed to GHCR for tags, built but not pushed for dry runs.
+  # BuildKit with the docker driver
+  # cannot cap memory; the image is two npm builds and nginx.
+  image:
+    name: Website image
+    needs: [version, package, publish]
+    if: ${{ !cancelled() && needs.package.result == 'success' && (needs.publish.result == 'success' || needs.publish.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
+      - name: Log in to GHCR
+        if: needs.version.outputs.publish == 'true'
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: printf '%s' "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+      - name: Build (and push for a published release)
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+          PUBLISH: ${{ needs.version.outputs.publish }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          img="ghcr.io/$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')/forge-website"
+          tags=(-t "$img:$VERSION" -t "$img:sha-${GITHUB_SHA::7}")
+          if [ "$PRERELEASE" = false ]; then tags+=(-t "$img:${VERSION%.*}" -t "$img:latest"); fi
+          out=(--load); [ "$PUBLISH" = true ] && out=(--push)
+          bash scripts/ci/build.sh heavy docker buildx build -f website/Dockerfile "${tags[@]}" "${out[@]}" .
+      - name: Log out of GHCR
+        if: always() && needs.version.outputs.publish == 'true'
+        shell: bash
+        run: docker logout ghcr.io || true

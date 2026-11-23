@@ -1,0 +1,30 @@
+[package]
+name = "forge-analytics-duckdb"
+description = "Orbyn Forge DuckDB analytics store: one database file per UTC day and family, in-process in the analytics worker (D-143)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+forge-core.workspace = true
+# The job report type the worker shows (`views::JobReport`).
+forge-analytics-proto.workspace = true
+async-trait.workspace = true
+duckdb.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

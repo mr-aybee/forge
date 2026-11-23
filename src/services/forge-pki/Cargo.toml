@@ -1,0 +1,24 @@
+[package]
+name = "forge-pki"
+description = "Internal CA, agent enrollment tokens, certificate issuance, rotation and revocation."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+forge-core.workspace = true
+forge-secrets.workspace = true
+rcgen.workspace = true
+x509-parser.workspace = true
+time.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

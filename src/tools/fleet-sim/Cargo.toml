@@ -1,0 +1,33 @@
+[package]
+name = "fleet-sim"
+description = "Simulates 10–5,000 Orbyn Forge agents against a real control plane and records resource use."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+forge-agent.workspace = true
+forge-core.workspace = true
+forge-secrets.workspace = true
+forge-proto.workspace = true
+prost.workspace = true
+async-trait.workspace = true
+http.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sysinfo.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+tempfile.workspace = true
+uuid.workspace = true
+futures.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

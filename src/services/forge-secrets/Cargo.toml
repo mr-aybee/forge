@@ -1,0 +1,22 @@
+[package]
+name = "forge-secrets"
+description = "Envelope encryption and shared crypto helpers (ring) for Orbyn Forge."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+ring.workspace = true
+base64.workspace = true
+hex.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

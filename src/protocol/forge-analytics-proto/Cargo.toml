@@ -1,0 +1,26 @@
+[package]
+name = "forge-analytics-proto"
+description = "Orbyn Forge analytics worker control protocol: framed messages, worker configuration and the analytics settings contract."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+forge-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true }
+# Typed OpenAPI schemas for the settings the console edits (D-077). Never
+# used by forge-agent. MIT.
+schemars = { version = "1.2", default-features = false, features = ["derive", "std"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,24 @@
+/target
+node_modules/
+dist/
+.astro/
+*.db
+*.db-shm
+*.db-wal
+
+__pycache__/
+# Local test release feed (scripts/setup_testing): built artifacts and the dev signing key
+/scripts/setup_testing/releases/
+/scripts/setup_testing/.keys/
+/scripts/setup_testing/.lab/
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+
+# forge-server run without a config (default data_dir): database and keys
+.forge-data/
+
+# Generated benchmark report
+scripts/dev/benchmarks/report/data.json
+scripts/dev/benchmarks/report.html

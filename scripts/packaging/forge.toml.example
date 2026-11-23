@@ -1,0 +1,26 @@
+# Orbyn Forge control plane. The installer writes /etc/forge/forge.toml
+# (Linux) or %ProgramData%\Orbyn Forge\forge.toml (Windows) from this file.
+
+# SQLite database, CA, keys, plugin artifacts and backups live here.
+data_dir = "/var/lib/forge"
+
+# Web console and REST API. Put a TLS proxy (Caddy, Nginx) in front for
+# production and keep this on localhost, or bind it privately.
+api_listen = "0.0.0.0:8080"
+public_url = "http://forge.example.com:8080"
+# true as soon as public_url is https://.
+cookie_secure = false
+
+# Agents dial in here over mutual TLS (open this port to your nodes).
+agent_listen = "0.0.0.0:7443"
+agent_public_url = "https://forge.example.com:7443"
+# Names and IPs nodes use to reach this server (in the agent certificate).
+agent_hostnames = ["forge.example.com", "localhost", "127.0.0.1"]
+
+# PostgreSQL instead of SQLite:
+# database_url = "postgres://forge:secret@db.internal/forge"
+
+[update]
+# Offer new Forge releases in the console (platform administrators update
+# with one click; releases are verified against Forge's signing key).
+enabled = true

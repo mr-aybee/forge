@@ -1,0 +1,346 @@
+---
+title: Installation
+description: Download a signed Forge release, verify it and install the control plane on Linux or Windows, then sign in.
+sidebar:
+  order: 3
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+This guide installs the Forge control plane from a release on GitHub, on a
+Linux or Windows server, and ends with you signed in to the console. For a
+ten-minute walkthrough that also adds your first node, follow the
+[Quickstart](/docs/getting-started/quickstart/).
+
+Each release has one self-contained package per platform: `forge-server`
+with the web console built in, the analytics worker and plugin runner it
+starts, the agent binaries your nodes download, and the installer. You
+install nothing else: no Node.js, database server or web server.
+
+## Before you begin
+
+| | Linux | Windows |
+| --- | --- | --- |
+| Operating system | Debian 12+, Ubuntu 22.04+, RHEL, Rocky or Alma 8+, with systemd | Windows Server 2019, 2022 or 2025, Windows 10 or 11 |
+| Architecture | `x86_64` or `aarch64` (arm64) | `x86_64` |
+| Access | `sudo` | **PowerShell as Administrator** |
+| Tools | `curl`, `tar`, `gzip`. Minimal RHEL-like images can lack `tar` and `gzip`: `sudo dnf install -y tar gzip` | none |
+| Signature check | OpenSSL 1.1.1 or later (`get-forge.sh` installs it when missing) | `openssl.exe`, for example from Git for Windows |
+| Disk | 500 MB for binaries, plus the data directory | the same |
+
+Network:
+
+| Port | Direction | Used for |
+| --- | --- | --- |
+| `8080/tcp` | Users and nodes to the server | Console, API, node installer and agent downloads |
+| `7443/tcp` | Nodes to the server | Agent link (mutual TLS) |
+| `55132/tcp` | Nodes to the server | Analytics uploads from agents (mutual TLS) |
+| `443/tcp` out | Server to `github.com` | Downloading releases and updates. Optional |
+
+The installer opens these ports in firewalld or ufw on Linux and in Windows
+Firewall. Open them in any network firewall yourself. See
+[Network ports](/docs/reference/network-ports/).
+
+### Choose an analytics engine
+
+The analytics database keeps node history, container metrics and logs. The
+installer asks for it; you can change it later in
+[Choose and connect databases](/docs/guides/databases/).
+
+| Engine | Use it for | Measured cost |
+| --- | --- | --- |
+| `duckdb` (default on Linux) | Small and medium installs, up to about 100 nodes with moderate logging | Idle: about 0 % of a core and 44 MB. Stored 100 nodes × 10 log lines/s (about 9,000 lines/s) with every line kept |
+| `embedded` (chDB, Linux only) | Heavy log search on one server | Idle: 13 to 16 % of a core and about 600 MB. Searches stay under 1 s at 9,000 lines/s |
+| `clickhouse` | Heavy load and large fleets; a ClickHouse server you run | On the ClickHouse server, not on Forge |
+| `off` | No history or logs | None |
+
+DuckDB slows down at about 18,000 log lines/s while people search the logs.
+Above that, use `embedded` or `clickhouse`. The numbers and method are in
+[Benchmarks](/docs/development/benchmarks/#analytics-duckdb-against-chdb).
+
+:::note
+On Windows the installer keeps analytics `off` by default: DuckDB is not yet
+verified on Windows. Pass `-Analytics clickhouse` to use a ClickHouse server.
+:::
+
+## Steps
+
+### 1. Download and verify the release
+
+A release publishes `SHA256SUMS`, a list of the SHA-256 of every file, and
+`SHA256SUMS.sig`, an Ed25519 signature of that list by the Orbyn Forge
+release key. Verify both before you run anything from the download.
+
+<Tabs syncKey="os">
+<TabItem label="Linux">
+
+`get-forge.sh` downloads the package for this machine, checks the signature
+and the checksum, and runs the installer only when both match. Download it
+from the release you want:
+
+```sh
+# The latest stable release:
+curl -fsSLO https://github.com/mr-aybee/forge/releases/latest/download/get-forge.sh
+# Or one release, for example a release candidate:
+curl -fsSLO https://github.com/mr-aybee/forge/releases/download/<tag>/get-forge.sh
+```
+
+Replace `<tag>` with the release tag, such as `v0.1.0-rc-03`. Pre-releases
+are never "latest", so install a release candidate by its tag.
+
+To download the package yourself instead, for example to copy it to a server
+without internet access:
+
+```sh
+TAG=<tag>
+V=${TAG#v}
+ARCH=$(uname -m)   # x86_64 or aarch64
+BASE=https://github.com/mr-aybee/forge/releases/download/$TAG
+curl -fLO $BASE/forge-$V-$ARCH-linux.tar.gz -fLO $BASE/SHA256SUMS -fLO $BASE/SHA256SUMS.sig -fLO $BASE/get-forge.sh
+sh get-forge.sh --verify-only .
+```
+
+`--verify-only` checks the signature and every listed file in the folder,
+and installs nothing. To check the signature with OpenSSL by hand, see
+[Verify a download](#verify-a-download).
+
+</TabItem>
+<TabItem label="Windows">
+
+`get-forge.ps1` downloads the Windows package, checks the signature and the
+checksum, and runs the installer only when both match:
+
+```powershell
+# The latest stable release:
+Invoke-WebRequest https://github.com/mr-aybee/forge/releases/latest/download/get-forge.ps1 -OutFile get-forge.ps1
+# Or one release:
+Invoke-WebRequest https://github.com/mr-aybee/forge/releases/download/<tag>/get-forge.ps1 -OutFile get-forge.ps1
+```
+
+Windows has no built-in Ed25519 verifier. `get-forge.ps1` uses
+`openssl.exe` from `PATH` or from Git for Windows, and stops if it finds
+neither. `-SkipSignatureCheck` installs after the checksum check alone.
+
+A release without a `forge-<version>-x86_64-windows.zip` has no Windows
+package.
+
+</TabItem>
+</Tabs>
+
+### 2. Run the installer
+
+<Tabs syncKey="os">
+<TabItem label="Linux">
+
+Interactive: the installer asks each question, shows a **REVIEW** and
+installs only after you confirm.
+
+```sh
+sudo sh get-forge.sh                          # latest stable release
+sudo sh get-forge.sh --version <tag>          # one release
+sudo sh get-forge.sh --file ./forge-<version>-<arch>-linux.tar.gz   # a downloaded package
+```
+
+Unattended: pass installer options after `--`. The installer asks nothing.
+
+```sh
+sudo sh get-forge.sh --version <tag> -- --yes \
+  --public-url https://forge.example.com --environment production
+```
+
+From an unpacked package, after you verified it:
+
+```sh
+tar xzf forge-<version>-<arch>-linux.tar.gz
+cd forge-<version>-<arch>-linux
+sudo ./install.sh
+```
+
+</TabItem>
+<TabItem label="Windows">
+
+In **PowerShell as Administrator**:
+
+```powershell
+.\get-forge.ps1 -Version <tag> -PublicUrl http://forge.example.com:8080
+```
+
+Parameters that `get-forge.ps1` does not know go to `install.ps1`. From an
+unpacked package, after you verified it:
+
+```powershell
+Expand-Archive forge-<version>-x86_64-windows.zip -DestinationPath .
+cd forge-<version>-x86_64-windows
+.\install.ps1 -PublicUrl http://forge.example.com:8080
+```
+
+</TabItem>
+</Tabs>
+
+The installer first checks the package against its own checksums and this
+machine's architecture, and stops before changing anything if they do not
+match. Every question, option and default is in the
+[Server installer reference](/docs/reference/cli/server-installer/).
+
+:::caution
+Pass the same `--prefix` on every Linux run. The first install writes
+`agent_dist_dir = "<prefix>/dist"` into `forge.toml`, and later runs keep that
+file, so a run with another prefix leaves the control plane serving the old
+agent binaries.
+:::
+
+### 3. Read the summary
+
+The installer ends with the console URL, where the administrator password
+is, and what to do next:
+
+```text
+  Orbyn Forge 0.1.0 is installed and running.
+
+  ACCESS
+    Console       http://192.0.2.10:8080
+    Agents        https://192.0.2.10:7443  (nodes connect out to TCP 7443 and 55132)
+    Analytics     duckdb, uploads on port 55132
+
+  ADMINISTRATOR
+    Username      admin
+    Password      <generated password>
+    Saved to      /var/lib/forge/initial-admin-password (root only, deleted when you change it)
+  ...
+  NEXT STEPS
+    1. Open http://192.0.2.10:8080 and sign in as admin.
+    2. Allow TCP 7443 and 55132 from your nodes to this server.
+    3. Add nodes: Overview > Add node.
+```
+
+The generated password is shown once. Forge deletes the saved copy when the
+administrator changes the password.
+
+<Tabs syncKey="os">
+<TabItem label="Linux">
+
+```sh
+sudo cat /var/lib/forge/initial-admin-password
+```
+
+</TabItem>
+<TabItem label="Windows">
+
+```powershell
+Get-Content "C:\ProgramData\Orbyn Forge\data\initial-admin-password"
+```
+
+</TabItem>
+</Tabs>
+
+To choose the password yourself, set `FORGE_ADMIN_PASSWORD` (12 or more
+characters) before you run the installer. Nothing is saved to disk then.
+
+### 4. Sign in
+
+1. Open the console URL from the summary.
+2. Sign in with the administrator name and password.
+3. Open **Settings → Password & security**, change the password and set up
+   MFA.
+
+### 5. Let your nodes reach the server
+
+Allow TCP `7443` and `55132` from your nodes to the server in every network
+firewall between them. The installer has already opened them in the host
+firewall.
+
+## Verify
+
+<Tabs syncKey="os">
+<TabItem label="Linux">
+
+```sh
+systemctl is-active forge-server                 # active
+curl -fsS http://127.0.0.1:8080/api/version; echo
+pgrep -a forge-analytics                         # the analytics worker, unless analytics is off
+grep '"version"' /opt/forge/dist/MANIFEST.json   # the agent version nodes get
+```
+
+</TabItem>
+<TabItem label="Windows">
+
+```powershell
+Get-ScheduledTask -TaskName "Orbyn Forge" | Get-ScheduledTaskInfo
+Invoke-RestMethod http://127.0.0.1:8080/api/version
+Get-Process forge-server, forge-analytics-worker
+```
+
+</TabItem>
+</Tabs>
+
+The console opens at the public URL, and **Administration → Forge updates**
+shows the version you installed.
+
+### Verify a download
+
+`get-forge.sh --verify-only <folder>` does these checks for you. By hand on
+Linux, with OpenSSL 1.1.1 or later:
+
+```sh
+KEY=bFMJk9wv3XFOhOtPya-idWiatNVVVcktN62sOnQr29U   # the Orbyn Forge release key
+K=$(printf '%s' "$KEY" | tr -- '-_' '+/')=
+{ printf '\060\052\060\005\006\003\053\145\160\003\041\000'; printf '%s' "$K" | base64 -d; } > forge-release.der
+base64 -d SHA256SUMS.sig > SHA256SUMS.sig.bin
+openssl pkeyutl -verify -pubin -keyform DER -inkey forge-release.der -rawin \
+  -in SHA256SUMS -sigfile SHA256SUMS.sig.bin     # Signature Verified Successfully
+sha256sum -c SHA256SUMS --ignore-missing         # each downloaded file: OK
+```
+
+The key is `RELEASE_PUBLIC_KEY`, built into Forge; the self-updater and
+`forge update` check the same signature before they install anything.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `No stable release found` | The release you want is a pre-release, which is never "latest" | Pass its tag: `--version v0.1.0-rc-03` (`-Version` on Windows) |
+| `SHA256SUMS does not carry a valid Orbyn Forge signature` | The files are not an Orbyn Forge release, or OpenSSL is older than 1.1.1 | Download from `github.com/mr-aybee/forge` again; check `openssl version` |
+| `… does not match SHA256SUMS` | Damaged or incomplete download | Delete the file and download it again |
+| `This package is for aarch64; this machine is x86_64` | Wrong package | Download `forge-<version>-$(uname -m)-linux.tar.gz` |
+| `systemd is required` | The server runs without systemd, for example in a plain container | Install on a VM or host with systemd |
+| `forge-server did not start` | Configuration error or a port in use | `journalctl -u forge-server -n 50`; on Windows run `forge-server.exe --config … serve` by hand |
+| Summary shows **Analytics worker not listening** | The worker failed to start or port `55132` is in use | `journalctl -u forge-server -n 50`. The console works without it; history and logs wait in the nodes' spools |
+| Nodes are online but show no history or logs | `55132/tcp` is blocked between the nodes and the server | Open it; the nodes upload their backlog |
+| `openssl.exe is needed` (Windows) | No OpenSSL on the machine | Install Git for Windows, or pass `-SkipSignatureCheck` |
+
+## Uninstall
+
+<Tabs syncKey="os">
+<TabItem label="Linux">
+
+```sh
+sudo sh /etc/forge/install.sh --uninstall            # keeps /etc/forge and /var/lib/forge
+sudo sh /etc/forge/install.sh --uninstall --purge    # also deletes them and the forge user
+```
+
+</TabItem>
+<TabItem label="Windows">
+
+From the package folder:
+
+```powershell
+.\install.ps1 -Uninstall           # keeps C:\ProgramData\Orbyn Forge
+.\install.ps1 -Uninstall -Purge    # also deletes it
+```
+
+</TabItem>
+</Tabs>
+
+:::caution
+`--purge` and `-Purge` delete the database, the keys and the internal CA.
+Back up the data directory first if you may need it. An agent on the same
+server is a node: remove it from the console first.
+:::
+
+## Next steps
+
+- [Add nodes](/docs/guides/add-nodes/)
+- [Run Forge in production](/docs/guides/production-setup/): TLS, MFA, PostgreSQL and backups
+- [Update Forge](/docs/guides/update-forge/)
+- [Server installer reference](/docs/reference/cli/server-installer/)
+- [Platforms](/docs/reference/platforms/)

@@ -1,0 +1,22 @@
+[package]
+name = "forge-sdk"
+description = "Orbyn Forge plugin SDK: WIT interface, manifest schema and package signing."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+forge-secrets.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+semver.workspace = true
+ring.workspace = true
+thiserror.workspace = true
+base64.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,21 @@
+# A "freshly bought VM" for onboarding tests: SSH, a sudo-capable user that
+# needs its password for sudo, and no root login. No systemd, so the Forge
+# installer uses its respawn-loop mode.
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssh-server sudo curl ca-certificates procps \
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /run/sshd \
+ && sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/; s/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config \
+ && useradd --create-home --shell /bin/bash --groups sudo forgeops \
+ # Host keys are generated per container at start (ssh-keygen -A); keys baked
+ # into the image would give every node the same identity.
+ && rm -f /etc/ssh/ssh_host_*
+
+# The password is set at container start from FORGEOPS_PASSWORD so it is
+# never baked into the image.
+COPY node-entrypoint.sh /usr/local/sbin/node-entrypoint.sh
+RUN chmod 0755 /usr/local/sbin/node-entrypoint.sh
+EXPOSE 22
+ENTRYPOINT ["/usr/local/sbin/node-entrypoint.sh"]

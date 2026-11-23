@@ -1,0 +1,26 @@
+// Orbyn Forge plugin interface, version 0.1.0.
+//
+// A plugin is a WebAssembly component that targets the `plugin` world. It may
+// import only the `host` interface: no WASI, so no files, sockets or clocks.
+// Every host function is typed and is checked on the host side against
+//   effective permission = user ∩ plugin's approved permissions ∩ resource policy.
+
+package forge:plugin@0.1.0;
+
+interface host {
+  /// Writes a line to the plugin's log (bounded; truncated by the host).
+  /// Requires permission `host:log`.
+  log: func(message: string);
+
+  /// Whether the server with this hostname has an online agent.
+  /// Requires permission `host:server-online` and `view` on that server
+  /// for the invoking user. Unknown or invisible servers return false.
+  server-online: func(hostname: string) -> bool;
+}
+
+world plugin {
+  import host;
+
+  /// Entry point. `input` is caller-defined; the result is returned to the caller.
+  export run: func(input: u32) -> u32;
+}

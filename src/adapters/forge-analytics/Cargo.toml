@@ -1,0 +1,32 @@
+[package]
+name = "forge-analytics"
+description = "Analytics database adapters for Orbyn Forge: ClickHouse over HTTP (server or the Forge-managed embedded engine)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+forge-core.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+# Insert bodies are sent zstd-compressed (D-142); already in the tree.
+zstd.workspace = true
+# Spool writes (D-145): the group-commit task and its queue.
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
+futures.workspace = true
+# Deduplication tokens of grouped files hash their ids (`sha256_hex`).
+forge-secrets.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

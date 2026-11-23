@@ -1,0 +1,31 @@
+[package]
+name = "forge-alerts"
+description = "Alert evaluation for Orbyn Forge: rules over observations open and close durable alarm episodes (#11)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+forge-core.workspace = true
+forge-rules.workspace = true
+forge-catalog.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+futures.workspace = true
+ring.workspace = true
+hex.workspace = true
+url.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+forge-store.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

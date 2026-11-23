@@ -1,0 +1,96 @@
+@import "tailwindcss";
+@import "./tokens.css";
+
+/* Tailwind colour names map onto the shared brand tokens, so light and dark
+   follow tokens.css without `dark:` variants. */
+@theme inline {
+  --font-sans: var(--forge-font-sans);
+  --font-mono: var(--forge-font-mono);
+  --color-bg: var(--forge-bg);
+  --color-raised: var(--forge-bg-raised);
+  --color-sunken: var(--forge-bg-sunken);
+  --color-line: var(--forge-border);
+  --color-fg: var(--forge-text);
+  --color-muted: var(--forge-text-muted);
+  --color-accent: var(--forge-accent);
+  --color-accent-strong: var(--forge-accent-strong);
+  --color-accent-soft: var(--forge-accent-soft);
+  --color-on-accent: var(--forge-on-accent);
+  --color-navy: var(--forge-navy);
+  --color-ok: var(--forge-success);
+  --color-ember: var(--forge-ember);
+  --color-ember-soft: var(--forge-ember-soft);
+  --shadow-card: var(--forge-shadow);
+  --color-warn: var(--forge-warning);
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--forge-bg);
+  color: var(--forge-text);
+  font-family: var(--forge-font-sans);
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--forge-accent-soft);
+}
+
+:focus-visible {
+  outline: 2px solid var(--forge-accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* A faint grid behind hero sections. */
+.grid-bg {
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--forge-border) 55%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--forge-border) 55%, transparent) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 40%, transparent 100%);
+}
+
+.glow {
+  background: radial-gradient(600px 300px at 50% 0%, var(--forge-glow), transparent 70%);
+}
+
+.text-gradient {
+  background: linear-gradient(100deg, var(--forge-accent-strong) 10%, var(--forge-accent) 55%, var(--forge-ember) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* Soft aurora wash used behind heroes. */
+.aurora {
+  background:
+    radial-gradient(40% 50% at 15% 10%, color-mix(in srgb, var(--forge-accent) 14%, transparent), transparent 70%),
+    radial-gradient(35% 45% at 85% 20%, color-mix(in srgb, var(--forge-ember) 10%, transparent), transparent 70%),
+    radial-gradient(50% 60% at 50% 100%, color-mix(in srgb, var(--forge-accent) 8%, transparent), transparent 70%);
+}
+
+.card {
+  border: 1px solid var(--forge-border);
+  background: var(--forge-bg-raised);
+  border-radius: var(--forge-radius);
+  box-shadow: var(--forge-shadow);
+}
+
+.marquee {
+  mask-image: linear-gradient(to right, transparent, #000 10%, #000 90%, transparent);
+}
+
+@keyframes marquee {
+  to { transform: translateX(-50%); }
+}
