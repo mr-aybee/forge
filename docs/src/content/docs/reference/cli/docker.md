@@ -225,3 +225,405 @@ In Git Bash on Windows, MSYS turns an argument that starts with `/` into a
 Windows path. Run `export MSYS_NO_PATHCONV=1`, or leave out the leading
 slash: `forge docker api <node> GET version`.
 :::
+
+## Images, volumes and networks
+
+Typed commands for a node's Docker resources (see
+[Docker resources](/docs/guides/docker-resources/)). Reads need `view` on
+the node; changes need `docker.image.manage`, `docker.volume.manage` or
+`docker.network.manage`. Pulls of private images use the credentials of a
+registry added with `forge registries add`; pushes go only to a registry
+that allows them. Slow operations (pull, push) start a job: add `--wait`.
+
+### forge docker images
+
+A node's images
+
+**Synopsis**
+
+```text
+forge docker images [OPTIONS] <NODE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+
+### forge docker volumes
+
+A node's volumes
+
+**Synopsis**
+
+```text
+forge docker volumes [OPTIONS] <NODE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+
+### forge docker networks
+
+A node's networks
+
+**Synopsis**
+
+```text
+forge docker networks [OPTIONS] <NODE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+
+### forge docker disk-usage
+
+Space used by images, containers, volumes and build cache
+
+**Synopsis**
+
+```text
+forge docker disk-usage [OPTIONS] <NODE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+
+### forge docker events
+
+Recent Docker events on a node
+
+**Synopsis**
+
+```text
+forge docker events [OPTIONS] <NODE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `--since-secs` | integer | `300` | no | How far back (seconds, at most one day) | - |
+
+### forge docker image inspect
+
+An image's configuration and layers
+
+**Synopsis**
+
+```text
+forge docker image inspect [OPTIONS] <NODE> <IMAGE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `<image>` | string | - | yes | Image reference or id | - |
+
+### forge docker image history
+
+The layers an image was built from
+
+**Synopsis**
+
+```text
+forge docker image history [OPTIONS] <NODE> <IMAGE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `<image>` | string | - | yes | Image reference or id | - |
+
+### forge docker image pull
+
+Pull an image; private registries use the credentials added in Forge
+
+**Synopsis**
+
+```text
+forge docker image pull [OPTIONS] <NODE> <IMAGE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `<image>` | string | - | yes | Image reference or id | - |
+| `--wait` | flag | - | no | Wait for the job to finish (exit 10 when it fails) | - |
+| `--timeout` | integer | `900` | no | Seconds `--wait` waits | - |
+
+### forge docker image push
+
+Push an image to a registry added in Forge with pushes allowed
+
+**Synopsis**
+
+```text
+forge docker image push [OPTIONS] <NODE> <IMAGE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `<image>` | string | - | yes | Image reference or id | - |
+| `--wait` | flag | - | no | Wait for the job to finish (exit 10 when it fails) | - |
+| `--timeout` | integer | `900` | no | Seconds `--wait` waits | - |
+
+### forge docker image tag
+
+Tag an image as `repo:tag`
+
+**Synopsis**
+
+```text
+forge docker image tag [OPTIONS] <NODE> <IMAGE> <REPO> <TAG>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `<image>` | string | - | yes | Image reference or id | - |
+| `<repo>` | string | - | yes | Target repository | - |
+| `<tag>` | string | - | yes | Target tag | - |
+
+### forge docker image remove
+
+Remove an image
+
+**Synopsis**
+
+```text
+forge docker image remove [OPTIONS] <NODE> <IMAGE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `<image>` | string | - | yes | Image reference or id | - |
+| `--force` | flag | - | no | Force the operation | - |
+| `--yes` | flag | - | no | Skip the confirmation prompt | - |
+
+### forge docker image prune
+
+Remove dangling images (`--all`: every unused image)
+
+**Synopsis**
+
+```text
+forge docker image prune [OPTIONS] <NODE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `--all` | flag | - | no | Every unused image, not only dangling ones | - |
+| `--yes` | flag | - | no | Skip the confirmation prompt | - |
+
+### forge docker volume inspect
+
+A volume's driver, mount point and labels
+
+**Synopsis**
+
+```text
+forge docker volume inspect [OPTIONS] <NODE> <NAME>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `<name>` | string | - | yes | Name | - |
+
+### forge docker volume create
+
+Create a named volume
+
+**Synopsis**
+
+```text
+forge docker volume create [OPTIONS] <NODE> <NAME>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `<name>` | string | - | yes | Name | - |
+| `--label` | flag | - | no | <KEY=VALUE> | - |
+
+### forge docker volume remove
+
+Remove a volume and its data
+
+**Synopsis**
+
+```text
+forge docker volume remove [OPTIONS] <NODE> <NAME>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `<name>` | string | - | yes | Name | - |
+| `--force` | flag | - | no | Force the operation | - |
+| `--yes` | flag | - | no | Skip the confirmation prompt | - |
+
+### forge docker volume prune
+
+Remove unused volumes and their data
+
+**Synopsis**
+
+```text
+forge docker volume prune [OPTIONS] <NODE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `--yes` | flag | - | no | Skip the confirmation prompt | - |
+
+### forge docker network inspect
+
+A network's configuration and attached containers
+
+**Synopsis**
+
+```text
+forge docker network inspect [OPTIONS] <NODE> <NETWORK>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `<network>` | string | - | yes | Network id or name | - |
+
+### forge docker network create
+
+Create a bridge or overlay network
+
+**Synopsis**
+
+```text
+forge docker network create [OPTIONS] <NODE> <NAME>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `<name>` | string | - | yes | Name | - |
+| `--driver` | enum: bridge \| overlay | `bridge` | no |  | - |
+| `--subnet` | string | - | no | Subnet (CIDR) | - |
+| `--gateway` | string | - | no | Gateway address | - |
+| `--internal` | flag | - | no | No outside access | - |
+| `--attachable` | flag | - | no | Standalone containers may join (overlay) | - |
+| `--label` | flag | - | no | <KEY=VALUE> | - |
+
+### forge docker network remove
+
+Remove a network
+
+**Synopsis**
+
+```text
+forge docker network remove [OPTIONS] <NODE> <NETWORK>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `<network>` | string | - | yes | Network id or name | - |
+| `--yes` | flag | - | no | Skip the confirmation prompt | - |
+
+### forge docker network connect
+
+Attach a container to a network
+
+**Synopsis**
+
+```text
+forge docker network connect [OPTIONS] <NODE> <NETWORK> <CONTAINER>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `<network>` | string | - | yes | Network id or name | - |
+| `<container>` | string | - | yes | Container id or name | - |
+
+### forge docker network disconnect
+
+Detach a container from a network
+
+**Synopsis**
+
+```text
+forge docker network disconnect [OPTIONS] <NODE> <NETWORK> <CONTAINER>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `<network>` | string | - | yes | Network id or name | - |
+| `<container>` | string | - | yes | Container id or name | - |
+| `--force` | flag | - | no | Force the operation | - |
+
+### forge docker network prune
+
+Remove unused networks
+
+**Synopsis**
+
+```text
+forge docker network prune [OPTIONS] <NODE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `--yes` | flag | - | no | Skip the confirmation prompt | - |
+

@@ -994,3 +994,110 @@ Example with a virtual IP on one LAN:
   }
 }
 ```
+
+## Docker Swarm
+
+A cluster created with `"mode": "swarm"` runs its services on Docker Swarm
+(see [Docker Swarm](/docs/guides/docker-swarm/)). These commands manage its
+members; they need `swarm.manage` on the cluster, with MFA.
+
+### forge clusters swarm status
+
+Members, live Swarm nodes and manager quorum of a Swarm cluster
+
+**Synopsis**
+
+```text
+forge clusters swarm status [OPTIONS] <CLUSTER>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<cluster>` | string | - | yes | Cluster id or name | - |
+
+### forge clusters swarm join
+
+Add a node to the cluster's swarm; the first node creates it
+
+**Synopsis**
+
+```text
+forge clusters swarm join [OPTIONS] <CLUSTER> <NODE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<cluster>` | string | - | yes | Cluster id or name | - |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `--role` | enum: manager \| worker | `worker` | no | The first node is always a manager. Keep 1, 3 or 5 managers | - |
+| `--advertise-addr` | string | - | no | Address or interface other nodes reach this one on | - |
+| `--addr-pool` | string | - | no | Overlay address pool (CIDR), first node only; repeat for more | - |
+| `--autolock` | flag | - | no | Lock manager keys at rest, first node only | - |
+| `--wait` | flag | - | no | Wait for the job to finish (exit 10 when it fails) | - |
+| `--timeout` | integer | `900` | no | Seconds `--wait` waits | - |
+
+### forge clusters swarm leave
+
+Remove a node from the swarm
+
+**Synopsis**
+
+```text
+forge clusters swarm leave [OPTIONS] <CLUSTER> <NODE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<cluster>` | string | - | yes | Cluster id or name | - |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `--force` | flag | - | no | Leave even when the node is unreachable or the last manager | - |
+| `--yes` | flag | - | no | Skip the confirmation prompt | - |
+| `--wait` | flag | - | no | Wait for the job to finish (exit 10 when it fails) | - |
+| `--timeout` | integer | `900` | no | Seconds `--wait` waits | - |
+
+### forge clusters swarm node
+
+Change a member's role, availability or labels
+
+**Synopsis**
+
+```text
+forge clusters swarm node [OPTIONS] <CLUSTER> <NODE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<cluster>` | string | - | yes | Cluster id or name | - |
+| `<node>` | string | - | yes | Node id, host name or name | - |
+| `--role` | enum: manager \| worker | - | no | New role: manager or worker | - |
+| `--availability` | string | - | no | active, pause or drain | - |
+| `--label` | flag | - | no | <KEY=VALUE> Replace the node's labels with these (`KEY=VALUE`, repeat) | - |
+| `--clear-labels` | flag | - | no | Remove every label | - |
+
+### forge clusters swarm rotate-tokens
+
+Rotate the swarm's join tokens
+
+**Synopsis**
+
+```text
+forge clusters swarm rotate-tokens [OPTIONS] <CLUSTER>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<cluster>` | string | - | yes | Cluster id or name | - |
+| `--worker` | flag | - | no | Rotate the worker join token | - |
+| `--manager` | flag | - | no | Rotate the manager join token | - |
+| `--yes` | flag | - | no | Skip the confirmation prompt | - |
+

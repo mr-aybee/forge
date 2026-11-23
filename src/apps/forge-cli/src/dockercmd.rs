@@ -22,6 +22,8 @@ use crate::{Global, connect, target};
 
 #[derive(Subcommand, Debug)]
 pub enum DockerCmd {
+    #[command(flatten)]
+    Resources(crate::containercmd::DockerResCmd),
     /// The node's Docker API endpoint (dockerd on TCP with mutual TLS).
     #[command(subcommand)]
     Endpoint(EndpointCmd),
@@ -145,9 +147,13 @@ fn endpoint_path(id: &str) -> String {
 }
 
 pub async fn run(g: &Global, cmd: DockerCmd) -> Result<()> {
+    if let DockerCmd::Resources(r) = cmd {
+        return crate::containercmd::docker_resources(g, r).await;
+    }
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
     match cmd {
+        DockerCmd::Resources(_) => Ok(()),
         DockerCmd::Endpoint(e) => endpoint(g, &mut api, e).await,
         DockerCmd::Catalog { class } => {
             let v = api.get("/api/v1/docker/catalog").await?;
