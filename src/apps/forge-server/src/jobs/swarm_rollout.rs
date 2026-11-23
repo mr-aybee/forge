@@ -46,6 +46,8 @@ use crate::deploy::release_app;
 use crate::jobs::swarm_service::{Progress, ServiceAction, progress};
 
 const OP_WAIT: Duration = Duration::from_secs(60);
+/// The state of a slot that serves.
+const SLOT_READY: &str = "ready";
 const POLL: Duration = Duration::from_secs(3);
 
 /// Job-state and operation keys (one definition each).
@@ -320,45 +322,46 @@ impl DeployJob {
             .map(|m| m.server_id)
             .collect();
         let rows = self.deploys.list_slots(r.app.id).await?;
-        for stale in rows.iter().filter(|x| !members.contains(&x.server_id)) {
-            self.deploys.delete_slot(r.app.id, stale.server_id, &stale.slot).await?;
-        }
         let ports_of = |s: &str| -> Value {
             ctx.state_value(&ports_key(s))
                 .cloned()
                 .or_else(|| rows.iter().find(|x| x.slot == s).map(|x| x.ports.clone()))
                 .unwrap_or_else(|| json!({}))
         };
+        let other_release = rows.iter().find(|x| x.slot == other).map_or(d.from_release, |x| x.release_number);
         let now = self.clock.now();
+        // The whole routing change at once: other slots of member nodes
+        // stay, nodes that left the swarm lose their rows.
+        let mut next: Vec<SlotRecord> = rows
+            .iter()
+            .filter(|x| members.contains(&x.server_id) && x.slot != slot && x.slot != other)
+            .cloned()
+            .collect();
         for server in &members {
-            self.deploys
-                .put_slot(&SlotRecord {
+            next.push(SlotRecord {
+                service_id: r.app.id,
+                server_id: *server,
+                slot: slot.to_owned(),
+                release_number: d.release_number,
+                weight,
+                state: SLOT_READY.into(),
+                ports: ports_of(slot),
+                updated_at: now,
+            });
+            if !other.is_empty() {
+                next.push(SlotRecord {
                     service_id: r.app.id,
                     server_id: *server,
-                    slot: slot.to_owned(),
-                    release_number: d.release_number,
-                    weight,
-                    state: "ready".into(),
-                    ports: ports_of(slot),
+                    slot: other.to_owned(),
+                    release_number: other_release,
+                    weight: 100 - weight.min(100),
+                    state: SLOT_READY.into(),
+                    ports: ports_of(other),
                     updated_at: now,
-                })
-                .await?;
-            if !other.is_empty() {
-                let release = rows.iter().find(|x| x.slot == other).map_or(d.from_release, |x| x.release_number);
-                self.deploys
-                    .put_slot(&SlotRecord {
-                        service_id: r.app.id,
-                        server_id: *server,
-                        slot: other.to_owned(),
-                        release_number: release,
-                        weight: 100 - weight.min(100),
-                        state: "ready".into(),
-                        ports: ports_of(other),
-                        updated_at: now,
-                    })
-                    .await?;
+                });
             }
         }
+        self.deploys.replace_slots(r.app.id, &next).await?;
         self.effects()?.reapply_endpoints(r.app.id).await?;
         Ok(())
     }

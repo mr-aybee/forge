@@ -69,6 +69,42 @@ user can reach, unless the user enrolled MFA for sign-in. Set it to `true` on
 any Forge that clients or production systems depend on.
 :::
 
+### Access lists and rate limits
+
+`[security.access]` limits which client addresses reach Forge, and
+`[security.rate_limit]` limits how often. Agents connect on their own port and
+are not affected. The client address is the TCP peer, or `X-Forwarded-For`
+from a `trusted_proxies` peer.
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `security.access.deny` | list of IP addresses or CIDRs | `[]` | Refused everywhere (`403`), before any other check |
+| `security.access.allow` | list of IP addresses or CIDRs | `[]` | When not empty, only these reach the console, the API, MCP and OAuth. Must include `127.0.0.1`, `::1` and every `trusted_proxies` entry, or the server refuses to start |
+| `security.access.webhooks_allow` | list of IP addresses or CIDRs | `[]` | When not empty, only these may call deploy webhooks (`/hooks/*`). `allow` does not apply to webhooks, so CI can deploy while the console is closed |
+| `security.access.nodes_allow` | list of IP addresses or CIDRs | `[]` | When not empty, only these may fetch the node installers and agent downloads (`/install.sh`, `/install.ps1`, `/agent/download/*`). `allow` does not apply to them |
+| `security.rate_limit.enabled` | boolean | `true` | Limits requests per client address |
+| `security.rate_limit.per_ip_per_minute` | integer | `1200` | Requests per minute from one address; an IPv6 `/64` counts as one address. At least `60`. Beyond it: `429` with `Retry-After: 60`. `/api/health` is never limited |
+
+```toml
+[security.access]
+allow = ["127.0.0.1", "::1", "10.0.0.0/8"]
+deny = ["198.51.100.0/24"]
+webhooks_allow = ["192.0.2.0/24"]   # your CI runners
+nodes_allow = []
+
+[security.rate_limit]
+enabled = true
+per_ip_per_minute = 1200
+```
+
+Agent enrollment is limited separately to 20 attempts per minute per address,
+and at most 16 agent downloads stream at once.
+
+:::caution
+An `allow` list that misses the address you manage Forge from locks you out
+of the console. Keep a way in (SSH to the control plane) when you change it.
+:::
+
 ### Public address
 
 The public address is the URL people use to reach the console. Forge puts it

@@ -239,9 +239,7 @@ impl SwarmServiceJob {
                     let op = SwarmOp::ServiceRemove { service_id: p.service_id.to_string(), slot: slot.into() };
                     self.op(ctx, manager, &format!("remove_op_{slot}"), &op, QUICK_WAIT).await?;
                 }
-                for row in self.deploys.list_slots(p.service_id).await.map_err(retry)? {
-                    self.deploys.delete_slot(p.service_id, row.server_id, &row.slot).await.map_err(retry)?;
-                }
+                self.deploys.replace_slots(p.service_id, &[]).await.map_err(retry)?;
                 Ok(())
             }
             1 => {

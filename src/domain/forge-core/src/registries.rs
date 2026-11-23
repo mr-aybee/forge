@@ -105,6 +105,8 @@ pub fn normalize_host(host: &str) -> Result<String, DomainError> {
 pub trait RegistryRepository: Send + Sync + std::fmt::Debug {
     async fn list_registries(&self, ws: WorkspaceId) -> DomainResult<Vec<Registry>>;
     async fn get_registry(&self, id: RegistryId) -> DomainResult<Option<Registry>>;
+    /// The workspace's registry for `host` (unique per workspace).
+    async fn registry_by_host(&self, ws: WorkspaceId, host: &str) -> DomainResult<Option<Registry>>;
     /// `Conflict` when the workspace already has a registry for the host.
     async fn create_registry(&self, r: &Registry) -> DomainResult<()>;
     async fn update_registry(&self, r: &Registry) -> DomainResult<()>;

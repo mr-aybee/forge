@@ -117,6 +117,10 @@ pub struct Services {
     /// `[security.access]`, parsed once (D-161).
     pub access_lists: crate::net_access::Lists,
     /// API-wide rate limits per client address (D-161).
+    /// Agent downloads streaming at once (public, large).
+    pub downloads: Arc<tokio::sync::Semaphore>,
+    /// Agent enrollment attempts per client address.
+    pub enroll_attempts: crate::rate_limit::Windows<std::net::IpAddr>,
     pub limiter: crate::net_access::Limiter,
     /// Deploy webhooks (D-159).
     pub webhooks: Arc<crate::webhooks::WebhookService>,
@@ -665,6 +669,8 @@ impl Services {
             webhooks,
             access_lists,
             limiter: crate::net_access::Limiter::default(),
+            downloads: Arc::new(tokio::sync::Semaphore::new(16)),
+            enroll_attempts: crate::rate_limit::Windows::default(),
             bucket_grants,
             health_secrets,
             notifier,

@@ -67,7 +67,11 @@ impl From<forge_core::analytics::AnalyticsError> for ApiError {
             A::WorkerDown => {
                 busy(ERR_ANALYTICS_WORKER_DOWN, "the analytics worker is not running; retry shortly".into())
             }
-            A::Unavailable(m) => busy(ERR_ANALYTICS_UNAVAILABLE, format!("analytics is unavailable: {m}")),
+            A::Unavailable(m) => {
+                // The reason names internals (hosts, paths): logged, not sent.
+                tracing::warn!(reason = %m, "analytics is unavailable");
+                busy(ERR_ANALYTICS_UNAVAILABLE, "analytics is unavailable".to_owned())
+            }
             A::Busy => busy(ERR_INGEST_BUSY, "too many log batches are waiting to be stored; retry shortly".into()),
             A::DiskLow => busy(ERR_INGEST_DISK_LOW, "the analytics database is low on disk space; retry later".into()),
             A::SearchBusy => busy(ERR_SEARCH_BUSY, "too many log searches are running; retry shortly".into()),

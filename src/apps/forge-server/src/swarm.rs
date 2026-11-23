@@ -20,6 +20,7 @@ use forge_secrets::Envelope;
 use serde::Serialize;
 
 use crate::jobs::swarm::tokens_aad;
+use crate::node_rpc::RpcError;
 
 /// How long a quick operation may take on the manager.
 const QUICK: Duration = Duration::from_secs(20);
@@ -221,7 +222,8 @@ impl SwarmService {
                 Ok(s) => s.display_name.unwrap_or(s.hostname),
                 // A node row may be gone while its member row is cleaned up;
                 // the console then shows the member without a name.
-                Err(_) => String::new(),
+                Err(DomainError::NotFound(_)) => String::new(),
+                Err(e) => return Err(e),
             };
             members.push(MemberView { member: m, hostname });
         }
@@ -481,19 +483,19 @@ impl SwarmService {
         for m in managers {
             match self.rpc(m.server_id, principal, op).await {
                 Ok(v) => return Ok(v),
-                Err(e) => last = e,
+                // Not connected: nothing ran, the next manager may.
+                Err(RpcError::Unreachable(e)) => last = e,
+                // A timeout may have run it; a failure is the swarm's answer.
+                Err(e) => return Err(e.into()),
             }
         }
         Err(DomainError::Conflict(format!("no swarm manager answered: {last}")))
     }
 
     /// One signed swarm command to a node, waiting for its answer.
-    async fn rpc(&self, server: ServerId, principal: &str, op: &SwarmOp) -> Result<serde_json::Value, String> {
-        let op_json = serde_json::to_string(op).map_err(|e| e.to_string())?;
-        self.rpc
-            .call(server, principal, Command::SwarmAction(SwarmAction { op_json }), QUICK)
-            .await
-            .map_err(|e| e.to_string())
+    async fn rpc(&self, server: ServerId, principal: &str, op: &SwarmOp) -> Result<serde_json::Value, RpcError> {
+        let op_json = serde_json::to_string(op).map_err(|e| RpcError::BadAnswer(e.to_string()))?;
+        self.rpc.call(server, principal, Command::SwarmAction(SwarmAction { op_json }), QUICK).await
     }
 }
 

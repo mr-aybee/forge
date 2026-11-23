@@ -28,11 +28,22 @@ pub(super) async fn ca(State(state): State<AppState>) -> Response {
     ([(header::CONTENT_TYPE, "application/x-pem-file")], state.ca.cert_pem().to_owned()).into_response()
 }
 
+/// Enrollment attempts per client address per minute.
+const ENROLL_PER_MINUTE: usize = 20;
+
 pub(super) async fn enroll(
     State(state): State<AppState>,
     Extension(PeerAddr(addr)): Extension<PeerAddr>,
     body: Bytes,
 ) -> Response {
+    // Before any lookup or audit row: an address gets a few tries a minute.
+    if !state.enroll_attempts.allow(
+        &crate::rate_limit::client_key(addr.ip()),
+        ENROLL_PER_MINUTE,
+        std::time::Duration::from_secs(60),
+    ) {
+        return reject(StatusCode::TOO_MANY_REQUESTS, "too many enrollment attempts; try again in a minute");
+    }
     let Ok(req) = EnrollRequest::decode(body) else { return reject(StatusCode::BAD_REQUEST, "malformed request") };
     if req.hostname.is_empty() || req.hostname.len() > 253 || req.os.len() > 32 || req.arch.len() > 32 {
         return reject(StatusCode::BAD_REQUEST, "invalid host facts");

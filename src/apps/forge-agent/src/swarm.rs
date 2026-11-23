@@ -68,14 +68,14 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
             api("POST", &format!("/swarm/leave?force={force}"), None, CONSENSUS).await?;
             Ok(json!({ "left": true }))
         }
-        SwarmOp::JoinTokens {} => to_value(&tokens(&swarm().await?)),
+        SwarmOp::JoinTokens {} => to_value(&tokens(&swarm().await?)?),
         SwarmOp::RotateTokens { worker, manager } => {
             let s = swarm().await?;
             let version = s["Version"]["Index"].as_u64().ok_or("Docker did not report the swarm version")?;
             let path =
                 format!("/swarm/update?version={version}&rotateWorkerToken={worker}&rotateManagerToken={manager}");
             api("POST", &path, Some(&s["Spec"]), QUICK).await?;
-            to_value(&tokens(&swarm().await?))
+            to_value(&tokens(&swarm().await?)?)
         }
         SwarmOp::Nodes {} => {
             let list = api("GET", "/nodes", None, QUICK).await?.unwrap_or(Value::Null);
@@ -323,11 +323,16 @@ pub(crate) fn status_of(info: &Value) -> SwarmStatus {
     }
 }
 
-fn tokens(swarm: &Value) -> JoinTokens {
-    JoinTokens {
-        worker: swarm["JoinTokens"]["Worker"].as_str().unwrap_or_default().to_owned(),
-        manager: swarm["JoinTokens"]["Manager"].as_str().unwrap_or_default().to_owned(),
-    }
+/// The join tokens of `GET /swarm`; missing ones are an error, never "".
+fn tokens(swarm: &Value) -> Result<JoinTokens, String> {
+    let get = |k: &str| {
+        swarm["JoinTokens"][k]
+            .as_str()
+            .filter(|t| !t.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| format!("Docker reported no {k} join token"))
+    };
+    Ok(JoinTokens { worker: get("Worker")?, manager: get("Manager")? })
 }
 
 fn labels_of(v: &Value) -> BTreeMap<String, String> {

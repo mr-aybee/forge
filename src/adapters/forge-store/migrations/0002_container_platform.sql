@@ -34,6 +34,7 @@ CREATE TABLE swarm_members (
 );
 
 CREATE INDEX swarm_members_cluster ON swarm_members (cluster_id);
+CREATE INDEX cluster_swarms_swarm ON cluster_swarms (swarm_id);
 
 -- ---- registries ----
 -- D-158: container registries per workspace; the secret is sealed.
@@ -84,4 +85,5 @@ CREATE TABLE webhook_deliveries (
 );
 
 CREATE INDEX webhook_deliveries_hook ON webhook_deliveries (webhook_id, at);
+CREATE INDEX webhooks_workspace ON webhooks (workspace_id);
 

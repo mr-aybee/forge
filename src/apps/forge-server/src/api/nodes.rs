@@ -245,16 +245,38 @@ pub async fn install_script(State(state): State<AppState>, Query(q): Query<Insta
     Ok(([(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")], body).into_response())
 }
 
+/// Bytes read per chunk of an agent download.
+const DOWNLOAD_CHUNK: usize = 64 * 1024;
+
 /// `GET /agent/download/{os}/{arch}/{binary}` — agent binaries (public).
 pub async fn download(
     State(state): State<AppState>,
     Path((os, arch, bin)): Path<(String, String, String)>,
 ) -> ApiResult<Response> {
     let (path, sum) = state.dist.binary(&os, &arch, &bin).ok_or_else(|| ApiError::not_found("no such agent build"))?;
-    let bytes = tokio::fs::read(&path).await.map_err(DomainError::internal)?;
-    let mut resp = Response::new(Body::from(bytes));
+    // Public and large: streamed in chunks, and only so many at once.
+    let permit =
+        state.downloads.clone().try_acquire_owned().map_err(|_| {
+            ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "busy", "too many downloads; try again shortly")
+        })?;
+    let file = tokio::fs::File::open(&path).await.map_err(DomainError::internal)?;
+    let len = file.metadata().await.map_err(DomainError::internal)?.len();
+    let stream = futures::stream::unfold((file, permit), |(mut file, permit)| async move {
+        use tokio::io::AsyncReadExt;
+        let mut buf = vec![0u8; DOWNLOAD_CHUNK];
+        match file.read(&mut buf).await {
+            Ok(0) => None,
+            Ok(n) => {
+                buf.truncate(n);
+                Some((Ok::<_, std::io::Error>(axum::body::Bytes::from(buf)), (file, permit)))
+            }
+            Err(e) => Some((Err(e), (file, permit))),
+        }
+    });
+    let mut resp = Response::new(Body::from_stream(stream));
     let h = resp.headers_mut();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
+    h.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
     if let Ok(v) = HeaderValue::from_str(&format!("sha256={sum}")) {
         h.insert("x-checksum", v);
     }

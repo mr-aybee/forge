@@ -5639,3 +5639,13 @@ A delivery may pick the image tag (`?tag=` or a JSON `"tag"`) only when the webh
 **Decision.** Forge ships a small set of compose app templates: Nginx, PostgreSQL, Redis, MariaDB, WordPress and Uptime Kuma. Each has pinned images (never `latest`), health checks and named volumes. A template's `${VAR}` placeholders are filled from the stack's `.env`, so Docker Compose does the substitution and Forge renders nothing into YAML. Secret variables left empty get a random 192-bit value and are sealed like any stack `.env`. A stack made from a template goes through the normal stack checks: policy, MFA for privileged settings, and audit.
 
 **Not done.** Git-backed stacks, where a stack follows a branch and redeploys on push. They need a git fetcher on the control plane and deploy keys, which means a new dependency and a new trust boundary, so they are on the roadmap. Until then, a deploy webhook (D-159) redeploys a stack from CI.
+
+## D-161 Address lists and API-wide rate limits
+
+**Decision.**
+- **Address lists, `[security.access]`:** `deny` is refused everywhere. A non-empty `allow` limits the console, API, MCP and OAuth. `webhooks_allow` and `nodes_allow` apply instead of `allow` to `/hooks/*` and to the node installers and agent downloads, so CI and new nodes keep working while the console is closed to the internet. The server refuses to start with an `allow` list that excludes loopback or a trusted proxy.
+- **Rate limit, `[security.rate_limit]`:** a sliding minute per client address, 1200 by default, with an IPv6 `/64` keyed as one address.
+- **One limiter:** a single bounded limiter (`rate_limit::Windows`) is shared by the API limit, the webhook limits, replay protection and enrollment attempts. When it is full of active keys it refuses newcomers rather than resetting, because a reset would lift every limit during a flood.
+- **Specific limits:** agent enrollment is limited to 20 attempts per minute per address. Agent downloads are streamed, with at most 16 at once.
+
+**Why.** Before this change, only sign-in and a few endpoints had limits, and the control plane could not be closed to unknown networks without a firewall in front. The lists use the same client-address logic as the sign-in throttle, so a reverse proxy is handled the same way everywhere.

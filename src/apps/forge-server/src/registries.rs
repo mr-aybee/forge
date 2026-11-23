@@ -125,8 +125,7 @@ impl RegistryService {
 
     /// The registry that serves `image` in workspace `ws`, if any.
     pub async fn for_image(&self, ws: WorkspaceId, image: &str) -> DomainResult<Option<Registry>> {
-        let host = image_host(image);
-        Ok(self.repo.list_registries(ws).await?.into_iter().find(|r| r.host == host))
+        self.repo.registry_by_host(ws, &image_host(image)).await
     }
 
     pub async fn get(&self, id: RegistryId) -> DomainResult<Registry> {

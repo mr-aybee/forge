@@ -42,6 +42,16 @@ impl RegistryRepository for Store {
         r.as_ref().map(registry_row).transpose()
     }
 
+    async fn registry_by_host(&self, ws: WorkspaceId, host: &str) -> DomainResult<Option<Registry>> {
+        let r = sqlx::query("SELECT * FROM registries WHERE workspace_id = $1 AND host = $2")
+            .bind(ws.to_string())
+            .bind(host)
+            .fetch_optional(self.pool())
+            .await
+            .map_err(db_err)?;
+        r.as_ref().map(registry_row).transpose()
+    }
+
     async fn create_registry(&self, r: &Registry) -> DomainResult<()> {
         sqlx::query(
             "INSERT INTO registries (id, workspace_id, name, kind, host, username, secret_sealed, allow_push, created_by, created_at, updated_at)
