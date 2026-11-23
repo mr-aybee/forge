@@ -329,7 +329,8 @@ rejected.
 Default `allowed_commands`: `ping`, `collect_facts`, `service_status`,
 `package`, `container`, `app`, `site`, `dns`, `probe`, `ingress`, `fabric`,
 `storage`, `files`, `access`, `cancel`, `processes`, `process_action`,
-`update`, `stack`, `terminal_account`, `names`, `tunnel`, `container_exec`. Agents enrolled
+`update`, `stack`, `terminal_account`, `names`, `tunnel`, `container_exec`,
+`docker_tls`, `swarm`. Agents enrolled
 before port tunnels replaced remote access may still list `access`; the
 agent ignores names it does not know.
 
@@ -337,6 +338,7 @@ agent ignores names it does not know.
 | --- | --- |
 | `files` | The file explorer |
 | `terminal_account` | Creating terminal accounts from Forge on an enrolled node (the node installer creates them as root and is not affected) |
+| `swarm` | Creating, joining and leaving a Docker Swarm, and changing swarm nodes, from a [Swarm cluster](/docs/concepts/clusters/#cluster-modes) |
 | `process_action` | Ending processes and changing their priority from the **Processes** panel, `forge nodes kill` and `forge nodes priority`. The process list (`processes`) keeps working |
 | `tunnel` | [Port tunnels](/docs/concepts/port-tunnels/) to this node |
 | `container_exec` | [Container shells](/docs/concepts/container-shells/) through the agent. **Opt-in on existing agents:** an update or `offer-commands` never adds it; add `"container_exec"` to `allowed_commands` and restart the agent. New enrollments have it. `container` does not cover it |
@@ -352,7 +354,7 @@ removed name again, add it to `allowed_commands` and restart the agent.
 
 ```toml
 server_url = "https://<forge-host>:7443"
-allowed_commands = ["ping", "collect_facts", "service_status", "package", "container", "app", "site", "dns", "probe", "ingress", "fabric", "storage", "files", "access", "cancel", "processes", "process_action", "update", "stack", "terminal_account", "names", "tunnel", "container_exec"]
+allowed_commands = ["ping", "collect_facts", "service_status", "package", "container", "app", "site", "dns", "probe", "ingress", "fabric", "storage", "files", "access", "cancel", "processes", "process_action", "update", "stack", "terminal_account", "names", "tunnel", "container_exec", "docker_tls", "swarm"]
 ```
 
 ## Databases

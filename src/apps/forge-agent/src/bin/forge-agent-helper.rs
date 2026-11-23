@@ -146,6 +146,10 @@ async fn handle(
         #[cfg(not(unix))]
         HelperRequest::DockerTls { .. } => HelperResponse::failed("the Docker TLS endpoint needs a Linux node"),
         #[cfg(unix)]
+        HelperRequest::Swarm { swarm } => data(forge_agent::swarm::run(&swarm).await),
+        #[cfg(not(unix))]
+        HelperRequest::Swarm { .. } => HelperResponse::failed("Docker Swarm needs a Linux node"),
+        #[cfg(unix)]
         HelperRequest::LoginAccounts {} => data(Ok(serde_json::json!(forge_agent::terminal_accounts::gather().await))),
         #[cfg(unix)]
         HelperRequest::TerminalAccount { name, sudo } => {

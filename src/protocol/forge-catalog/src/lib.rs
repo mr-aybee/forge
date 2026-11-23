@@ -34,6 +34,7 @@ pub mod names;
 pub mod sites;
 pub mod stacks;
 pub mod storage;
+pub mod swarm;
 pub mod versions;
 
 use std::collections::BTreeMap;

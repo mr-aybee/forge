@@ -285,6 +285,8 @@ impl Agent {
             forge_proto::Command::StackAction(_) => true,
             // Restarting dockerd can take a minute.
             forge_proto::Command::DockerTlsAction(_) => true,
+            // Joining a swarm waits for the managers' consensus.
+            forge_proto::Command::SwarmAction(_) => true,
             _ => false,
         };
         // Stop a running background operation: its task is dropped, which

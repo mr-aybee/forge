@@ -523,7 +523,7 @@ pub struct CommandBody {
     pub principal: String,
     #[prost(
         oneof = "command_body::Command",
-        tags = "10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 30, 31, 32, 33, 34, 38, 39, 40"
+        tags = "10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 30, 31, 32, 33, 34, 38, 39, 40, 41"
     )]
     pub command: Option<command_body::Command>,
 }
@@ -581,6 +581,8 @@ pub mod command_body {
         ContainerExecOpen(super::ContainerExecOpen),
         #[prost(message, tag = "40")]
         DockerTlsAction(super::DockerTlsAction),
+        #[prost(message, tag = "41")]
+        SwarmAction(super::SwarmAction),
     }
 
     impl Command {
@@ -613,6 +615,7 @@ pub mod command_body {
                 // adding it (D-114).
                 Command::ContainerExecOpen(_) => "container_exec",
                 Command::DockerTlsAction(_) => "docker_tls",
+                Command::SwarmAction(_) => "swarm",
             }
         }
     }
@@ -741,6 +744,14 @@ pub struct FileAction {
 /// key is made on the node.
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct DockerTlsAction {
+    #[prost(string, tag = "1")]
+    pub op_json: String,
+}
+
+/// Docker Swarm membership or node operation (`forge_catalog::swarm::SwarmOp`,
+/// JSON; D-154). Join tokens in it or its result are secrets.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct SwarmAction {
     #[prost(string, tag = "1")]
     pub op_json: String,
 }
@@ -1024,6 +1035,7 @@ mod oneof_tests {
             command_body::Command::ProcessList(ProcessList::default()),
             command_body::Command::StackAction(StackAction { op_json: "{}".into() }),
             command_body::Command::DockerTlsAction(DockerTlsAction { op_json: "{}".into() }),
+            command_body::Command::SwarmAction(SwarmAction { op_json: "{}".into() }),
             command_body::Command::TerminalAccount(TerminalAccount { name: "forge-ops".into(), sudo: true }),
             command_body::Command::ProcessAction(ProcessAction {
                 op: "signal".into(),

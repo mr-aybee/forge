@@ -56,6 +56,8 @@ pub mod spool_upload;
 pub mod ssh_principals;
 #[cfg(unix)]
 pub mod stacks;
+#[cfg(unix)]
+pub mod swarm;
 pub mod terminal_accounts;
 pub mod tls;
 pub mod tunnel;
