@@ -364,7 +364,12 @@
     "POST /api/v1/stacks/{id}/expose": "publishing a service creates a site; `forge sites create` covers it",
     "GET /api/v1/tags": "tag catalogue; `forge nodes tags` covers node tags",
     "GET /api/v1/tags/{kind}": "tag catalogue by kind",
-    "GET /api/v1/traffic": "traffic map data for the console graph"
+    "GET /api/v1/traffic": "traffic map data for the console graph",
+    "GET /api/v1/clusters/{id}/swarm": "Docker Swarm (D-154); typed `forge swarm` commands follow with the swarm CLI",
+    "POST /api/v1/clusters/{id}/swarm/members": "Docker Swarm (D-154); typed `forge swarm` commands follow with the swarm CLI",
+    "PATCH /api/v1/clusters/{id}/swarm/members/{server}": "Docker Swarm (D-154); typed `forge swarm` commands follow with the swarm CLI",
+    "DELETE /api/v1/clusters/{id}/swarm/members/{server}": "Docker Swarm (D-154); typed `forge swarm` commands follow with the swarm CLI",
+    "POST /api/v1/clusters/{id}/swarm/tokens/rotate": "Docker Swarm (D-154); typed `forge swarm` commands follow with the swarm CLI"
   },
   "excluded": {
     "POST /api/events/raw": "Seq log ingest for services, authenticated by an ingest key, not by a user",

@@ -112,6 +112,8 @@ pub struct Services {
     pub health: forge_health::ObservationRecorder,
     /// File explorer: roots, authorization, uploads and audit (API and SFTP).
     pub files: Arc<forge_files::FileService>,
+    /// Docker Swarm in Swarm clusters (D-154).
+    pub swarm: Arc<crate::swarm::SwarmService>,
     /// Bucket grants: one person's access to one bucket of a store (D-108).
     pub bucket_grants: crate::bucket_grants::BucketGrants,
     /// Vault-backed header values for health checks, handed to nodes (D-111).
@@ -350,14 +352,19 @@ impl Services {
             envelope.clone(),
             clock.clone(),
         ));
+        let node_ops = crate::jobs::node_op::NodeOps {
+            hub: hub.clone(),
+            signer: signer.clone(),
+            servers: Arc::new(store.clone()),
+            clock: clock.clone(),
+        };
+        registry.register(Arc::new(crate::jobs::swarm::SwarmMemberJob {
+            ops: node_ops.clone(),
+            swarms: Arc::new(store.clone()),
+            envelope: envelope.clone(),
+        }));
         for enable in [true, false] {
-            let link = crate::jobs::docker_endpoint::NodeLink {
-                hub: hub.clone(),
-                signer: signer.clone(),
-                servers: Arc::new(store.clone()),
-                engines: docker.clone(),
-                clock: clock.clone(),
-            };
+            let link = crate::jobs::docker_endpoint::NodeLink { ops: node_ops.clone(), engines: docker.clone() };
             if enable {
                 registry.register(Arc::new(crate::jobs::docker_endpoint::DockerEndpointEnableJob { link }));
             } else {
@@ -457,6 +464,15 @@ impl Services {
         } else {
             None
         };
+        let swarm = Arc::new(crate::swarm::SwarmService {
+            swarms: Arc::new(store.clone()),
+            servers: Arc::new(store.clone()),
+            clusters: Arc::new(store.clone()),
+            hub: hub.clone(),
+            signer: signer.clone(),
+            envelope: envelope.clone(),
+            clock: clock.clone(),
+        });
         let files = forge_files::FileService::new(
             Arc::new(store.clone()),
             Arc::new(store.clone()),
@@ -590,6 +606,7 @@ impl Services {
             analytics_control,
             health,
             files,
+            swarm,
             bucket_grants,
             health_secrets,
             notifier,

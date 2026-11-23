@@ -14,7 +14,7 @@ use crate::auth::Ws;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
-fn cluster_ref(id: ClusterId) -> EntityRef {
+pub(super) fn cluster_ref(id: ClusterId) -> EntityRef {
     EntityRef::new(EntityKind::Cluster, id)
 }
 

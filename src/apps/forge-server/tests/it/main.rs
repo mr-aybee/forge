@@ -55,6 +55,7 @@ mod resume;
 mod scale;
 mod server_settings;
 mod sftp;
+mod swarm;
 mod silences;
 mod stack_versions;
 mod stacks;

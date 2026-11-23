@@ -28,21 +28,18 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use forge_catalog::docker_tls::{DockerTlsOp, Prepared};
-use forge_core::model::{AgentStatus, DockerEndpoint, DockerEndpointState};
-use forge_core::ports::ServerRepository;
-use forge_core::{Action, Clock, ServerId};
+use forge_core::model::{DockerEndpoint, DockerEndpointState};
+use forge_core::{Action, ServerId};
 use forge_jobs::{JobHandler, StepContext, StepError};
+use forge_proto::Command;
 use forge_proto::messages::DockerTlsAction;
-use forge_proto::{Command, CommandSigner};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::agent_hub::CommandQueue;
 use crate::docker_engine::{DAEMON_CERT_VALIDITY, DockerEngines};
 
 pub const ENABLE_KIND: &str = "docker.endpoint.enable";
 pub const DISABLE_KIND: &str = "docker.endpoint.disable";
-const COMMAND_TTL: Duration = Duration::from_secs(120);
 /// Restarting dockerd waits up to two minutes, then a rollback may restart it again.
 const APPLY_WAIT: Duration = Duration::from_secs(6 * 60);
 const QUICK_WAIT: Duration = Duration::from_secs(90);
@@ -80,17 +77,13 @@ fn parse<T: serde::de::DeserializeOwned>(ctx: &StepContext) -> Result<T, StepErr
 /// What both kinds need to reach a node.
 #[derive(Debug)]
 pub struct NodeLink {
-    pub hub: Arc<CommandQueue>,
-    pub signer: Arc<CommandSigner>,
-    pub servers: Arc<dyn ServerRepository>,
+    pub ops: super::node_op::NodeOps,
     pub engines: Arc<DockerEngines>,
-    pub clock: Arc<dyn Clock>,
 }
 
 impl NodeLink {
-    /// Sends `op` to the node's helper and waits for its answer. The
-    /// operation id is kept under `key`, so a resumed step waits for the
-    /// same operation, or sends it again after a control-plane restart.
+    /// Sends `op` to the node's helper and waits for its answer (see
+    /// [`super::node_op::NodeOps::run`]).
     async fn run(
         &self,
         ctx: &mut StepContext,
@@ -99,33 +92,8 @@ impl NodeLink {
         op: &DockerTlsOp,
         wait: Duration,
     ) -> Result<Value, StepError> {
-        let s = self.servers.get_server(server).await.map_err(retry)?;
-        if s.status == AgentStatus::Revoked {
-            return Err(fatal("server is revoked"));
-        }
-        let tracked =
-            ctx.state_value(key).and_then(Value::as_str).filter(|op| self.hub.is_tracked(op)).map(str::to_owned);
-        let op_id = match tracked {
-            Some(op_id) => op_id,
-            None => {
-                let op_json = serde_json::to_string(op).map_err(fatal)?;
-                let (body, signed) = self.signer.issue(
-                    &server.to_string(),
-                    &ctx.job.principal.to_string(),
-                    Command::DockerTlsAction(DockerTlsAction { op_json }),
-                    self.clock.now(),
-                    COMMAND_TTL,
-                );
-                self.hub.enqueue(server, &body.operation_id, signed).map_err(StepError::Retryable)?;
-                ctx.set_state(key, json!(body.operation_id));
-                body.operation_id
-            }
-        };
-        let result = self.hub.wait(&op_id, wait).await.ok_or_else(|| retry("the node did not answer in time"))?;
-        if !result.ok {
-            return Err(fatal(result.error));
-        }
-        serde_json::from_str(&result.output).map_err(|e| fatal(format!("the node's answer is not JSON: {e}")))
+        let op_json = serde_json::to_string(op).map_err(fatal)?;
+        self.ops.run(ctx, server, key, Command::DockerTlsAction(DockerTlsAction { op_json }), wait).await
     }
 }
 

@@ -9,9 +9,11 @@ pub mod deploy;
 mod diagnostics;
 pub mod docker_endpoint;
 pub mod node_bootstrap;
+pub mod node_op;
 pub mod package;
 pub mod stack;
 pub mod storage;
+pub mod swarm;
 
 pub use agent_command::AgentCommandJob;
 pub use app::AppJob;

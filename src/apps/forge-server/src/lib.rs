@@ -50,6 +50,7 @@ pub mod public_address;
 pub mod service_ports;
 pub mod stacks;
 pub mod state;
+pub mod swarm;
 mod tasks;
 mod throttle;
 pub mod tunnels;

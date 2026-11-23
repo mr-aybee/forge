@@ -59,6 +59,7 @@ mod sites;
 mod stacks;
 mod storage;
 mod storage_grants;
+mod swarm;
 pub mod system_update;
 mod tags;
 mod telemetry;
@@ -180,6 +181,10 @@ pub fn router(state: AppState) -> Router {
         .route("/secrets/{id}", delete(nodes::delete_secret))
         .route("/clusters/{id}", get(clusters::get).put(clusters::update).delete(clusters::delete))
         .route("/clusters/{id}/profile", get(ingress::get).put(ingress::put))
+        .route("/clusters/{id}/swarm", get(swarm::get))
+        .route("/clusters/{id}/swarm/members", post(swarm::join))
+        .route("/clusters/{id}/swarm/members/{server}", patch(swarm::update_node).delete(swarm::leave))
+        .route("/clusters/{id}/swarm/tokens/rotate", post(swarm::rotate_tokens))
         .route("/clusters/{id}/fabric", get(fabric::get).put(fabric::put).delete(fabric::delete))
         .route("/clusters/{id}/fabric/suggest", post(fabric::suggest))
         .route("/fabric/suggest", post(fabric::suggest_new))

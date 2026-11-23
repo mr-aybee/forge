@@ -1602,6 +1602,42 @@ with `details.reason` and `details.detail`.
 | `icon` | string | none | Data URL (PNG, JPEG, WebP, GIF or SVG), up to 128 KB; `""` removes it |
 | `mode` | `default` or `swarm` | `default` | Set on `POST` only. On `PUT` it may be omitted or repeated; a different value returns `400`. See [Cluster modes](/docs/concepts/clusters/#cluster-modes) |
 
+### Docker Swarm
+
+Swarm clusters only (`mode: swarm`). Joins and leaves start a `swarm.member`
+job; node changes and token rotation run through a manager at once. Join
+tokens never leave the server.
+
+| Method | Path | Permission |
+| --- | --- | --- |
+| GET | `/clusters/{id}/swarm` | `view` on the cluster: `{cluster_id, mode, swarm, members, nodes, nodes_error, quorum}` |
+| POST | `/clusters/{id}/swarm/members` | `swarm.manage` (MFA) on the cluster: join a node → `202 {job, installs}` |
+| PATCH | `/clusters/{id}/swarm/members/{server}` | `swarm.manage` (MFA): change role, availability or labels → the swarm node |
+| DELETE | `/clusters/{id}/swarm/members/{server}?force=` | `swarm.manage` (MFA): leave → `202` the job |
+| POST | `/clusters/{id}/swarm/tokens/rotate` | `swarm.manage` (MFA): `{worker, manager}` → `204` |
+
+**Join body:**
+
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `server_id` | string | required | A Linux node already assigned to the cluster |
+| `role` | `manager` or `worker` | required | The first node must be `manager` |
+| `advertise_addr` | string | Docker's choice | IP address or interface name other nodes reach this node on |
+| `default_addr_pool` | string array | Docker's default | Overlay address pools (CIDR), first node only, at most 8 |
+| `autolock` | boolean | `false` | Lock manager keys at rest, first node only |
+
+`installs` lists Docker Engine install jobs Forge started first on a node
+without a running engine; the join waits for them.
+
+**Node body** (`PATCH`): `role` (`manager`/`worker`), `availability`
+(`active`, `pause`, `drain`), `labels` (object; replaces all labels). At least
+one is required. Demoting the last manager returns `409`.
+
+**Errors:** `422` when the cluster is not a Swarm cluster, the node is not in
+the cluster or not Linux, or the first node is not a manager; `409` while the
+node is already joining, joined or leaving, when the last manager would leave
+while workers remain, or when no manager answers.
+
 | PATCH | `/servers/{id}` | `server.manage` on the node; with `cluster_id` also `server.enroll` on that cluster; leaving a cluster needs `server.enroll` on the cluster left; changing the environment needs `server.enroll` on the new and on the old environment — `{cluster_id, environment_id}`, both optional (`null` or omitted clears). See [Moving a node between clusters](#moving-a-node-between-clusters) → the updated server |
 | POST | `/nodes/probe` | `node.onboard` (MFA) — returns SSH host key |
 | POST | `/nodes/onboard` | `node.onboard` (MFA) — starts `node.bootstrap` |
