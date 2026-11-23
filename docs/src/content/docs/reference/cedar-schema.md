@@ -119,6 +119,7 @@ out at every assignable scope.
 | `docker.volume.manage` | ✓ | ✓ | ✓ | | | | |
 | `docker.network.manage` | ✓ | ✓ | ✓ | | | | |
 | `registry.manage` † | ✓ | ✓ | | | | | |
+| `webhook.manage` † | ✓ | ✓ | ✓ | ✓ | | | |
 | `certificate.use` † | ✓ | ✓ | | | | | |
 | `secret.read` † | ✓ | ✓ | | | | | |
 | `secret.manage` † (on the platform: create, change and delete credential vault items) | ✓ | | | | | | |

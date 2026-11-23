@@ -59,6 +59,7 @@ mod throttle;
 pub mod tunnels;
 pub mod ui_embed;
 pub mod update;
+pub mod webhooks;
 
 use std::net::SocketAddr;
 

@@ -715,3 +715,50 @@ async fn registries_round_trip_one_per_host() {
     assert!(store.get_registry(r.id).await.unwrap().is_none());
     assert!(matches!(store.update_registry(&r).await, Err(DomainError::NotFound(_))), "no silent update")
 }
+
+/// Webhooks (D-159): found by token hash; deliveries stay bounded and go
+/// with the hook.
+#[tokio::test]
+async fn webhooks_round_trip_and_keep_bounded_deliveries() {
+    use forge_core::webhooks::*;
+    let (store, _d) = store().await;
+    let (ws, _) = seed_workspace(&store).await;
+    let w = Webhook {
+        id: WebhookId::new(),
+        workspace_id: ws.id,
+        name: "ci".into(),
+        target: WebhookTarget::Service { id: ServiceId::new() },
+        token_hash: "h1".into(),
+        token_hint: "whk_ab".into(),
+        signature: Signature::Github,
+        secret_sealed: Some("sealed".into()),
+        tag_pattern: Some("v*".into()),
+        enabled: true,
+        created_by: Principal::User(UserId::new()),
+        created_at: Timestamp(1),
+        updated_at: Timestamp(1),
+        last_delivery_at: None,
+    };
+    store.create_webhook(&w).await.unwrap();
+    assert_eq!(store.webhook_by_token_hash("h1").await.unwrap().map(|x| x.id), Some(w.id));
+    assert!(store.webhook_by_token_hash("h2").await.unwrap().is_none());
+    for i in 0..(DELIVERIES_KEPT + 5) {
+        let d = Delivery {
+            id: WebhookDeliveryId::new(),
+            webhook_id: w.id,
+            at: Timestamp(i64::from(i) + 10),
+            outcome: DeliveryOutcome::Accepted,
+            reason: String::new(),
+            job_id: None,
+            tag: Some("v1".into()),
+            source_ip: "192.0.2.1".into(),
+        };
+        store.add_delivery(&d).await.unwrap();
+    }
+    let all = store.list_deliveries(w.id, 1000).await.unwrap();
+    assert_eq!(all.len(), DELIVERIES_KEPT as usize);
+    assert_eq!(all[0].at, Timestamp(i64::from(DELIVERIES_KEPT) + 14), "newest first");
+    assert_eq!(store.get_webhook(w.id).await.unwrap().unwrap().last_delivery_at, Some(all[0].at));
+    store.delete_webhook(w.id).await.unwrap();
+    assert!(store.list_deliveries(w.id, 10).await.unwrap().is_empty());
+}

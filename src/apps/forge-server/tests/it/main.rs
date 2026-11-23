@@ -64,4 +64,5 @@ mod tags;
 mod terminal_accounts;
 mod terminal_cli;
 mod tunnels;
+mod webhooks;
 mod workspace;

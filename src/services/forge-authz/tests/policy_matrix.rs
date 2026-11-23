@@ -767,3 +767,17 @@ fn registry_manage_is_admin_only_with_mfa() {
     assert!(allowed(&engine, admin, Action::RegistryManage, &ws, true));
     assert!(!allowed(&engine, op, Action::RegistryManage, &ws, true));
 }
+
+/// Deploy webhooks (D-159): whoever deploys may create them, always with MFA;
+/// auditors cannot.
+#[test]
+fn webhook_manage_needs_mfa() {
+    let engine = PolicyEngine::new().unwrap();
+    let ws = ResourceRef::new(EntityRef::new(EntityKind::Workspace, "a"), vec![]);
+    let (dev, auditor) = (UserId::new(), UserId::new());
+    bind(&engine, dev, Role::Developer, workspace("a"));
+    bind(&engine, auditor, Role::Auditor, workspace("a"));
+    assert!(!allowed(&engine, dev, Action::WebhookManage, &ws, false));
+    assert!(allowed(&engine, dev, Action::WebhookManage, &ws, true));
+    assert!(!allowed(&engine, auditor, Action::WebhookManage, &ws, true));
+}

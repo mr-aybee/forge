@@ -174,6 +174,12 @@ impl Action {
                 "Add, change and remove container registries and their credentials.",
                 Admin,
             ),
+            Action::WebhookManage => info(
+                "Services",
+                "Manage deploy webhooks",
+                "Create, rotate and remove webhooks that let CI deploy a service or stack.",
+                Admin,
+            ),
             Action::Deploy => info("Services", "Deploy", "Deploy and update services.", Write),
             Action::DeployApprove => info(
                 "Services",

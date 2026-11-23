@@ -102,11 +102,17 @@ async fn registries_hold_secrets_and_gate_pushes() {
     assert_eq!(s, StatusCode::BAD_REQUEST, "pushes are off by default: {e}");
     let rid = r["id"].as_str().unwrap();
     let (s, e) = admin
-        .put(&format!("/api/v1/registries/{rid}"), json!({"name": "GitHub", "kind": "ghcr", "host": "ghcr.io", "username": "bot", "allow_push": true}))
+        .put(
+            &format!("/api/v1/registries/{rid}"),
+            json!({"name": "GitHub", "kind": "ghcr", "host": "ghcr.io", "username": "bot", "allow_push": true}),
+        )
         .await;
     assert_eq!(s, StatusCode::OK, "{e}");
     let (s, e) = admin
-        .put(&format!("/api/v1/registries/{rid}"), json!({"name": "GitHub", "kind": "ghcr", "host": "attacker.example", "username": "bot"}))
+        .put(
+            &format!("/api/v1/registries/{rid}"),
+            json!({"name": "GitHub", "kind": "ghcr", "host": "attacker.example", "username": "bot"}),
+        )
         .await;
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "a new host needs the secret again: {e}");
     let (s, _) = op.post(&ops, json!({"op": "image_push", "image": "ghcr.io/acme/app:1"})).await;

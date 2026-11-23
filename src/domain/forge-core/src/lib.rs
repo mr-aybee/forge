@@ -33,6 +33,7 @@ pub mod storage;
 pub mod swarm;
 pub mod tags;
 pub mod tunnels;
+pub mod webhooks;
 
 pub use access::{AccessRequest, Action, AuthzContext, EntityKind, EntityRef, Principal, ResourceRef, Role};
 pub use backoff::Backoff;

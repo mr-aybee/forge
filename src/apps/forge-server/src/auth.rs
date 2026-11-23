@@ -442,6 +442,42 @@ async fn api_key_caller(state: &AppState, token: &str) -> Result<Caller, ApiErro
     })
 }
 
+/// A caller for a webhook delivery (D-159): the webhook's creator, never
+/// MFA-verified (MFA-guarded actions are refused), audited as the webhook.
+/// `None` when the creator is gone or disabled.
+pub(crate) async fn webhook_caller(
+    state: &AppState,
+    creator: &Principal,
+    webhook: forge_core::WebhookId,
+) -> Result<Option<Caller>, ApiError> {
+    use forge_core::ports::UserRepository;
+    let Principal::User(user_id) = creator;
+    let Ok(user) = state.store.get_user(*user_id).await else { return Ok(None) };
+    if user.disabled {
+        return Ok(None);
+    }
+    let now = state.clock.now();
+    let session = forge_core::model::Session {
+        id_hash: format!("webhook:{webhook}"),
+        user_id: user.id,
+        kind: SessionKind::Bearer,
+        csrf_hash: None,
+        refresh_hash: None,
+        mfa: false,
+        created_at: now,
+        expires_at: now,
+        connection_id: None,
+    };
+    Ok(Some(Caller {
+        session: AuthenticatedSession { user, session, connection: None },
+        state: state.clone(),
+        via: Some(serde_json::json!({ "webhook": webhook })),
+        factor_verified: false,
+        elevated_token: false,
+        ceiling: None,
+    }))
+}
+
 /// Whether an API key counts as MFA-verified: always where MFA is off for
 /// the server, otherwise only an elevated key while the policy allows them.
 #[must_use]

@@ -1655,6 +1655,29 @@ labels (`forge.*`) and Docker's or Forge's own networks (`bridge`, `host`,
 Image pushes (`image_push`) need `registry.manage` and a registry for the
 image's host with `allow_push` (default `false`).
 
+### Deploy webhooks
+
+| Method | Path | Permission |
+| --- | --- | --- |
+| GET | `/webhooks` | `view` on the workspace (never the token or secret) |
+| POST | `/webhooks` | `webhook.manage` (MFA) and `deploy` on the service (or `stack.manage` on the stack's environment): `{name, target, signature, tag_pattern, enabled}` → `201 {webhook, token, secret}` (shown once) |
+| PUT | `/webhooks/{id}` | The same: changes `name`, `tag_pattern`, `enabled`; the target and signature stay |
+| POST | `/webhooks/{id}/rotate` | The same: new token and secret → `{webhook, token, secret}` |
+| DELETE | `/webhooks/{id}` | The same → `204` |
+| GET | `/webhooks/{id}/deliveries` | `view`: the newest 100 deliveries `{at, outcome, reason, job_id, tag, source_ip}` |
+| POST | `/hooks/{token}` | The secret URL (no session); body at most 64 KiB → `202 {jobs, status_url}` |
+| GET | `/hooks/{token}/jobs/{job}` | The secret URL: `{id, kind, status, error}` of a job this webhook started |
+
+`target` is `{"kind": "service", "id"}` or `{"kind": "stack", "id"}`.
+`signature` is `none`, `github` (`X-Hub-Signature-256: sha256=<hmac(body)>`),
+`gitlab` (`X-Gitlab-Token: <secret>`) or `forge` (`X-Forge-Timestamp:
+<unix>`, `X-Forge-Signature: sha256=<hmac("<timestamp>.<body>")>`, within 300
+seconds). A delivery's tag comes from `?tag=` or a JSON body's `"tag"`, only
+when `tag_pattern` is set (`*` matches any characters). Answers: `401` bad
+signature, `403` disabled or the creator can no longer deploy, `404` unknown
+URL, `422` refused tag, `429` rate limit (10 per minute per webhook, 60 per
+source address).
+
 ### Docker Swarm
 
 Swarm clusters only (`mode: swarm`). Joins and leaves start a `swarm.member`

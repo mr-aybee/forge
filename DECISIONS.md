@@ -5618,3 +5618,18 @@ HA is a property, not a strategy: the service's Swarm view scores replicas, spre
 Managing registries needs `registry.manage`: administrators, with MFA. Pushes go only to registries added in Forge, so an operator cannot send an image to an arbitrary registry.
 
 **Not yet.** ECR tokens expire after 12 hours and are not refreshed automatically; update the secret, or use a custom registry with a long-lived credential. Compose stacks do not use registries yet.
+
+## D-159 Deploy webhooks
+
+**Decision.** A deploy webhook is a secret URL, `POST /hooks/<token>`, that CI calls to deploy a service (on Default or Swarm clusters) or a compose stack. The token (`whk_…`, 256 bits) is stored as its SHA-256. An optional signature adds a second factor:
+- `github` uses `X-Hub-Signature-256`, the HMAC of the body;
+- `gitlab` uses `X-Gitlab-Token`;
+- `forge` uses `X-Forge-Signature`, the HMAC of `<timestamp>.<body>`, with `X-Forge-Timestamp` within five minutes to stop replays.
+
+The secret is sealed. The token and the secret are shown once and can be rotated.
+
+A delivery runs as the webhook's creator, through the same deploy paths and checks as the console. Permissions are re-checked on every delivery; the delivery never counts as MFA, so MFA-guarded work (privileged binds) is refused. It is audited as `webhook.deliver`, with the webhook in `via`.
+
+A delivery may pick the image tag (`?tag=` or a JSON `"tag"`) only when the webhook has a tag pattern such as `v*`. Deliveries are rate-limited per source address (before any lookup) and per webhook. The newest 100 deliveries per webhook are kept. `GET /hooks/<token>/jobs/<id>` reports only jobs that webhook started.
+
+**Why.** CI needs one call that deploys without holding a user's token. A URL credential that can only deploy one target, is checked again against its creator's current rights, and leaves a record of every call is narrower than a service-account token. Signatures, especially the timestamped one, stop a leaked URL being replayed from a log.

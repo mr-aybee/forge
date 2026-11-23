@@ -77,6 +77,10 @@ typed_id!(
     StackId,
     /// Container registry identifier (D-158).
     RegistryId,
+    /// Deploy webhook identifier (D-159).
+    WebhookId,
+    /// Webhook delivery identifier (D-159).
+    WebhookDeliveryId,
     /// Human or service user identifier.
     UserId,
     /// Role binding identifier (one Cedar template link).

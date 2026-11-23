@@ -249,6 +249,10 @@ namespace Forge {
   action "registry.manage" in ["role:platform_admin", "role:workspace_admin"]
     appliesTo { principal: [User], resource: [Workspace, Server], context: RequestContext };
 
+  // Deploy webhooks (D-159): long-lived deploy credentials, MFA guardrail.
+  action "webhook.manage" in ["role:platform_admin", "role:workspace_admin", "role:operator", "role:developer"]
+    appliesTo { principal: [User], resource: [Workspace], context: RequestContext };
+
   // Docker Swarm membership and nodes in a Swarm cluster (D-154): MFA guardrail.
   action "swarm.manage" in ["role:platform_admin", "role:workspace_admin"]
     appliesTo { principal: [User], resource: [Cluster, Server], context: RequestContext };

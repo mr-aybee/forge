@@ -23,6 +23,7 @@ mod events;
 pub(crate) mod fabric;
 pub(crate) mod fabric_reconcile;
 mod files;
+mod hooks;
 pub(crate) mod idempotency;
 mod ingress;
 pub(crate) mod ingress_dns;
@@ -70,6 +71,7 @@ mod terminal;
 mod traffic;
 mod tunnels;
 mod vault;
+mod webhooks;
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
@@ -185,6 +187,10 @@ pub fn router(state: AppState) -> Router {
         .route("/clusters/{id}/profile", get(ingress::get).put(ingress::put))
         .route("/clusters/{id}/swarm", get(swarm::get))
         .route("/registries", get(registries::list).post(registries::create))
+        .route("/webhooks", get(webhooks::list).post(webhooks::create))
+        .route("/webhooks/{id}", put(webhooks::update).delete(webhooks::delete))
+        .route("/webhooks/{id}/rotate", post(webhooks::rotate))
+        .route("/webhooks/{id}/deliveries", get(webhooks::deliveries))
         .route("/registries/{id}", put(registries::update).delete(registries::delete))
         .route("/servers/{id}/docker/images", get(docker_resources::images))
         .route("/servers/{id}/docker/volumes", get(docker_resources::volumes))
@@ -410,6 +416,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(meta::health))
         // Seq-compatible log ingest (D-128): authenticated by its ingest key.
         .route("/api/events/raw", post(logs::ingest))
+        // Deploy webhooks (D-159): the secret URL is the credential.
+        .route("/hooks/{token}", post(hooks::fire).layer(axum::extract::DefaultBodyLimit::max(hooks::MAX_BODY)))
+        .route("/hooks/{token}/jobs/{job}", get(hooks::job))
         .route("/install.sh", get(nodes::install_script))
         .route("/install.ps1", get(nodes::install_ps1))
         .route("/agent/download/{os}/{arch}/{binary}", get(nodes::download))

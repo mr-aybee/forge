@@ -49,6 +49,7 @@ mod tags;
 mod tenancy;
 mod tunnels;
 mod vault;
+mod webhooks;
 
 use std::sync::Once;
 use std::time::Duration;

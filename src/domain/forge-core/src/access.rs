@@ -224,6 +224,10 @@ pub enum Action {
     /// (D-158). Administrators, MFA.
     #[serde(rename = "registry.manage")]
     RegistryManage,
+    /// Create, rotate and remove deploy webhooks (D-159). A webhook is a
+    /// long-lived deploy credential: MFA.
+    #[serde(rename = "webhook.manage")]
+    WebhookManage,
     /// Send an uploaded TLS certificate's private key to an edge node when an
     /// endpoint is applied (administrators, MFA).
     #[serde(rename = "certificate.use")]
@@ -231,7 +235,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 54] = [
+    pub const ALL: [Action; 55] = [
         Action::View,
         Action::AuditRead,
         Action::WorkspaceCreate,
@@ -285,6 +289,7 @@ impl Action {
         Action::VolumeManage,
         Action::NetworkManage,
         Action::RegistryManage,
+        Action::WebhookManage,
         Action::CertificateUse,
     ];
 
@@ -344,6 +349,7 @@ impl Action {
             Action::VolumeManage => "docker.volume.manage",
             Action::NetworkManage => "docker.network.manage",
             Action::RegistryManage => "registry.manage",
+            Action::WebhookManage => "webhook.manage",
             Action::CertificateUse => "certificate.use",
         }
     }

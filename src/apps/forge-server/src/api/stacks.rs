@@ -37,7 +37,7 @@ fn internal(e: impl std::fmt::Display) -> ApiError {
     ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string())
 }
 
-fn ns_ref(id: EnvironmentId) -> EntityRef {
+pub(super) fn ns_ref(id: EnvironmentId) -> EntityRef {
     EntityRef::new(EntityKind::Environment, id)
 }
 
@@ -49,7 +49,7 @@ fn deps(state: &AppState) -> Deps<'_> {
     Deps { servers: &state.store, clusters: &state.store, fabrics: &state.store, files: &state.store }
 }
 
-async fn load(state: &AppState, id: StackId) -> ApiResult<Stack> {
+pub(super) async fn load(state: &AppState, id: StackId) -> ApiResult<Stack> {
     state.store.get_stack(id).await?.ok_or_else(|| ApiError::not_found("stack not found"))
 }
 

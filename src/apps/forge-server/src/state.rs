@@ -114,6 +114,8 @@ pub struct Services {
     pub files: Arc<forge_files::FileService>,
     /// Docker Swarm in Swarm clusters (D-154).
     pub swarm: Arc<crate::swarm::SwarmService>,
+    /// Deploy webhooks (D-159).
+    pub webhooks: Arc<crate::webhooks::WebhookService>,
     /// Container registries and their sealed credentials (D-158).
     pub registries: Arc<crate::registries::RegistryService>,
     /// Docker images, volumes and networks on nodes (D-157).
@@ -335,6 +337,16 @@ impl Services {
         let docker_resources = Arc::new(crate::docker_resources::DockerResources {
             rpc: node_rpc.clone(),
             servers: Arc::new(store.clone()),
+        });
+        let webhooks = Arc::new(crate::webhooks::WebhookService {
+            repo: Arc::new(store.clone()),
+            jobs: Arc::new(store.clone()),
+            services: Arc::new(store.clone()),
+            envelope: envelope.clone(),
+            clock: clock.clone(),
+            limits: crate::webhooks::Limits::default(),
+            per_hook: crate::webhooks::Windows::default(),
+            per_ip: crate::webhooks::Windows::default(),
         });
         let swarm = Arc::new(crate::swarm::SwarmService {
             swarms: Arc::new(store.clone()),
@@ -644,6 +656,7 @@ impl Services {
             swarm,
             docker_resources,
             registries,
+            webhooks,
             bucket_grants,
             health_secrets,
             notifier,
