@@ -248,7 +248,8 @@ async fn heartbeat_measures_feed_threshold_rules() {
     let (_stop, rx) = tokio::sync::watch::channel(false);
     tokio::spawn(Agent::load(StatePaths::new(dir.path())).unwrap().run(rx));
 
-    let alarm = wait_for("a CPU alarm", 90, || {
+    // Generous: GitHub-hosted runners run this suite several times slower.
+    let alarm = wait_for("a CPU alarm", 240, || {
         let c = &admin;
         async move { c.get("/api/v1/alarms?active=true").await.1.as_array().and_then(|a| a.first().cloned()) }
     })

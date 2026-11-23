@@ -740,7 +740,7 @@ fn analytics_worker_config(
                 );
             }
             StoreSelection::Embedded {
-                paths: crate::analytics_install::paths(config),
+                paths: Box::new(crate::analytics_install::paths(config)),
                 port: config.analytics.embedded_port,
                 database: config.analytics_name(),
             }
