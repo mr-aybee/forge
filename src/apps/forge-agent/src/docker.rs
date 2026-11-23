@@ -118,24 +118,32 @@ pub(crate) async fn call_lines(
                 .collect()
                 .await
                 .map(http_body_util::Collected::to_bytes)
+                // An unreadable error body still yields the status.
                 .unwrap_or_default();
             return Err(docker_error(status, &raw));
         }
         let mut buf: Vec<u8> = Vec::new();
+        // Set while dropping the rest of a line that grew too long.
+        let mut skipping = false;
         while let Some(frame) = body.frame().await {
             let frame = frame.map_err(|e| format!("reading Docker response: {e}"))?;
             let Ok(data) = frame.into_data() else { continue };
             buf.extend_from_slice(&data);
             while let Some(pos) = buf.iter().position(|b| *b == b'\n') {
                 let line: Vec<u8> = buf.drain(..=pos).collect();
-                on_line(String::from_utf8_lossy(&line).trim());
+                if skipping {
+                    skipping = false;
+                } else {
+                    on_line(String::from_utf8_lossy(&line).trim());
+                }
             }
             if buf.len() > MAX_LINE {
-                // A line this long is not progress: drop it, keep streaming.
+                // A line this long is not progress: drop it up to its end.
                 buf.clear();
+                skipping = true;
             }
         }
-        if !buf.is_empty() {
+        if !buf.is_empty() && !skipping {
             on_line(String::from_utf8_lossy(&buf).trim());
         }
         Ok(status)

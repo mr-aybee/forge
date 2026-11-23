@@ -15,6 +15,7 @@ fn registry_row(r: &AnyRow) -> DomainResult<Registry> {
         host: text(r, "host")?,
         username: text(r, "username")?,
         secret_sealed: text(r, "secret_sealed")?,
+        allow_push: flag(r, "allow_push")?,
         created_by: parsed(r, "created_by")?,
         created_at: ts(r, "created_at")?,
         updated_at: ts(r, "updated_at")?,
@@ -43,8 +44,8 @@ impl RegistryRepository for Store {
 
     async fn create_registry(&self, r: &Registry) -> DomainResult<()> {
         sqlx::query(
-            "INSERT INTO registries (id, workspace_id, name, kind, host, username, secret_sealed, created_by, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            "INSERT INTO registries (id, workspace_id, name, kind, host, username, secret_sealed, allow_push, created_by, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         )
         .bind(r.id.to_string())
         .bind(r.workspace_id.to_string())
@@ -53,6 +54,7 @@ impl RegistryRepository for Store {
         .bind(&r.host)
         .bind(&r.username)
         .bind(&r.secret_sealed)
+        .bind(i64::from(r.allow_push))
         .bind(r.created_by.to_string())
         .bind(r.created_at.0)
         .bind(r.updated_at.0)
@@ -63,21 +65,23 @@ impl RegistryRepository for Store {
     }
 
     async fn update_registry(&self, r: &Registry) -> DomainResult<()> {
-        sqlx::query(
-            "UPDATE registries SET name = $1, kind = $2, host = $3, username = $4, secret_sealed = $5, updated_at = $6
-             WHERE id = $7",
+        let done = sqlx::query(
+            "UPDATE registries SET name = $1, kind = $2, host = $3, username = $4, secret_sealed = $5, allow_push = $6,
+                 updated_at = $7 WHERE id = $8",
         )
         .bind(&r.name)
         .bind(r.kind.as_str())
         .bind(&r.host)
         .bind(&r.username)
         .bind(&r.secret_sealed)
+        .bind(i64::from(r.allow_push))
         .bind(r.updated_at.0)
         .bind(r.id.to_string())
         .execute(self.pool())
         .await
         .map_err(db_err)?;
-        Ok(())
+        // A row deleted meanwhile is not silently "updated".
+        if done.rows_affected() == 1 { Ok(()) } else { Err(DomainError::NotFound("registry not found".into())) }
     }
 
     async fn delete_registry(&self, id: RegistryId) -> DomainResult<()> {

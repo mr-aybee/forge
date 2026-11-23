@@ -17,8 +17,11 @@ pub struct RegistryInput {
     pub kind: RegistryKind,
     pub host: String,
     pub username: String,
-    /// Password or token; `None` on update keeps the current one.
+    /// Password or token; `None` on update keeps the current one (only
+    /// while host, kind and user name stay the same).
     pub secret: Option<String>,
+    /// Images may be pushed to it.
+    pub allow_push: bool,
 }
 
 #[derive(Debug)]
@@ -28,8 +31,10 @@ pub struct RegistryService {
     pub clock: Arc<dyn Clock>,
 }
 
-fn aad(id: RegistryId) -> String {
-    format!("registry:{id}")
+/// The secret is bound to the registry, its workspace and its host: a row
+/// moved to another host (in the database) cannot open it.
+fn aad(r: &Registry) -> String {
+    format!("registry:{}:{}:{}", r.id, r.workspace_id, r.host)
 }
 
 fn invalid(m: &str) -> DomainError {
@@ -67,36 +72,61 @@ impl RegistryService {
     pub async fn create(&self, ws: WorkspaceId, by: &Principal, input: RegistryInput) -> DomainResult<Registry> {
         let host = check(&input)?;
         let secret = input.secret.ok_or_else(|| invalid("a password or token is required"))?;
-        let id = RegistryId::new();
         let now = self.clock.now();
-        let r = Registry {
-            id,
+        let mut r = Registry {
+            id: RegistryId::new(),
             workspace_id: ws,
             name: input.name.trim().to_owned(),
             kind: input.kind,
             host,
             username: input.username.trim().to_owned(),
-            secret_sealed: self.envelope.seal(secret.as_bytes(), &aad(id)).map_err(DomainError::internal)?,
+            secret_sealed: String::new(),
+            allow_push: input.allow_push,
             created_by: by.clone(),
             created_at: now,
             updated_at: now,
         };
+        r.secret_sealed = self.envelope.seal(secret.as_bytes(), &aad(&r)).map_err(DomainError::internal)?;
         self.repo.create_registry(&r).await?;
         Ok(r)
     }
 
     pub async fn update(&self, id: RegistryId, input: RegistryInput) -> DomainResult<Registry> {
         let mut r = self.get(id).await?;
-        r.host = check(&input)?;
+        let host = check(&input)?;
+        let username = input.username.trim().to_owned();
+        // The stored secret only ever goes where it was entered for: a new
+        // host, kind or user needs the secret again.
+        let moved = host != r.host || input.kind != r.kind || username != r.username;
+        let secret = match input.secret {
+            Some(s) => s,
+            None if moved => {
+                return Err(invalid("enter the password or token again when the host, kind or user changes"));
+            }
+            None => {
+                let raw = self.envelope.open(&r.secret_sealed, &aad(&r)).map_err(DomainError::internal)?;
+                String::from_utf8(raw).map_err(DomainError::internal)?
+            }
+        };
+        r.host = host;
         r.name = input.name.trim().to_owned();
         r.kind = input.kind;
-        r.username = input.username.trim().to_owned();
-        if let Some(secret) = input.secret {
-            r.secret_sealed = self.envelope.seal(secret.as_bytes(), &aad(id)).map_err(DomainError::internal)?;
-        }
+        r.username = username;
+        r.allow_push = input.allow_push;
+        r.secret_sealed = self.envelope.seal(secret.as_bytes(), &aad(&r)).map_err(DomainError::internal)?;
         r.updated_at = self.clock.now();
         self.repo.update_registry(&r).await?;
         Ok(r)
+    }
+
+    pub async fn delete(&self, id: RegistryId) -> DomainResult<()> {
+        self.repo.delete_registry(id).await
+    }
+
+    /// The registry that serves `image` in workspace `ws`, if any.
+    pub async fn for_image(&self, ws: WorkspaceId, image: &str) -> DomainResult<Option<Registry>> {
+        let host = image_host(image);
+        Ok(self.repo.list_registries(ws).await?.into_iter().find(|r| r.host == host))
     }
 
     pub async fn get(&self, id: RegistryId) -> DomainResult<Registry> {
@@ -106,11 +136,8 @@ impl RegistryService {
     /// The `X-Registry-Auth` for `image` in workspace `ws`: the registry of
     /// the image's host, or `None` (public image, no registry in Forge).
     pub async fn auth_for(&self, ws: WorkspaceId, image: &str) -> DomainResult<Option<RegistryAuth>> {
-        let host = image_host(image);
-        let Some(r) = self.repo.list_registries(ws).await?.into_iter().find(|r| r.host == host) else {
-            return Ok(None);
-        };
-        let secret = self.envelope.open(&r.secret_sealed, &aad(r.id)).map_err(DomainError::internal)?;
+        let Some(r) = self.for_image(ws, image).await? else { return Ok(None) };
+        let secret = self.envelope.open(&r.secret_sealed, &aad(&r)).map_err(DomainError::internal)?;
         let secret = String::from_utf8(secret).map_err(DomainError::internal)?;
         let body = serde_json::json!({ "username": r.username, "password": secret, "serveraddress": r.host });
         Ok(Some(RegistryAuth(b64url_padded(body.to_string().as_bytes()))))
@@ -135,6 +162,7 @@ mod tests {
             host: "ghcr.io".into(),
             username: "bot".into(),
             secret: Some("t".into()),
+            allow_push: false,
         };
         assert!(check(&base).is_ok());
         assert!(check(&RegistryInput { host: "ghcr.io/acme".into(), ..base.clone() }).is_err());

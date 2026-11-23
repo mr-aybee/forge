@@ -247,7 +247,7 @@ namespace Forge {
 
   // Container registries and their credentials (D-158): MFA guardrail.
   action "registry.manage" in ["role:platform_admin", "role:workspace_admin"]
-    appliesTo { principal: [User], resource: [Workspace], context: RequestContext };
+    appliesTo { principal: [User], resource: [Workspace, Server], context: RequestContext };
 
   // Docker Swarm membership and nodes in a Swarm cluster (D-154): MFA guardrail.
   action "swarm.manage" in ["role:platform_admin", "role:workspace_admin"]

@@ -7,6 +7,8 @@ CREATE TABLE registries (
     host          TEXT NOT NULL,
     username      TEXT NOT NULL DEFAULT '',
     secret_sealed TEXT NOT NULL,
+    -- Pushes need this on, besides registry.manage (off by default).
+    allow_push    BIGINT NOT NULL DEFAULT 0,
     created_by    TEXT NOT NULL,
     created_at    BIGINT NOT NULL,
     updated_at    BIGINT NOT NULL,

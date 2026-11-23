@@ -101,11 +101,13 @@ pub async fn op(
     let ws = state.docker_resources.workspace(id).await?;
     // Pushes go only to registries added in Forge: an image never leaves for
     // a registry nobody approved.
+    // Pushes use the workspace's stored credentials: only administrators
+    // (registry.manage, MFA), and only to a registry that allows pushes.
     if let DockerOp::ImagePush { image, .. } = &op
-        && state.registries.auth_for(ws, image).await?.is_none()
+        && !state.registries.for_image(ws, image).await?.is_some_and(|r| r.allow_push)
     {
         return Err(ApiError::bad_request(format!(
-            "push only to a registry added in Forge (Settings → Registries); `{}` is not one",
+            "push only to a registry added in Forge with pushes allowed (Settings → Registries); `{}` is not one",
             forge_core::registries::image_host(image)
         )));
     }
@@ -114,12 +116,14 @@ pub async fn op(
     let principal = caller.principal().to_string();
     if op.read_only() {
         let mut out = state.docker_resources.run(id, &principal, &op).await?;
-        if matches!(op, DockerOp::ImageInspect { .. }) && !caller.can(Action::ContainerInspectEnv, server_ref(id)).await
+        if matches!(op, DockerOp::ImageInspect { .. } | DockerOp::ImageHistory { .. })
+            && !caller.can(Action::ContainerInspectEnv, server_ref(id)).await
         {
-            // Environment values often hold build-time secrets: keys only.
+            // Environment values and build arguments often hold build-time
+            // secrets: keys only.
             hide_env_values(&mut out);
         }
-        if op.name().ends_with("_inspect") {
+        if op.is_inspect() {
             caller.audit(&audit, &server_ref(id), Some(ws), details).await;
         }
         return Ok((StatusCode::OK, Json(out)));
@@ -162,13 +166,39 @@ pub async fn op(
     }
 }
 
-/// Replaces environment values with nothing, keeping the keys.
+/// Hides environment values (an image's details) and `KEY=value` words in
+/// build commands (its history), keeping the keys.
 fn hide_env_values(detail: &mut Value) {
-    if let Some(env) = detail["env"].as_array_mut() {
+    if let Some(env) = detail.as_object_mut().and_then(|d| d.get_mut("env")).and_then(Value::as_array_mut) {
         for e in env {
             e["value"] = Value::Null;
         }
     }
+    if let Some(layers) = detail.as_array_mut() {
+        for l in layers {
+            if let Some(cmd) = l["created_by"].as_str() {
+                l["created_by"] = Value::String(mask_assignments(cmd));
+            }
+        }
+    }
+}
+
+/// `ENV TOKEN=abc` → `ENV TOKEN=***`; build arguments (`|1 NPM_TOKEN=abc
+/// /bin/sh -c …`) the same. Any `KEY=value` word is masked: a harmless one
+/// costs a little readability, a missed secret costs more.
+fn mask_assignments(cmd: &str) -> String {
+    cmd.split(' ')
+        .map(|w| match w.split_once('=') {
+            Some((k, _))
+                if k.bytes().next().is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+                    && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') =>
+            {
+                format!("{k}=***")
+            }
+            _ => w.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The request for the audit log: never credentials.
@@ -179,4 +209,19 @@ fn redacted(op: &DockerOp) -> Value {
         o.remove("registry_auth");
     }
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_secrets_are_masked() {
+        assert_eq!(mask_assignments("ENV TOKEN=abc PATH=/bin"), "ENV TOKEN=*** PATH=***");
+        assert_eq!(mask_assignments("|1 NPM_TOKEN=s3cret /bin/sh -c npm ci"), "|1 NPM_TOKEN=*** /bin/sh -c npm ci");
+        assert_eq!(mask_assignments("RUN make --flag"), "RUN make --flag");
+        let mut history = serde_json::json!([{"created_by": "ENV KEY=v"}]);
+        hide_env_values(&mut history);
+        assert_eq!(history[0]["created_by"], "ENV KEY=***");
+    }
 }

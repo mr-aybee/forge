@@ -176,11 +176,16 @@ pub fn subnet(c: &str) -> Option<(std::net::IpAddr, u8)> {
     let len: u8 = len.parse().ok()?;
     let ok = match ip {
         std::net::IpAddr::V4(v) => {
+            let o = v.octets();
+            // 0/8 (this network), 240/4 (reserved) and 100.64/10 (carrier
+            // NAT, used by overlay VPNs such as Tailscale) are left alone.
+            let reserved = o[0] == 0 || o[0] >= 240 || (o[0] == 100 && (o[1] & 0xc0) == 64);
             (16..=30).contains(&len)
                 && !v.is_loopback()
                 && !v.is_link_local()
                 && !v.is_multicast()
                 && !v.is_unspecified()
+                && !reserved
         }
         std::net::IpAddr::V6(v) => {
             (48..=124).contains(&len)
@@ -251,6 +256,18 @@ impl DockerOp {
             Self::NetworkPrune {} => "network_prune",
             Self::Events { .. } => "events",
         }
+    }
+
+    /// Reads of one object's details (audited: they can show secrets).
+    #[must_use]
+    pub const fn is_inspect(&self) -> bool {
+        matches!(
+            self,
+            Self::ImageInspect { .. }
+                | Self::ImageHistory { .. }
+                | Self::VolumeInspect { .. }
+                | Self::NetworkInspect { .. }
+        )
     }
 
     /// Reads change nothing on the node.

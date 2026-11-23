@@ -51,6 +51,36 @@ export interface DockerNetwork {
   protected: boolean;
 }
 
+/** One environment variable of an image; `value` is null when hidden (no `container.inspect_env`). */
+export interface ImageEnv {
+  key: string;
+  value: string | null;
+}
+
+/** `image_inspect` result: the typed view the server returns. */
+export interface DockerImageDetail {
+  id: string;
+  full_id: string;
+  tags: string[];
+  digests: string[];
+  /** Unix ms. */
+  created?: number;
+  size?: number;
+  architecture?: string;
+  os?: string;
+  author?: string;
+  entrypoint: string[];
+  cmd: string[];
+  working_dir?: string;
+  user?: string;
+  exposed_ports: string[];
+  volumes: string[];
+  labels: Record<string, string>;
+  env: ImageEnv[];
+  /** Layer digests, bottom first. */
+  layers: string[];
+}
+
 export interface DiskBucket {
   count?: number;
   bytes?: number;
@@ -157,6 +187,34 @@ export function normImage(v: unknown): DockerImage {
     created: ms(o.created),
     containers: num(o.containers),
     dangling: typeof o.dangling === "boolean" ? o.dangling : tags.length === 0,
+  };
+}
+
+export function normImageDetail(v: unknown): DockerImageDetail {
+  const o = obj(v);
+  const base = normImage(v);
+  return {
+    id: base.id,
+    full_id: base.full_id,
+    tags: base.tags,
+    digests: base.digests,
+    created: base.created,
+    size: base.size,
+    architecture: str(o.architecture) || undefined,
+    os: str(o.os) || undefined,
+    author: str(o.author) || undefined,
+    entrypoint: arr(o.entrypoint).filter((x): x is string => typeof x === "string"),
+    cmd: arr(o.cmd).filter((x): x is string => typeof x === "string"),
+    working_dir: str(o.working_dir) || undefined,
+    user: str(o.user) || undefined,
+    exposed_ports: strs(o.exposed_ports),
+    volumes: strs(o.volumes),
+    labels: labels(o.labels),
+    env: arr(o.env)
+      .map(obj)
+      .filter((e) => typeof e.key === "string" && e.key !== "")
+      .map((e) => ({ key: str(e.key), value: typeof e.value === "string" ? e.value : null })),
+    layers: strs(o.layers),
   };
 }
 

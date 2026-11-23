@@ -184,8 +184,10 @@ async fn api_auth(method: &str, path: &str, body: &Value, auth: Option<&str>) ->
     if !(200..300).contains(&status) {
         return Err(crate::docker::docker_error(status, &bytes));
     }
-    // An update answers with warnings only; the create's id is read when present.
-    Ok(serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    if bytes.iter().all(u8::is_ascii_whitespace) {
+        return Ok(Value::Null);
+    }
+    serde_json::from_slice(&bytes).map_err(|e| format!("Docker's answer is not JSON: {e}"))
 }
 
 /// The Swarm service of Forge service `service_id`, or `None` when there is

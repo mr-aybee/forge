@@ -64,6 +64,8 @@ pub struct Registry {
     pub username: String,
     #[serde(skip)]
     pub secret_sealed: String,
+    /// Images may be pushed to it (off by default).
+    pub allow_push: bool,
     pub created_by: Principal,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,

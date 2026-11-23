@@ -1,4 +1,5 @@
 import { Boxes, Download, Eraser, History, Search, Tag, Trash2, Upload } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 
 import { type DockerImage, type DockerInspectOp, useDockerImages } from "../../api/dockerResources";
@@ -241,17 +242,23 @@ function PullDialog({ runner, onClose }: { runner: DockerRunner; onClose: () => 
 
 function PushDialog({ image, runner, onClose }: { image: DockerImage; runner: DockerRunner; onClose: () => void }) {
   const [ref, setRef] = useState(image.tags[0] ?? "");
+  const [error, setError] = useState<string>();
   const busy = runner.pending;
+  const host = registryHost(ref);
   return (
-    <Modal open onOpenChange={(o) => !o && onClose()} title="Push image" description="Docker uploads the tag to its registry, with the credentials added in Forge. The push runs as a job.">
+    <Modal open onOpenChange={(o) => !o && onClose()} title="Push image" description="Docker uploads the tag to its registry. The push runs as a job.">
       <form
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault();
-          void runner.run({ op: "image_push", image: ref }, `Push ${ref}`).then((ok) => ok && onClose());
+          setError(undefined);
+          void runner.runPush(ref).then((r) => {
+            if (r === true) onClose();
+            else if (r) setError(r);
+          });
         }}
       >
-        <Field label="Tag to push">
+        <Field label="Tag to push" hint={<>Registry: <span className="font-mono">{host}</span></>}>
           <Select value={ref} onChange={(e) => setRef(e.target.value)}>
             {image.tags.map((t) => (
               <option key={t} value={t}>
@@ -260,6 +267,14 @@ function PushDialog({ image, runner, onClose }: { image: DockerImage; runner: Do
             ))}
           </Select>
         </Field>
+        <p className="text-xs text-muted">
+          Forge pushes only to registries added under{" "}
+          <Link to="/settings/registries" className="text-accent hover:underline">
+            Settings → Registries
+          </Link>
+          , using the credentials stored there. Tag the image with that registry's host first (for example <span className="font-mono">ghcr.io/org/app:1.0</span>).
+        </p>
+        {error && <p className="rounded-md bg-bad-soft px-3 py-2 text-xs text-bad">{error}</p>}
         <div className="flex justify-end gap-2">
           <Button type="button" onClick={onClose}>
             Cancel
@@ -274,6 +289,12 @@ function PushDialog({ image, runner, onClose }: { image: DockerImage; runner: Do
       </form>
     </Modal>
   );
+}
+
+/** The registry host of an image reference, as Docker reads it. */
+function registryHost(ref: string): string {
+  const first = ref.split("/")[0] ?? "";
+  return ref.includes("/") && (first.includes(".") || first.includes(":") || first === "localhost") ? first : "docker.io";
 }
 
 function TagDialog({ image, runner, onClose }: { image: DockerImage; runner: DockerRunner; onClose: () => void }) {

@@ -54,6 +54,17 @@ impl JobHandler for DockerOpJob {
         let p: Payload = serde_json::from_value(ctx.job.payload.clone())
             .map_err(|e| StepError::Fatal(format!("bad payload: {e}")))?;
         let mut op = p.op.clone();
+        // A push only ever goes to a registry that (still) allows pushes.
+        if let (DockerOp::ImagePush { image, .. }, Some(ws)) = (&op, ctx.job.workspace_id)
+            && !self
+                .registries
+                .for_image(ws, image)
+                .await
+                .map_err(|e| StepError::Retryable(e.to_string()))?
+                .is_some_and(|r| r.allow_push)
+        {
+            return Err(StepError::Fatal("the registry no longer allows pushes".into()));
+        }
         if let (DockerOp::ImagePull { image, registry_auth } | DockerOp::ImagePush { image, registry_auth }, Some(ws)) =
             (&mut op, ctx.job.workspace_id)
         {

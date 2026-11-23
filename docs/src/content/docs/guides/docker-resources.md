@@ -36,8 +36,13 @@ For containers and stacks, see [Containers](/docs/guides/containers/).
    - **Pull image** takes a reference such as `nginx:1.27` or
      `ghcr.io/org/app:1.2`. The pull runs as a job; the toast's
      **Follow job** opens its live log.
-   - The row menu offers **Inspect** and **History** (the node's JSON, with
-     **Copy JSON**), **Tag…**, **Push…** and **Remove…**. **Remove** refuses an
+   - The row menu offers **Inspect**, **History**, **Tag…**, **Push…** and
+     **Remove…**. **Inspect** shows tags, digests, platform, entrypoint and
+     command, ports, volumes, environment, labels and layers; switch to
+     **Raw JSON** for the full document, with **Copy JSON**. Environment
+     values show **hidden** unless you have `container.inspect_env`.
+     **Push…** works only for a tag whose host has a registry in
+     **Settings** → **Registries**. **Remove** refuses an
      image a container uses unless you turn on **Force**.
    - Select rows with the check boxes and use **Remove** for several unused
      images at once. Images in use cannot be selected.

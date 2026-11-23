@@ -85,13 +85,32 @@ async fn registries_hold_secrets_and_gate_pushes() {
     let (_, tok) = admin.post("/api/v1/enrollment-tokens", json!({"ttl_minutes": 10})).await;
     let dir = tempfile::tempdir().unwrap();
     let facts = HostFacts { hostname: "lab-b".into(), os: "linux".into(), arch: "x86_64".into() };
-    let id = enroll(&StatePaths::new(dir.path()), AgentConfig::new(h.agent_url.clone()), tok["token"].as_str().unwrap(), facts)
-        .await
-        .unwrap()
-        .server_id;
+    let id = enroll(
+        &StatePaths::new(dir.path()),
+        AgentConfig::new(h.agent_url.clone()),
+        tok["token"].as_str().unwrap(),
+        facts,
+    )
+    .await
+    .unwrap()
+    .server_id;
     let ops = format!("/api/v1/servers/{id}/docker/ops");
     let (s, e) = admin.post(&ops, json!({"op": "image_push", "image": "attacker.example/x:1"})).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "{e}");
+    // Pushes need a registry that allows them, and registry.manage.
+    let (s, e) = admin.post(&ops, json!({"op": "image_push", "image": "ghcr.io/acme/app:1"})).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "pushes are off by default: {e}");
+    let rid = r["id"].as_str().unwrap();
+    let (s, e) = admin
+        .put(&format!("/api/v1/registries/{rid}"), json!({"name": "GitHub", "kind": "ghcr", "host": "ghcr.io", "username": "bot", "allow_push": true}))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{e}");
+    let (s, e) = admin
+        .put(&format!("/api/v1/registries/{rid}"), json!({"name": "GitHub", "kind": "ghcr", "host": "attacker.example", "username": "bot"}))
+        .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "a new host needs the secret again: {e}");
+    let (s, _) = op.post(&ops, json!({"op": "image_push", "image": "ghcr.io/acme/app:1"})).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "operators do not push with the workspace's credentials");
     let (s, job) = admin.post(&ops, json!({"op": "image_push", "image": "ghcr.io/acme/app:1"})).await;
     assert_eq!(s, StatusCode::ACCEPTED, "{job}");
 

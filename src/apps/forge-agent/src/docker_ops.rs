@@ -143,6 +143,21 @@ fn ipv4_routes(text: &str) -> Vec<(std::net::IpAddr, u8)> {
         .collect()
 }
 
+/// A route: network and prefix length.
+type Route = (std::net::IpAddr, u8);
+
+/// The node's IPv6 routes (`/proc/net/ipv6_route`), without the default.
+fn ipv6_routes(text: &str) -> Vec<(std::net::IpAddr, u8)> {
+    text.lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            let dest = u128::from_str_radix(f.first()?, 16).ok()?;
+            let len = u8::from_str_radix(f.get(1)?, 16).ok()?;
+            (len != 0).then(|| (std::net::IpAddr::V6(std::net::Ipv6Addr::from(dest)), len))
+        })
+        .collect()
+}
+
 /// Two networks overlap when either contains the other's start.
 fn overlaps(a: (std::net::IpAddr, u8), b: (std::net::IpAddr, u8)) -> bool {
     forge_catalog::docker_ops::contains(a.0, a.1, b.0) || forge_catalog::docker_ops::contains(b.0, b.1, a.0)
@@ -152,9 +167,10 @@ fn overlaps(a: (std::net::IpAddr, u8), b: (std::net::IpAddr, u8)) -> bool {
 /// that traffic (the node's LAN, the fabric, the way to the control plane).
 async fn subnet_free(cidr: &str) -> Result<(), String> {
     let Some(net) = forge_catalog::docker_ops::subnet(cidr) else { return Err("invalid subnet".into()) };
-    let text =
-        tokio::fs::read_to_string("/proc/net/route").await.map_err(|e| format!("reading the node's routes: {e}"))?;
-    if let Some((ip, len)) = ipv4_routes(&text).into_iter().find(|r| overlaps(*r, net)) {
+    let (file, parse): (&str, fn(&str) -> Vec<Route>) =
+        if net.0.is_ipv4() { ("/proc/net/route", ipv4_routes) } else { ("/proc/net/ipv6_route", ipv6_routes) };
+    let text = tokio::fs::read_to_string(file).await.map_err(|e| format!("reading the node's routes: {e}"))?;
+    if let Some((ip, len)) = parse(&text).into_iter().find(|r| overlaps(*r, net)) {
         return Err(format!("{cidr} overlaps the node's route {ip}/{len}"));
     }
     Ok(())
@@ -167,7 +183,10 @@ pub async fn run(op: &DockerOp) -> Result<Value, String> {
             Ok(json!(get("/images/json").await?.as_array().map(|a| a.iter().map(image_view).collect::<Vec<_>>())))
         }
         DockerOp::ImageInspect { id } => Ok(image_detail(&get(&format!("/images/{}/json", enc(id))).await?)),
-        DockerOp::ImageHistory { id } => get(&format!("/images/{}/history", enc(id))).await,
+        DockerOp::ImageHistory { id } => {
+            let h = get(&format!("/images/{}/history", enc(id))).await?;
+            Ok(json!(h.as_array().map(|a| a.iter().map(history_view).collect::<Vec<_>>())))
+        }
         DockerOp::ImageRemove { id, force } => {
             if *force {
                 image_unused_by_forge(id).await?;
@@ -348,6 +367,11 @@ pub(crate) fn image_detail(i: &Value) -> Value {
     })
 }
 
+/// One layer of an image's history.
+pub(crate) fn history_view(l: &Value) -> Value {
+    json!({ "created": l["Created"], "created_by": l["CreatedBy"], "size": l["Size"], "tags": l["Tags"], "comment": l["Comment"] })
+}
+
 pub(crate) fn volume_view(v: &Value) -> Value {
     json!({
         "name": v["Name"], "driver": v["Driver"], "mountpoint": v["Mountpoint"], "scope": v["Scope"],
@@ -450,5 +474,13 @@ eth0\t0002000A\t00000000\t0001\t0\t0\t0\t00FFFFFF\n";
         );
         assert_eq!(d["env"][0]["key"], "TOKEN");
         assert_eq!(d["layers"], 2);
+    }
+
+    #[test]
+    fn ipv6_routes_are_read() {
+        let text = "fd000000000000000000000000000000 40 00000000000000000000000000000000 00 00000000000000000000000000000000 00000100 00000001 00000000 00000001 eth0\n\
+00000000000000000000000000000000 00 00000000000000000000000000000000 00 fe800000000000000000000000000001 00000400 00000001 00000000 00000003 eth0\n";
+        let r = ipv6_routes(text);
+        assert_eq!(r, vec![("fd00::".parse().unwrap(), 64)]);
     }
 }

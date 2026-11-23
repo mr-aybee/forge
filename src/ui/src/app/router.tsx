@@ -413,6 +413,11 @@ const settingsAnalytics = createRoute({
   path: "/settings/analytics",
   component: lazyRouteComponent(() => import("../pages/AnalyticsSettings"), "AnalyticsSettings"),
 });
+const settingsRegistries = createRoute({
+  getParentRoute: parent,
+  path: "/settings/registries",
+  component: lazyRouteComponent(() => import("../pages/Registries"), "Registries"),
+});
 const settingsSection = createRoute({
   getParentRoute: parent,
   path: "/settings/$section",
@@ -458,6 +463,7 @@ const routeTree = rootRoute.addChildren([
   plugins,
   settings,
   settingsAnalytics,
+  settingsRegistries,
   settingsSection,
   profile,
   profileSection,

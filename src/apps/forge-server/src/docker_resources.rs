@@ -22,6 +22,10 @@ pub fn action_for(op: &DockerOp) -> Action {
     if op.read_only() {
         return Action::ServerManage;
     }
+    // A push uses the workspace's stored registry credentials.
+    if matches!(op, DockerOp::ImagePush { .. }) {
+        return Action::RegistryManage;
+    }
     match op.kind() {
         "image" => Action::ImageManage,
         "volume" => Action::VolumeManage,

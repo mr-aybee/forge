@@ -19,12 +19,13 @@ or a Swarm service is deployed from it.
 ## Steps
 
 1. Go to **Settings** → **Registries** and select **Add registry**.
-2. Choose the **Kind**: Docker Hub, GitHub (GHCR), GitLab, Amazon ECR or
-   Custom.
+2. Choose the **Kind**: Docker Hub, GitHub (ghcr.io), GitLab, Amazon ECR or
+   Custom. Forge fills in the host for the known kinds.
 3. Enter the **Host**, for example `ghcr.io` or `registry.example.com:5000`.
    Docker Hub is always `docker.io`.
-4. Enter the **User name** and the **Password or token**, then select
-   **Save**.
+4. Enter the **Username** and the **Password or token**, then select
+   **Add registry**. When you edit a registry, leave **Password or token**
+   empty to keep the stored one.
 
 Forge picks the registry by the image's host: `ghcr.io/acme/app:1` uses the
 `ghcr.io` registry, and `nginx:1.27` uses Docker Hub.
@@ -32,6 +33,18 @@ Forge picks the registry by the image's host: `ghcr.io/acme/app:1` uses the
 :::caution
 The secret is stored encrypted and never shown again. To change it, enter a
 new one. Pushes are allowed only to registries added here.
+:::
+
+:::caution[Who uses the credentials]
+- Anyone who may deploy a service or manage images on a node can pull with
+  the workspace's registry credentials. Give the registry a read-only token
+  unless you push from Forge.
+- Pushes need **Allow push** on the registry and `registry.manage`
+  (an administrator with MFA).
+- Docker Swarm keeps the credentials of a deployed service on every manager
+  (`--with-registry-auth`). After you change a token, deploy the service
+  again so the managers drop the old one.
+- Changing the host, kind or user name of a registry needs the secret again.
 :::
 
 ## Verify

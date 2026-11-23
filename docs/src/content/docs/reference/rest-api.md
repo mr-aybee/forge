@@ -1623,7 +1623,8 @@ operation; nothing needs the Docker TLS endpoint.
 | `image_inspect`, `image_history` | `id` | `server.manage` |
 | `image_remove` | `id`, `force` | `docker.image.manage` |
 | `image_tag` | `id`, `repo`, `tag` | `docker.image.manage` |
-| `image_pull`, `image_push` | `image` | `docker.image.manage` (job) |
+| `image_pull` | `image` | `docker.image.manage` (job) |
+| `image_push` | `image` (a registry with `allow_push`) | `registry.manage`, MFA (job) |
 | `image_prune` | `all` (default: dangling only) | `docker.image.manage` (job) |
 | `volume_inspect` | `name` | `server.manage` |
 | `volume_create` | `name`, `labels` (local driver, no options) | `docker.volume.manage` |
@@ -1644,14 +1645,15 @@ labels (`forge.*`) and Docker's or Forge's own networks (`bridge`, `host`,
 | Method | Path | Permission |
 | --- | --- | --- |
 | GET | `/registries` | `view` on the workspace: `[{id, workspace_id, name, kind, host, username, created_by, created_at, updated_at}]` (never the secret) |
-| POST | `/registries` | `registry.manage` (MFA): `{name, kind, host, username, secret}` → `201` the registry |
-| PUT | `/registries/{id}` | `registry.manage` (MFA): the same body; without `secret` the stored one stays |
+| POST | `/registries` | `registry.manage` (MFA): `{name, kind, host, username, secret, allow_push}` → `201` the registry |
+| PUT | `/registries/{id}` | `registry.manage` (MFA): the same body; without `secret` the stored one stays, unless `host`, `kind` or `username` changes (`422`) |
 | DELETE | `/registries/{id}` | `registry.manage` (MFA) → `204` |
 
 `kind` is `docker_hub`, `ghcr`, `gitlab`, `ecr` or `custom`. `host` is
 `host[:port]` (a scheme or trailing slash is removed); Docker Hub's is
 `docker.io`. `409` when the workspace already has a registry for the host.
-Image pushes (`image_push`) are allowed only to a registry's host.
+Image pushes (`image_push`) need `registry.manage` and a registry for the
+image's host with `allow_push` (default `false`).
 
 ### Docker Swarm
 

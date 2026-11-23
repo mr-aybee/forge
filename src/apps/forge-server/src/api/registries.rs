@@ -33,14 +33,25 @@ pub struct RegistryBody {
     pub host: String,
     #[serde(default)]
     pub username: String,
-    /// Password or token. Required on create; absent on update keeps it.
+    /// Password or token. Required on create; absent on update keeps it
+    /// (only while host, kind and user name stay the same).
     #[serde(default)]
     pub secret: Option<String>,
+    /// Images may be pushed to it (also needs `registry.manage`).
+    #[serde(default)]
+    pub allow_push: bool,
 }
 
 impl From<RegistryBody> for RegistryInput {
     fn from(b: RegistryBody) -> Self {
-        Self { name: b.name, kind: b.kind, host: b.host, username: b.username, secret: b.secret }
+        Self {
+            name: b.name,
+            kind: b.kind,
+            host: b.host,
+            username: b.username,
+            secret: b.secret,
+            allow_push: b.allow_push,
+        }
     }
 }
 
@@ -89,7 +100,7 @@ pub async fn delete(
 ) -> ApiResult<StatusCode> {
     let r = state.registries.get(id).await?;
     caller.authorize(Action::RegistryManage, ws_ref(r.workspace_id)).await?;
-    state.registries.repo.delete_registry(id).await?;
+    state.registries.delete(id).await?;
     caller
         .audit(
             AUDIT_DELETE,

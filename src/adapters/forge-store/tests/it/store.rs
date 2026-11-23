@@ -698,6 +698,7 @@ async fn registries_round_trip_one_per_host() {
         host: "ghcr.io".into(),
         username: "bot".into(),
         secret_sealed: "sealed".into(),
+        allow_push: false,
         created_by: Principal::User(UserId::new()),
         created_at: Timestamp(1),
         updated_at: Timestamp(1),
@@ -712,4 +713,5 @@ async fn registries_round_trip_one_per_host() {
     assert_eq!(store.list_registries(ws.id).await.unwrap(), vec![r.clone()]);
     store.delete_registry(r.id).await.unwrap();
     assert!(store.get_registry(r.id).await.unwrap().is_none());
+    assert!(matches!(store.update_registry(&r).await, Err(DomainError::NotFound(_))), "no silent update")
 }
