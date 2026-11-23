@@ -123,6 +123,26 @@ environment its own encrypted overlay network that other containers cannot
 join. Forge only changes Swarm services it created for that service.
 :::
 
+## Deploy releases with a strategy
+
+Release deployments (**Deployments**, or `forge deploy apply`) work in Swarm
+clusters too. Forge plans the steps for the swarm instead of for single nodes:
+
+| Strategy | What happens in the swarm |
+| --- | --- |
+| `rolling` | Swarm updates `batchSize` tasks at a time and rolls back on failure |
+| `recreate` | Swarm stops every task, then starts the new release (brief downtime) |
+| `blue-green` | The new release runs as a second service on its own ports; once healthy, the site sends all traffic to it; the old one stays at zero tasks for a fast rollback |
+| `canary` | The new release grows step by step while the site sends it the same share of traffic |
+| `manual` | Not available on Swarm. Use `rolling` with `approval: true`, or `canary` |
+
+`blue-green` and `canary` need a site in front of the service, so the edge
+can move traffic between the two versions.
+
+The service page shows an **HA readiness** score: more than one task, tasks
+spread over nodes, a health check, restarts, rollback on failure, and at
+least three managers.
+
 ## Verify
 
 - The **Swarm** tab lists every node as **joined**, and the node cards show

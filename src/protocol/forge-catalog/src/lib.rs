@@ -35,6 +35,7 @@ pub mod sites;
 pub mod stacks;
 pub mod storage;
 pub mod swarm;
+pub mod swarm_rollout;
 pub mod swarm_service;
 pub mod versions;
 

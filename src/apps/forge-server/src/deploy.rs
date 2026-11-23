@@ -162,6 +162,16 @@ pub struct Prepared {
     pub removed: Vec<ServerId>,
     /// Node id → name, for the plan's descriptions.
     pub names: BTreeMap<String, String>,
+    /// In a Docker Swarm cluster: the cluster and the Swarm plan, which
+    /// replaces `plan`'s node steps.
+    pub swarm: Option<SwarmRollout>,
+}
+
+/// A rollout in a Docker Swarm cluster (D-156).
+#[derive(Debug, Clone)]
+pub struct SwarmRollout {
+    pub cluster: forge_core::ClusterId,
+    pub plan: forge_catalog::swarm_rollout::SwarmPlan,
 }
 
 /// The plan as people read it.
@@ -201,7 +211,10 @@ impl Prepared {
             nodes: self.nodes.iter().map(name).collect(),
             added_nodes: self.added.iter().map(name).collect(),
             removed_nodes: self.removed.iter().map(name).collect(),
-            steps: self.plan.steps.iter().map(|s| s.describe(&self.names)).collect(),
+            steps: match &self.swarm {
+                Some(sw) => sw.plan.steps.iter().map(forge_catalog::swarm_rollout::SwarmStep::describe).collect(),
+                None => self.plan.steps.iter().map(|s| s.describe(&self.names)).collect(),
+            },
             notes: self.plan.notes.clone(),
             plan: self.plan.clone(),
         }
@@ -226,6 +239,8 @@ pub struct DeployService {
     pub sites: Arc<dyn SiteRepository>,
     pub releases: Arc<dyn ReleaseRepository>,
     pub deploys: Arc<dyn DeploymentRepository>,
+    /// Swarm clusters plan their rollouts differently (D-156).
+    pub swarm: Arc<crate::swarm::SwarmService>,
     pub clock: Arc<dyn Clock>,
 }
 
@@ -290,6 +305,9 @@ impl DeployService {
             created_at: now,
         };
         crate::jobs::app::build_spec(&release_app(&app, &release), None).map_err(DomainError::Invalid)?;
+        if let Some(prepared) = self.swarm_prepared(&app, existing.is_none(), &release, &policy).await? {
+            return Ok(prepared);
+        }
         let current: Vec<ServerId> = self.apps.list_instances(app.id).await?.iter().map(|i| i.server_id).collect();
         let nodes = match &doc.spec.placement {
             Some(p) => self.place(ws, p, &current).await?,
@@ -303,7 +321,78 @@ impl DeployService {
         let added = nodes.iter().copied().filter(|n| !current.contains(n)).collect();
         let removed = current.iter().copied().filter(|n| !nodes.contains(n)).collect();
         let (plan, names) = self.plan(&app, &release, &policy, &nodes).await?;
-        Ok(Prepared { app, is_new: existing.is_none(), release, policy, plan, nodes, added, removed, names })
+        Ok(Prepared {
+            app,
+            is_new: existing.is_none(),
+            release,
+            policy,
+            plan,
+            nodes,
+            added,
+            removed,
+            names,
+            swarm: None,
+        })
+    }
+
+    /// In a Docker Swarm cluster, the swarm places the tasks: the plan is a
+    /// [`SwarmPlan`](forge_catalog::swarm_rollout::SwarmPlan) and no node is
+    /// added or removed (D-156). `None` outside Swarm clusters.
+    async fn swarm_prepared(
+        &self,
+        app: &Service,
+        is_new: bool,
+        release: &Release,
+        policy: &RolloutPolicy,
+    ) -> DomainResult<Option<Prepared>> {
+        let Some(cluster) = self.swarm.swarm_of_environment(app.environment_id).await? else { return Ok(None) };
+        let runtime: forge_catalog::Runtime =
+            serde_json::from_value(release.spec["runtime"].clone()).map_err(DomainError::internal)?;
+        if runtime != forge_catalog::Runtime::Container {
+            return Err(DomainError::Invalid("Docker Swarm clusters run container services only".into()));
+        }
+        // No Swarm settings in the release: Swarm's defaults (one replica).
+        let settings: forge_catalog::swarm_service::SwarmSettings = match &release.spec["swarm"] {
+            Value::Null => forge_catalog::swarm_service::SwarmSettings::default(),
+            v => serde_json::from_value(v.clone()).map_err(|e| DomainError::Invalid(format!("swarm settings: {e}")))?,
+        };
+        // The slot serving now: a weighted slot, else the unslotted service
+        // once a release went live, else nothing yet.
+        let slots = self.deploys.list_slots(app.id).await?;
+        let weighted = slots.iter().filter(|s| s.weight > 0).max_by_key(|s| s.weight).map(|s| s.slot.clone());
+        let serving = match weighted {
+            Some(s) => Some(s),
+            None if self.deploys.current_release(app.id).await? > 0 => Some(String::new()),
+            None => None,
+        };
+        let routed = self.sites.list_sites().await?.iter().any(|s| site_targets(&s.config, app.id));
+        let input = forge_catalog::swarm_rollout::SwarmPlanInput {
+            policy,
+            replicas: settings.replicas,
+            serving: serving.as_deref(),
+            routed,
+        };
+        let swarm_plan = forge_catalog::swarm_rollout::plan(&input).map_err(DomainError::Invalid)?;
+        let plan = Plan {
+            strategy: swarm_plan.strategy,
+            slotted: !swarm_plan.slot.is_empty(),
+            steps: Vec::new(),
+            downtime: swarm_plan.strategy == forge_catalog::deploy::Strategy::Recreate,
+            notes: vec!["Docker Swarm places the tasks on the swarm's nodes".into()],
+            targets: Vec::new(),
+        };
+        Ok(Some(Prepared {
+            app: app.clone(),
+            is_new,
+            release: release.clone(),
+            policy: policy.clone(),
+            plan,
+            nodes: Vec::new(),
+            added: Vec::new(),
+            removed: Vec::new(),
+            names: BTreeMap::new(),
+            swarm: Some(SwarmRollout { cluster, plan: swarm_plan }),
+        }))
     }
 
     /// Prepares a redeploy of release `number` (rollback, or again) on the
@@ -315,6 +404,9 @@ impl DeployService {
             .await?
             .ok_or_else(|| DomainError::NotFound(format!("release {number}")))?;
         let policy: RolloutPolicy = serde_json::from_value(release.policy.clone()).map_err(DomainError::internal)?;
+        if let Some(prepared) = self.swarm_prepared(app, false, &release, &policy).await? {
+            return Ok(prepared);
+        }
         let nodes: Vec<ServerId> = self.apps.list_instances(app.id).await?.iter().map(|i| i.server_id).collect();
         if nodes.is_empty() {
             return Err(DomainError::Invalid("the service runs on no node".into()));
@@ -330,6 +422,7 @@ impl DeployService {
             added: Vec::new(),
             removed: Vec::new(),
             names,
+            swarm: None,
         })
     }
 
@@ -473,6 +566,7 @@ impl DeployService {
             a.updated_at = now;
             self.apps.put_service(&a).await?;
         }
+        let swarm = prepared.swarm.clone();
         for server in &prepared.added {
             self.apps
                 .put_instance(&ServiceInstance {
@@ -506,7 +600,11 @@ impl DeployService {
             state: DeploymentState::Pending,
             request: None,
             job_id: None,
-            plan: serde_json::to_value(&prepared.plan).map_err(DomainError::internal)?,
+            plan: match &swarm {
+                Some(sw) => serde_json::to_value(&sw.plan),
+                None => serde_json::to_value(&prepared.plan),
+            }
+            .map_err(DomainError::internal)?,
             step: 0,
             error: None,
             created_by: who.principal.clone(),
@@ -534,6 +632,7 @@ impl DeployService {
                     "privileged_mounts": who.privileged_mounts,
                     "remove": prepared.removed,
                     "names": prepared.names,
+                    "swarm_cluster": swarm.as_ref().map(|sw| sw.cluster),
                 }),
                 max_attempts: 3,
             })

@@ -143,8 +143,20 @@ async fn swarm_services_are_containers_with_checked_settings() {
     let (s, e) = admin.post(&format!("/api/v1/services/{id}/swarm"), json!({"kind": "scale", "replicas": 5000})).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "{e}");
 
-    // Release rollouts are not available on Swarm yet.
-    let yaml = "apiVersion: forge/v1\nkind: Deployment\nmetadata:\n  name: web\n  environment: prod\nspec:\n  runtime: container\n  artifact:\n    image: nginx:1.27\n";
-    let (s, _) = admin.post("/api/v1/deployments/plan", json!({"yaml": yaml})).await;
-    assert!(s.is_client_error(), "{s}");
+    // Release rollouts plan Swarm steps (D-156): Rolling updates the
+    // service in place; Canary needs a site in front; Manual is refused.
+    let doc = |strategy: &str| {
+        format!(
+            "apiVersion: forge/v1\nkind: Deployment\nmetadata:\n  name: web\n  environment: prod\nspec:\n  runtime: container\n  artifact:\n    image: nginx:1.27\n  strategy:\n    type: {strategy}\n"
+        )
+    };
+    let (s, plan) = admin.post("/api/v1/deployments/plan", json!({"yaml": doc("rolling")})).await;
+    assert_eq!(s, StatusCode::OK, "{plan}");
+    assert_eq!(plan["strategy"], "rolling");
+    assert!(plan["steps"][0].as_str().unwrap().contains("Deploy the release to the service"), "{plan}");
+    assert_eq!(plan["nodes"], json!([]), "the swarm places the tasks");
+    let (s, e) = admin.post("/api/v1/deployments/plan", json!({"yaml": doc("canary")})).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{e}");
+    let (s, e) = admin.post("/api/v1/deployments/plan", json!({"yaml": doc("manual")})).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{e}");
 }

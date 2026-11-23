@@ -322,6 +322,25 @@ impl Services {
             deploys: Arc::new(store.clone()),
         });
         registry.register(app_job.clone());
+        let swarm = Arc::new(crate::swarm::SwarmService {
+            swarms: Arc::new(store.clone()),
+            servers: Arc::new(store.clone()),
+            clusters: Arc::new(store.clone()),
+            tenancy: Arc::new(store.clone()),
+            files: Arc::new(store.clone()),
+            deploys: Arc::new(store.clone()),
+            hub: hub.clone(),
+            signer: signer.clone(),
+            envelope: envelope.clone(),
+            clock: clock.clone(),
+            node_cache: std::sync::Mutex::default(),
+        });
+        let node_ops = crate::jobs::node_op::NodeOps {
+            hub: hub.clone(),
+            signer: signer.clone(),
+            servers: Arc::new(store.clone()),
+            clock: clock.clone(),
+        };
         let deploy = Arc::new(crate::deploy::DeployService {
             apps: Arc::new(store.clone()),
             tenancy: Arc::new(store.clone()),
@@ -330,6 +349,7 @@ impl Services {
             sites: Arc::new(store.clone()),
             releases: Arc::new(store.clone()),
             deploys: Arc::new(store.clone()),
+            swarm: swarm.clone(),
             clock: clock.clone(),
         });
         let rollout_effects: Arc<std::sync::OnceLock<Arc<dyn crate::deploy::RolloutEffects>>> =
@@ -345,6 +365,9 @@ impl Services {
             audit: audit.clone(),
             clock: clock.clone(),
             tick: Duration::from_millis(config.jobs.poll_ms.clamp(200, 3_000) * 5),
+            swarm: swarm.clone(),
+            swarms: Arc::new(store.clone()),
+            ops: node_ops.clone(),
         }));
         let docker = Arc::new(crate::docker_engine::DockerEngines::new(
             Arc::new(store.clone()),
@@ -352,24 +375,6 @@ impl Services {
             envelope.clone(),
             clock.clone(),
         ));
-        let swarm = Arc::new(crate::swarm::SwarmService {
-            swarms: Arc::new(store.clone()),
-            servers: Arc::new(store.clone()),
-            clusters: Arc::new(store.clone()),
-            tenancy: Arc::new(store.clone()),
-            files: Arc::new(store.clone()),
-            hub: hub.clone(),
-            signer: signer.clone(),
-            envelope: envelope.clone(),
-            clock: clock.clone(),
-            node_cache: std::sync::Mutex::default(),
-        });
-        let node_ops = crate::jobs::node_op::NodeOps {
-            hub: hub.clone(),
-            signer: signer.clone(),
-            servers: Arc::new(store.clone()),
-            clock: clock.clone(),
-        };
         registry.register(Arc::new(crate::jobs::swarm_service::SwarmServiceJob {
             ops: node_ops.clone(),
             swarm: swarm.clone(),

@@ -253,11 +253,13 @@ async fn service_cluster(state: &AppState, app: &forge_core::model::Service) -> 
 #[derive(Debug, Serialize)]
 pub struct ServiceSwarmView {
     pub cluster_id: ClusterId,
-    /// `<environment>-<service>` in the swarm.
+    /// The serving Swarm service: `forge-<id>` or `forge-<id>-<slot>`.
     pub name: String,
     pub settings: forge_catalog::swarm_service::SwarmSettings,
     pub status: Option<forge_catalog::swarm::SwarmServiceStatus>,
     pub status_error: Option<String>,
+    /// High-availability readiness of the service's settings (D-156).
+    pub ha: forge_catalog::swarm_service::HaReport,
 }
 
 pub async fn service_get(
@@ -269,19 +271,17 @@ pub async fn service_get(
     caller.authorize(Action::View, super::services::svc_ref(id)).await?;
     let cluster = service_cluster(&state, &app).await?;
     let spec = crate::jobs::app::build_spec(&app, None).map_err(ApiError::bad_request)?;
-    let name = forge_catalog::swarm_service::service_name(&app.id.to_string());
-    let op = forge_catalog::swarm::SwarmOp::ServiceStatus { service_id: app.id.to_string() };
+    let slot = state.swarm.serving_slot(app.id).await?;
+    let name = forge_catalog::swarm_service::service_name(&app.id.to_string(), &slot);
+    let op = forge_catalog::swarm::SwarmOp::ServiceStatus { service_id: app.id.to_string(), slot };
     let (status, status_error) = match state.swarm.run(cluster, &caller.principal().to_string(), &op).await {
         Ok(v) => (Some(serde_json::from_value(v).map_err(forge_core::DomainError::internal)?), None),
         Err(e) => (None, Some(e.to_string())),
     };
-    Ok(Json(ServiceSwarmView {
-        cluster_id: cluster,
-        name,
-        settings: spec.swarm.unwrap_or_default(),
-        status,
-        status_error,
-    }))
+    let settings = spec.swarm.clone().unwrap_or_default();
+    let managers = state.swarm.view_managers(cluster).await?;
+    let ha = forge_catalog::swarm_service::ha_report(&settings, spec.healthcheck.is_some(), managers);
+    Ok(Json(ServiceSwarmView { cluster_id: cluster, name, settings, status, status_error, ha }))
 }
 
 /// Starts a `swarm.service` job for `app` (also used by Deploy).
@@ -306,13 +306,19 @@ pub(super) async fn start_service_action(
     } else {
         Vec::new()
     };
+    let slot = state.swarm.serving_slot(app.id).await?;
+    if action == ServiceAction::Deploy && !slot.is_empty() {
+        return Err(ApiError::conflict(
+            "this service runs in slots (Blue-Green or Canary): roll it out as a release from Deployments",
+        ));
+    }
     let resource = if privileged_binds.is_empty() {
         super::services::svc_ref(app.id)
     } else {
         super::services::ns_ref(app.environment_id)
     };
     let payload =
-        crate::jobs::swarm_service::Payload { service_id: app.id, cluster_id: cluster, action, privileged_binds };
+        crate::jobs::swarm_service::Payload { service_id: app.id, cluster_id: cluster, action, privileged_binds, slot };
     let job = state
         .jobs
         .submit(NewJob {
@@ -384,6 +390,8 @@ pub async fn service_logs(
     let app = super::services::load_own(&state, id).await?;
     caller.authorize(Action::View, super::services::svc_ref(id)).await?;
     let cluster = service_cluster(&state, &app).await?;
-    let op = forge_catalog::swarm::SwarmOp::ServiceLogs { service_id: app.id.to_string(), tail: q.tail.min(10_000) };
+    let slot = state.swarm.serving_slot(app.id).await?;
+    let op =
+        forge_catalog::swarm::SwarmOp::ServiceLogs { service_id: app.id.to_string(), slot, tail: q.tail.min(10_000) };
     Ok(Json(state.swarm.run(cluster, &caller.principal().to_string(), &op).await?))
 }

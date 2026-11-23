@@ -75,6 +75,9 @@ pub struct Payload {
     /// was authorized for (`stack.privileged`). A deploy refuses any other.
     #[serde(default)]
     pub privileged_binds: Vec<String>,
+    /// The slot acted on (`""`: the unslotted service).
+    #[serde(default)]
+    pub slot: String,
 }
 
 #[derive(Debug)]
@@ -177,16 +180,18 @@ impl SwarmServiceJob {
                 }
                 SwarmOp::ServiceApply { def: Box::new(def) }
             }
-            ServiceAction::Scale { replicas } => SwarmOp::ServiceScale { service_id: sid, replicas },
-            ServiceAction::Restart => SwarmOp::ServiceRestart { service_id: sid },
-            ServiceAction::Rollback => SwarmOp::ServiceRollback { service_id: sid },
-            ServiceAction::Remove => SwarmOp::ServiceRemove { service_id: sid },
+            ServiceAction::Scale { replicas } => {
+                SwarmOp::ServiceScale { service_id: sid, slot: p.slot.clone(), replicas }
+            }
+            ServiceAction::Restart => SwarmOp::ServiceRestart { service_id: sid, slot: p.slot.clone() },
+            ServiceAction::Rollback => SwarmOp::ServiceRollback { service_id: sid, slot: p.slot.clone() },
+            ServiceAction::Remove => SwarmOp::ServiceRemove { service_id: sid, slot: p.slot.clone() },
         })
     }
 
     async fn converge(&self, ctx: &mut StepContext, p: &Payload, manager: ServerId) -> Result<(), StepError> {
         let deadline = tokio::time::Instant::now() + CONVERGE_FOR;
-        let op = SwarmOp::ServiceStatus { service_id: p.service_id.to_string() };
+        let op = SwarmOp::ServiceStatus { service_id: p.service_id.to_string(), slot: p.slot.clone() };
         loop {
             // One key: a finished operation is no longer tracked, so each
             // round sends a fresh status request.

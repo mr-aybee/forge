@@ -5581,3 +5581,21 @@ does this well, so Forge drives Swarm and does not build a scheduler of its
 own.
 
 **Not done yet.** Converting an existing cluster to the other mode.
+
+## D-156 Deployment strategies on Docker Swarm
+
+**Decision.** Releases in a Swarm cluster go through the same deployment record, events, pause, abort and approval as node rollouts. The steps come from a Swarm plan (`forge_catalog::swarm_rollout`):
+
+| Strategy | On Swarm |
+| --- | --- |
+| Rolling | The service's own update: `batch_size` tasks at a time; start or stop first; Swarm rolls back on failure when `auto_rollback` is set |
+| Recreate | The same update with every task at once, stop first |
+| Blue-Green | A second Swarm service (slot `a`/`b`) at full size on Forge-allocated ports; once healthy, the edge moves all traffic to it; the old slot is scaled to zero and kept |
+| Canary | The new slot grows step by step while the edge gives it the same share of traffic; then it takes all traffic |
+| Manual | Refused: Swarm cannot hold an update between batches |
+
+HA is a property, not a strategy: the service's Swarm view scores replicas, spread, health check, restart, rollback on failure and manager quorum.
+
+**Why.** Swarm already does rolling updates well, so Forge uses its update config instead of driving tasks itself. Swarm cannot split traffic between two versions of one service, so Blue-Green and Canary use two services and the weighted routing that node rollouts already use (slot records and the edge), which keeps one model for both cluster modes.
+
+**Trade-offs.** Blue-Green and Canary need a site in front of the service. Slotted and unslotted services do not switch strategies in place. Failure handling moves traffic back to the old slot, or lets Swarm roll the service back.

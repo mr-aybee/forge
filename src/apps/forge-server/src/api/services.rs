@@ -348,12 +348,14 @@ pub async fn delete(State(state): State<AppState>, caller: Caller, Path(id): Pat
     caller.authorize(Action::Deploy, ns_ref(app.environment_id)).await?;
     // A Swarm service must be removed from the swarm first.
     if let Some(cluster) = state.swarm.swarm_of_environment(app.environment_id).await? {
-        let op = forge_catalog::swarm::SwarmOp::ServiceStatus { service_id: app.id.to_string() };
-        let status: forge_catalog::swarm::SwarmServiceStatus =
-            serde_json::from_value(state.swarm.run(cluster, &caller.principal().to_string(), &op).await?)
-                .map_err(forge_core::DomainError::internal)?;
-        if status.exists {
-            return Err(ApiError::conflict("remove the service from the swarm first"));
+        for slot in ["", "a", "b"] {
+            let op = forge_catalog::swarm::SwarmOp::ServiceStatus { service_id: app.id.to_string(), slot: slot.into() };
+            let status: forge_catalog::swarm::SwarmServiceStatus =
+                serde_json::from_value(state.swarm.run(cluster, &caller.principal().to_string(), &op).await?)
+                    .map_err(forge_core::DomainError::internal)?;
+            if status.exists {
+                return Err(ApiError::conflict("remove the service from the swarm first"));
+            }
         }
     }
     let instances = state.store.list_instances(id).await?;

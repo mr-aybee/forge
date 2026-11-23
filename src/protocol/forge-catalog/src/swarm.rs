@@ -126,24 +126,36 @@ pub enum SwarmOp {
     },
     ServiceStatus {
         service_id: String,
+        #[serde(default)]
+        slot: String,
     },
     ServiceScale {
         service_id: String,
+        #[serde(default)]
+        slot: String,
         replicas: u32,
     },
     /// Replaces every task with the same spec (`--force`).
     ServiceRestart {
         service_id: String,
+        #[serde(default)]
+        slot: String,
     },
     /// Back to the previous spec.
     ServiceRollback {
         service_id: String,
+        #[serde(default)]
+        slot: String,
     },
     ServiceRemove {
         service_id: String,
+        #[serde(default)]
+        slot: String,
     },
     ServiceLogs {
         service_id: String,
+        #[serde(default)]
+        slot: String,
         #[serde(default = "default_tail")]
         tail: u32,
     },
@@ -196,6 +208,11 @@ fn addr_ok(a: Option<&str>) -> bool {
                 && a.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
         }
     }
+}
+
+fn slot_checked(id: &str, slot: &str) -> Result<(), String> {
+    id_checked(id)?;
+    if crate::swarm_service::slot_ok(slot) { Ok(()) } else { Err("a slot is empty, `a` or `b`".into()) }
 }
 
 fn id_checked(id: &str) -> Result<(), String> {
@@ -258,17 +275,17 @@ impl SwarmOp {
                     Err("choose the worker or manager token".into())
                 }
             }
-            Self::EnsureNetwork { environment_id: id }
-            | Self::ServiceStatus { service_id: id }
-            | Self::ServiceRestart { service_id: id }
-            | Self::ServiceRollback { service_id: id }
-            | Self::ServiceRemove { service_id: id } => id_checked(id),
-            Self::ServiceScale { service_id, replicas } => {
-                id_checked(service_id)?;
+            Self::EnsureNetwork { environment_id: id } => id_checked(id),
+            Self::ServiceStatus { service_id: id, slot }
+            | Self::ServiceRestart { service_id: id, slot }
+            | Self::ServiceRollback { service_id: id, slot }
+            | Self::ServiceRemove { service_id: id, slot } => slot_checked(id, slot),
+            Self::ServiceScale { service_id, slot, replicas } => {
+                slot_checked(service_id, slot)?;
                 if *replicas > 1000 { Err("at most 1000 replicas".into()) } else { Ok(()) }
             }
-            Self::ServiceLogs { service_id, tail } => {
-                id_checked(service_id)?;
+            Self::ServiceLogs { service_id, slot, tail } => {
+                slot_checked(service_id, slot)?;
                 if *tail > 10_000 { Err("at most 10000 log lines".into()) } else { Ok(()) }
             }
             Self::ServiceApply { def } => def.validate(),
@@ -431,8 +448,10 @@ mod tests {
         assert_eq!(serde_json::from_str::<SwarmOp>(&json).unwrap(), op);
         assert!(serde_json::from_str::<SwarmOp>(r#"{"op":"leave","force":true,"x":1}"#).is_err());
         assert!(
-            SwarmOp::ServiceRemove { service_id: "01900000-0000-7000-8000-000000000001".into() }.validate().is_ok()
+            SwarmOp::ServiceRemove { service_id: "01900000-0000-7000-8000-000000000001".into(), slot: "a".into() }
+                .validate()
+                .is_ok()
         );
-        assert!(SwarmOp::ServiceRemove { service_id: "../x".into() }.validate().is_err());
+        assert!(SwarmOp::ServiceRemove { service_id: "../x".into(), slot: String::new() }.validate().is_err());
     }
 }

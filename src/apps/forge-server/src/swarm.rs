@@ -87,6 +87,7 @@ pub struct SwarmService {
     pub clusters: Arc<dyn ClusterRepository>,
     pub tenancy: Arc<dyn TenancyRepository>,
     pub files: Arc<dyn forge_core::files::FileRepository>,
+    pub deploys: Arc<dyn forge_core::deploy::DeploymentRepository>,
     pub hub: Arc<CommandQueue>,
     pub signer: Arc<CommandSigner>,
     pub envelope: Envelope,
@@ -175,6 +176,24 @@ impl SwarmService {
             })
             .cloned()
             .collect())
+    }
+
+    /// The slot of `app` that serves now: the weighted one when it runs in
+    /// slots (Blue-Green, Canary), else the unslotted service (`""`).
+    pub async fn serving_slot(&self, app: forge_core::ServiceId) -> DomainResult<String> {
+        let slots = self.deploys.list_slots(app).await?;
+        Ok(slots.into_iter().filter(|s| s.weight > 0).max_by_key(|s| s.weight).map(|s| s.slot).unwrap_or_default())
+    }
+
+    /// How many managers of the cluster's swarm are joined.
+    pub async fn view_managers(&self, cluster: ClusterId) -> DomainResult<usize> {
+        Ok(self
+            .swarms
+            .list_members(cluster)
+            .await?
+            .iter()
+            .filter(|m| m.role == MemberRole::Manager && m.state == MemberState::Joined)
+            .count())
     }
 
     /// A joined manager of the cluster's swarm.

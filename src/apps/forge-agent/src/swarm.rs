@@ -13,7 +13,7 @@ use forge_catalog::swarm::{
 };
 use serde_json::{Value, json};
 
-use forge_catalog::swarm_service::{MANAGED_LABEL, SERVICE_ID_LABEL, network_name, service_name};
+use forge_catalog::swarm_service::{MANAGED_LABEL, SERVICE_ID_LABEL, SLOT_LABEL, network_name, service_name};
 
 use crate::docker::api;
 
@@ -110,7 +110,7 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
         }
         SwarmOp::ServiceApply { def } => {
             let spec = def.engine_spec();
-            match owned(&def.service_id).await? {
+            match owned(&def.service_id, &def.slot).await? {
                 None => {
                     let created = api("POST", "/services/create", Some(&spec), QUICK).await?.unwrap_or(Value::Null);
                     Ok(json!({ "id": created["ID"], "created": true }))
@@ -124,9 +124,9 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
                 }
             }
         }
-        SwarmOp::ServiceStatus { service_id } => to_value(&service_status(service_id).await?),
-        SwarmOp::ServiceScale { service_id, replicas } => {
-            change_service(service_id, "", |spec| {
+        SwarmOp::ServiceStatus { service_id, slot } => to_value(&service_status(service_id, slot).await?),
+        SwarmOp::ServiceScale { service_id, slot, replicas } => {
+            change_service(service_id, slot, "", |spec| {
                 if spec["Mode"]["Replicated"].is_object() {
                     spec["Mode"]["Replicated"]["Replicas"] = json!(replicas);
                     Ok(())
@@ -136,24 +136,26 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
             })
             .await
         }
-        SwarmOp::ServiceRestart { service_id } => {
-            change_service(service_id, "", |spec| {
+        SwarmOp::ServiceRestart { service_id, slot } => {
+            change_service(service_id, slot, "", |spec| {
                 let n = spec["TaskTemplate"]["ForceUpdate"].as_u64().unwrap_or(0);
                 spec["TaskTemplate"]["ForceUpdate"] = json!(n + 1);
                 Ok(())
             })
             .await
         }
-        SwarmOp::ServiceRollback { service_id } => change_service(service_id, "&rollback=previous", |_| Ok(())).await,
-        SwarmOp::ServiceRemove { service_id } => {
-            if let Some(cur) = owned(service_id).await? {
+        SwarmOp::ServiceRollback { service_id, slot } => {
+            change_service(service_id, slot, "&rollback=previous", |_| Ok(())).await
+        }
+        SwarmOp::ServiceRemove { service_id, slot } => {
+            if let Some(cur) = owned(service_id, slot).await? {
                 let id = cur["ID"].as_str().ok_or("Docker did not report the service id")?;
                 api("DELETE", &format!("/services/{id}"), None, QUICK).await?;
             }
             Ok(json!({ "removed": service_id }))
         }
-        SwarmOp::ServiceLogs { service_id, tail } => {
-            let cur = owned(service_id).await?.ok_or("the service is not in the swarm")?;
+        SwarmOp::ServiceLogs { service_id, slot, tail } => {
+            let cur = owned(service_id, slot).await?.ok_or("the service is not in the swarm")?;
             let id = cur["ID"].as_str().ok_or("Docker did not report the service id")?;
             let path = format!("/services/{id}/logs?stdout=1&stderr=1&timestamps=1&tail={tail}");
             let (status, bytes) =
@@ -169,17 +171,18 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
 /// The Swarm service of Forge service `service_id`, or `None` when there is
 /// none. A service with that name that does not carry the same Forge id is
 /// refused: Forge never touches a service it did not make for this id.
-async fn owned(service_id: &str) -> Result<Option<Value>, String> {
-    let Some(cur) = api("GET", &format!("/services/{}", service_name(service_id)), None, QUICK).await? else {
+async fn owned(service_id: &str, slot: &str) -> Result<Option<Value>, String> {
+    let Some(cur) = api("GET", &format!("/services/{}", service_name(service_id, slot)), None, QUICK).await? else {
         return Ok(None);
     };
-    check_owner(&cur, service_id)?;
+    check_owner(&cur, service_id, slot)?;
     Ok(Some(cur))
 }
 
-pub(crate) fn check_owner(cur: &Value, service_id: &str) -> Result<(), String> {
+pub(crate) fn check_owner(cur: &Value, service_id: &str, slot: &str) -> Result<(), String> {
     let labels = &cur["Spec"]["Labels"];
-    if labels[MANAGED_LABEL] != "true" || labels[SERVICE_ID_LABEL] != service_id {
+    let slot_label = labels[SLOT_LABEL].as_str().unwrap_or_default();
+    if labels[MANAGED_LABEL] != "true" || labels[SERVICE_ID_LABEL] != service_id || slot_label != slot {
         return Err("a Swarm service with this name exists but Forge did not make it for this service".into());
     }
     Ok(())
@@ -189,10 +192,11 @@ pub(crate) fn check_owner(cur: &Value, service_id: &str) -> Result<(), String> {
 /// version read (`extra` adds query parameters, e.g. a rollback).
 async fn change_service(
     service_id: &str,
+    slot: &str,
     extra: &str,
     edit: impl FnOnce(&mut Value) -> Result<(), String>,
 ) -> Result<Value, String> {
-    let cur = owned(service_id).await?.ok_or("the service is not in the swarm")?;
+    let cur = owned(service_id, slot).await?.ok_or("the service is not in the swarm")?;
     let version = cur["Version"]["Index"].as_u64().ok_or("Docker did not report the service version")?;
     let id = cur["ID"].as_str().ok_or("Docker did not report the service id")?.to_owned();
     let mut spec = cur["Spec"].clone();
@@ -207,11 +211,11 @@ fn task_filter(name: &str) -> String {
     format!("%7B%22service%22%3A%7B%22{name}%22%3Atrue%7D%7D")
 }
 
-async fn service_status(service_id: &str) -> Result<SwarmServiceStatus, String> {
-    let Some(svc) = owned(service_id).await? else {
+async fn service_status(service_id: &str, slot: &str) -> Result<SwarmServiceStatus, String> {
+    let Some(svc) = owned(service_id, slot).await? else {
         return Ok(SwarmServiceStatus::default());
     };
-    let name = service_name(service_id);
+    let name = service_name(service_id, slot);
     let tasks =
         api("GET", &format!("/tasks?filters={}", task_filter(&name)), None, QUICK).await?.unwrap_or(Value::Null);
     Ok(status_from(&svc, &tasks))
@@ -430,10 +434,11 @@ mod tests {
     fn foreign_services_are_never_touched() {
         let id = "01900000-0000-7000-8000-000000000001";
         let mine = json!({"Spec": {"Labels": {"forge.managed": "true", "forge.service.id": id}}});
-        assert!(check_owner(&mine, id).is_ok());
+        assert!(check_owner(&mine, id, "").is_ok());
+        assert!(check_owner(&mine, id, "a").is_err(), "another slot is another service");
         let other = json!({"Spec": {"Labels": {"forge.managed": "true", "forge.service.id": "01900000-0000-7000-8000-000000000009"}}});
-        assert!(check_owner(&other, id).is_err());
+        assert!(check_owner(&other, id, "").is_err());
         let outside = json!({"Spec": {"Labels": {}}});
-        assert!(check_owner(&outside, id).is_err());
+        assert!(check_owner(&outside, id, "").is_err());
     }
 }

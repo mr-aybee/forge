@@ -105,6 +105,19 @@ async fn authorize(state: &AppState, caller: &Caller, p: &Prepared) -> ApiResult
     let spec = crate::jobs::app::build_spec(&crate::deploy::release_app(&p.app, &p.release), None)
         .map_err(ApiError::bad_request)?;
     let mut mounts = std::collections::BTreeSet::new();
+    if let Some(sw) = &p.swarm {
+        // In a swarm a task may run on any node: host binds are approved
+        // only inside an approved root on every node (D-156).
+        let settings = spec.swarm.clone().unwrap_or_default();
+        let def = forge_catalog::swarm_service::service_def(
+            &spec,
+            &settings,
+            &p.app.id.to_string(),
+            &p.app.environment_id.to_string(),
+        )
+        .map_err(ApiError::bad_request)?;
+        mounts.extend(state.swarm.privileged_binds(sw.cluster, &def.bind_sources()).await?);
+    }
     for n in &p.nodes {
         let roots = crate::stacks::bind_roots(&state.store, *n).await;
         mounts.extend(crate::jobs::app::privileged_mounts(&spec, &roots));
@@ -124,20 +137,7 @@ async fn prepare(
     let doc = crate::deploy::read_document(&input.yaml, input.environment.as_deref())?;
     let p = state.deploy.prepare(ws, &doc, &input.yaml, &caller.principal()).await?;
     state.swarm.check_runtime(p.app.environment_id, &p.app.runtime).await?;
-    refuse_on_swarm(state, p.app.environment_id).await?;
     Ok(p)
-}
-
-/// Release rollouts place copies node by node, which a Docker Swarm cluster
-/// does not do: refused there (also for releases made before the
-/// environment moved into a Swarm cluster).
-async fn refuse_on_swarm(state: &AppState, env: forge_core::EnvironmentId) -> ApiResult<()> {
-    if state.swarm.swarm_of_environment(env).await?.is_some() {
-        return Err(ApiError::conflict(
-            "release rollouts are not available in Docker Swarm clusters yet; use Deploy on the service",
-        ));
-    }
-    Ok(())
 }
 
 async fn next_number(state: &AppState, app: ServiceId) -> DomainResult<i64> {
@@ -274,7 +274,6 @@ async fn redeploy(
     kind: DeploymentKind,
 ) -> ApiResult<(StatusCode, Json<Started>)> {
     caller.authorize(Action::Deploy, svc_ref(app.id)).await?;
-    refuse_on_swarm(state, app.environment_id).await?;
     let p = state.deploy.prepare_release(app, number).await?;
     let mounts = authorize(state, caller, &p).await?;
     let env = p.release.spec["environment"].as_str().unwrap_or_default().to_owned();

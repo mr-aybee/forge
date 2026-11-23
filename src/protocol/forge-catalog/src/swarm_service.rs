@@ -228,12 +228,23 @@ pub fn id_ok(id: &str) -> bool {
     compact(id).is_some()
 }
 
-/// The Swarm service of Forge service `service_id`: `forge-<id>`. Made from
-/// the id, so two environments can never name the same service.
+/// The Swarm service of Forge service `service_id` in `slot`: `forge-<id>`
+/// (unslotted) or `forge-<id>-a` / `-b`. Made from the id, so two
+/// environments can never name the same service.
 #[must_use]
-pub fn service_name(service_id: &str) -> String {
-    format!("forge-{}", compact(service_id).unwrap_or_default())
+pub fn service_name(service_id: &str, slot: &str) -> String {
+    let base = format!("forge-{}", compact(service_id).unwrap_or_default());
+    if slot.is_empty() { base } else { format!("{base}-{slot}") }
 }
+
+/// A slot Forge uses: `""` (unslotted), `a` or `b`.
+#[must_use]
+pub fn slot_ok(slot: &str) -> bool {
+    matches!(slot, "" | "a" | "b")
+}
+
+/// Label carrying the slot on a Swarm service.
+pub const SLOT_LABEL: &str = "forge.slot";
 
 /// The overlay network of environment `environment_id`.
 #[must_use]
@@ -287,6 +298,9 @@ pub struct HealthDef {
 #[serde(deny_unknown_fields)]
 pub struct ServiceDef {
     pub service_id: String,
+    /// `""`, `a` or `b` (Blue-Green and Canary run two slots).
+    #[serde(default)]
+    pub slot: String,
     pub environment_id: String,
     /// Display names, for labels only.
     pub environment: String,
@@ -391,6 +405,7 @@ pub fn service_def(
     };
     let def = ServiceDef {
         service_id: service_id.to_owned(),
+        slot: String::new(),
         environment_id: environment_id.to_owned(),
         environment: app.environment.clone(),
         service: app.name.clone(),
@@ -423,6 +438,22 @@ pub fn service_def(
 }
 
 impl ServiceDef {
+    /// The definition for `slot`, publishing each container port on the
+    /// slot's own port from `ports` (container port → published port), so
+    /// two slots run side by side. The edge sends traffic to those ports.
+    pub fn into_slot(mut self, slot: &str, ports: &std::collections::BTreeMap<u16, u16>) -> Result<Self, String> {
+        if !slot_ok(slot) || slot.is_empty() {
+            return Err("a slot is `a` or `b`".into());
+        }
+        for p in &mut self.ports {
+            p.published =
+                Some(*ports.get(&p.target).ok_or_else(|| format!("no slot port for container port {}", p.target))?);
+        }
+        self.slot = slot.to_owned();
+        self.validate()?;
+        Ok(self)
+    }
+
     /// Host folders this service binds (normalized).
     #[must_use]
     pub fn bind_sources(&self) -> Vec<String> {
@@ -438,8 +469,8 @@ impl ServiceDef {
     /// Checks everything before a node runs it. Runs on the control plane
     /// and again in the node's root helper.
     pub fn validate(&self) -> Result<(), String> {
-        if !id_ok(&self.service_id) || !id_ok(&self.environment_id) {
-            return Err("invalid service or environment id".into());
+        if !id_ok(&self.service_id) || !id_ok(&self.environment_id) || !slot_ok(&self.slot) {
+            return Err("invalid service id, environment id or slot".into());
         }
         if self.image.is_empty() || !crate::apps::valid_image_ref(&self.image) {
             return Err("a container service needs a valid image reference".into());
@@ -619,10 +650,11 @@ impl ServiceDef {
             })
             .collect();
         json!({
-            "Name": service_name(&self.service_id),
+            "Name": service_name(&self.service_id, &self.slot),
             "Labels": {
                 MANAGED_LABEL: "true",
                 SERVICE_ID_LABEL: self.service_id,
+                SLOT_LABEL: self.slot,
                 "forge.environment.id": self.environment_id,
                 "forge.environment": self.environment,
                 "forge.service": self.service,
@@ -638,6 +670,54 @@ impl ServiceDef {
 
 fn secs(n: u32) -> u64 {
     u64::from(n) * NANOS
+}
+
+/// One high-availability check of a Swarm service.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HaCheck {
+    pub name: String,
+    pub ok: bool,
+    /// What to change when it fails.
+    pub hint: String,
+}
+
+/// How well a service survives losing a node or a manager.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HaReport {
+    /// Share of checks that pass, 0–100.
+    pub score: u8,
+    pub checks: Vec<HaCheck>,
+}
+
+/// The HA readiness of a service with `settings`, a health check or not,
+/// in a swarm with `managers` managers.
+#[must_use]
+pub fn ha_report(settings: &SwarmSettings, has_healthcheck: bool, managers: usize) -> HaReport {
+    let check = |name: &str, ok: bool, hint: &str| HaCheck { name: name.into(), ok, hint: hint.into() };
+    let global = settings.mode == ServiceMode::Global;
+    let checks = vec![
+        check("More than one task", global || settings.replicas >= 2, "Run at least 2 replicas, or global mode"),
+        check(
+            "Tasks spread over nodes",
+            global || !settings.spread.is_empty() || settings.max_per_node == 1,
+            "Spread over a node label (e.g. node.labels.zone) or allow 1 task per node",
+        ),
+        check("Health check", has_healthcheck, "Add a health check so Swarm replaces unhealthy tasks"),
+        check(
+            "Restarts on failure",
+            settings.restart.condition != RestartCondition::None,
+            "Set the restart condition to any or on-failure",
+        ),
+        check(
+            "Rolls back a failed update",
+            settings.update.failure_action == FailureAction::Rollback,
+            "Set the update failure action to rollback",
+        ),
+        check("Manager quorum survives a failure", managers >= 3, "Run 3 or 5 managers"),
+    ];
+    let passed = checks.iter().filter(|c| c.ok).count();
+    let score = u8::try_from(passed * 100 / checks.len()).unwrap_or(100);
+    HaReport { score, checks }
 }
 
 #[cfg(test)]
@@ -698,7 +778,8 @@ mod tests {
 
     #[test]
     fn names_come_from_ids_so_environments_never_collide() {
-        assert_ne!(service_name(SVC), service_name(ENV));
+        assert_ne!(service_name(SVC, ""), service_name(ENV, ""));
+        assert_eq!(service_name(SVC, "a"), "forge-01900000000070008000000000000001-a");
         assert!(id_ok(SVC));
         assert!(!id_ok("a-b-c"));
         assert!(!id_ok("../../etc/passwd-0000-0000-0000-00000000"));
@@ -768,5 +849,28 @@ mod tests {
         assert_eq!(s.update.order, UpdateOrder::StartFirst);
         assert_eq!(s.restart.delay_secs, 5);
         assert!(serde_json::from_value::<SwarmSettings>(json!({"replica": 2})).is_err());
+    }
+
+    #[test]
+    fn slots_publish_their_own_ports() {
+        let d = def(&SwarmSettings::default()).unwrap();
+        let ports = std::collections::BTreeMap::from([(80, 21000), (9000, 21001)]);
+        let a = d.clone().into_slot("a", &ports).unwrap();
+        let v = a.engine_spec();
+        assert_eq!(v["Name"], "forge-01900000000070008000000000000001-a");
+        assert_eq!(v["Labels"][SLOT_LABEL], "a");
+        assert_eq!(v["EndpointSpec"]["Ports"][0]["PublishedPort"], 21000);
+        assert!(d.clone().into_slot("c", &ports).is_err());
+        assert!(d.into_slot("b", &std::collections::BTreeMap::new()).is_err(), "every port needs a slot port");
+    }
+
+    #[test]
+    fn ha_report_scores_the_checks() {
+        let weak = ha_report(&SwarmSettings::default(), false, 1);
+        assert!(weak.score < 50, "{weak:?}");
+        let strong = SwarmSettings { replicas: 3, spread: vec!["node.labels.zone".into()], ..Default::default() };
+        let r = ha_report(&strong, true, 3);
+        assert_eq!(r.score, 100, "{r:?}");
+        assert!(ha_report(&SwarmSettings { mode: ServiceMode::Global, ..Default::default() }, true, 3).checks[0].ok);
     }
 }
