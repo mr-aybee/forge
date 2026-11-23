@@ -365,6 +365,7 @@ impl Services {
             tenancy: Arc::new(store.clone()),
             files: Arc::new(store.clone()),
             deploys: Arc::new(store.clone()),
+            services: Arc::new(store.clone()),
             rpc: node_rpc.clone(),
             envelope: envelope.clone(),
             clock: clock.clone(),

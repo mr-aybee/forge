@@ -142,6 +142,12 @@ async fn swarm_services_are_containers_with_checked_settings() {
     assert_eq!(s, StatusCode::CONFLICT, "{e}");
     let (s, e) = admin.post(&format!("/api/v1/services/{id}/swarm"), json!({"kind": "scale", "replicas": 5000})).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "{e}");
+    // A refused scale leaves the definition alone (a successful one records
+    // the new count, so the next deploy keeps it).
+    let (s, e) = admin.post(&format!("/api/v1/services/{id}/swarm"), json!({"kind": "scale", "replicas": 5})).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{e}");
+    let (_, web) = admin.get(&format!("/api/v1/services/{id}")).await;
+    assert_eq!(web["spec"]["swarm"]["replicas"], 3, "{web}");
 
     // Release rollouts plan Swarm steps (D-156): Rolling updates the
     // service in place; Canary needs a site in front; Manual is refused.

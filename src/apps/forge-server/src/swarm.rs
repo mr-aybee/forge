@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use forge_catalog::swarm::{Availability, JoinTokens, SwarmNode, SwarmOp, SwarmRole};
 use forge_core::model::{Cluster, ClusterMode};
-use forge_core::ports::{ClusterRepository, ServerRepository, TenancyRepository};
+use forge_core::ports::{ClusterRepository, ServerRepository, ServiceRepository, TenancyRepository};
 use forge_core::swarm::{ClusterSwarm, MemberRole, MemberState, SwarmMember, SwarmRepository};
 use forge_core::{Clock, ClusterId, DomainError, DomainResult, EnvironmentId, ServerId};
 use forge_proto::Command;
@@ -88,6 +88,7 @@ pub struct SwarmService {
     pub tenancy: Arc<dyn TenancyRepository>,
     pub files: Arc<dyn forge_core::files::FileRepository>,
     pub deploys: Arc<dyn forge_core::deploy::DeploymentRepository>,
+    pub services: Arc<dyn ServiceRepository>,
     pub rpc: crate::node_rpc::NodeRpc,
     pub envelope: Envelope,
     pub clock: Arc<dyn Clock>,
@@ -368,6 +369,27 @@ impl SwarmService {
     }
 
     /// Changes one node through a manager.
+    /// Records `replicas` in the service's definition, so the next deploy (a
+    /// webhook, a redeploy) keeps the new scale instead of reverting it. A
+    /// global service runs one task per matching node and cannot be scaled.
+    /// One write; the scale job that follows only applies it.
+    pub async fn set_replicas(&self, app: &forge_core::model::Service, replicas: u32) -> DomainResult<()> {
+        let mut app = app.clone();
+        let spec = app.spec.as_object_mut().ok_or_else(|| invalid("the service definition is not an object"))?;
+        let swarm = spec.entry("swarm").or_insert_with(|| serde_json::json!({}));
+        if swarm.get("mode").and_then(serde_json::Value::as_str) == Some("global") {
+            return Err(invalid("a global service runs one task per node and cannot be scaled"));
+        }
+        match swarm.as_object_mut() {
+            Some(o) => {
+                o.insert("replicas".into(), replicas.into());
+            }
+            None => *swarm = serde_json::json!({ "replicas": replicas }),
+        }
+        app.updated_at = self.clock.now();
+        self.services.put_service(&app).await
+    }
+
     pub async fn update_node(
         &self,
         cluster: ClusterId,

@@ -368,7 +368,14 @@ pub async fn service_action(
     {
         return Err(ApiError::bad_request("at most 1000 replicas"));
     }
-    Ok((StatusCode::ACCEPTED, Json(start_service_action(&state, &caller, &app, req.action).await?)))
+    let job = start_service_action(&state, &caller, &app, req.action).await?;
+    // Recorded once the job is accepted, so a refused scale (no manager, a
+    // slotted service) leaves the definition alone. If this write fails the
+    // swarm still scales; the error says so and a retry is harmless.
+    if let ServiceAction::Scale { replicas } = req.action {
+        state.swarm.set_replicas(&app, replicas).await?;
+    }
+    Ok((StatusCode::ACCEPTED, Json(job)))
 }
 
 #[derive(Debug, Deserialize)]
