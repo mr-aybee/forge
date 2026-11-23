@@ -6,6 +6,9 @@ CREATE TABLE cluster_swarms (
     default_addr_pool TEXT NOT NULL DEFAULT '[]',
     autolock          BIGINT NOT NULL DEFAULT 0,
     tokens_sealed     TEXT,
+    -- The node creating the swarm while swarm_id is still empty: claiming
+    -- this row is what makes only one node create it.
+    founder           TEXT,
     updated_at        BIGINT NOT NULL
 );
 

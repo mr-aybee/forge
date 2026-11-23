@@ -14,6 +14,7 @@ fn swarm_row(r: &AnyRow) -> DomainResult<ClusterSwarm> {
         default_addr_pool: serde_json::from_str(&text(r, "default_addr_pool")?).map_err(DomainError::internal)?,
         autolock: flag(r, "autolock")?,
         tokens_sealed: opt_text(r, "tokens_sealed")?,
+        founder: opt_parsed(r, "founder")?,
         updated_at: ts(r, "updated_at")?,
     })
 }
@@ -46,10 +47,10 @@ impl SwarmRepository for Store {
     async fn put_swarm(&self, s: &ClusterSwarm) -> DomainResult<()> {
         let pool = serde_json::to_string(&s.default_addr_pool).map_err(DomainError::internal)?;
         sqlx::query(
-            "INSERT INTO cluster_swarms (cluster_id, swarm_id, port, default_addr_pool, autolock, tokens_sealed, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "INSERT INTO cluster_swarms (cluster_id, swarm_id, port, default_addr_pool, autolock, tokens_sealed, founder, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
              ON CONFLICT (cluster_id) DO UPDATE SET swarm_id = $2, port = $3, default_addr_pool = $4, autolock = $5,
-                 tokens_sealed = $6, updated_at = $7",
+                 tokens_sealed = $6, founder = $7, updated_at = $8",
         )
         .bind(s.cluster_id.to_string())
         .bind(&s.swarm_id)
@@ -57,11 +58,42 @@ impl SwarmRepository for Store {
         .bind(pool)
         .bind(i64::from(s.autolock))
         .bind(s.tokens_sealed.clone())
+        .bind(s.founder.map(|f| f.to_string()))
         .bind(s.updated_at.0)
         .execute(self.pool())
         .await
         .map_err(db_err)?;
         Ok(())
+    }
+
+    async fn claim_swarm(&self, s: &ClusterSwarm) -> DomainResult<bool> {
+        let pool = serde_json::to_string(&s.default_addr_pool).map_err(DomainError::internal)?;
+        let done = sqlx::query(
+            "INSERT INTO cluster_swarms (cluster_id, swarm_id, port, default_addr_pool, autolock, tokens_sealed, founder, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (cluster_id) DO NOTHING",
+        )
+        .bind(s.cluster_id.to_string())
+        .bind(&s.swarm_id)
+        .bind(i64::from(s.port))
+        .bind(pool)
+        .bind(i64::from(s.autolock))
+        .bind(s.tokens_sealed.clone())
+        .bind(s.founder.map(|f| f.to_string()))
+        .bind(s.updated_at.0)
+        .execute(self.pool())
+        .await
+        .map_err(db_err)?;
+        Ok(done.rows_affected() == 1)
+    }
+
+    async fn cluster_of_swarm(&self, swarm_id: &str) -> DomainResult<Option<ClusterId>> {
+        let r = sqlx::query("SELECT cluster_id FROM cluster_swarms WHERE swarm_id = $1 AND swarm_id != ''")
+            .bind(swarm_id)
+            .fetch_optional(self.pool())
+            .await
+            .map_err(db_err)?;
+        r.as_ref().map(|r| parsed(r, "cluster_id")).transpose()
     }
 
     async fn delete_swarm(&self, cluster: ClusterId) -> DomainResult<()> {

@@ -12,10 +12,11 @@ import { SectionCard } from "./parts";
 import { PortsSection } from "./PortsSection";
 import { ResourcesSection } from "./ResourcesSection";
 import { RuntimeSection } from "./RuntimeSection";
-import { CLEARED_ON_SWITCH, KINDS, SECTIONS, type BasicsState, type SectionId, sectionDomId, sectionIssues, switchKind } from "./sections";
+import { CLEARED_ON_SWITCH, KINDS, type BasicsState, type SectionId, sectionDomId, sectionIssues, sectionsFor, switchKind } from "./sections";
 import { StartSection } from "./StartSection";
 import { StatusMark } from "./StatusMark";
 import { StorageSection } from "./StorageSection";
+import { SwarmSection } from "./SwarmSection";
 import { VolumesSection } from "./VolumesSection";
 
 export interface ServiceEditorProps {
@@ -30,6 +31,8 @@ export interface ServiceEditorProps {
   facts: { home: string; envFile: string; unit: string; user: string };
   /** Set on edit: links to the service's other tabs. */
   serviceId?: string;
+  /** The environment's cluster runs Docker Swarm: containers only, with the Swarm section. */
+  swarm?: boolean;
 }
 
 /**
@@ -38,17 +41,17 @@ export interface ServiceEditorProps {
  * always-open section cards. Shared by **New service** and the service's
  * **Configuration** tab; the page owns the form object and the action bar.
  */
-export function ServiceEditor({ value, onChange, mode, basics, basicsState, facts, serviceId }: ServiceEditorProps) {
+export function ServiceEditor({ value, onChange, mode, basics, basicsState, facts, serviceId, swarm = false }: ServiceEditorProps) {
   const catalog = useCatalog();
   const packages = catalog.data?.packages ?? [];
   const runtimes = packages.filter((p) => p.category === "runtimes");
   const [ui, setUi] = useState<{ envMode: "grid" | "text"; yaml: boolean; pendingKind: EditableRuntime | null }>({ envMode: "grid", yaml: false, pendingKind: null });
   const set = (p: Partial<ServiceInput>) => onChange({ ...value, ...p });
-  const sections = SECTIONS[value.runtime];
+  const sections = sectionsFor(value);
   const issues = Object.fromEntries(sections.map((s) => [s.id, sectionIssues(s.id, value, basicsState)])) as Record<SectionId, ReturnType<typeof sectionIssues>>;
 
   const pickKind = (k: EditableRuntime) => {
-    if (k === value.runtime) return;
+    if (k === value.runtime || (swarm && k !== "container")) return;
     if (mode === "edit") setUi((u) => ({ ...u, pendingKind: k }));
     else onChange(switchKind(value, k));
   };
@@ -82,6 +85,8 @@ export function ServiceEditor({ value, onChange, mode, basics, basicsState, fact
         return { node: <VolumesSection value={value} set={set} home={facts.home} /> };
       case "health":
         return { node: <HealthSection value={value} set={set} serviceId={serviceId} /> };
+      case "swarm":
+        return { node: value.swarm ? <SwarmSection value={value.swarm} onChange={(w) => set({ swarm: w })} /> : null };
       case "advanced":
         return {
           // Keyed on the view so the YAML text starts from the current form each time it opens.
@@ -96,14 +101,17 @@ export function ServiceEditor({ value, onChange, mode, basics, basicsState, fact
       <div role="radiogroup" aria-label="Kind" className="grid gap-3 sm:grid-cols-2">
         {KINDS.map((k) => {
           const on = value.runtime === k.id;
+          const off = swarm && k.id !== "container";
           return (
             <button
               key={k.id}
               type="button"
               role="radio"
               aria-checked={on}
+              disabled={off}
+              title={off ? "This environment's cluster runs Docker Swarm, which runs containers only" : undefined}
               onClick={() => pickKind(k.id)}
-              className={`press flex min-w-0 items-start gap-3 rounded-lg border p-4 text-left focus-visible:outline-2 focus-visible:outline-accent ${on ? "border-accent bg-accent-soft/60" : "border-line bg-panel hover:border-line-strong"}`}
+              className={`press flex disabled:cursor-not-allowed disabled:opacity-50 min-w-0 items-start gap-3 rounded-lg border p-4 text-left focus-visible:outline-2 focus-visible:outline-accent ${on ? "border-accent bg-accent-soft/60" : "border-line bg-panel hover:border-line-strong"}`}
             >
               <span className={`grid size-10 shrink-0 place-items-center rounded-md ${on ? "bg-accent text-white" : "bg-panel-2 text-muted"}`}>
                 <k.icon className="size-5" aria-hidden />
@@ -111,7 +119,7 @@ export function ServiceEditor({ value, onChange, mode, basics, basicsState, fact
               <span className="min-w-0">
                 <span className={`block text-sm font-semibold ${on ? "text-accent" : ""}`}>{k.label}</span>
                 <span className="block text-xs text-muted">{k.description}</span>
-                <span className="mt-1 block text-[11px] text-faint">{k.needs}</span>
+                <span className="mt-1 block text-[11px] text-faint">{off ? "Not available: the cluster runs Docker Swarm, which runs containers only." : k.needs}</span>
               </span>
             </button>
           );

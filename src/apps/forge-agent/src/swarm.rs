@@ -13,6 +13,8 @@ use forge_catalog::swarm::{
 };
 use serde_json::{Value, json};
 
+use forge_catalog::swarm_service::{MANAGED_LABEL, SERVICE_ID_LABEL, network_name, service_name};
+
 use crate::docker::api;
 
 const QUICK: Duration = Duration::from_secs(15);
@@ -92,67 +94,68 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
             api("DELETE", &format!("/nodes/{node_id}?force={force}"), None, QUICK).await?;
             Ok(json!({ "removed": node_id }))
         }
-        SwarmOp::EnsureNetwork { name } => {
+        SwarmOp::EnsureNetwork { environment_id } => {
+            let name = network_name(environment_id);
             if api("GET", &format!("/networks/{name}"), None, QUICK).await?.is_none() {
+                // Encrypted (IPsec between nodes) and not attachable: only
+                // this environment's services join it, never a stray container.
                 let body = json!({
-                    "Name": name, "Driver": "overlay", "Attachable": true, "CheckDuplicate": true,
-                    "Labels": { forge_catalog::swarm_service::MANAGED_LABEL: "true" },
+                    "Name": name, "Driver": "overlay", "Attachable": false, "CheckDuplicate": true,
+                    "Options": { "encrypted": "true" },
+                    "Labels": { MANAGED_LABEL: "true", "forge.environment.id": environment_id },
                 });
                 api("POST", "/networks/create", Some(&body), QUICK).await?;
             }
             Ok(json!({ "network": name }))
         }
-        SwarmOp::ServiceApply { spec } => {
-            let name = spec["Name"].as_str().unwrap_or_default();
-            match api("GET", &format!("/services/{name}"), None, QUICK).await? {
+        SwarmOp::ServiceApply { def } => {
+            let spec = def.engine_spec();
+            match owned(&def.service_id).await? {
                 None => {
-                    let created = api("POST", "/services/create", Some(spec), QUICK).await?.unwrap_or(Value::Null);
+                    let created = api("POST", "/services/create", Some(&spec), QUICK).await?.unwrap_or(Value::Null);
                     Ok(json!({ "id": created["ID"], "created": true }))
                 }
                 Some(cur) => {
                     let version =
                         cur["Version"]["Index"].as_u64().ok_or("Docker did not report the service version")?;
-                    let id = cur["ID"].as_str().unwrap_or(name);
-                    api("POST", &format!("/services/{id}/update?version={version}"), Some(spec), QUICK).await?;
+                    let id = cur["ID"].as_str().ok_or("Docker did not report the service id")?;
+                    api("POST", &format!("/services/{id}/update?version={version}"), Some(&spec), QUICK).await?;
                     Ok(json!({ "id": id, "created": false }))
                 }
             }
         }
-        SwarmOp::ServiceStatus { name } => to_value(&service_status(name).await?),
-        SwarmOp::ServiceScale { name, replicas } => {
-            change_service(
-                name,
-                |spec| {
-                    if spec["Mode"]["Replicated"].is_object() {
-                        spec["Mode"]["Replicated"]["Replicas"] = json!(replicas);
-                        Ok(())
-                    } else {
-                        Err("a global service runs one task per node; it cannot be scaled".to_owned())
-                    }
-                },
-                "",
-            )
-            .await
-        }
-        SwarmOp::ServiceRestart { name } => {
-            change_service(
-                name,
-                |spec| {
-                    let n = spec["TaskTemplate"]["ForceUpdate"].as_u64().unwrap_or(0);
-                    spec["TaskTemplate"]["ForceUpdate"] = json!(n + 1);
+        SwarmOp::ServiceStatus { service_id } => to_value(&service_status(service_id).await?),
+        SwarmOp::ServiceScale { service_id, replicas } => {
+            change_service(service_id, "", |spec| {
+                if spec["Mode"]["Replicated"].is_object() {
+                    spec["Mode"]["Replicated"]["Replicas"] = json!(replicas);
                     Ok(())
-                },
-                "",
-            )
+                } else {
+                    Err("a global service runs one task per node; it cannot be scaled".to_owned())
+                }
+            })
             .await
         }
-        SwarmOp::ServiceRollback { name } => change_service(name, |_| Ok(()), "&rollback=previous").await,
-        SwarmOp::ServiceRemove { name } => {
-            api("DELETE", &format!("/services/{name}"), None, QUICK).await?;
-            Ok(json!({ "removed": name }))
+        SwarmOp::ServiceRestart { service_id } => {
+            change_service(service_id, "", |spec| {
+                let n = spec["TaskTemplate"]["ForceUpdate"].as_u64().unwrap_or(0);
+                spec["TaskTemplate"]["ForceUpdate"] = json!(n + 1);
+                Ok(())
+            })
+            .await
         }
-        SwarmOp::ServiceLogs { name, tail } => {
-            let path = format!("/services/{name}/logs?stdout=1&stderr=1&timestamps=1&tail={tail}");
+        SwarmOp::ServiceRollback { service_id } => change_service(service_id, "&rollback=previous", |_| Ok(())).await,
+        SwarmOp::ServiceRemove { service_id } => {
+            if let Some(cur) = owned(service_id).await? {
+                let id = cur["ID"].as_str().ok_or("Docker did not report the service id")?;
+                api("DELETE", &format!("/services/{id}"), None, QUICK).await?;
+            }
+            Ok(json!({ "removed": service_id }))
+        }
+        SwarmOp::ServiceLogs { service_id, tail } => {
+            let cur = owned(service_id).await?.ok_or("the service is not in the swarm")?;
+            let id = cur["ID"].as_str().ok_or("Docker did not report the service id")?;
+            let path = format!("/services/{id}/logs?stdout=1&stderr=1&timestamps=1&tail={tail}");
             let (status, bytes) =
                 crate::docker::call_at(std::path::Path::new(crate::docker::SOCKET), "GET", &path, None, QUICK).await?;
             if !(200..300).contains(&status) {
@@ -163,21 +166,35 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
     }
 }
 
+/// The Swarm service of Forge service `service_id`, or `None` when there is
+/// none. A service with that name that does not carry the same Forge id is
+/// refused: Forge never touches a service it did not make for this id.
+async fn owned(service_id: &str) -> Result<Option<Value>, String> {
+    let Some(cur) = api("GET", &format!("/services/{}", service_name(service_id)), None, QUICK).await? else {
+        return Ok(None);
+    };
+    check_owner(&cur, service_id)?;
+    Ok(Some(cur))
+}
+
+pub(crate) fn check_owner(cur: &Value, service_id: &str) -> Result<(), String> {
+    let labels = &cur["Spec"]["Labels"];
+    if labels[MANAGED_LABEL] != "true" || labels[SERVICE_ID_LABEL] != service_id {
+        return Err("a Swarm service with this name exists but Forge did not make it for this service".into());
+    }
+    Ok(())
+}
+
 /// Reads the service, lets `edit` change its spec, and writes it back at the
 /// version read (`extra` adds query parameters, e.g. a rollback).
 async fn change_service(
-    name: &str,
-    edit: impl FnOnce(&mut Value) -> Result<(), String>,
+    service_id: &str,
     extra: &str,
+    edit: impl FnOnce(&mut Value) -> Result<(), String>,
 ) -> Result<Value, String> {
-    let cur = api("GET", &format!("/services/{name}"), None, QUICK)
-        .await?
-        .ok_or_else(|| format!("service {name} not found"))?;
+    let cur = owned(service_id).await?.ok_or("the service is not in the swarm")?;
     let version = cur["Version"]["Index"].as_u64().ok_or("Docker did not report the service version")?;
-    let id = cur["ID"].as_str().unwrap_or(name).to_owned();
-    if cur["Spec"]["Labels"][forge_catalog::swarm_service::MANAGED_LABEL] != "true" {
-        return Err(format!("service {name} is not managed by Forge"));
-    }
+    let id = cur["ID"].as_str().ok_or("Docker did not report the service id")?.to_owned();
     let mut spec = cur["Spec"].clone();
     edit(&mut spec)?;
     api("POST", &format!("/services/{id}/update?version={version}{extra}"), Some(&spec), QUICK).await?;
@@ -190,11 +207,13 @@ fn task_filter(name: &str) -> String {
     format!("%7B%22service%22%3A%7B%22{name}%22%3Atrue%7D%7D")
 }
 
-async fn service_status(name: &str) -> Result<SwarmServiceStatus, String> {
-    let Some(svc) = api("GET", &format!("/services/{name}"), None, QUICK).await? else {
+async fn service_status(service_id: &str) -> Result<SwarmServiceStatus, String> {
+    let Some(svc) = owned(service_id).await? else {
         return Ok(SwarmServiceStatus::default());
     };
-    let tasks = api("GET", &format!("/tasks?filters={}", task_filter(name)), None, QUICK).await?.unwrap_or(Value::Null);
+    let name = service_name(service_id);
+    let tasks =
+        api("GET", &format!("/tasks?filters={}", task_filter(&name)), None, QUICK).await?.unwrap_or(Value::Null);
     Ok(status_from(&svc, &tasks))
 }
 
@@ -405,5 +424,16 @@ mod tests {
         assert_eq!(s.tasks[2].error, "exit 1");
         assert_eq!(s.image, "nginx:1.27");
         assert_eq!(task_filter("prod-web"), "%7B%22service%22%3A%7B%22prod-web%22%3Atrue%7D%7D");
+    }
+
+    #[test]
+    fn foreign_services_are_never_touched() {
+        let id = "01900000-0000-7000-8000-000000000001";
+        let mine = json!({"Spec": {"Labels": {"forge.managed": "true", "forge.service.id": id}}});
+        assert!(check_owner(&mine, id).is_ok());
+        let other = json!({"Spec": {"Labels": {"forge.managed": "true", "forge.service.id": "01900000-0000-7000-8000-000000000009"}}});
+        assert!(check_owner(&other, id).is_err());
+        let outside = json!({"Spec": {"Labels": {}}});
+        assert!(check_owner(&outside, id).is_err());
     }
 }

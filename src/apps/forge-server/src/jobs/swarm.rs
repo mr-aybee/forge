@@ -140,10 +140,20 @@ impl SwarmMemberJob {
     }
 
     async fn failed(&self, p: &Payload, e: StepError) -> StepError {
-        if let StepError::Fatal(msg) = &e
-            && let Err(err) = self.mark(p, MemberState::Failed, msg).await
-        {
-            tracing::warn!(server = %p.server_id, error = ?err, "could not record the swarm failure");
+        if let StepError::Fatal(msg) = &e {
+            if let Err(err) = self.mark(p, MemberState::Failed, msg).await {
+                tracing::warn!(server = %p.server_id, error = ?err, "could not record the swarm failure");
+            }
+            // A founder that failed gives up its claim, so another node can
+            // create the swarm.
+            if p.action == MemberAction::Join
+                && let Ok(Some(s)) = self.swarms.get_swarm(p.cluster_id).await
+                && s.pending()
+                && s.founder == Some(p.server_id)
+                && let Err(err) = self.swarms.delete_swarm(p.cluster_id).await
+            {
+                tracing::warn!(cluster = %p.cluster_id, error = ?err, "could not release the swarm claim");
+            }
         }
         e
     }
@@ -159,64 +169,86 @@ impl SwarmMemberJob {
             .find(|m| m.server_id != p.server_id && m.role == MemberRole::Manager && m.state == MemberState::Joined))
     }
 
-    async fn join(&self, ctx: &mut StepContext, p: &Payload) -> Result<(), StepError> {
-        let status: SwarmStatus = serde_json::from_value(ctx.state_value("status").cloned().unwrap_or_default())
-            .map_err(|e| fatal(format!("lost the node's swarm state: {e}")))?;
-        let swarm = self.swarms.get_swarm(p.cluster_id).await.map_err(retry)?;
-        let manager = self.other_manager(p).await?;
-        if status.state == "active" {
-            return match (&swarm, &status.swarm_id) {
-                (Some(s), Some(id)) if &s.swarm_id == id => Ok(()),
-                (None, _) if manager.is_none() => self.adopt(ctx, p).await,
-                _ => Err(fatal("the node is already in another Docker Swarm; make it leave that swarm first")),
-            };
-        }
-        match (swarm, manager) {
-            (Some(s), Some(m)) => {
-                let tokens = self.open_tokens(&s)?;
-                let token = if p.role == MemberRole::Manager { tokens.manager } else { tokens.worker };
-                let mut remote: Vec<String> = self
-                    .swarms
-                    .list_members(p.cluster_id)
-                    .await
-                    .map_err(retry)?
-                    .into_iter()
-                    .filter(|x| x.role == MemberRole::Manager && x.state == MemberState::Joined)
-                    .map(|x| x.manager_addr)
-                    .filter(|a| !a.is_empty())
-                    .collect();
-                if remote.is_empty() {
-                    remote.push(m.manager_addr);
-                }
-                remote.truncate(7);
-                let op =
-                    SwarmOp::Join { remote_addrs: remote, join_token: token, advertise_addr: p.advertise_addr.clone() };
-                let _: SwarmStatus = self.op(ctx, p.server_id, "join_op", &op, CONSENSUS_WAIT).await?;
-                Ok(())
-            }
-            (None, None) => {
-                let op = SwarmOp::Init {
-                    advertise_addr: p.advertise_addr.clone(),
-                    port: forge_catalog::swarm::DEFAULT_PORT,
-                    default_addr_pool: p.init.default_addr_pool.clone(),
-                    autolock: p.init.autolock,
-                };
-                let _: SwarmStatus = self.op(ctx, p.server_id, "init_op", &op, CONSENSUS_WAIT).await?;
-                self.adopt(ctx, p).await
-            }
-            (Some(_), None) => {
-                Err(fatal("no manager of this swarm is reachable through Forge; re-join a manager first"))
-            }
-            (None, Some(_)) => Err(fatal("the swarm record is missing; remove the cluster's nodes and start again")),
-        }
+    async fn swarm_row(&self, p: &Payload) -> Result<ClusterSwarm, StepError> {
+        self.swarms
+            .get_swarm(p.cluster_id)
+            .await
+            .map_err(retry)?
+            .ok_or_else(|| fatal("the cluster's swarm record is gone; add the node again"))
     }
 
-    /// Records the swarm this node manages (just created, or found running
-    /// on the cluster's first node) with its join tokens sealed.
+    /// Step 1 of a join: what the node is in now. A node already in a swarm
+    /// that this cluster has not recorded is refused: Forge never adopts a
+    /// swarm made outside it or by another cluster.
+    async fn prepare_join(&self, ctx: &mut StepContext, p: &Payload) -> Result<(), StepError> {
+        let status: SwarmStatus = self.op(ctx, p.server_id, "status_op", &SwarmOp::Status {}, QUICK_WAIT).await?;
+        if !status.docker {
+            return Err(retry("waiting for Docker Engine on the node"));
+        }
+        if status.state == "active" {
+            let swarm = self.swarm_row(p).await?;
+            if swarm.pending() || status.swarm_id.as_deref() != Some(swarm.swarm_id.as_str()) {
+                return Err(fatal(
+                    "the node is already in a Docker Swarm this cluster did not create; make it leave that swarm first",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    async fn join(&self, ctx: &mut StepContext, p: &Payload) -> Result<(), StepError> {
+        let swarm = self.swarm_row(p).await?;
+        if swarm.pending() {
+            if swarm.founder != Some(p.server_id) {
+                return Err(retry("another node is creating the swarm"));
+            }
+            // Init answers with the current state when the node already made
+            // the swarm (a retried step), so this is safe to run again.
+            let op = SwarmOp::Init {
+                advertise_addr: p.advertise_addr.clone(),
+                port: forge_catalog::swarm::DEFAULT_PORT,
+                default_addr_pool: p.init.default_addr_pool.clone(),
+                autolock: p.init.autolock,
+            };
+            let _: SwarmStatus = self.op(ctx, p.server_id, "init_op", &op, CONSENSUS_WAIT).await?;
+            return self.adopt(ctx, p).await;
+        }
+        let status: SwarmStatus = self.op(ctx, p.server_id, "join_status_op", &SwarmOp::Status {}, QUICK_WAIT).await?;
+        if status.state == "active" && status.swarm_id.as_deref() == Some(swarm.swarm_id.as_str()) {
+            return Ok(());
+        }
+        let tokens = self.open_tokens(&swarm)?;
+        let token = if p.role == MemberRole::Manager { tokens.manager } else { tokens.worker };
+        let mut remote: Vec<String> = self
+            .swarms
+            .list_members(p.cluster_id)
+            .await
+            .map_err(retry)?
+            .into_iter()
+            .filter(|x| x.role == MemberRole::Manager && x.state == MemberState::Joined && !x.manager_addr.is_empty())
+            .map(|x| x.manager_addr)
+            .collect();
+        if remote.is_empty() {
+            return Err(fatal("no manager of this swarm is reachable through Forge; re-join a manager first"));
+        }
+        remote.truncate(7);
+        let op = SwarmOp::Join { remote_addrs: remote, join_token: token, advertise_addr: p.advertise_addr.clone() };
+        let _: SwarmStatus = self.op(ctx, p.server_id, "join_op", &op, CONSENSUS_WAIT).await?;
+        Ok(())
+    }
+
+    /// Records the swarm the founder just created, with its join tokens
+    /// sealed. A swarm id another cluster records is refused.
     async fn adopt(&self, ctx: &mut StepContext, p: &Payload) -> Result<(), StepError> {
         let status: SwarmStatus = self.op(ctx, p.server_id, "adopt_status_op", &SwarmOp::Status {}, QUICK_WAIT).await?;
-        if !status.manager {
-            return Err(fatal("the first node of a swarm must be a manager"));
+        let swarm_id = status
+            .swarm_id
+            .filter(|_| status.manager)
+            .ok_or_else(|| fatal("the node did not become a swarm manager"))?;
+        if let Some(other) = self.swarms.cluster_of_swarm(&swarm_id).await.map_err(retry)?
+            && other != p.cluster_id
+        {
+            return Err(fatal("this Docker Swarm belongs to another cluster"));
         }
         let tokens: JoinTokens = self.op(ctx, p.server_id, "tokens_op", &SwarmOp::JoinTokens {}, QUICK_WAIT).await?;
         let sealed = self
@@ -225,11 +257,12 @@ impl SwarmMemberJob {
             .map_err(fatal)?;
         let swarm = ClusterSwarm {
             cluster_id: p.cluster_id,
-            swarm_id: status.swarm_id.unwrap_or_default(),
+            swarm_id,
             port: forge_catalog::swarm::DEFAULT_PORT,
             default_addr_pool: p.init.default_addr_pool.clone(),
             autolock: p.init.autolock,
             tokens_sealed: Some(sealed),
+            founder: None,
             updated_at: self.ops.clock.now(),
         };
         self.swarms.put_swarm(&swarm).await.map_err(retry)
@@ -265,6 +298,9 @@ impl SwarmMemberJob {
         self.swarms.put_member(&m).await.map_err(retry)
     }
 
+    /// Step 1 of a leave: through another manager, a manager is demoted first
+    /// (so it leaves without force and the swarm keeps its quorum), and the
+    /// node is drained so its tasks move.
     async fn drain(&self, ctx: &mut StepContext, p: &Payload) -> Result<(), StepError> {
         let (Some(member), Some(manager)) =
             (self.swarms.get_member(p.server_id).await.map_err(retry)?, self.other_manager(p).await?)
@@ -274,38 +310,44 @@ impl SwarmMemberJob {
         if member.node_id.is_empty() {
             return Ok(());
         }
+        let role = (member.role == MemberRole::Manager).then_some(forge_catalog::swarm::SwarmRole::Worker);
         let op = SwarmOp::NodeUpdate {
             node_id: member.node_id,
-            role: None,
+            role,
             availability: Some(Availability::Drain),
             labels: None,
         };
-        // Best effort: a node that cannot be drained still leaves.
-        if let Err(e) = self.ops.run(ctx, manager.server_id, "drain_op", swarm_command(&op)?, QUICK_WAIT).await {
-            tracing::warn!(server = %p.server_id, error = ?e, "could not drain the node before it leaves the swarm");
+        match self.ops.run(ctx, manager.server_id, "drain_op", swarm_command(&op)?, QUICK_WAIT).await {
+            Ok(_) => Ok(()),
+            // A failed node cannot be drained; it is removed with force.
+            Err(e) if p.force => {
+                tracing::warn!(server = %p.server_id, error = ?e, "could not drain the node before it leaves the swarm");
+                Ok(())
+            }
+            Err(e) => Err(e),
         }
-        Ok(())
     }
 
     async fn leave(&self, ctx: &mut StepContext, p: &Payload) -> Result<(), StepError> {
         let member = self.swarms.get_member(p.server_id).await.map_err(retry)?;
         let manager = self.other_manager(p).await?;
-        let last_manager = member.as_ref().is_some_and(|m| m.role == MemberRole::Manager) && manager.is_none();
-        let leave = self
-            .ops
-            .run(
-                ctx,
-                p.server_id,
-                "leave_op",
-                swarm_command(&SwarmOp::Leave { force: last_manager || p.force })?,
-                CONSENSUS_WAIT,
-            )
-            .await;
-        if let Err(e) = leave {
-            // A node that is gone can still be removed from the list with force.
-            if !p.force {
-                return Err(e);
-            }
+        // Force only for a failed node, or for the very last node (which
+        // dissolves the swarm). A demoted manager leaves without it.
+        let others = self
+            .swarms
+            .list_members(p.cluster_id)
+            .await
+            .map_err(retry)?
+            .iter()
+            .filter(|m| m.server_id != p.server_id)
+            .count();
+        let force = p.force || others == 0;
+        let leave =
+            self.ops.run(ctx, p.server_id, "leave_op", swarm_command(&SwarmOp::Leave { force })?, CONSENSUS_WAIT).await;
+        if let Err(e) = leave
+            && !p.force
+        {
+            return Err(e);
         }
         if let (Some(m), Some(mgr)) = (member, manager)
             && !m.node_id.is_empty()
@@ -328,13 +370,7 @@ impl SwarmMemberJob {
         match (p.action, index) {
             (MemberAction::Join, 0) => {
                 self.mark(p, MemberState::Joining, "").await?;
-                let status: SwarmStatus =
-                    self.op(ctx, p.server_id, "status_op", &SwarmOp::Status {}, QUICK_WAIT).await?;
-                if !status.docker {
-                    return Err(retry("waiting for Docker Engine on the node"));
-                }
-                ctx.set_state("status", serde_json::to_value(&status).map_err(fatal)?);
-                Ok(())
+                self.prepare_join(ctx, p).await
             }
             (MemberAction::Join, 1) => self.join(ctx, p).await,
             (MemberAction::Join, 2) => self.record_join(ctx, p).await,

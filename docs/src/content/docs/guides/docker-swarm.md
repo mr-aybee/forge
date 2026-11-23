@@ -70,6 +70,59 @@ A node in the swarm cannot move to another cluster. Make it **Leave** first.
 The last manager can leave only when no other node is left.
 :::
 
+## Run a service in the swarm
+
+In a Swarm cluster, a service runs as a Docker Swarm service. The swarm
+places its tasks, so you do not pick nodes.
+
+1. Open **Services → New service** and choose an environment of the Swarm
+   cluster. **Systemd** is unavailable: a swarm runs containers only.
+2. Fill in **Image**, **Ports** and the other sections as usual.
+3. In **Swarm**, choose **Replicated** with a replica count, or **Global** for
+   one task on every matching node. Add **Placement constraints** (for example
+   **Node role** `==` `worker`, or **Node label** `zone` `==` `a`), **Spread
+   over node labels**, **Max tasks per node** and **Published ports**
+   (**Ingress mesh** or **Host**). **Rollout** and **Restart policy** hold
+   the update and restart settings; the defaults update one task at a time
+   and pause on failure.
+4. Select **Create and deploy**. Forge starts a `swarm.service` job on a
+   manager.
+
+The service's **Overview** shows a **Swarm** panel instead of the node list:
+
+| Item | Shows or does |
+| --- | --- |
+| Status line | Running and desired tasks, the rollout state and message, the image |
+| **Deploy** | Creates or updates the Docker service from the saved definition |
+| **Scale** | Changes the task count now; the next **Deploy** uses the saved replicas again |
+| **Restart** | Replaces every task, following the rollout settings |
+| **Roll back** | Returns the Docker service to its previous spec |
+| **Remove** | Deletes the Docker service; the service is down until the next **Deploy** |
+| Tasks | Slot, node, state, desired state, error and last change of each task |
+| **Logs** | The last 100 to 1000 lines of all tasks, with **Refresh** |
+
+:::caution
+**Remove** stops every task. You must remove a service from the swarm before
+you can delete it.
+:::
+
+:::caution[Secrets and host folders in a swarm]
+- Environment variables, including ones marked secret, become part of the
+  Swarm service. Every manager stores them, and `docker service inspect` on a
+  manager shows them. Restrict who can log in to manager nodes.
+- A host folder mounted into a Swarm service must lie inside an approved
+  file root on **every** node of the swarm, because a task may run on any
+  of them. Other host folders need `stack.privileged` (an administrator with
+  MFA). System paths, the Docker socket and Forge's own folders are always
+  refused.
+:::
+
+:::note
+Forge names each Swarm service `forge-<service-id>` and gives each
+environment its own encrypted overlay network that other containers cannot
+join. Forge only changes Swarm services it created for that service.
+:::
+
 ## Verify
 
 - The **Swarm** tab lists every node as **joined**, and the node cards show

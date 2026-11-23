@@ -4,7 +4,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api, get, post } from "./client";
-import { useAction } from "./hooks";
+import { fleetKeys, useAction } from "./hooks";
 import type { ClusterMode, Job } from "./types";
 
 const enc = encodeURIComponent;
@@ -91,6 +91,8 @@ export interface SwarmJoinStarted {
 export const swarmKeys = {
   all: ["swarm"] as const,
   view: (cluster: string) => ["swarm", cluster] as const,
+  service: (id: string) => ["swarm", "service", id] as const,
+  serviceLogs: (id: string, tail: number) => ["swarm", "service", id, "logs", tail] as const,
 };
 
 type Rec = Record<string, unknown>;
@@ -207,3 +209,180 @@ export const useLeaveSwarm = (cluster: string) =>
 /** Rotates the worker and/or manager join token. */
 export const useRotateSwarmTokens = (cluster: string) =>
   useAction((b: { worker: boolean; manager: boolean }) => post<void>(`${base(cluster)}/tokens/rotate`, b), [swarmKeys.view(cluster)]);
+
+// ------------------------------------------------------------------ services in a swarm
+
+export type SwarmServiceMode = "replicated" | "global";
+export type SwarmRestartCondition = "any" | "on-failure" | "none";
+export type SwarmUpdateOrder = "start-first" | "stop-first";
+export type SwarmFailureAction = "rollback" | "pause" | "continue";
+export type SwarmPublishMode = "ingress" | "host";
+
+/** `swarm` of a container service in a Swarm cluster (server: `forge_catalog::swarm_service::SwarmSettings`). */
+export interface SwarmSettings {
+  mode: SwarmServiceMode;
+  /** Replicated mode only; 1 to 1000. */
+  replicas: number;
+  /** `node.role==worker`, `node.labels.zone!=a`, … */
+  constraints: string[];
+  /** `node.labels.<x>`, at most 4. */
+  spread: string[];
+  /** 0 = no limit. */
+  max_per_node: number;
+  restart: { condition: SwarmRestartCondition; max_attempts: number; delay_secs: number };
+  update: { parallelism: number; delay_secs: number; order: SwarmUpdateOrder; failure_action: SwarmFailureAction; monitor_secs: number; max_failure_ratio: number };
+  publish: SwarmPublishMode;
+}
+
+export const defaultSwarmSettings = (): SwarmSettings => ({
+  mode: "replicated",
+  replicas: 1,
+  constraints: [],
+  spread: [],
+  max_per_node: 0,
+  restart: { condition: "any", max_attempts: 0, delay_secs: 5 },
+  update: { parallelism: 1, delay_secs: 0, order: "stop-first", failure_action: "pause", monitor_secs: 10, max_failure_ratio: 0 },
+  publish: "ingress",
+});
+
+const strs = (v: unknown) => arr(v).filter((x): x is string => typeof x === "string");
+
+/** Settings with every field defaulted, so an older or partial spec never breaks the editor. */
+export function normSwarmSettings(v: unknown): SwarmSettings {
+  const o = rec(v);
+  const d = defaultSwarmSettings();
+  const r = rec(o.restart);
+  const u = rec(o.update);
+  return {
+    mode: oneOf(o.mode, ["replicated", "global"] as const, d.mode),
+    replicas: num(o.replicas) ?? d.replicas,
+    constraints: strs(o.constraints),
+    spread: strs(o.spread),
+    max_per_node: num(o.max_per_node) ?? 0,
+    restart: {
+      condition: oneOf(r.condition, ["any", "on-failure", "none"] as const, d.restart.condition),
+      max_attempts: num(r.max_attempts) ?? 0,
+      delay_secs: num(r.delay_secs) ?? d.restart.delay_secs,
+    },
+    update: {
+      parallelism: num(u.parallelism) ?? d.update.parallelism,
+      delay_secs: num(u.delay_secs) ?? 0,
+      order: oneOf(u.order, ["start-first", "stop-first"] as const, d.update.order),
+      failure_action: oneOf(u.failure_action, ["rollback", "pause", "continue"] as const, d.update.failure_action),
+      monitor_secs: num(u.monitor_secs) ?? d.update.monitor_secs,
+      max_failure_ratio: num(u.max_failure_ratio) ?? 0,
+    },
+    publish: oneOf(o.publish, ["ingress", "host"] as const, d.publish),
+  };
+}
+
+export interface SwarmTask {
+  id: string;
+  node_id?: string;
+  slot?: number;
+  state: string;
+  desired_state?: string;
+  error?: string;
+  image?: string;
+  /** RFC 3339 from Docker, or epoch ms. */
+  updated_at?: string | number;
+}
+
+export interface SwarmServiceStatus {
+  exists: boolean;
+  id?: string;
+  mode?: string;
+  desired: number;
+  running: number;
+  /** `updating`, `completed`, `paused`, `rollback_started`, …; empty before the first update. */
+  update_state?: string;
+  update_message?: string;
+  image?: string;
+  tasks: SwarmTask[];
+}
+
+export interface ServiceSwarmView {
+  cluster_id: string;
+  /** Docker service name. */
+  name: string;
+  settings: SwarmSettings;
+  status: SwarmServiceStatus | null;
+  status_error: string | null;
+}
+
+export type ServiceSwarmAction = { kind: "deploy" } | { kind: "scale"; replicas: number } | { kind: "restart" } | { kind: "rollback" } | { kind: "remove" };
+
+function normTask(v: unknown): SwarmTask | null {
+  const o = rec(v);
+  const id = str(o.id);
+  if (!id) return null;
+  const at = o.updated_at;
+  return {
+    id,
+    node_id: str(o.node_id),
+    slot: num(o.slot),
+    state: str(o.state) ?? "unknown",
+    desired_state: str(o.desired_state),
+    error: str(o.error),
+    image: str(o.image),
+    updated_at: typeof at === "string" || typeof at === "number" ? at : undefined,
+  };
+}
+
+export function normServiceSwarm(v: unknown): ServiceSwarmView {
+  const o = rec(v);
+  const s = o.status && typeof o.status === "object" ? rec(o.status) : null;
+  return {
+    cluster_id: str(o.cluster_id) ?? "",
+    name: str(o.name) ?? "",
+    settings: normSwarmSettings(o.settings),
+    status: s
+      ? {
+          exists: s.exists === true,
+          id: str(s.id),
+          mode: str(s.mode),
+          desired: num(s.desired) ?? 0,
+          running: num(s.running) ?? 0,
+          update_state: str(s.update_state),
+          update_message: str(s.update_message),
+          image: str(s.image),
+          tasks: arr(s.tasks).map(normTask).filter((t): t is SwarmTask => t !== null),
+        }
+      : null,
+    status_error: str(o.status_error) ?? null,
+  };
+}
+
+/** The service is converging: a rollout or rollback runs, or fewer tasks run than asked for. */
+export const swarmServiceBusy = (v: ServiceSwarmView | undefined) => {
+  const s = v?.status;
+  if (!s?.exists) return false;
+  return s.update_state === "updating" || s.update_state === "rollback_started" || s.running < s.desired;
+};
+
+const svcBase = (id: string) => `/api/v1/services/${enc(id)}/swarm`;
+
+/** A service's Docker Swarm service; polls every 3 s while converging, else every 30 s. */
+export const useServiceSwarm = (id: string, enabled = true) =>
+  useQuery({
+    queryKey: swarmKeys.service(id),
+    queryFn: () => get<unknown>(svcBase(id)).then(normServiceSwarm),
+    enabled: enabled && !!id,
+    retry: false,
+    staleTime: 5_000,
+    refetchInterval: (q) => (swarmServiceBusy(q.state.data) ? 3_000 : 30_000),
+  });
+
+/** Deploy, scale, restart, roll back or remove the Swarm service (starts a `swarm.service` job). */
+export const useServiceSwarmAction = (id: string) =>
+  useAction((b: ServiceSwarmAction) => post<Job>(svcBase(id), b), [swarmKeys.service(id), fleetKeys.services, fleetKeys.serviceAny, ["jobs"]]);
+
+/** The last `tail` log lines of every task; fetched on demand, never polled. */
+export const useServiceSwarmLogs = (id: string, tail: number, enabled = true) =>
+  useQuery({
+    queryKey: swarmKeys.serviceLogs(id, tail),
+    queryFn: () => get<unknown>(`${svcBase(id)}/logs?tail=${tail}`).then((v) => str(rec(v).logs) ?? ""),
+    enabled: enabled && !!id,
+    retry: false,
+    staleTime: 5_000,
+  });

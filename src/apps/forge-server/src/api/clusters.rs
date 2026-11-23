@@ -304,8 +304,9 @@ async fn handover_blockers(state: &AppState, node: ServerId, cluster: ClusterId)
     let mut roles = Vec::new();
     if let Some(m) = forge_core::swarm::SwarmRepository::get_member(&state.store, node).await?
         && m.cluster_id == cluster
-        && m.state != forge_core::swarm::MemberState::Failed
     {
+        // Failed members too: the node may still be in the swarm until a
+        // forced leave has removed it.
         roles.push("Docker Swarm member (Cluster → Swarm → Leave)");
     }
     if let Some(p) = forge_core::ports::ClusterProfileRepository::get_cluster_profile(&state.store, cluster).await?

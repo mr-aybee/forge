@@ -86,11 +86,20 @@ pub struct SwarmService {
     pub servers: Arc<dyn ServerRepository>,
     pub clusters: Arc<dyn ClusterRepository>,
     pub tenancy: Arc<dyn TenancyRepository>,
+    pub files: Arc<dyn forge_core::files::FileRepository>,
     pub hub: Arc<CommandQueue>,
     pub signer: Arc<CommandSigner>,
     pub envelope: Envelope,
     pub clock: Arc<dyn Clock>,
+    /// Recent live node lists per cluster (see `live_nodes`).
+    pub node_cache: std::sync::Mutex<std::collections::HashMap<ClusterId, NodeCacheEntry>>,
 }
+
+/// When a live node list was read, and what it was.
+pub type NodeCacheEntry = (std::time::Instant, Result<Vec<SwarmNode>, String>);
+
+/// How long a live node list is reused.
+const NODE_CACHE: Duration = Duration::from_secs(5);
 
 fn invalid(msg: impl Into<String>) -> DomainError {
     DomainError::Invalid(msg.into())
@@ -106,6 +115,26 @@ impl SwarmService {
         Ok(c)
     }
 
+    /// The live node list from a manager, cached briefly per cluster: the
+    /// console polls the view, and each read is a command to a root helper.
+    async fn live_nodes(&self, cluster: ClusterId, principal: &str) -> Result<Vec<SwarmNode>, String> {
+        if let Ok(cache) = self.node_cache.lock()
+            && let Some((at, nodes)) = cache.get(&cluster)
+            && at.elapsed() < NODE_CACHE
+        {
+            return nodes.clone();
+        }
+        let fresh = match self.on_manager(cluster, principal, &SwarmOp::Nodes {}).await {
+            Ok(v) => serde_json::from_value(v).map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
+        };
+        if let Ok(mut cache) = self.node_cache.lock() {
+            cache.retain(|_, (at, _)| at.elapsed() < NODE_CACHE);
+            cache.insert(cluster, (std::time::Instant::now(), fresh.clone()));
+        }
+        fresh
+    }
+
     /// The Swarm cluster an environment belongs to, if its cluster is one.
     pub async fn swarm_of_environment(&self, env: EnvironmentId) -> DomainResult<Option<ClusterId>> {
         let Some(cluster) = self.tenancy.get_environment(env).await?.cluster_id else { return Ok(None) };
@@ -119,6 +148,33 @@ impl SwarmService {
             return Err(invalid("this environment is in a Docker Swarm cluster, which runs container services only"));
         }
         Ok(())
+    }
+
+    /// The binds among `sources` that need `stack.privileged`: a task may run
+    /// on any node of the swarm, so a host folder is approved only when it
+    /// lies inside an approved file root on every node of the swarm.
+    pub async fn privileged_binds(&self, cluster: ClusterId, sources: &[String]) -> DomainResult<Vec<String>> {
+        if sources.is_empty() {
+            return Ok(Vec::new());
+        }
+        let members = self.swarms.list_members(cluster).await?;
+        let mut per_node = Vec::new();
+        for m in &members {
+            per_node.push(crate::stacks::bind_roots(self.files.as_ref(), m.server_id).await);
+        }
+        Ok(sources
+            .iter()
+            .filter(|src| {
+                per_node.is_empty()
+                    || !per_node.iter().all(|roots| {
+                        roots
+                            .iter()
+                            .filter_map(|r| forge_catalog::stacks::normalize_abs(r))
+                            .any(|r| forge_catalog::stacks::within(src, &r))
+                    })
+            })
+            .cloned()
+            .collect())
     }
 
     /// A joined manager of the cluster's swarm.
@@ -146,6 +202,8 @@ impl SwarmService {
         for m in self.swarms.list_members(cluster).await? {
             let hostname = match self.servers.get_server(m.server_id).await {
                 Ok(s) => s.display_name.unwrap_or(s.hostname),
+                // A node row may be gone while its member row is cleaned up;
+                // the console then shows the member without a name.
                 Err(_) => String::new(),
             };
             members.push(MemberView { member: m, hostname });
@@ -155,9 +213,9 @@ impl SwarmService {
             .filter(|m| m.member.role == MemberRole::Manager && m.member.state == MemberState::Joined)
             .count();
         let (nodes, nodes_error) = if c.mode == ClusterMode::Swarm && managers > 0 {
-            match self.on_manager(cluster, principal, &SwarmOp::Nodes {}).await {
-                Ok(v) => (Some(serde_json::from_value(v).map_err(DomainError::internal)?), None),
-                Err(e) => (None, Some(e.to_string())),
+            match self.live_nodes(cluster, principal).await {
+                Ok(n) => (Some(n), None),
+                Err(e) => (None, Some(e)),
             }
         } else {
             (None, None)
@@ -173,8 +231,23 @@ impl SwarmService {
         })
     }
 
+    /// Refuses a membership change while another one runs in the cluster:
+    /// joins and leaves happen one at a time, so quorum and the first-node
+    /// rules are judged on settled state.
+    async fn one_change_at_a_time(&self, cluster: ClusterId, server: ServerId) -> DomainResult<Vec<SwarmMember>> {
+        let all = self.swarms.list_members(cluster).await?;
+        if all.iter().any(|m| m.server_id != server && matches!(m.state, MemberState::Joining | MemberState::Leaving)) {
+            return Err(DomainError::Conflict(
+                "another node is joining or leaving the swarm; try again when it is done".into(),
+            ));
+        }
+        Ok(all)
+    }
+
     /// Checks that `server` may join `cluster`'s swarm now and marks it
-    /// `joining`, so a second request is refused while the job runs.
+    /// `joining`, so a second request is refused while the job runs. The
+    /// first node claims the swarm row atomically: of two concurrent first
+    /// joins, one gets a conflict instead of creating a second swarm.
     pub async fn begin_join(
         &self,
         cluster: ClusterId,
@@ -191,7 +264,7 @@ impl SwarmService {
             return Err(invalid("Docker Swarm nodes must run Linux"));
         }
         if let Some(m) = self.swarms.get_member(server).await?
-            && matches!(m.state, MemberState::Joining | MemberState::Joined | MemberState::Leaving)
+            && m.state != MemberState::Failed
         {
             return Err(DomainError::Conflict(format!(
                 "the node is already {} the swarm",
@@ -202,23 +275,36 @@ impl SwarmService {
                 }
             )));
         }
-        let has_swarm = self.swarms.get_swarm(cluster).await?.is_some();
-        if !has_swarm && role != MemberRole::Manager {
+        self.one_change_at_a_time(cluster, server).await?;
+        let claim = ClusterSwarm {
+            cluster_id: cluster,
+            swarm_id: String::new(),
+            port: forge_catalog::swarm::DEFAULT_PORT,
+            default_addr_pool: Vec::new(),
+            autolock: false,
+            tokens_sealed: None,
+            founder: Some(server),
+            updated_at: self.clock.now(),
+        };
+        let founding = if self.swarms.claim_swarm(&claim).await? {
+            true
+        } else {
+            let current = self.swarms.get_swarm(cluster).await?;
+            match current {
+                Some(c) if c.pending() && c.founder == Some(server) => true,
+                Some(c) if c.pending() => {
+                    return Err(DomainError::Conflict(
+                        "the swarm is still being created; add more nodes once the first node has joined".into(),
+                    ));
+                }
+                _ => false,
+            }
+        };
+        if founding && role != MemberRole::Manager {
+            if self.swarms.get_swarm(cluster).await?.is_some_and(|c| c.pending() && c.founder == Some(server)) {
+                self.swarms.delete_swarm(cluster).await?;
+            }
             return Err(invalid("the first node of a swarm must be a manager"));
-        }
-        // Only one node creates the swarm: until it has, others wait (two
-        // first managers would make two separate swarms).
-        if !has_swarm
-            && self
-                .swarms
-                .list_members(cluster)
-                .await?
-                .iter()
-                .any(|m| m.server_id != server && m.state != MemberState::Failed)
-        {
-            return Err(DomainError::Conflict(
-                "the swarm is still being created; add more nodes once the first node has joined".into(),
-            ));
         }
         self.swarms
             .put_member(&SwarmMember {
@@ -235,16 +321,20 @@ impl SwarmService {
             .await
     }
 
-    /// Checks that `server` may leave: it is a member, and it is not the last
-    /// manager while workers remain.
-    pub async fn check_leave(&self, cluster: ClusterId, server: ServerId) -> DomainResult<SwarmMember> {
+    /// Checks that `server` may leave: it is a member, no other change runs,
+    /// and it is not the last manager while other nodes remain. `force` is
+    /// only for a node that failed (it cannot leave cleanly any more).
+    pub async fn check_leave(&self, cluster: ClusterId, server: ServerId, force: bool) -> DomainResult<SwarmMember> {
         self.swarm_cluster(cluster).await?;
         let m = self.swarms.get_member(server).await?.filter(|m| m.cluster_id == cluster);
         let m = m.ok_or_else(|| DomainError::NotFound("the node is not in this swarm".into()))?;
-        if m.state == MemberState::Leaving {
-            return Err(DomainError::Conflict("the node is already leaving".into()));
+        if matches!(m.state, MemberState::Leaving | MemberState::Joining) {
+            return Err(DomainError::Conflict(format!("the node is already {}", m.state.as_str())));
         }
-        let all = self.swarms.list_members(cluster).await?;
+        if force && m.state != MemberState::Failed {
+            return Err(invalid("force is only for a node whose join or leave failed; leave it normally"));
+        }
+        let all = self.one_change_at_a_time(cluster, server).await?;
         let other_managers = all
             .iter()
             .filter(|x| x.server_id != server && x.role == MemberRole::Manager && x.state == MemberState::Joined)
@@ -327,10 +417,24 @@ impl SwarmService {
         op.validate().map_err(invalid)?;
         let tokens: JoinTokens =
             serde_json::from_value(self.on_manager(cluster, principal, &op).await?).map_err(DomainError::internal)?;
-        let raw = serde_json::to_vec(&tokens).map_err(DomainError::internal)?;
-        s.tokens_sealed = Some(self.envelope.seal(&raw, &tokens_aad(cluster)).map_err(DomainError::internal)?);
+        // Not atomic: the manager has rotated already. If storing fails, the
+        // current tokens are read again and stored, so Forge never keeps the
+        // old (now invalid) ones; if that fails too, the error says so.
+        if let Err(first) = self.store_tokens(&mut s, &tokens).await {
+            tracing::warn!(%cluster, error = %first, "storing rotated join tokens failed; reading them again");
+            let current: JoinTokens =
+                serde_json::from_value(self.on_manager(cluster, principal, &SwarmOp::JoinTokens {}).await?)
+                    .map_err(DomainError::internal)?;
+            self.store_tokens(&mut s, &current).await?;
+        }
+        Ok(())
+    }
+
+    async fn store_tokens(&self, s: &mut ClusterSwarm, tokens: &JoinTokens) -> DomainResult<()> {
+        let raw = serde_json::to_vec(tokens).map_err(DomainError::internal)?;
+        s.tokens_sealed = Some(self.envelope.seal(&raw, &tokens_aad(s.cluster_id)).map_err(DomainError::internal)?);
         s.updated_at = self.clock.now();
-        self.swarms.put_swarm(&s).await
+        self.swarms.put_swarm(s).await
     }
 
     async fn on_manager(&self, cluster: ClusterId, principal: &str, op: &SwarmOp) -> DomainResult<serde_json::Value> {

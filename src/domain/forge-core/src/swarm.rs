@@ -23,7 +23,17 @@ pub struct ClusterSwarm {
     /// The worker and manager join tokens, sealed. Never serialized.
     #[serde(skip)]
     pub tokens_sealed: Option<String>,
+    /// While `swarm_id` is empty: the node creating the swarm.
+    pub founder: Option<ServerId>,
     pub updated_at: Timestamp,
+}
+
+impl ClusterSwarm {
+    /// The swarm is still being created.
+    #[must_use]
+    pub fn pending(&self) -> bool {
+        self.swarm_id.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,6 +122,11 @@ pub struct SwarmMember {
 #[async_trait]
 pub trait SwarmRepository: Send + Sync + std::fmt::Debug {
     async fn get_swarm(&self, cluster: ClusterId) -> DomainResult<Option<ClusterSwarm>>;
+    /// Inserts `swarm` only when the cluster has no swarm row yet; `true`
+    /// when this call inserted it. Atomic: of two concurrent claims, one wins.
+    async fn claim_swarm(&self, swarm: &ClusterSwarm) -> DomainResult<bool>;
+    /// The cluster that already records Docker swarm `swarm_id`, if any.
+    async fn cluster_of_swarm(&self, swarm_id: &str) -> DomainResult<Option<ClusterId>>;
     /// Inserts or replaces the cluster's swarm row.
     async fn put_swarm(&self, swarm: &ClusterSwarm) -> DomainResult<()>;
     /// Removes the swarm row (the last node left).

@@ -157,7 +157,7 @@ pub async fn leave(
     Query(q): Query<LeaveQuery>,
 ) -> ApiResult<(StatusCode, Json<Job>)> {
     caller.authorize(Action::SwarmManage, cluster_ref(id)).await?;
-    let m = state.swarm.check_leave(id, server).await?;
+    let m = state.swarm.check_leave(id, server, q.force).await?;
     let payload = Payload {
         cluster_id: id,
         server_id: server,
@@ -201,9 +201,16 @@ pub async fn update_node(
         "labels": req.labels,
     });
     let change = NodeChange { role: req.role, availability: req.availability, labels: req.labels };
-    let node = state.swarm.update_node(id, server, &caller.principal().to_string(), change).await?;
-    caller.audit(AUDIT_NODE_UPDATE, &cluster_ref(id), None, details).await;
-    Ok(Json(node))
+    match state.swarm.update_node(id, server, &caller.principal().to_string(), change).await {
+        Ok(node) => {
+            caller.audit(AUDIT_NODE_UPDATE, &cluster_ref(id), None, details).await;
+            Ok(Json(node))
+        }
+        Err(e) => {
+            caller.audit_failed(AUDIT_NODE_UPDATE, &cluster_ref(id), None, details, &e.to_string()).await;
+            Err(e.into())
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -221,7 +228,11 @@ pub async fn rotate_tokens(
     Json(req): Json<RotateInput>,
 ) -> ApiResult<StatusCode> {
     caller.authorize(Action::SwarmManage, cluster_ref(id)).await?;
-    state.swarm.rotate_tokens(id, &caller.principal().to_string(), req.worker, req.manager).await?;
+    let details = json!({ "worker": req.worker, "manager": req.manager });
+    if let Err(e) = state.swarm.rotate_tokens(id, &caller.principal().to_string(), req.worker, req.manager).await {
+        caller.audit_failed(AUDIT_TOKENS_ROTATE, &cluster_ref(id), None, details, &e.to_string()).await;
+        return Err(e.into());
+    }
     caller
         .audit(AUDIT_TOKENS_ROTATE, &cluster_ref(id), None, json!({ "worker": req.worker, "manager": req.manager }))
         .await;
@@ -258,8 +269,8 @@ pub async fn service_get(
     caller.authorize(Action::View, super::services::svc_ref(id)).await?;
     let cluster = service_cluster(&state, &app).await?;
     let spec = crate::jobs::app::build_spec(&app, None).map_err(ApiError::bad_request)?;
-    let name = forge_catalog::swarm_service::service_name(&spec.environment, &app.name);
-    let op = forge_catalog::swarm::SwarmOp::ServiceStatus { name: name.clone() };
+    let name = forge_catalog::swarm_service::service_name(&app.id.to_string());
+    let op = forge_catalog::swarm::SwarmOp::ServiceStatus { service_id: app.id.to_string() };
     let (status, status_error) = match state.swarm.run(cluster, &caller.principal().to_string(), &op).await {
         Ok(v) => (Some(serde_json::from_value(v).map_err(forge_core::DomainError::internal)?), None),
         Err(e) => (None, Some(e.to_string())),
@@ -283,13 +294,32 @@ pub(super) async fn start_service_action(
     let cluster = service_cluster(state, app).await?;
     // Fails early (409) when the swarm has no manager yet.
     state.swarm.manager(cluster).await?;
-    let payload = crate::jobs::swarm_service::Payload { service_id: app.id, cluster_id: cluster, action };
+    // Host folders outside the approved roots of every swarm node need
+    // stack.privileged on the environment, as they do on Default clusters.
+    let privileged_binds = if action == ServiceAction::Deploy {
+        let binds = crate::jobs::swarm_service::binds_of(app).map_err(ApiError::bad_request)?;
+        let needed = state.swarm.privileged_binds(cluster, &binds).await?;
+        if !needed.is_empty() {
+            caller.authorize(Action::StackPrivileged, super::services::ns_ref(app.environment_id)).await?;
+        }
+        needed
+    } else {
+        Vec::new()
+    };
+    let resource = if privileged_binds.is_empty() {
+        super::services::svc_ref(app.id)
+    } else {
+        super::services::ns_ref(app.environment_id)
+    };
+    let payload =
+        crate::jobs::swarm_service::Payload { service_id: app.id, cluster_id: cluster, action, privileged_binds };
     let job = state
         .jobs
         .submit(NewJob {
             kind: crate::jobs::swarm_service::KIND.into(),
             workspace_id: Some(app.workspace_id),
-            resource: super::services::svc_ref(app.id),
+            // stack.privileged is held per environment (as for app.action).
+            resource,
             principal: caller.principal(),
             context: caller.ctx(),
             idempotency_key: None,
@@ -302,7 +332,10 @@ pub(super) async fn start_service_action(
             AUDIT_SERVICE,
             &super::services::ns_ref(app.environment_id),
             Some(app.workspace_id),
-            json!({ "service": app.name, "action": action.name(), "job_id": job.id }),
+            json!({
+                "service": app.name, "action": action.name(), "job_id": job.id,
+                "privileged_binds": payload.privileged_binds,
+            }),
         )
         .await;
     Ok(job)
@@ -351,8 +384,6 @@ pub async fn service_logs(
     let app = super::services::load_own(&state, id).await?;
     caller.authorize(Action::View, super::services::svc_ref(id)).await?;
     let cluster = service_cluster(&state, &app).await?;
-    let spec = crate::jobs::app::build_spec(&app, None).map_err(ApiError::bad_request)?;
-    let name = forge_catalog::swarm_service::service_name(&spec.environment, &app.name);
-    let op = forge_catalog::swarm::SwarmOp::ServiceLogs { name, tail: q.tail.min(10_000) };
+    let op = forge_catalog::swarm::SwarmOp::ServiceLogs { service_id: app.id.to_string(), tail: q.tail.min(10_000) };
     Ok(Json(state.swarm.run(cluster, &caller.principal().to_string(), &op).await?))
 }

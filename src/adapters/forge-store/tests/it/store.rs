@@ -633,8 +633,14 @@ async fn swarm_rows_round_trip_and_go_with_the_cluster() {
         default_addr_pool: vec!["10.20.0.0/16".into()],
         autolock: true,
         tokens_sealed: Some("sealed".into()),
+        founder: None,
         updated_at: Timestamp(1),
     };
+    // Only the first claim wins; the recorded swarm id is found again.
+    assert!(store.claim_swarm(&swarm).await.unwrap());
+    assert!(!store.claim_swarm(&swarm).await.unwrap());
+    assert_eq!(store.cluster_of_swarm("s1").await.unwrap(), Some(cluster.id));
+    assert_eq!(store.cluster_of_swarm("").await.unwrap(), None);
     store.put_swarm(&swarm).await.unwrap();
     assert_eq!(store.get_swarm(cluster.id).await.unwrap(), Some(swarm.clone()));
     let server = Server {

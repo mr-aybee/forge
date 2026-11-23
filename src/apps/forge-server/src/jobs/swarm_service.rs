@@ -1,26 +1,29 @@
 //! `swarm.service`: a container service in a Docker Swarm cluster (D-154).
 //!
-//! Payload: `{"service_id", "cluster_id", "action"}` where `action` is
-//! `{"kind": "deploy"}`, `{"kind": "scale", "replicas"}`, `{"kind":
-//! "restart"}`, `{"kind": "rollback"}` or `{"kind": "remove"}`. Steps:
+//! Payload: `{"service_id", "cluster_id", "action", "privileged_binds"}`
+//! where `action` is `{"kind": "deploy"}`, `{"kind": "scale", "replicas"}`,
+//! `{"kind": "restart"}`, `{"kind": "rollback"}` or `{"kind": "remove"}`.
+//! Steps:
 //! 1. `prepare`: picks a manager; a deploy also makes sure the
-//!    environment's overlay network exists.
-//! 2. `apply`: one operation on the manager. A deploy turns the service
-//!    into a Swarm `ServiceSpec` (secrets resolved here, never stored in the
-//!    job) and creates or updates it.
+//!    environment's encrypted overlay network exists.
+//! 2. `apply`: one operation on the manager. A deploy turns the service into
+//!    a typed [`ServiceDef`](forge_catalog::swarm_service::ServiceDef) (secrets
+//!    resolved here, never stored in the job), re-checks host binds against
+//!    `stack.privileged`, and creates or updates the service.
 //! 3. `converge`: waits until Swarm runs the tasks asked for. An update that
 //!    Swarm rolled back or paused fails the job with Swarm's message.
 //!
-//! Every step can run again: applying the same spec is an update to the
-//! same state, scaling to the same count is a no-op, and removing a service
-//! that is gone succeeds.
+//! Every step can run again: applying the same definition is an update to
+//! the same state, scaling to the same count is a no-op, and removing a
+//! service that is gone succeeds.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use forge_catalog::swarm::{SwarmOp, SwarmServiceStatus};
-use forge_catalog::swarm_service::{network_name, service_name, service_spec};
+use forge_catalog::swarm_service::service_def;
+use forge_core::model::Service;
 use forge_core::ports::ServiceRepository;
 use forge_core::swarm::{MemberRole, MemberState, SwarmRepository};
 use forge_core::{Action, ClusterId, ServerId, ServiceId};
@@ -68,11 +71,16 @@ pub struct Payload {
     pub service_id: ServiceId,
     pub cluster_id: ClusterId,
     pub action: ServiceAction,
+    /// Host folders outside the swarm's approved roots that the submitter
+    /// was authorized for (`stack.privileged`). A deploy refuses any other.
+    #[serde(default)]
+    pub privileged_binds: Vec<String>,
 }
 
 #[derive(Debug)]
 pub struct SwarmServiceJob {
     pub ops: NodeOps,
+    pub swarm: Arc<crate::swarm::SwarmService>,
     pub swarms: Arc<dyn SwarmRepository>,
     pub services: Arc<dyn ServiceRepository>,
     pub envelope: Envelope,
@@ -103,21 +111,22 @@ pub fn progress(action: ServiceAction, s: &SwarmServiceStatus) -> Progress {
     if !s.exists {
         return Progress::Failed("the service is gone from the swarm".into());
     }
-    let rolled_back = s.update_state.starts_with("rollback");
     match s.update_state.as_str() {
-        "paused" | "rollback_paused" => {
-            return Progress::Failed(format!("Swarm paused the update: {}", s.update_message));
-        }
+        "paused" | "rollback_paused" => Progress::Failed(format!("Swarm paused the update: {}", s.update_message)),
         "rollback_completed" if action != ServiceAction::Rollback => {
-            return Progress::Failed(format!("Swarm rolled the update back: {}", s.update_message));
+            Progress::Failed(format!("Swarm rolled the update back: {}", s.update_message))
         }
-        "updating" | "rollback_started" => return Progress::Running,
-        _ => {}
+        "updating" | "rollback_started" => Progress::Running,
+        _ if s.running >= s.desired => Progress::Done,
+        _ => Progress::Running,
     }
-    if rolled_back && action != ServiceAction::Rollback && s.update_state != "rollback_completed" {
-        return Progress::Running;
-    }
-    if s.running >= s.desired { Progress::Done } else { Progress::Running }
+}
+
+/// The host binds of `app`'s Swarm definition.
+pub fn binds_of(app: &Service) -> Result<Vec<String>, String> {
+    let spec = crate::jobs::app::build_spec(app, None)?;
+    let settings = spec.swarm.clone().unwrap_or_default();
+    Ok(service_def(&spec, &settings, &app.id.to_string(), &app.environment_id.to_string())?.bind_sources())
 }
 
 impl SwarmServiceJob {
@@ -150,69 +159,78 @@ impl SwarmServiceJob {
         Ok(m.server_id)
     }
 
-    async fn names(&self, id: ServiceId) -> Result<(forge_core::model::Service, String, String), StepError> {
-        let app = self.services.get_service(id).await.map_err(retry)?.ok_or_else(|| fatal("the service is gone"))?;
-        let env = app.spec.get("environment").and_then(Value::as_str).unwrap_or_default().to_owned();
-        let name = service_name(&env, &app.name);
-        Ok((app, env, name))
+    async fn apply_op(&self, p: &Payload, app: &Service) -> Result<SwarmOp, StepError> {
+        let sid = app.id.to_string();
+        Ok(match p.action {
+            ServiceAction::Deploy => {
+                let spec = crate::jobs::app::build_spec(app, Some(&self.envelope)).map_err(fatal)?;
+                let settings = spec.swarm.clone().unwrap_or_default();
+                let def = service_def(&spec, &settings, &sid, &app.environment_id.to_string()).map_err(fatal)?;
+                // Binds outside the swarm's approved roots need
+                // stack.privileged; checked again at every attempt.
+                let needed = self.swarm.privileged_binds(p.cluster_id, &def.bind_sources()).await.map_err(retry)?;
+                if let Some(b) = needed.iter().find(|b| !p.privileged_binds.contains(b)) {
+                    return Err(fatal(format!(
+                        "host folder `{b}` is outside the approved file roots of the swarm's nodes; it needs \
+                         stack.privileged (an administrator with MFA): deploy again as one"
+                    )));
+                }
+                SwarmOp::ServiceApply { def: Box::new(def) }
+            }
+            ServiceAction::Scale { replicas } => SwarmOp::ServiceScale { service_id: sid, replicas },
+            ServiceAction::Restart => SwarmOp::ServiceRestart { service_id: sid },
+            ServiceAction::Rollback => SwarmOp::ServiceRollback { service_id: sid },
+            ServiceAction::Remove => SwarmOp::ServiceRemove { service_id: sid },
+        })
+    }
+
+    async fn converge(&self, ctx: &mut StepContext, p: &Payload, manager: ServerId) -> Result<(), StepError> {
+        let deadline = tokio::time::Instant::now() + CONVERGE_FOR;
+        let op = SwarmOp::ServiceStatus { service_id: p.service_id.to_string() };
+        loop {
+            // One key: a finished operation is no longer tracked, so each
+            // round sends a fresh status request.
+            let status: SwarmServiceStatus =
+                serde_json::from_value(self.op(ctx, manager, "status_op", &op, QUICK_WAIT).await?).map_err(fatal)?;
+            ctx.set_state("status", serde_json::to_value(&status).map_err(fatal)?);
+            match progress(p.action, &status) {
+                Progress::Done => return Ok(()),
+                Progress::Failed(why) => return Err(fatal(why)),
+                Progress::Running if tokio::time::Instant::now() >= deadline => {
+                    return Err(retry(format!(
+                        "still converging: {} of {} tasks running",
+                        status.running, status.desired
+                    )));
+                }
+                Progress::Running => tokio::time::sleep(POLL).await,
+            }
+        }
     }
 
     async fn step(&self, index: usize, ctx: &mut StepContext, p: &Payload) -> Result<(), StepError> {
         let manager = self.manager(ctx, p.cluster_id).await?;
-        let (app, env, name) = self.names(p.service_id).await?;
         match index {
-            0 => {
-                if p.action == ServiceAction::Deploy {
-                    self.op(
-                        ctx,
-                        manager,
-                        "network_op",
-                        &SwarmOp::EnsureNetwork { name: network_name(&env) },
-                        QUICK_WAIT,
-                    )
-                    .await?;
-                }
-                Ok(())
+            0 if p.action == ServiceAction::Deploy => {
+                let app = self
+                    .services
+                    .get_service(p.service_id)
+                    .await
+                    .map_err(retry)?
+                    .ok_or_else(|| fatal("the service is gone"))?;
+                let op = SwarmOp::EnsureNetwork { environment_id: app.environment_id.to_string() };
+                self.op(ctx, manager, "network_op", &op, QUICK_WAIT).await.map(|_| ())
             }
             1 => {
-                let op = match p.action {
-                    ServiceAction::Deploy => {
-                        let spec = crate::jobs::app::build_spec(&app, Some(&self.envelope)).map_err(fatal)?;
-                        let settings = spec.swarm.clone().unwrap_or_default();
-                        SwarmOp::ServiceApply { spec: service_spec(&spec, &settings, &env).map_err(fatal)? }
-                    }
-                    ServiceAction::Scale { replicas } => SwarmOp::ServiceScale { name, replicas },
-                    ServiceAction::Restart => SwarmOp::ServiceRestart { name },
-                    ServiceAction::Rollback => SwarmOp::ServiceRollback { name },
-                    ServiceAction::Remove => SwarmOp::ServiceRemove { name },
-                };
-                self.op(ctx, manager, "apply_op", &op, QUICK_WAIT).await?;
-                Ok(())
+                let app = self
+                    .services
+                    .get_service(p.service_id)
+                    .await
+                    .map_err(retry)?
+                    .ok_or_else(|| fatal("the service is gone"))?;
+                let op = self.apply_op(p, &app).await?;
+                self.op(ctx, manager, "apply_op", &op, QUICK_WAIT).await.map(|_| ())
             }
-            2 => {
-                let deadline = tokio::time::Instant::now() + CONVERGE_FOR;
-                let mut round = 0u32;
-                loop {
-                    round += 1;
-                    let key = format!("status_op_{round}");
-                    let status: SwarmServiceStatus = serde_json::from_value(
-                        self.op(ctx, manager, &key, &SwarmOp::ServiceStatus { name: name.clone() }, QUICK_WAIT).await?,
-                    )
-                    .map_err(fatal)?;
-                    ctx.set_state("status", serde_json::to_value(&status).map_err(fatal)?);
-                    match progress(p.action, &status) {
-                        Progress::Done => return Ok(()),
-                        Progress::Failed(why) => return Err(fatal(why)),
-                        Progress::Running if tokio::time::Instant::now() >= deadline => {
-                            return Err(retry(format!(
-                                "still converging: {} of {} tasks running",
-                                status.running, status.desired
-                            )));
-                        }
-                        Progress::Running => tokio::time::sleep(POLL).await,
-                    }
-                }
-            }
+            2 => self.converge(ctx, p, manager).await,
             _ => Ok(()),
         }
     }
@@ -228,8 +246,11 @@ impl JobHandler for SwarmServiceJob {
         &["prepare", "apply", "converge"]
     }
 
-    fn required_action(&self, _payload: &Value) -> Action {
-        Action::Deploy
+    fn required_action(&self, payload: &Value) -> Action {
+        // A deploy that binds host folders outside the approved roots needs
+        // what it needed when it was submitted.
+        let privileged = payload["privileged_binds"].as_array().is_some_and(|a| !a.is_empty());
+        if privileged { Action::StackPrivileged } else { Action::Deploy }
     }
 
     async fn run_step(&self, index: usize, ctx: &mut StepContext) -> Result<(), StepError> {

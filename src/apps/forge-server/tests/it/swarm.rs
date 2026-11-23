@@ -78,7 +78,8 @@ async fn swarm_membership_is_checked_guarded_and_tracked() {
     assert_eq!(view["members"][0]["server_id"], a);
     assert_eq!(view["members"][0]["hostname"], "lab-a");
     assert!(matches!(view["members"][0]["state"].as_str(), Some("joining" | "failed")), "{view}");
-    assert!(view["swarm"].is_null(), "no swarm until the first node joined");
+    assert_eq!(view["swarm"]["swarm_id"], "", "the swarm is claimed but not created until the first node joined");
+    assert_eq!(view["swarm"]["founder"], a);
     assert!(view.to_string().find("SWMTKN").is_none(), "tokens never leave the server");
 
     // A swarm member cannot move to another cluster; it leaves the swarm first.

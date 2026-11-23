@@ -115,35 +115,35 @@ pub enum SwarmOp {
         #[serde(default)]
         force: bool,
     },
-    /// Creates the overlay network an environment's services share.
+    /// Creates the encrypted overlay network an environment's services share.
     EnsureNetwork {
-        name: String,
+        environment_id: String,
     },
-    /// Creates the service, or updates it to `spec` (an Engine API
-    /// `ServiceSpec` made by `swarm_service::service_spec`).
+    /// Creates the service, or updates it to `def`. An existing service is
+    /// updated only when it carries the same Forge service id.
     ServiceApply {
-        spec: serde_json::Value,
+        def: Box<crate::swarm_service::ServiceDef>,
     },
     ServiceStatus {
-        name: String,
+        service_id: String,
     },
     ServiceScale {
-        name: String,
+        service_id: String,
         replicas: u32,
     },
     /// Replaces every task with the same spec (`--force`).
     ServiceRestart {
-        name: String,
+        service_id: String,
     },
     /// Back to the previous spec.
     ServiceRollback {
-        name: String,
+        service_id: String,
     },
     ServiceRemove {
-        name: String,
+        service_id: String,
     },
     ServiceLogs {
-        name: String,
+        service_id: String,
         #[serde(default = "default_tail")]
         tail: u32,
     },
@@ -151,46 +151,6 @@ pub enum SwarmOp {
 
 const fn default_tail() -> u32 {
     200
-}
-
-/// Docker object names Forge uses: lower-case letters, digits, `-`, `_`, `.`.
-fn object_name_ok(n: &str) -> bool {
-    (1..=63).contains(&n.len())
-        && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'-' | b'_' | b'.'))
-        && !n.starts_with(['-', '.'])
-}
-
-/// Host paths a service may never bind: the Docker socket and system trees.
-const DENIED_BINDS: &[&str] =
-    &["/", "/etc", "/proc", "/sys", "/dev", "/boot", "/root", "/var/run/docker.sock", "/run/docker.sock"];
-
-/// Checks a service spec before the node hands it to Docker: Forge's own
-/// label, a valid name, no added capabilities, sysctls or privilege
-/// changes, and no binds of the Docker socket or system directories.
-fn service_spec_ok(spec: &serde_json::Value) -> Result<(), String> {
-    let name = spec["Name"].as_str().unwrap_or_default();
-    if !object_name_ok(name) {
-        return Err("invalid service name".into());
-    }
-    if spec["Labels"]["forge.managed"] != "true" {
-        return Err("only services Forge made can be applied".into());
-    }
-    let c = &spec["TaskTemplate"]["ContainerSpec"];
-    for key in ["CapabilityAdd", "Sysctls", "Privileges", "Ulimits", "Init"] {
-        if !c[key].is_null() {
-            return Err(format!("`{key}` is not allowed in a service"));
-        }
-    }
-    for m in c["Mounts"].as_array().into_iter().flatten() {
-        if m["Type"] == "bind" {
-            let src = m["Source"].as_str().unwrap_or_default().trim_end_matches('/');
-            let src = if src.is_empty() { "/" } else { src };
-            if DENIED_BINDS.contains(&src) {
-                return Err(format!("binding `{src}` into a service is not allowed"));
-            }
-        }
-    }
-    Ok(())
 }
 
 const fn default_port() -> u16 {
@@ -236,6 +196,10 @@ fn addr_ok(a: Option<&str>) -> bool {
                 && a.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
         }
     }
+}
+
+fn id_checked(id: &str) -> Result<(), String> {
+    if crate::swarm_service::id_ok(id) { Ok(()) } else { Err("invalid Forge id".into()) }
 }
 
 impl SwarmOp {
@@ -294,39 +258,22 @@ impl SwarmOp {
                     Err("choose the worker or manager token".into())
                 }
             }
-            Self::EnsureNetwork { name }
-            | Self::ServiceStatus { name }
-            | Self::ServiceRestart { name }
-            | Self::ServiceRollback { name }
-            | Self::ServiceRemove { name } => {
-                if object_name_ok(name) {
-                    Ok(())
-                } else {
-                    Err("invalid Docker object name".into())
-                }
-            }
-            Self::ServiceScale { name, replicas } => {
-                if !object_name_ok(name) {
-                    return Err("invalid Docker object name".into());
-                }
+            Self::EnsureNetwork { environment_id: id }
+            | Self::ServiceStatus { service_id: id }
+            | Self::ServiceRestart { service_id: id }
+            | Self::ServiceRollback { service_id: id }
+            | Self::ServiceRemove { service_id: id } => id_checked(id),
+            Self::ServiceScale { service_id, replicas } => {
+                id_checked(service_id)?;
                 if *replicas > 1000 { Err("at most 1000 replicas".into()) } else { Ok(()) }
             }
-            Self::ServiceLogs { name, tail } => {
-                if !object_name_ok(name) {
-                    return Err("invalid Docker object name".into());
-                }
+            Self::ServiceLogs { service_id, tail } => {
+                id_checked(service_id)?;
                 if *tail > 10_000 { Err("at most 10000 log lines".into()) } else { Ok(()) }
             }
-            Self::ServiceApply { spec } => service_spec_ok(spec),
+            Self::ServiceApply { def } => def.validate(),
             Self::Status {} | Self::Leave { .. } | Self::JoinTokens {} | Self::Nodes {} => Ok(()),
         }
-    }
-
-    /// Whether the result carries a secret (a join token), so the control
-    /// plane seals it and never shows it in job output.
-    #[must_use]
-    pub const fn returns_secret(&self) -> bool {
-        matches!(self, Self::JoinTokens {} | Self::RotateTokens { .. })
     }
 }
 
@@ -483,28 +430,9 @@ mod tests {
         let json = serde_json::to_string(&op).unwrap();
         assert_eq!(serde_json::from_str::<SwarmOp>(&json).unwrap(), op);
         assert!(serde_json::from_str::<SwarmOp>(r#"{"op":"leave","force":true,"x":1}"#).is_err());
-        assert!(op.returns_secret());
-        assert!(SwarmOp::ServiceRemove { name: "prod-web".into() }.validate().is_ok());
-        assert!(SwarmOp::ServiceRemove { name: "../x".into() }.validate().is_err());
-        assert!(!SwarmOp::Status {}.returns_secret());
-    }
-
-    #[test]
-    fn service_specs_are_checked_on_the_node() {
-        let ok = serde_json::json!({"Name": "prod-web", "Labels": {"forge.managed": "true"},
-            "TaskTemplate": {"ContainerSpec": {"Image": "nginx", "Mounts": [{"Type": "volume", "Source": "data", "Target": "/data"}]}}});
-        assert!(SwarmOp::ServiceApply { spec: ok.clone() }.validate().is_ok());
-        let mut foreign = ok.clone();
-        foreign["Labels"] = serde_json::json!({});
-        assert!(SwarmOp::ServiceApply { spec: foreign }.validate().is_err());
-        let mut caps = ok.clone();
-        caps["TaskTemplate"]["ContainerSpec"]["CapabilityAdd"] = serde_json::json!(["SYS_ADMIN"]);
-        assert!(SwarmOp::ServiceApply { spec: caps }.validate().is_err());
-        for src in ["/var/run/docker.sock", "/", "/etc/"] {
-            let mut sock = ok.clone();
-            sock["TaskTemplate"]["ContainerSpec"]["Mounts"] =
-                serde_json::json!([{"Type": "bind", "Source": src, "Target": "/x"}]);
-            assert!(SwarmOp::ServiceApply { spec: sock }.validate().is_err(), "{src}");
-        }
+        assert!(
+            SwarmOp::ServiceRemove { service_id: "01900000-0000-7000-8000-000000000001".into() }.validate().is_ok()
+        );
+        assert!(SwarmOp::ServiceRemove { service_id: "../x".into() }.validate().is_err());
     }
 }

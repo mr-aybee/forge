@@ -216,183 +216,437 @@ impl SwarmSettings {
     }
 }
 
-/// `<environment>-<service>`: unique per swarm, valid as a Docker name.
-#[must_use]
-pub fn service_name(environment: &str, service: &str) -> String {
-    format!("{environment}-{service}")
+/// A Forge id as Swarm object names carry it: the UUID's 32 hex digits.
+fn compact(id: &str) -> Option<String> {
+    let hex: String = id.chars().filter(|c| *c != '-').collect();
+    (id.len() == 36 && hex.len() == 32 && hex.bytes().all(|b| b.is_ascii_hexdigit())).then(|| hex.to_ascii_lowercase())
 }
 
-/// The overlay network of an environment.
+/// Whether `id` is a Forge id (a canonical UUID).
 #[must_use]
-pub fn network_name(environment: &str) -> String {
-    format!("forge-{environment}")
+pub fn id_ok(id: &str) -> bool {
+    compact(id).is_some()
 }
 
-fn port(p: &str) -> Result<Value, String> {
-    let (body, proto) = p.rsplit_once('/').map_or((p, "tcp"), |(b, pr)| (b, pr));
-    if !matches!(proto, "tcp" | "udp") {
-        return Err(format!("port `{p}`: protocol is tcp or udp"));
+/// The Swarm service of Forge service `service_id`: `forge-<id>`. Made from
+/// the id, so two environments can never name the same service.
+#[must_use]
+pub fn service_name(service_id: &str) -> String {
+    format!("forge-{}", compact(service_id).unwrap_or_default())
+}
+
+/// The overlay network of environment `environment_id`.
+#[must_use]
+pub fn network_name(environment_id: &str) -> String {
+    format!("forge-net-{}", compact(environment_id).unwrap_or_default())
+}
+
+/// Label carrying the Forge service id on a Swarm service: every operation
+/// checks it before it touches the service.
+pub const SERVICE_ID_LABEL: &str = "forge.service.id";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Protocol {
+    Tcp,
+    Udp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortDef {
+    pub protocol: Protocol,
+    pub target: u16,
+    #[serde(default)]
+    pub published: Option<u16>,
+}
+
+/// A mount: a named Docker volume, or a host folder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MountDef {
+    Volume { name: String, target: String, read_only: bool },
+    Bind { source: String, target: String, read_only: bool },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HealthDef {
+    pub command: String,
+    pub interval_secs: u32,
+    pub timeout_secs: u32,
+    pub retries: u32,
+    pub start_period_secs: u32,
+}
+
+/// Everything a node needs to create or update one Swarm service. A closed
+/// set: the node builds Docker's `ServiceSpec` from it, so a command can ask
+/// for nothing else (no privileges, capabilities, plugins, runtimes, other
+/// networks or volume drivers).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceDef {
+    pub service_id: String,
+    pub environment_id: String,
+    /// Display names, for labels only.
+    pub environment: String,
+    pub service: String,
+    pub image: String,
+    /// Resolved environment (secrets included): never logged.
+    pub env: Vec<(String, String)>,
+    pub command: Vec<String>,
+    pub args: Vec<String>,
+    pub user: String,
+    pub hostname: String,
+    pub mounts: Vec<MountDef>,
+    pub read_only: bool,
+    pub stop_grace_secs: u32,
+    pub healthcheck: Option<HealthDef>,
+    pub cpu_millis: u32,
+    pub memory_mb: u32,
+    pub log_max_mb: u32,
+    /// `name:ip` host entries.
+    pub extra_hosts: Vec<String>,
+    /// User labels (never `forge.*`).
+    pub labels: Vec<(String, String)>,
+    pub ports: Vec<PortDef>,
+    pub settings: SwarmSettings,
+}
+
+impl std::fmt::Debug for ServiceDef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServiceDef")
+            .field("service_id", &self.service_id)
+            .field("environment_id", &self.environment_id)
+            .field("image", &self.image)
+            .field("env_keys", &self.env.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>())
+            .field("mounts", &self.mounts)
+            .field("ports", &self.ports)
+            .field("settings", &self.settings)
+            .finish_non_exhaustive()
     }
+}
+
+fn port(p: &str) -> Result<PortDef, String> {
+    let (body, proto) = match p.rsplit_once('/') {
+        Some((b, "tcp")) => (b, Protocol::Tcp),
+        Some((b, "udp")) => (b, Protocol::Udp),
+        Some(_) => return Err(format!("port `{p}`: protocol is tcp or udp")),
+        None => (p, Protocol::Tcp),
+    };
     let parts: Vec<&str> = body.split(':').collect();
     let (published, target) = match parts.as_slice() {
         [t] => (None, *t),
         [h, t] | [_, h, t] => (Some(*h), *t),
         _ => return Err(format!("port `{p}` is not `[ip:]host:container`")),
     };
-    let target: u16 = target.parse().map_err(|_| format!("port `{p}`: bad container port"))?;
-    let mut v = json!({ "Protocol": proto, "TargetPort": target });
-    if let Some(h) = published {
-        v["PublishedPort"] = json!(h.parse::<u16>().map_err(|_| format!("port `{p}`: bad host port"))?);
-    }
-    Ok(v)
+    let target = target.parse().map_err(|_| format!("port `{p}`: bad container port"))?;
+    let published = published.map(|h| h.parse().map_err(|_| format!("port `{p}`: bad host port"))).transpose()?;
+    Ok(PortDef { protocol: proto, target, published })
 }
 
-fn mount(v: &str) -> Result<Value, String> {
+fn mount(v: &str) -> Result<MountDef, String> {
     let parts: Vec<&str> = v.split(':').collect();
-    let (source, target, ro) = match parts.as_slice() {
-        [s, t] => (*s, *t, false),
+    let (source, target, read_only) = match parts.as_slice() {
+        [s, t] | [s, t, "rw"] => (*s, *t, false),
         [s, t, "ro"] => (*s, *t, true),
-        [s, t, "rw"] => (*s, *t, false),
         _ => return Err(format!("volume `{v}` is not `source:target[:ro]`")),
     };
-    if !target.starts_with('/') {
-        return Err(format!("volume `{v}`: the container path must be absolute"));
+    let (source, target) = (source.to_owned(), target.to_owned());
+    Ok(if source.starts_with('/') {
+        MountDef::Bind { source, target, read_only }
+    } else {
+        MountDef::Volume { name: source, target, read_only }
+    })
+}
+
+fn volume_name_ok(n: &str) -> bool {
+    (1..=64).contains(&n.len())
+        && n.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric())
+        && n.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
+}
+
+fn container_path_ok(t: &str) -> bool {
+    crate::stacks::normalize_abs(t).is_some_and(|n| n != "/") && t.len() <= 1024 && !t.chars().any(char::is_control)
+}
+
+/// Builds the definition of `app` (a container service) for the swarm.
+pub fn service_def(
+    app: &AppSpec,
+    settings: &SwarmSettings,
+    service_id: &str,
+    environment_id: &str,
+) -> Result<ServiceDef, String> {
+    if app.runtime != Runtime::Container {
+        return Err("only container services run on Docker Swarm".into());
     }
-    let kind = if source.starts_with('/') { "bind" } else { "volume" };
-    Ok(json!({ "Type": kind, "Source": source, "Target": target, "ReadOnly": ro }))
+    let (command, args) = match (app.entrypoint.trim(), app.command.trim()) {
+        ("", "") => (Vec::new(), Vec::new()),
+        ("", cmd) => (vec!["/bin/sh".to_owned(), "-c".to_owned(), cmd.to_owned()], Vec::new()),
+        (ep, "") => (ep.split_whitespace().map(str::to_owned).collect(), Vec::new()),
+        (ep, cmd) => (
+            ep.split_whitespace().map(str::to_owned).collect(),
+            vec!["/bin/sh".to_owned(), "-c".to_owned(), cmd.to_owned()],
+        ),
+    };
+    let def = ServiceDef {
+        service_id: service_id.to_owned(),
+        environment_id: environment_id.to_owned(),
+        environment: app.environment.clone(),
+        service: app.name.clone(),
+        image: app.image.trim().to_owned(),
+        env: app.env.clone(),
+        command,
+        args,
+        user: app.user.trim().to_owned(),
+        hostname: app.hostname.trim().to_owned(),
+        mounts: app.volumes.iter().map(|v| mount(v)).collect::<Result<_, _>>()?,
+        read_only: app.read_only,
+        stop_grace_secs: app.stop_timeout_secs,
+        healthcheck: app.healthcheck.as_ref().map(|h| HealthDef {
+            command: h.command.clone(),
+            interval_secs: h.interval_secs,
+            timeout_secs: h.timeout_secs,
+            retries: h.retries,
+            start_period_secs: h.start_period_secs,
+        }),
+        cpu_millis: app.cpu_millis,
+        memory_mb: app.memory_mb,
+        log_max_mb: app.log_max_mb,
+        extra_hosts: app.extra_hosts.clone(),
+        labels: app.labels.clone(),
+        ports: app.ports.iter().map(|p| port(p)).collect::<Result<_, _>>()?,
+        settings: settings.clone(),
+    };
+    def.validate()?;
+    Ok(def)
+}
+
+impl ServiceDef {
+    /// Host folders this service binds (normalized).
+    #[must_use]
+    pub fn bind_sources(&self) -> Vec<String> {
+        self.mounts
+            .iter()
+            .filter_map(|m| match m {
+                MountDef::Bind { source, .. } => crate::stacks::normalize_abs(source),
+                MountDef::Volume { .. } => None,
+            })
+            .collect()
+    }
+
+    /// Checks everything before a node runs it. Runs on the control plane
+    /// and again in the node's root helper.
+    pub fn validate(&self) -> Result<(), String> {
+        if !id_ok(&self.service_id) || !id_ok(&self.environment_id) {
+            return Err("invalid service or environment id".into());
+        }
+        if self.image.is_empty() || !crate::apps::valid_image_ref(&self.image) {
+            return Err("a container service needs a valid image reference".into());
+        }
+        if self.env.len() > 500 || !self.env.iter().all(|(k, v)| crate::apps::valid_env_key(k) && !v.contains('\0')) {
+            return Err("invalid environment variable".into());
+        }
+        for word in self.command.iter().chain(&self.args) {
+            if word.len() > 16 * 1024 || word.contains('\0') {
+                return Err("command words must be text without NUL, up to 16 KiB".into());
+            }
+        }
+        for (what, v) in [("user", &self.user), ("hostname", &self.hostname)] {
+            if v.len() > 253 || v.chars().any(|c| c.is_control() || c.is_whitespace()) {
+                return Err(format!("invalid {what}"));
+            }
+        }
+        if self.mounts.len() > 64 {
+            return Err("at most 64 mounts".into());
+        }
+        for m in &self.mounts {
+            match m {
+                MountDef::Volume { name, target, .. } => {
+                    if !volume_name_ok(name) || !container_path_ok(target) {
+                        return Err(format!("volume `{name}:{target}` is not allowed"));
+                    }
+                }
+                MountDef::Bind { source, target, .. } => {
+                    if let Some(why) = crate::stacks::protected_host_path(source) {
+                        return Err(format!("binding `{source}` is not allowed: {why}"));
+                    }
+                    if !container_path_ok(target) {
+                        return Err(format!("mount target `{target}` must be an absolute container path"));
+                    }
+                }
+            }
+        }
+        if let Some(h) = &self.healthcheck
+            && (h.command.trim().is_empty() || h.command.len() > 4096 || h.command.contains('\0'))
+        {
+            return Err("invalid health check command".into());
+        }
+        if !self.extra_hosts.iter().all(|h| {
+            h.split_once(':').is_some_and(|(n, ip)| volume_name_ok(n) && ip.parse::<std::net::IpAddr>().is_ok())
+        }) {
+            return Err("extra hosts are `name:ip`".into());
+        }
+        if self.labels.len() > 64
+            || !self.labels.iter().all(|(k, v)| {
+                label_name_ok(k) && !k.starts_with("forge.") && v.len() <= 1024 && !v.chars().any(char::is_control)
+            })
+        {
+            return Err("labels: letters, digits, `.` `-` `_`; `forge.*` is reserved".into());
+        }
+        if self.ports.len() > 64 || self.ports.iter().any(|p| p.target == 0 || p.published == Some(0)) {
+            return Err("invalid port".into());
+        }
+        self.settings.validate()
+    }
+
+    /// The Engine API `ServiceSpec`.
+    #[must_use]
+    pub fn engine_spec(&self) -> Value {
+        let s = &self.settings;
+        let mut labels = Map::new();
+        for (k, v) in &self.labels {
+            labels.insert(k.clone(), json!(v));
+        }
+        let mounts: Vec<Value> = self
+            .mounts
+            .iter()
+            .map(|m| match m {
+                MountDef::Volume { name, target, read_only } => {
+                    json!({ "Type": "volume", "Source": name, "Target": target, "ReadOnly": read_only })
+                }
+                MountDef::Bind { source, target, read_only } => {
+                    json!({ "Type": "bind", "Source": source, "Target": target, "ReadOnly": read_only })
+                }
+            })
+            .collect();
+        let mut container = json!({
+            "Image": self.image,
+            "Env": self.env.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>(),
+            "Labels": labels,
+            "Mounts": mounts,
+            "ReadOnly": self.read_only,
+            "Hosts": self.extra_hosts.iter().filter_map(|h| h.split_once(':').map(|(n, ip)| format!("{ip} {n}"))).collect::<Vec<_>>(),
+        });
+        if !self.command.is_empty() {
+            container["Command"] = json!(self.command);
+        }
+        if !self.args.is_empty() {
+            container["Args"] = json!(self.args);
+        }
+        for (key, value) in [("User", &self.user), ("Hostname", &self.hostname)] {
+            if !value.is_empty() {
+                container[key] = json!(value);
+            }
+        }
+        if self.stop_grace_secs > 0 {
+            container["StopGracePeriod"] = json!(secs(self.stop_grace_secs));
+        }
+        if let Some(hc) = &self.healthcheck {
+            container["Healthcheck"] = json!({
+                "Test": ["CMD-SHELL", hc.command],
+                "Interval": secs(hc.interval_secs),
+                "Timeout": secs(hc.timeout_secs),
+                "Retries": hc.retries,
+                "StartPeriod": secs(hc.start_period_secs),
+            });
+        }
+        let mut limits = Map::new();
+        if self.cpu_millis > 0 {
+            limits.insert("NanoCPUs".into(), json!(u64::from(self.cpu_millis) * 1_000_000));
+        }
+        if self.memory_mb > 0 {
+            limits.insert("MemoryBytes".into(), json!(u64::from(self.memory_mb) * 1024 * 1024));
+        }
+        let mut placement = json!({
+            "Constraints": s.constraints,
+            "Preferences": s.spread.iter().map(|l| json!({ "Spread": { "SpreadDescriptor": l } })).collect::<Vec<_>>(),
+        });
+        if s.max_per_node > 0 {
+            placement["MaxReplicas"] = json!(s.max_per_node);
+        }
+        let restart = json!({
+            "Condition": match s.restart.condition {
+                RestartCondition::Any => "any",
+                RestartCondition::OnFailure => "on-failure",
+                RestartCondition::None => "none",
+            },
+            "Delay": secs(s.restart.delay_secs),
+            "MaxAttempts": s.restart.max_attempts,
+        });
+        let mut task = json!({
+            "ContainerSpec": container,
+            "Resources": { "Limits": limits },
+            "RestartPolicy": restart,
+            "Placement": placement,
+            "Networks": [{ "Target": network_name(&self.environment_id) }],
+        });
+        if self.log_max_mb > 0 {
+            task["LogDriver"] =
+                json!({ "Name": "json-file", "Options": { "max-size": format!("{}m", self.log_max_mb) } });
+        }
+        let update = json!({
+            "Parallelism": s.update.parallelism,
+            "Delay": secs(s.update.delay_secs),
+            "FailureAction": s.update.failure_action.as_docker(),
+            "Monitor": secs(s.update.monitor_secs),
+            "MaxFailureRatio": s.update.max_failure_ratio,
+            "Order": match s.update.order { UpdateOrder::StartFirst => "start-first", UpdateOrder::StopFirst => "stop-first" },
+        });
+        let mut rollback = update.clone();
+        rollback["FailureAction"] = json!("pause");
+        let mode = match s.mode {
+            ServiceMode::Replicated => json!({ "Replicated": { "Replicas": s.replicas } }),
+            ServiceMode::Global => json!({ "Global": {} }),
+        };
+        let publish = match s.publish {
+            PublishMode::Ingress => "ingress",
+            PublishMode::Host => "host",
+        };
+        let ports: Vec<Value> = self
+            .ports
+            .iter()
+            .map(|p| {
+                let mut v = json!({
+                    "Protocol": match p.protocol { Protocol::Tcp => "tcp", Protocol::Udp => "udp" },
+                    "TargetPort": p.target,
+                    "PublishMode": publish,
+                });
+                if let Some(h) = p.published {
+                    v["PublishedPort"] = json!(h);
+                }
+                v
+            })
+            .collect();
+        json!({
+            "Name": service_name(&self.service_id),
+            "Labels": {
+                MANAGED_LABEL: "true",
+                SERVICE_ID_LABEL: self.service_id,
+                "forge.environment.id": self.environment_id,
+                "forge.environment": self.environment,
+                "forge.service": self.service,
+            },
+            "TaskTemplate": task,
+            "Mode": mode,
+            "UpdateConfig": update,
+            "RollbackConfig": rollback,
+            "EndpointSpec": { "Mode": "vip", "Ports": ports },
+        })
+    }
 }
 
 fn secs(n: u32) -> u64 {
     u64::from(n) * NANOS
 }
 
-/// The Engine API `ServiceSpec` for a container service.
-pub fn service_spec(spec: &AppSpec, s: &SwarmSettings, env_slug: &str) -> Result<Value, String> {
-    if spec.runtime != Runtime::Container {
-        return Err("only container services run on Docker Swarm".into());
-    }
-    if spec.image.trim().is_empty() {
-        return Err("a container service needs an image".into());
-    }
-    s.validate()?;
-    let mut labels = Map::new();
-    for (k, v) in &spec.labels {
-        labels.insert(k.clone(), json!(v));
-    }
-    let mut container = json!({
-        "Image": spec.image,
-        "Env": spec.env.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>(),
-        "Labels": labels,
-        "Mounts": spec.volumes.iter().map(|v| mount(v)).collect::<Result<Vec<_>, _>>()?,
-        "ReadOnly": spec.read_only,
-        "Hosts": spec.extra_hosts.iter().filter_map(|h| h.split_once(':').map(|(n, ip)| format!("{ip} {n}"))).collect::<Vec<_>>(),
-    });
-    if !spec.command.trim().is_empty() {
-        container["Command"] = json!(["/bin/sh", "-c", spec.command.trim()]);
-    }
-    if !spec.entrypoint.trim().is_empty() {
-        container["Command"] = json!(spec.entrypoint.split_whitespace().collect::<Vec<_>>());
-        if !spec.command.trim().is_empty() {
-            container["Args"] = json!(["/bin/sh", "-c", spec.command.trim()]);
-        }
-    }
-    for (key, value) in [("User", &spec.user), ("Hostname", &spec.hostname)] {
-        if !value.trim().is_empty() {
-            container[key] = json!(value);
-        }
-    }
-    if spec.stop_timeout_secs > 0 {
-        container["StopGracePeriod"] = json!(secs(spec.stop_timeout_secs));
-    }
-    if let Some(hc) = &spec.healthcheck {
-        container["Healthcheck"] = json!({
-            "Test": ["CMD-SHELL", hc.command],
-            "Interval": secs(hc.interval_secs),
-            "Timeout": secs(hc.timeout_secs),
-            "Retries": hc.retries,
-            "StartPeriod": secs(hc.start_period_secs),
-        });
-    }
-    let mut limits = Map::new();
-    if spec.cpu_millis > 0 {
-        limits.insert("NanoCPUs".into(), json!(u64::from(spec.cpu_millis) * 1_000_000));
-    }
-    if spec.memory_mb > 0 {
-        limits.insert("MemoryBytes".into(), json!(u64::from(spec.memory_mb) * 1024 * 1024));
-    }
-    let mut placement = json!({
-        "Constraints": s.constraints,
-        "Preferences": s.spread.iter().map(|l| json!({ "Spread": { "SpreadDescriptor": l } })).collect::<Vec<_>>(),
-    });
-    if s.max_per_node > 0 {
-        placement["MaxReplicas"] = json!(s.max_per_node);
-    }
-    let restart = json!({
-        "Condition": match s.restart.condition {
-            RestartCondition::Any => "any",
-            RestartCondition::OnFailure => "on-failure",
-            RestartCondition::None => "none",
-        },
-        "Delay": secs(s.restart.delay_secs),
-        "MaxAttempts": s.restart.max_attempts,
-    });
-    let mut task = json!({
-        "ContainerSpec": container,
-        "Resources": { "Limits": limits },
-        "RestartPolicy": restart,
-        "Placement": placement,
-        "Networks": [{ "Target": network_name(env_slug) }],
-    });
-    if spec.log_max_mb > 0 {
-        task["LogDriver"] = json!({ "Name": "json-file", "Options": { "max-size": format!("{}m", spec.log_max_mb) } });
-    }
-    let update = json!({
-        "Parallelism": s.update.parallelism,
-        "Delay": secs(s.update.delay_secs),
-        "FailureAction": s.update.failure_action.as_docker(),
-        "Monitor": secs(s.update.monitor_secs),
-        "MaxFailureRatio": s.update.max_failure_ratio,
-        "Order": match s.update.order { UpdateOrder::StartFirst => "start-first", UpdateOrder::StopFirst => "stop-first" },
-    });
-    let mut rollback = update.clone();
-    rollback["FailureAction"] = json!("pause");
-    let mode = match s.mode {
-        ServiceMode::Replicated => json!({ "Replicated": { "Replicas": s.replicas } }),
-        ServiceMode::Global => json!({ "Global": {} }),
-    };
-    let publish = match s.publish {
-        PublishMode::Ingress => "ingress",
-        PublishMode::Host => "host",
-    };
-    let ports: Vec<Value> = spec
-        .ports
-        .iter()
-        .map(|p| {
-            port(p).map(|mut v| {
-                v["PublishMode"] = json!(publish);
-                v
-            })
-        })
-        .collect::<Result<_, _>>()?;
-    let mut svc_labels = Map::new();
-    svc_labels.insert(MANAGED_LABEL.into(), json!("true"));
-    svc_labels.insert("forge.environment".into(), json!(env_slug));
-    svc_labels.insert("forge.service".into(), json!(spec.name));
-    Ok(json!({
-        "Name": service_name(env_slug, &spec.name),
-        "Labels": svc_labels,
-        "TaskTemplate": task,
-        "Mode": mode,
-        "UpdateConfig": update,
-        "RollbackConfig": rollback,
-        "EndpointSpec": { "Mode": "vip", "Ports": ports },
-    }))
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    const SVC: &str = "01900000-0000-7000-8000-000000000001";
+    const ENV: &str = "01900000-0000-7000-8000-000000000002";
 
     fn app() -> AppSpec {
         serde_json::from_value(json!({
@@ -406,6 +660,10 @@ mod tests {
         .unwrap()
     }
 
+    fn def(s: &SwarmSettings) -> Result<ServiceDef, String> {
+        service_def(&app(), s, SVC, ENV)
+    }
+
     #[test]
     fn a_container_service_becomes_a_swarm_service() {
         let s = SwarmSettings {
@@ -414,9 +672,12 @@ mod tests {
             max_per_node: 2,
             ..Default::default()
         };
-        let v = service_spec(&app(), &s, "prod").unwrap();
-        assert_eq!(v["Name"], "prod-web");
+        let d = def(&s).unwrap();
+        assert_eq!(d.bind_sources(), vec!["/srv/conf"]);
+        let v = d.engine_spec();
+        assert_eq!(v["Name"], "forge-01900000000070008000000000000001");
         assert_eq!(v["Labels"][MANAGED_LABEL], "true");
+        assert_eq!(v["Labels"][SERVICE_ID_LABEL], SVC);
         assert_eq!(v["Mode"]["Replicated"]["Replicas"], 3);
         let c = &v["TaskTemplate"]["ContainerSpec"];
         assert_eq!(c["Image"], "nginx:1.27");
@@ -426,27 +687,55 @@ mod tests {
         assert_eq!(c["Mounts"][1]["Type"], "bind");
         assert_eq!(c["Mounts"][1]["ReadOnly"], true);
         assert_eq!(c["Healthcheck"]["Interval"], 30 * NANOS);
+        assert!(c.get("CapabilityAdd").is_none() && c.get("Privileges").is_none());
         assert_eq!(v["TaskTemplate"]["Resources"]["Limits"]["NanoCPUs"], 500_000_000u64);
         assert_eq!(v["TaskTemplate"]["Placement"]["MaxReplicas"], 2);
-        assert_eq!(v["TaskTemplate"]["Placement"]["Preferences"][0]["Spread"]["SpreadDescriptor"], "node.labels.zone");
-        assert_eq!(v["TaskTemplate"]["Networks"][0]["Target"], "forge-prod");
-        assert_eq!(v["UpdateConfig"]["Order"], "start-first");
+        assert_eq!(v["TaskTemplate"]["Networks"][0]["Target"], "forge-net-01900000000070008000000000000002");
         assert_eq!(v["UpdateConfig"]["FailureAction"], "rollback");
         assert_eq!(v["EndpointSpec"]["Ports"][0]["PublishedPort"], 8080);
         assert_eq!(v["EndpointSpec"]["Ports"][1]["Protocol"], "udp");
     }
 
     #[test]
+    fn names_come_from_ids_so_environments_never_collide() {
+        assert_ne!(service_name(SVC), service_name(ENV));
+        assert!(id_ok(SVC));
+        assert!(!id_ok("a-b-c"));
+        assert!(!id_ok("../../etc/passwd-0000-0000-0000-00000000"));
+    }
+
+    #[test]
     fn global_mode_and_host_ports() {
         let s = SwarmSettings { mode: ServiceMode::Global, publish: PublishMode::Host, ..Default::default() };
-        let v = service_spec(&app(), &s, "prod").unwrap();
+        let v = def(&s).unwrap().engine_spec();
         assert!(v["Mode"]["Global"].is_object());
         assert_eq!(v["EndpointSpec"]["Ports"][0]["PublishMode"], "host");
     }
 
     #[test]
-    fn settings_are_checked() {
-        let bad = |s: SwarmSettings| service_spec(&app(), &s, "prod").is_err();
+    fn protected_host_paths_never_become_binds() {
+        for src in [
+            "/",
+            "/etc/cron.d",
+            "/var/run",
+            "/run/docker.sock",
+            "/var/lib/docker",
+            "/srv/../etc",
+            "/root/.ssh",
+            "/opt/forge",
+        ] {
+            let mut a = app();
+            a.volumes = vec![format!("{src}:/x")];
+            assert!(service_def(&a, &SwarmSettings::default(), SVC, ENV).is_err(), "{src}");
+        }
+        let mut a = app();
+        a.volumes = vec!["/srv/data:relative".into()];
+        assert!(service_def(&a, &SwarmSettings::default(), SVC, ENV).is_err(), "relative target");
+    }
+
+    #[test]
+    fn settings_and_fields_are_checked() {
+        let bad = |s: SwarmSettings| def(&s).is_err();
         assert!(bad(SwarmSettings { constraints: vec!["rm -rf /".into()], ..Default::default() }));
         assert!(bad(SwarmSettings { constraints: vec!["node.labels.zone=a".into()], ..Default::default() }));
         assert!(!bad(SwarmSettings {
@@ -457,7 +746,20 @@ mod tests {
         assert!(bad(SwarmSettings { replicas: 5000, ..Default::default() }));
         let mut native = app();
         native.runtime = Runtime::Systemd;
-        assert!(service_spec(&native, &SwarmSettings::default(), "prod").is_err());
+        assert!(service_def(&native, &SwarmSettings::default(), SVC, ENV).is_err());
+        let mut forged = app();
+        forged.labels = vec![("forge.service.id".into(), "other".into())];
+        assert!(service_def(&forged, &SwarmSettings::default(), SVC, ENV).is_err(), "forge.* labels are reserved");
+    }
+
+    #[test]
+    fn definitions_are_closed() {
+        let d = def(&SwarmSettings::default()).unwrap();
+        let mut v = serde_json::to_value(&d).unwrap();
+        v["privileged"] = json!(true);
+        assert!(serde_json::from_value::<ServiceDef>(v).is_err());
+        let dbg = format!("{d:?}");
+        assert!(!dbg.contains("prod\""), "env values never print: {dbg}");
     }
 
     #[test]

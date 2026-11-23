@@ -352,6 +352,18 @@ impl Services {
             envelope.clone(),
             clock.clone(),
         ));
+        let swarm = Arc::new(crate::swarm::SwarmService {
+            swarms: Arc::new(store.clone()),
+            servers: Arc::new(store.clone()),
+            clusters: Arc::new(store.clone()),
+            tenancy: Arc::new(store.clone()),
+            files: Arc::new(store.clone()),
+            hub: hub.clone(),
+            signer: signer.clone(),
+            envelope: envelope.clone(),
+            clock: clock.clone(),
+            node_cache: std::sync::Mutex::default(),
+        });
         let node_ops = crate::jobs::node_op::NodeOps {
             hub: hub.clone(),
             signer: signer.clone(),
@@ -360,6 +372,7 @@ impl Services {
         };
         registry.register(Arc::new(crate::jobs::swarm_service::SwarmServiceJob {
             ops: node_ops.clone(),
+            swarm: swarm.clone(),
             swarms: Arc::new(store.clone()),
             services: Arc::new(store.clone()),
             envelope: envelope.clone(),
@@ -470,16 +483,6 @@ impl Services {
         } else {
             None
         };
-        let swarm = Arc::new(crate::swarm::SwarmService {
-            swarms: Arc::new(store.clone()),
-            servers: Arc::new(store.clone()),
-            clusters: Arc::new(store.clone()),
-            tenancy: Arc::new(store.clone()),
-            hub: hub.clone(),
-            signer: signer.clone(),
-            envelope: envelope.clone(),
-            clock: clock.clone(),
-        });
         let files = forge_files::FileService::new(
             Arc::new(store.clone()),
             Arc::new(store.clone()),
