@@ -71,6 +71,12 @@ a development machine, never on a shared or production host.
    forge stacks from-template redis cache --environment prod --node lab-b
    ```
 
+4. Run PostgreSQL on the swarm from
+   `scripts/lab/swarm/examples/postgres.yml`. It runs one replica pinned to
+   a labelled node, keeps its data in the named volume `pgdata`, takes the
+   password from a sealed secret, and updates stop-first. The comment at the
+   top of the file lists the commands.
+
 ## Verify
 
 - `forge clusters swarm status lab` lists every node as a member, and
