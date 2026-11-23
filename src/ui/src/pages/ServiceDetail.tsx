@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { ChevronRight, Container, History, Database, Globe, HeartPulse, LayoutDashboard, Loader2, Rocket, Settings2, Trash2, Waypoints } from "lucide-react";
+import { ChevronRight, Container, History, Database, Globe, HeartPulse, LayoutDashboard, Loader2, Rocket, Settings2, Trash2, Waypoints, Webhook } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ApiError, get } from "../api/client";
@@ -41,6 +41,7 @@ import { Button, Confirm, Drawer, Empty, ErrorNote, RowMenu, Modal, PageCrumb, P
 import { TagEditor } from "../components/TagEditor";
 import { AppStorageTab } from "../components/storage/AppStorageTab";
 import { ReleasesTab } from "../components/deploy/ReleasesTab";
+import { WebhooksTab } from "../components/deploy/WebhooksTab";
 import { LogIngestKeys, OpenLogStream } from "../components/logs/LogIngestKeys";
 import { ServiceNodes } from "../components/service/ServiceNodes";
 import { ServiceSwarm } from "../components/service/ServiceSwarm";
@@ -267,6 +268,7 @@ function ServicePage({ appId }: { appId: string }) {
             ["health", "Health Checks", HeartPulse],
             ["storage", "Storage", Database],
             ["releases", "Releases", History],
+            ["webhooks", "Webhooks", Webhook],
           ] as const
         ).map(([id, label, Icon]) => (
           <button key={id} onClick={() => setTab(id)} className={`press -mb-px inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-[13px] whitespace-nowrap focus-visible:outline-2 focus-visible:outline-accent ${tab === id ? "border-accent text-accent" : "border-transparent text-muted hover:text-fg"}`}>
@@ -284,6 +286,8 @@ function ServicePage({ appId }: { appId: string }) {
       <div key={tab} className="view-enter" hidden={tab === "health"}>
       {tab === "health" ? null : tab === "releases" ? (
         <ReleasesTab app={a} swarm={swarm} />
+      ) : tab === "webhooks" ? (
+        <WebhooksTab target={{ kind: "service", id: a.id }} targetName={a.name} />
       ) : tab === "storage" ? (
         <AppStorageTab app={a} />
       ) : tab === "overview" ? (

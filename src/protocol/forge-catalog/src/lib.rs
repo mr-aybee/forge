@@ -33,6 +33,7 @@ pub mod ingress;
 pub mod integration;
 pub mod names;
 pub mod sites;
+pub mod stack_templates;
 pub mod stacks;
 pub mod storage;
 pub mod swarm;

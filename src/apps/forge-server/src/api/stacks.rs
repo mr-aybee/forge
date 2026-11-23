@@ -318,6 +318,53 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(json!({ "stack": stack, "preview": preview(&p) }))))
 }
 
+/// `GET /stack-templates`: the compose app templates (D-160).
+pub async fn templates(
+    caller: Caller,
+    Ws(ws): Ws,
+) -> ApiResult<Json<&'static [forge_catalog::stack_templates::Template]>> {
+    caller.authorize(Action::View, EntityRef::new(EntityKind::Workspace, ws)).await?;
+    Ok(Json(forge_catalog::stack_templates::TEMPLATES))
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FromTemplateInput {
+    /// A template id from `GET /stack-templates`.
+    pub template: String,
+    #[schemars(with = "String")]
+    pub environment_id: EnvironmentId,
+    #[schemars(with = "String")]
+    pub server_id: ServerId,
+    pub name: String,
+    /// Variable values; empty secrets are generated.
+    #[serde(default)]
+    pub values: BTreeMap<String, String>,
+}
+
+/// `POST /stacks/from-template`: a compose stack from a template, through
+/// the same checks as any stack (policy, sealed `.env`, audit).
+pub async fn from_template(
+    State(state): State<AppState>,
+    caller: Caller,
+    Json(input): Json<FromTemplateInput>,
+) -> ApiResult<(StatusCode, Json<Value>)> {
+    let t = forge_catalog::stack_templates::find(&input.template)
+        .ok_or_else(|| ApiError::bad_request(format!("unknown template `{}`", input.template)))?;
+    let env = forge_catalog::stack_templates::render_env(t, &input.values, forge_secrets::crypto::random_token::<24>)
+        .map_err(ApiError::bad_request)?;
+    let stack_input = CreateInput {
+        environment_id: input.environment_id,
+        server_id: input.server_id,
+        name: input.name,
+        content: t.compose.to_owned(),
+        env: Some(env),
+        dir: None,
+        note: Some(format!("from the {} template", t.title)),
+    };
+    create(State(state), caller, Json(stack_input)).await
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ContainerInput {

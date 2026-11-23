@@ -5633,3 +5633,9 @@ A delivery runs as the webhook's creator, through the same deploy paths and chec
 A delivery may pick the image tag (`?tag=` or a JSON `"tag"`) only when the webhook has a tag pattern such as `v*`. Deliveries are rate-limited per source address (before any lookup) and per webhook. The newest 100 deliveries per webhook are kept. `GET /hooks/<token>/jobs/<id>` reports only jobs that webhook started.
 
 **Why.** CI needs one call that deploys without holding a user's token. A URL credential that can only deploy one target, is checked again against its creator's current rights, and leaves a record of every call is narrower than a service-account token. Signatures, especially the timestamped one, stop a leaked URL being replayed from a log.
+
+## D-160 Compose app templates
+
+**Decision.** Forge ships a small set of compose app templates: Nginx, PostgreSQL, Redis, MariaDB, WordPress and Uptime Kuma. Each has pinned images (never `latest`), health checks and named volumes. A template's `${VAR}` placeholders are filled from the stack's `.env`, so Docker Compose does the substitution and Forge renders nothing into YAML. Secret variables left empty get a random 192-bit value and are sealed like any stack `.env`. A stack made from a template goes through the normal stack checks: policy, MFA for privileged settings, and audit.
+
+**Not done.** Git-backed stacks, where a stack follows a branch and redeploys on push. They need a git fetcher on the control plane and deploy keys, which means a new dependency and a new trust boundary, so they are on the roadmap. Until then, a deploy webhook (D-159) redeploys a stack from CI.

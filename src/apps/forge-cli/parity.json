@@ -388,7 +388,9 @@
     "PUT /api/v1/webhooks/{id}": "Deploy webhooks (D-159); the service's Webhooks tab, `forge api call` for scripts",
     "DELETE /api/v1/webhooks/{id}": "Deploy webhooks (D-159); the service's Webhooks tab, `forge api call` for scripts",
     "POST /api/v1/webhooks/{id}/rotate": "Deploy webhooks (D-159); the service's Webhooks tab, `forge api call` for scripts",
-    "GET /api/v1/webhooks/{id}/deliveries": "Deploy webhooks (D-159); the service's Webhooks tab, `forge api call` for scripts"
+    "GET /api/v1/webhooks/{id}/deliveries": "Deploy webhooks (D-159); the service's Webhooks tab, `forge api call` for scripts",
+    "GET /api/v1/stack-templates": "Compose app templates (D-160); New stack → From a template, `forge api call` for scripts",
+    "POST /api/v1/stacks/from-template": "Compose app templates (D-160); New stack → From a template, `forge api call` for scripts"
   },
   "excluded": {
     "POST /api/events/raw": "Seq log ingest for services, authenticated by an ingest key, not by a user",

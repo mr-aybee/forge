@@ -53,7 +53,7 @@ const services = createRoute({
   }),
   component: lazyRouteComponent(() => import("../pages/Services"), "Services"),
 });
-const APP_TABS = ["overview", "configuration", "health", "storage", "releases"] as const;
+const APP_TABS = ["overview", "configuration", "health", "storage", "releases", "webhooks"] as const;
 export type AppTab = (typeof APP_TABS)[number];
 const service = createRoute({
   getParentRoute: parent,

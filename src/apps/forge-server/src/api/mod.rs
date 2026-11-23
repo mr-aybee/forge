@@ -187,6 +187,8 @@ pub fn router(state: AppState) -> Router {
         .route("/clusters/{id}/profile", get(ingress::get).put(ingress::put))
         .route("/clusters/{id}/swarm", get(swarm::get))
         .route("/registries", get(registries::list).post(registries::create))
+        .route("/stack-templates", get(stacks::templates))
+        .route("/stacks/from-template", post(stacks::from_template))
         .route("/webhooks", get(webhooks::list).post(webhooks::create))
         .route("/webhooks/{id}", put(webhooks::update).delete(webhooks::delete))
         .route("/webhooks/{id}/rotate", post(webhooks::rotate))

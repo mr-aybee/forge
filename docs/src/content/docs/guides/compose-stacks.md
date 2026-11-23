@@ -24,6 +24,16 @@ For how placement, the policy and port binding work, see
 - Bind mounts outside the stack folder must be inside an
   [approved file root](/docs/guides/approve-file-roots/) on that node.
 
+## Start from a template
+
+Instead of uploading a compose file, select **New stack** → **From a
+template** and choose one: Nginx, PostgreSQL, Redis, MariaDB, WordPress or
+Uptime Kuma. Fill in the variables (ports, users). Leave a password empty and
+Forge generates a strong one and stores it encrypted in the stack's `.env`.
+The template's images are pinned versions with health checks and named
+volumes. From the API: `GET /stack-templates` and `POST /stacks/from-template`
+with `{template, environment_id, server_id, name, values}`.
+
 ## Create a stack
 
 1. Open a node, select the **Docker** tab (**Containers**), then **Create** → **Create from

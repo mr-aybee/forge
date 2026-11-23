@@ -1678,6 +1678,13 @@ signature, `403` disabled or the creator can no longer deploy, `404` unknown
 URL, `422` refused tag, `429` rate limit (10 per minute per webhook, 60 per
 source address).
 
+### Compose app templates
+
+| Method | Path | Permission |
+| --- | --- | --- |
+| GET | `/stack-templates` | `view` on the workspace: `[{id, title, description, category, compose, variables: [{name, label, default, secret}]}]` |
+| POST | `/stacks/from-template` | As `POST /stacks`: `{template, environment_id, server_id, name, values}` → `201 {stack, preview}`. Empty secret variables are generated; unknown variables and values with a newline or `'` give `400` |
+
 ### Docker Swarm
 
 Swarm clusters only (`mode: swarm`). Joins and leaves start a `swarm.member`

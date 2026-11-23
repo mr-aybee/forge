@@ -31,23 +31,34 @@ async fn webhooks_deploy_as_their_creator_with_checked_signatures() {
     let mut admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
     let (_, cl) = admin.post("/api/v1/clusters", json!({"name": "dev"})).await;
     let (_, shop) = admin.post("/api/v1/projects", json!({"name": "shop"})).await;
-    let (_, env) = admin.post("/api/v1/environments", json!({"name": "prod", "cluster_id": cl["id"], "project_id": shop["id"]})).await;
+    let (_, env) = admin
+        .post("/api/v1/environments", json!({"name": "prod", "cluster_id": cl["id"], "project_id": shop["id"]}))
+        .await;
     let (s, web) = admin
-        .post("/api/v1/services", json!({"environment_id": env["id"], "name": "web", "runtime": "container", "image": "nginx:1.27"}))
+        .post(
+            "/api/v1/services",
+            json!({"environment_id": env["id"], "name": "web", "runtime": "container", "image": "nginx:1.27"}),
+        )
         .await;
     assert_eq!(s, StatusCode::CREATED, "{web}");
     let sid = web["id"].as_str().unwrap().to_owned();
     let (_, tok) = admin.post("/api/v1/enrollment-tokens", json!({"ttl_minutes": 10})).await;
     let dir = tempfile::tempdir().unwrap();
     let facts = HostFacts { hostname: "lab-a".into(), os: "linux".into(), arch: "x86_64".into() };
-    let node = enroll(&StatePaths::new(dir.path()), AgentConfig::new(h.agent_url.clone()), tok["token"].as_str().unwrap(), facts)
-        .await
-        .unwrap()
-        .server_id;
+    let node = enroll(
+        &StatePaths::new(dir.path()),
+        AgentConfig::new(h.agent_url.clone()),
+        tok["token"].as_str().unwrap(),
+        facts,
+    )
+    .await
+    .unwrap()
+    .server_id;
     let (s, e) = admin.put(&format!("/api/v1/services/{sid}/instances"), json!([{"server_id": node}])).await;
     assert!(s.is_success(), "{e}");
 
-    let body = json!({"name": "ci", "target": {"kind": "service", "id": sid}, "signature": "github", "tag_pattern": "v*"});
+    let body =
+        json!({"name": "ci", "target": {"kind": "service", "id": sid}, "signature": "github", "tag_pattern": "v*"});
     let (s, _) = admin.post("/api/v1/webhooks", body.clone()).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "MFA first");
     step_up(&mut admin).await;
@@ -65,15 +76,24 @@ async fn webhooks_deploy_as_their_creator_with_checked_signatures() {
     let path = format!("/hooks/{token}");
     let (s, _) = post(&h.base, &path, &[], "{}").await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
-    let (s, _) = post(&h.base, &path, &[("x-hub-signature-256", format!("sha256={}", hmac("wrong", b"{}")))], "{}").await;
+    let (s, _) =
+        post(&h.base, &path, &[("x-hub-signature-256", format!("sha256={}", hmac("wrong", b"{}")))], "{}").await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
     let tagged = r#"{"tag":"latest"}"#;
-    let (s, _) = post(&h.base, &path, &[("x-hub-signature-256", format!("sha256={}", hmac(&secret, tagged.as_bytes())))], tagged).await;
+    let (s, _) = post(
+        &h.base,
+        &path,
+        &[("x-hub-signature-256", format!("sha256={}", hmac(&secret, tagged.as_bytes())))],
+        tagged,
+    )
+    .await;
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "latest does not match v*");
 
     // A signed delivery with an allowed tag deploys the new tag.
     let good = r#"{"tag":"v2.0.1"}"#;
-    let (s, out) = post(&h.base, &path, &[("x-hub-signature-256", format!("sha256={}", hmac(&secret, good.as_bytes())))], good).await;
+    let (s, out) =
+        post(&h.base, &path, &[("x-hub-signature-256", format!("sha256={}", hmac(&secret, good.as_bytes())))], good)
+            .await;
     assert_eq!(s, StatusCode::ACCEPTED, "{out}");
     let (_, svc) = admin.get(&format!("/api/v1/services/{sid}")).await;
     assert_eq!(svc["spec"]["image"], "nginx:v2.0.1", "{svc}");
