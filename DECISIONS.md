@@ -5555,3 +5555,29 @@ needed.
   repository is archived.
 - Lab machines in docs and scripts are named `lab-a` … `lab-z`.
 - Example addresses use `192.0.2.x`.
+
+## D-154 Cluster modes: Default and Docker Swarm (supersedes D-033)
+
+**Decision.** Every cluster has a mode, `default` or `swarm`. You choose it at
+creation, and it cannot be changed afterwards. It is stored in
+`clusters.mode`, added by migration `0002`. Existing clusters migrate as
+`default` and behave as before.
+
+- **Default clusters** keep Forge's own orchestration, for system services and
+  containers.
+- **Swarm clusters:**
+  - Every node runs Docker Engine and joins one Docker Swarm. Forge inits the
+    swarm on the first manager and joins the other nodes during onboarding.
+  - Swarm schedules containers. Only container services are allowed.
+  - Projects, environments, applications and services keep their meaning.
+  - Deployments still go through Forge. Its strategies map onto Swarm's
+    native update and rollback config where that fits; blue-green and canary
+    are built from paired services behind Forge's ingress.
+
+**Why.** D-033 parked Swarm until a workload needed scheduling across nodes.
+Container management at the level of Portainer needs that now: replicas,
+placement, node drain and rolling updates, all driven by CI. Docker already
+does this well, so Forge drives Swarm and does not build a scheduler of its
+own.
+
+**Not done yet.** Converting an existing cluster to the other mode.

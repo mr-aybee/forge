@@ -88,6 +88,9 @@ export interface Environment {
   created_at: number;
 }
 
+/** `default`: Forge orchestration (system and container services). `swarm`: Docker Swarm (containers only). */
+export type ClusterMode = "default" | "swarm";
+
 export interface Cluster {
   id: string;
   workspace_id: string;
@@ -96,6 +99,8 @@ export interface Cluster {
   environment_id: string | null;
   abbr?: string;
   icon?: string | null;
+  /** Orchestration mode, fixed at creation (D-154). */
+  mode?: ClusterMode;
   created_at: number;
   node_count?: number;
   nodes_online?: number;

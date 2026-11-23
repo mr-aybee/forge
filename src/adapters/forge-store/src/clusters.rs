@@ -17,6 +17,7 @@ fn cluster_row(r: &AnyRow) -> DomainResult<Cluster> {
         environment_id: opt_parsed(r, "environment_id")?,
         abbr: text(r, "abbr")?,
         icon: r.try_get::<Option<String>, _>("icon").map_err(db_err)?,
+        mode: text(r, "mode")?.parse()?,
         created_at: ts(r, "created_at")?,
     })
 }
@@ -25,8 +26,8 @@ fn cluster_row(r: &AnyRow) -> DomainResult<Cluster> {
 impl ClusterRepository for Store {
     async fn create_cluster(&self, c: &Cluster) -> DomainResult<()> {
         sqlx::query(
-            "INSERT INTO clusters (id, workspace_id, name, description, environment_id, abbr, icon, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            "INSERT INTO clusters (id, workspace_id, name, description, environment_id, abbr, icon, mode, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         )
         .bind(c.id.to_string())
         .bind(c.workspace_id.to_string())
@@ -35,6 +36,7 @@ impl ClusterRepository for Store {
         .bind(c.environment_id.map(|e| e.to_string()))
         .bind(&c.abbr)
         .bind(c.icon.clone())
+        .bind(c.mode.as_str())
         .bind(c.created_at.0)
         .execute(self.pool())
         .await

@@ -1590,6 +1590,18 @@ with `details.reason` and `details.detail`.
 | --- | --- | --- |
 | GET / POST | `/clusters` | `view` / `workspace.manage` |
 | GET / PUT / DELETE | `/clusters/{id}` | `view` / `workspace.manage` |
+
+**Cluster body** (`POST /clusters`, `PUT /clusters/{id}`):
+
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `name` | string | required | Letters, digits, spaces, `-`, `_`, `.`; unique per workspace |
+| `description` | string | `""` | Up to 500 characters |
+| `environment_id` | string or `null` | `null` | Environment this cluster serves |
+| `abbr` | string | initials of the name | Up to 4 letters or digits |
+| `icon` | string | none | Data URL (PNG, JPEG, WebP, GIF or SVG), up to 128 KB; `""` removes it |
+| `mode` | `default` or `swarm` | `default` | Set on `POST` only. On `PUT` it may be omitted or repeated; a different value returns `400`. See [Cluster modes](/docs/concepts/clusters/#cluster-modes) |
+
 | PATCH | `/servers/{id}` | `server.manage` on the node; with `cluster_id` also `server.enroll` on that cluster; leaving a cluster needs `server.enroll` on the cluster left; changing the environment needs `server.enroll` on the new and on the old environment — `{cluster_id, environment_id}`, both optional (`null` or omitted clears). See [Moving a node between clusters](#moving-a-node-between-clusters) → the updated server |
 | POST | `/nodes/probe` | `node.onboard` (MFA) — returns SSH host key |
 | POST | `/nodes/onboard` | `node.onboard` (MFA) — starts `node.bootstrap` |

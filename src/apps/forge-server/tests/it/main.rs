@@ -29,6 +29,7 @@ mod app_mounts;
 mod app_roots;
 mod audit;
 mod captcha;
+mod cluster_modes;
 mod compression;
 mod console_access;
 mod container_shell;

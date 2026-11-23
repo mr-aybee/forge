@@ -211,6 +211,7 @@ async fn cluster_membership_adds_second_parent() {
         environment_id: None,
         abbr: String::new(),
         icon: None,
+        mode: Default::default(),
         created_at: Timestamp(1),
     };
     s.create_cluster(&cluster).await.unwrap();
@@ -280,6 +281,7 @@ async fn resolve_many_matches_resolve_for_servers() {
         environment_id: None,
         abbr: String::new(),
         icon: None,
+        mode: Default::default(),
         created_at: Timestamp(1),
     };
     s.create_cluster(&cluster).await.unwrap();
@@ -334,6 +336,7 @@ fn cluster_in(ws: WorkspaceId, name: &str) -> Cluster {
         environment_id: None,
         abbr: String::new(),
         icon: None,
+        mode: Default::default(),
         created_at: Timestamp(1),
     }
 }

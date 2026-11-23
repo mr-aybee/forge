@@ -3,7 +3,7 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use forge_core::model::{Cluster, Server};
+use forge_core::model::{Cluster, ClusterMode, Server};
 use forge_core::ports::{ClusterRepository, FabricRepository, ServerRepository, TenancyRepository};
 use forge_core::*;
 use serde::Deserialize;
@@ -76,6 +76,11 @@ pub struct ClusterInput {
     /// Absent keeps the current image, `""` removes it, else a data URL.
     #[serde(default)]
     pub icon: Option<String>,
+    /// `default` or `swarm`; set at creation only. Absent means `default` on
+    /// create and "unchanged" on update.
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub mode: Option<ClusterMode>,
 }
 
 /// Largest accepted badge image (the data URL, base64 included).
@@ -123,10 +128,13 @@ pub async fn create(
         environment_id: req.environment_id,
         abbr: valid_abbr(req.abbr.as_deref().unwrap_or(""))?,
         icon: valid_icon(req.icon.as_deref().unwrap_or(""))?,
+        mode: req.mode.unwrap_or_default(),
         created_at: state.clock.now(),
     };
     state.store.create_cluster(&c).await?;
-    caller.audit("cluster.create", &cluster_ref(c.id), Some(ws), json!({ "name": c.name })).await;
+    caller
+        .audit("cluster.create", &cluster_ref(c.id), Some(ws), json!({ "name": c.name, "mode": c.mode.as_str() }))
+        .await;
     Ok((StatusCode::CREATED, Json(c)))
 }
 
@@ -143,6 +151,9 @@ pub async fn update(
 ) -> ApiResult<Json<Cluster>> {
     caller.authorize(Action::WorkspaceManage, cluster_ref(id)).await?;
     let mut c = state.store.get_cluster(id).await?;
+    if req.mode.is_some_and(|m| m != c.mode) {
+        return Err(ApiError::bad_request("a cluster's mode cannot be changed after it is created"));
+    }
     check_env(&state, c.workspace_id, req.environment_id).await?;
     c.name = valid_name(&req.name)?;
     c.description = req.description.chars().take(500).collect();

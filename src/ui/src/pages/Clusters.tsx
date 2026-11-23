@@ -1,19 +1,64 @@
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { ClusterBadge, imageToDataUrl, initials } from "../components/ClusterBadge";
-import { Pencil, Plus, ServerCog, Sparkles, Trash2 } from "lucide-react";
+import { Boxes, Pencil, Plus, ServerCog, Sparkles, Trash2, Workflow } from "lucide-react";
 import { useState } from "react";
 
 import { useAllEnvironments, useClusters, useDeleteCluster, useSaveCluster } from "../api/hooks";
-import type { Cluster } from "../api/types";
+import type { Cluster, ClusterMode } from "../api/types";
 import { errorText, useToast } from "../app/toast";
 import { ClusterWizard } from "../components/setup/ClusterWizard";
 import { usePinAction } from "../components/Pins";
-import { Button, Confirm, Empty, ErrorNote, FadeSwitch, Field, IconButton, Input, Modal, PageHeader, Panel, RowMenu, Select, Skeleton, Table, Td, TextArea, VIEW_CARDS, VIEW_LIST, ViewToggle, usePageView } from "../components/ui";
+import { Badge, Button, Confirm, Empty, ErrorNote, FadeSwitch, Field, IconButton, Input, Modal, PageHeader, Panel, RowMenu, Select, Skeleton, Table, Td, TextArea, VIEW_CARDS, VIEW_LIST, ViewToggle, usePageView } from "../components/ui";
 import { FilterBar } from "../components/filters/FilterBar";
 import type { ClustersSearch } from "../app/router";
 
 const VIEWS = [VIEW_LIST, VIEW_CARDS] as const;
 type Health = "healthy" | "degraded" | "empty";
+type ModeInfo = { id: ClusterMode; label: string; icon: typeof Boxes; text: string };
+const DEFAULT_MODE: ModeInfo = { id: "default", label: "Default", icon: Workflow, text: "Forge orchestration. Runs system services and containers." };
+const MODES: ModeInfo[] = [
+  DEFAULT_MODE,
+  { id: "swarm", label: "Docker Swarm", icon: Boxes, text: "Docker Swarm schedules containers across nodes. Container services only; every node needs Docker Engine." },
+];
+
+/** The cluster mode: chosen once at creation, shown read-only afterwards. */
+function ModePicker({ value, locked, onChange }: { value: ClusterMode; locked: boolean; onChange: (m: ClusterMode) => void }) {
+  if (locked) {
+    const m = MODES.find((x) => x.id === value) ?? DEFAULT_MODE;
+    return (
+      <p className="flex items-center gap-2 text-[13px]">
+        <m.icon className="size-4 text-muted" aria-hidden="true" /> <span className="font-medium">{m.label}</span>
+        <span className="text-muted">· set when the cluster was created</span>
+      </p>
+    );
+  }
+  return (
+    <div role="radiogroup" aria-label="Cluster mode" className="grid gap-2 sm:grid-cols-2">
+      {MODES.map((m) => {
+        const on = m.id === value;
+        return (
+          <button
+            key={m.id}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            onClick={() => onChange(m.id)}
+            className={`flex gap-3 rounded-md border p-3 text-left transition-colors ${on ? "border-accent bg-accent-soft" : "border-line hover:border-accent"}`}
+          >
+            <m.icon className={`mt-0.5 size-4 shrink-0 ${on ? "text-accent" : "text-muted"}`} aria-hidden="true" />
+            <span>
+              <span className="block text-[13px] font-medium">{m.label}</span>
+              <span className="mt-0.5 block text-xs text-muted">{m.text}</span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+export const modeLabel = (c: Pick<Cluster, "mode">) => (c.mode === "swarm" ? "Swarm" : "Default");
+
 const healthOf = (c: Cluster): Health => (!c.node_count ? "empty" : (c.nodes_online ?? 0) === c.node_count ? "healthy" : "degraded");
 
 export function ClusterForm({ initial, onDone }: { initial?: Cluster; onDone: () => void }) {
@@ -26,6 +71,7 @@ export function ClusterForm({ initial, onDone }: { initial?: Cluster; onDone: ()
     environment_id: initial?.environment_id ?? "",
     abbr: initial?.abbr ?? "",
     icon: initial?.icon ?? "",
+    mode: initial?.mode ?? ("default" as ClusterMode),
   });
   return (
     <form
@@ -33,7 +79,7 @@ export function ClusterForm({ initial, onDone }: { initial?: Cluster; onDone: ()
       onSubmit={(e) => {
         e.preventDefault();
         save.mutate(
-          { id: initial?.id, name: f.name, description: f.description, environment_id: f.environment_id || null, abbr: f.abbr, icon: f.icon },
+          { id: initial?.id, name: f.name, description: f.description, environment_id: f.environment_id || null, abbr: f.abbr, icon: f.icon, ...(initial ? {} : { mode: f.mode }) },
           {
             onSuccess: (c) => {
               toast(initial ? `Cluster “${c.name}” updated` : `Cluster “${c.name}” created`);
@@ -46,6 +92,9 @@ export function ClusterForm({ initial, onDone }: { initial?: Cluster; onDone: ()
     >
       <Field label="Name" hint="Letters, digits, spaces, - _ .">
         <Input required autoFocus maxLength={63} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="edge-eu" />
+      </Field>
+      <Field label="Mode" hint={initial ? undefined : "Cannot be changed after the cluster is created."}>
+        <ModePicker value={f.mode} locked={!!initial} onChange={(mode) => setF({ ...f, mode })} />
       </Field>
       <Field label="Badge" hint="Shown next to the cluster name. Upload a PNG, JPEG, WebP or SVG (up to 128 KB), or set up to 4 letters.">
         <div className="flex flex-wrap items-center gap-3">
@@ -191,6 +240,7 @@ export function Clusters() {
                         <span className="truncate" title={c.name}>
                           {c.name}
                         </span>
+                        {c.mode === "swarm" && <Badge tone="accent">Swarm</Badge>}
                       </Link>
                     </Td>
                     <Td className="py-1.5">
