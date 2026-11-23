@@ -122,7 +122,14 @@ async fn prepare(
     input: &DocInput,
 ) -> ApiResult<Prepared> {
     let doc = crate::deploy::read_document(&input.yaml, input.environment.as_deref())?;
-    Ok(state.deploy.prepare(ws, &doc, &input.yaml, &caller.principal()).await?)
+    let p = state.deploy.prepare(ws, &doc, &input.yaml, &caller.principal()).await?;
+    state.swarm.check_runtime(p.app.environment_id, &p.app.runtime).await?;
+    if state.swarm.swarm_of_environment(p.app.environment_id).await?.is_some() {
+        return Err(ApiError::conflict(
+            "release rollouts are not available in Docker Swarm clusters yet; use Deploy on the service",
+        ));
+    }
+    Ok(p)
 }
 
 async fn next_number(state: &AppState, app: ServiceId) -> DomainResult<i64> {

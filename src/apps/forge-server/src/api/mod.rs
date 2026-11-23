@@ -275,6 +275,8 @@ pub fn router(state: AppState) -> Router {
         .route("/services/{id}/storage", get(app_storage::list).post(app_storage::attach))
         .route("/services/{id}/storage/{access_key}", axum::routing::delete(app_storage::detach))
         .route("/services/{id}/deploy", post(services::deploy))
+        .route("/services/{id}/swarm", get(swarm::service_get).post(swarm::service_action))
+        .route("/services/{id}/swarm/logs", get(swarm::service_logs))
         // Releases and deployments (#73)
         .route("/deployments", post(deployments::apply))
         .route("/deployments/validate", post(deployments::validate))

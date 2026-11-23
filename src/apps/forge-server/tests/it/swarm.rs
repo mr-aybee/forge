@@ -100,3 +100,50 @@ async fn swarm_membership_is_checked_guarded_and_tracked() {
     let (_, audit) = admin.get("/api/v1/audit?limit=200").await;
     assert!(audit.to_string().contains("swarm.member.join"), "{audit}");
 }
+
+/// Services in a Swarm cluster (D-154): containers only, settings checked,
+/// and a deploy needs a swarm manager.
+#[tokio::test]
+async fn swarm_services_are_containers_with_checked_settings() {
+    let h = start().await;
+    let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+    let (_, swarm) = admin.post("/api/v1/clusters", json!({"name": "swarm-eu", "mode": "swarm"})).await;
+    let (_, shop) = admin.post("/api/v1/projects", json!({"name": "shop"})).await;
+    let (s, env) = admin
+        .post("/api/v1/environments", json!({"name": "prod", "cluster_id": swarm["id"], "project_id": shop["id"]}))
+        .await;
+    assert_eq!(s, StatusCode::CREATED, "{env}");
+
+    // System services do not run on Swarm.
+    let (s, e) = admin
+        .post(
+            "/api/v1/services",
+            json!({"environment_id": env["id"], "name": "cron", "runtime": "systemd", "command": "true"}),
+        )
+        .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{e}");
+
+    // Swarm settings are validated.
+    let bad = json!({"environment_id": env["id"], "name": "web", "runtime": "container", "image": "nginx:1.27",
+        "swarm": {"replicas": 3, "constraints": ["rm -rf /"]}});
+    let (s, _) = admin.post("/api/v1/services", bad).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+
+    let good = json!({"environment_id": env["id"], "name": "web", "runtime": "container", "image": "nginx:1.27",
+        "ports": ["8080:80"], "swarm": {"replicas": 3, "constraints": ["node.role==worker"], "spread": ["node.labels.zone"]}});
+    let (s, web) = admin.post("/api/v1/services", good).await;
+    assert_eq!(s, StatusCode::CREATED, "{web}");
+    assert_eq!(web["spec"]["swarm"]["replicas"], 3);
+
+    // Without a manager there is nothing to deploy to.
+    let id = web["id"].as_str().unwrap();
+    let (s, e) = admin.post(&format!("/api/v1/services/{id}/deploy"), json!({})).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{e}");
+    let (s, e) = admin.post(&format!("/api/v1/services/{id}/swarm"), json!({"kind": "scale", "replicas": 5000})).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{e}");
+
+    // Release rollouts are not available on Swarm yet.
+    let yaml = "apiVersion: forge/v1\nkind: Deployment\nmetadata:\n  name: web\n  environment: prod\nspec:\n  runtime: container\n  artifact:\n    image: nginx:1.27\n";
+    let (s, _) = admin.post("/api/v1/deployments/plan", json!({"yaml": yaml})).await;
+    assert!(s.is_client_error(), "{s}");
+}

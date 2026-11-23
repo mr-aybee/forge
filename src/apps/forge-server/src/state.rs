@@ -358,6 +358,12 @@ impl Services {
             servers: Arc::new(store.clone()),
             clock: clock.clone(),
         };
+        registry.register(Arc::new(crate::jobs::swarm_service::SwarmServiceJob {
+            ops: node_ops.clone(),
+            swarms: Arc::new(store.clone()),
+            services: Arc::new(store.clone()),
+            envelope: envelope.clone(),
+        }));
         registry.register(Arc::new(crate::jobs::swarm::SwarmMemberJob {
             ops: node_ops.clone(),
             swarms: Arc::new(store.clone()),
@@ -468,6 +474,7 @@ impl Services {
             swarms: Arc::new(store.clone()),
             servers: Arc::new(store.clone()),
             clusters: Arc::new(store.clone()),
+            tenancy: Arc::new(store.clone()),
             hub: hub.clone(),
             signer: signer.clone(),
             envelope: envelope.clone(),

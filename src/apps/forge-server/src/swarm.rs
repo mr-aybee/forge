@@ -11,9 +11,9 @@ use std::time::Duration;
 
 use forge_catalog::swarm::{Availability, JoinTokens, SwarmNode, SwarmOp, SwarmRole};
 use forge_core::model::{Cluster, ClusterMode};
-use forge_core::ports::{ClusterRepository, ServerRepository};
+use forge_core::ports::{ClusterRepository, ServerRepository, TenancyRepository};
 use forge_core::swarm::{ClusterSwarm, MemberRole, MemberState, SwarmMember, SwarmRepository};
-use forge_core::{Clock, ClusterId, DomainError, DomainResult, ServerId};
+use forge_core::{Clock, ClusterId, DomainError, DomainResult, EnvironmentId, ServerId};
 use forge_proto::messages::SwarmAction;
 use forge_proto::{Command, CommandSigner};
 use forge_secrets::Envelope;
@@ -85,6 +85,7 @@ pub struct SwarmService {
     pub swarms: Arc<dyn SwarmRepository>,
     pub servers: Arc<dyn ServerRepository>,
     pub clusters: Arc<dyn ClusterRepository>,
+    pub tenancy: Arc<dyn TenancyRepository>,
     pub hub: Arc<CommandQueue>,
     pub signer: Arc<CommandSigner>,
     pub envelope: Envelope,
@@ -103,6 +104,40 @@ impl SwarmService {
             return Err(invalid("this cluster is not a Docker Swarm cluster"));
         }
         Ok(c)
+    }
+
+    /// The Swarm cluster an environment belongs to, if its cluster is one.
+    pub async fn swarm_of_environment(&self, env: EnvironmentId) -> DomainResult<Option<ClusterId>> {
+        let Some(cluster) = self.tenancy.get_environment(env).await?.cluster_id else { return Ok(None) };
+        let c = self.clusters.get_cluster(cluster).await?;
+        Ok((c.mode == ClusterMode::Swarm).then_some(c.id))
+    }
+
+    /// Refuses system services in a Swarm cluster: Swarm runs containers only.
+    pub async fn check_runtime(&self, env: EnvironmentId, runtime: &str) -> DomainResult<()> {
+        if runtime != "container" && self.swarm_of_environment(env).await?.is_some() {
+            return Err(invalid("this environment is in a Docker Swarm cluster, which runs container services only"));
+        }
+        Ok(())
+    }
+
+    /// A joined manager of the cluster's swarm.
+    pub async fn manager(&self, cluster: ClusterId) -> DomainResult<ServerId> {
+        self.swarms
+            .list_members(cluster)
+            .await?
+            .into_iter()
+            .find(|m| m.role == MemberRole::Manager && m.state == MemberState::Joined)
+            .map(|m| m.server_id)
+            .ok_or_else(|| {
+                DomainError::Conflict("the cluster has no swarm manager yet; add a node on the Swarm tab".into())
+            })
+    }
+
+    /// Runs `op` on a manager of the cluster's swarm.
+    pub async fn run(&self, cluster: ClusterId, principal: &str, op: &SwarmOp) -> DomainResult<serde_json::Value> {
+        op.validate().map_err(invalid)?;
+        self.on_manager(cluster, principal, op).await
     }
 
     pub async fn view(&self, cluster: ClusterId, principal: &str) -> DomainResult<SwarmView> {

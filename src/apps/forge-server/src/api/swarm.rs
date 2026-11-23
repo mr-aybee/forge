@@ -12,15 +12,16 @@ use axum::http::StatusCode;
 use forge_catalog::swarm::{Availability, SwarmNode};
 use forge_core::model::{Job, NewJob};
 use forge_core::swarm::MemberRole;
-use forge_core::{Action, ClusterId, ServerId};
+use forge_core::{Action, ClusterId, ServerId, ServiceId};
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::clusters::cluster_ref;
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
 use crate::jobs::swarm::{InitSettings, KIND, MemberAction, Payload};
+use crate::jobs::swarm_service::ServiceAction;
 use crate::state::AppState;
 use crate::swarm::{NodeChange, SwarmView};
 
@@ -225,4 +226,133 @@ pub async fn rotate_tokens(
         .audit(AUDIT_TOKENS_ROTATE, &cluster_ref(id), None, json!({ "worker": req.worker, "manager": req.manager }))
         .await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ------------------------------------------------------------ services
+
+pub const AUDIT_SERVICE: &str = "swarm.service";
+
+/// The Swarm cluster of a service, or `422` when it is not in one.
+async fn service_cluster(state: &AppState, app: &forge_core::model::Service) -> ApiResult<ClusterId> {
+    state.swarm.swarm_of_environment(app.environment_id).await?.ok_or_else(|| {
+        ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid", "this service is not in a Docker Swarm cluster")
+    })
+}
+
+#[derive(Debug, Serialize)]
+pub struct ServiceSwarmView {
+    pub cluster_id: ClusterId,
+    /// `<environment>-<service>` in the swarm.
+    pub name: String,
+    pub settings: forge_catalog::swarm_service::SwarmSettings,
+    pub status: Option<forge_catalog::swarm::SwarmServiceStatus>,
+    pub status_error: Option<String>,
+}
+
+pub async fn service_get(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<ServiceId>,
+) -> ApiResult<Json<ServiceSwarmView>> {
+    let app = super::services::load_own(&state, id).await?;
+    caller.authorize(Action::View, super::services::svc_ref(id)).await?;
+    let cluster = service_cluster(&state, &app).await?;
+    let spec = crate::jobs::app::build_spec(&app, None).map_err(ApiError::bad_request)?;
+    let name = forge_catalog::swarm_service::service_name(&spec.environment, &app.name);
+    let op = forge_catalog::swarm::SwarmOp::ServiceStatus { name: name.clone() };
+    let (status, status_error) = match state.swarm.run(cluster, &caller.principal().to_string(), &op).await {
+        Ok(v) => (Some(serde_json::from_value(v).map_err(forge_core::DomainError::internal)?), None),
+        Err(e) => (None, Some(e.to_string())),
+    };
+    Ok(Json(ServiceSwarmView {
+        cluster_id: cluster,
+        name,
+        settings: spec.swarm.unwrap_or_default(),
+        status,
+        status_error,
+    }))
+}
+
+/// Starts a `swarm.service` job for `app` (also used by Deploy).
+pub(super) async fn start_service_action(
+    state: &AppState,
+    caller: &Caller,
+    app: &forge_core::model::Service,
+    action: ServiceAction,
+) -> ApiResult<Job> {
+    let cluster = service_cluster(state, app).await?;
+    // Fails early (409) when the swarm has no manager yet.
+    state.swarm.manager(cluster).await?;
+    let payload = crate::jobs::swarm_service::Payload { service_id: app.id, cluster_id: cluster, action };
+    let job = state
+        .jobs
+        .submit(NewJob {
+            kind: crate::jobs::swarm_service::KIND.into(),
+            workspace_id: Some(app.workspace_id),
+            resource: super::services::svc_ref(app.id),
+            principal: caller.principal(),
+            context: caller.ctx(),
+            idempotency_key: None,
+            payload: serde_json::to_value(&payload).map_err(forge_core::DomainError::internal)?,
+            max_attempts: 6,
+        })
+        .await?;
+    caller
+        .audit(
+            AUDIT_SERVICE,
+            &super::services::ns_ref(app.environment_id),
+            Some(app.workspace_id),
+            json!({ "service": app.name, "action": action.name(), "job_id": job.id }),
+        )
+        .await;
+    Ok(job)
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ServiceActionInput {
+    /// `deploy`, `scale`, `restart`, `rollback` or `remove`.
+    #[serde(flatten)]
+    #[schemars(with = "Value")]
+    pub action: ServiceAction,
+}
+
+pub async fn service_action(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<ServiceId>,
+    Json(req): Json<ServiceActionInput>,
+) -> ApiResult<(StatusCode, Json<Job>)> {
+    let app = super::services::load_own(&state, id).await?;
+    caller.authorize(Action::Deploy, super::services::svc_ref(id)).await?;
+    if let ServiceAction::Scale { replicas } = req.action
+        && replicas > 1000
+    {
+        return Err(ApiError::bad_request("at most 1000 replicas"));
+    }
+    Ok((StatusCode::ACCEPTED, Json(start_service_action(&state, &caller, &app, req.action).await?)))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LogsQuery {
+    #[serde(default = "tail")]
+    pub tail: u32,
+}
+
+const fn tail() -> u32 {
+    200
+}
+
+pub async fn service_logs(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<ServiceId>,
+    Query(q): Query<LogsQuery>,
+) -> ApiResult<Json<Value>> {
+    let app = super::services::load_own(&state, id).await?;
+    caller.authorize(Action::View, super::services::svc_ref(id)).await?;
+    let cluster = service_cluster(&state, &app).await?;
+    let spec = crate::jobs::app::build_spec(&app, None).map_err(ApiError::bad_request)?;
+    let name = forge_catalog::swarm_service::service_name(&spec.environment, &app.name);
+    let op = forge_catalog::swarm::SwarmOp::ServiceLogs { name, tail: q.tail.min(10_000) };
+    Ok(Json(state.swarm.run(cluster, &caller.principal().to_string(), &op).await?))
 }
