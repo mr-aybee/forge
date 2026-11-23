@@ -112,6 +112,22 @@ pub struct Services {
     pub health: forge_health::ObservationRecorder,
     /// File explorer: roots, authorization, uploads and audit (API and SFTP).
     pub files: Arc<forge_files::FileService>,
+    /// Docker Swarm in Swarm clusters (D-154).
+    pub swarm: Arc<crate::swarm::SwarmService>,
+    /// `[security.access]`, parsed once (D-161).
+    pub access_lists: crate::net_access::Lists,
+    /// API-wide rate limits per client address (D-161).
+    /// Agent downloads streaming at once (public, large).
+    pub downloads: Arc<tokio::sync::Semaphore>,
+    /// Agent enrollment attempts per client address.
+    pub enroll_attempts: crate::rate_limit::Windows<std::net::IpAddr>,
+    pub limiter: crate::net_access::Limiter,
+    /// Deploy webhooks (D-159).
+    pub webhooks: Arc<crate::webhooks::WebhookService>,
+    /// Container registries and their sealed credentials (D-158).
+    pub registries: Arc<crate::registries::RegistryService>,
+    /// Docker images, volumes and networks on nodes (D-157).
+    pub docker_resources: Arc<crate::docker_resources::DockerResources>,
     /// Bucket grants: one person's access to one bucket of a store (D-108).
     pub bucket_grants: crate::bucket_grants::BucketGrants,
     /// Vault-backed header values for health checks, handed to nodes (D-111).
@@ -130,6 +146,7 @@ pub struct Services {
 
 impl Services {
     pub async fn build(config: ServerConfig) -> anyhow::Result<AppState> {
+        let access_lists = config.access_lists();
         let data = config.data_dir.clone();
         std::fs::create_dir_all(data.join("keys")).with_context(|| format!("creating {}", data.display()))?;
         // Only the service user may read or write the database, its WAL, the
@@ -320,6 +337,46 @@ impl Services {
             deploys: Arc::new(store.clone()),
         });
         registry.register(app_job.clone());
+        let registries = Arc::new(crate::registries::RegistryService {
+            repo: Arc::new(store.clone()),
+            envelope: envelope.clone(),
+            clock: clock.clone(),
+        });
+        let node_rpc = crate::node_rpc::NodeRpc { hub: hub.clone(), signer: signer.clone(), clock: clock.clone() };
+        let docker_resources = Arc::new(crate::docker_resources::DockerResources {
+            rpc: node_rpc.clone(),
+            servers: Arc::new(store.clone()),
+        });
+        let webhooks = Arc::new(crate::webhooks::WebhookService {
+            repo: Arc::new(store.clone()),
+            jobs: Arc::new(store.clone()),
+            services: Arc::new(store.clone()),
+            envelope: envelope.clone(),
+            clock: clock.clone(),
+            limits: crate::webhooks::Limits::default(),
+            per_hook: crate::webhooks::Windows::default(),
+            per_ip: crate::webhooks::Windows::default(),
+            seen: crate::webhooks::Windows::default(),
+        });
+        let swarm = Arc::new(crate::swarm::SwarmService {
+            swarms: Arc::new(store.clone()),
+            servers: Arc::new(store.clone()),
+            clusters: Arc::new(store.clone()),
+            tenancy: Arc::new(store.clone()),
+            files: Arc::new(store.clone()),
+            deploys: Arc::new(store.clone()),
+            services: Arc::new(store.clone()),
+            rpc: node_rpc.clone(),
+            envelope: envelope.clone(),
+            clock: clock.clone(),
+            node_cache: std::sync::Mutex::default(),
+        });
+        let node_ops = crate::jobs::node_op::NodeOps {
+            hub: hub.clone(),
+            signer: signer.clone(),
+            servers: Arc::new(store.clone()),
+            clock: clock.clone(),
+        };
         let deploy = Arc::new(crate::deploy::DeployService {
             apps: Arc::new(store.clone()),
             tenancy: Arc::new(store.clone()),
@@ -328,6 +385,7 @@ impl Services {
             sites: Arc::new(store.clone()),
             releases: Arc::new(store.clone()),
             deploys: Arc::new(store.clone()),
+            swarm: swarm.clone(),
             clock: clock.clone(),
         });
         let rollout_effects: Arc<std::sync::OnceLock<Arc<dyn crate::deploy::RolloutEffects>>> =
@@ -343,6 +401,10 @@ impl Services {
             audit: audit.clone(),
             clock: clock.clone(),
             tick: Duration::from_millis(config.jobs.poll_ms.clamp(200, 3_000) * 5),
+            swarm: swarm.clone(),
+            swarms: Arc::new(store.clone()),
+            ops: node_ops.clone(),
+            registries: registries.clone(),
         }));
         let docker = Arc::new(crate::docker_engine::DockerEngines::new(
             Arc::new(store.clone()),
@@ -350,14 +412,26 @@ impl Services {
             envelope.clone(),
             clock.clone(),
         ));
+        registry.register(Arc::new(crate::jobs::swarm_service::SwarmServiceJob {
+            ops: node_ops.clone(),
+            swarm: swarm.clone(),
+            swarms: Arc::new(store.clone()),
+            services: Arc::new(store.clone()),
+            deploys: Arc::new(store.clone()),
+            envelope: envelope.clone(),
+            registries: registries.clone(),
+        }));
+        registry.register(Arc::new(crate::jobs::docker_op::DockerOpJob {
+            ops: node_ops.clone(),
+            registries: registries.clone(),
+        }));
+        registry.register(Arc::new(crate::jobs::swarm::SwarmMemberJob {
+            ops: node_ops.clone(),
+            swarms: Arc::new(store.clone()),
+            envelope: envelope.clone(),
+        }));
         for enable in [true, false] {
-            let link = crate::jobs::docker_endpoint::NodeLink {
-                hub: hub.clone(),
-                signer: signer.clone(),
-                servers: Arc::new(store.clone()),
-                engines: docker.clone(),
-                clock: clock.clone(),
-            };
+            let link = crate::jobs::docker_endpoint::NodeLink { ops: node_ops.clone(), engines: docker.clone() };
             if enable {
                 registry.register(Arc::new(crate::jobs::docker_endpoint::DockerEndpointEnableJob { link }));
             } else {
@@ -590,6 +664,14 @@ impl Services {
             analytics_control,
             health,
             files,
+            swarm,
+            docker_resources,
+            registries,
+            webhooks,
+            access_lists,
+            limiter: crate::net_access::Limiter::default(),
+            downloads: Arc::new(tokio::sync::Semaphore::new(16)),
+            enroll_attempts: crate::rate_limit::Windows::default(),
             bucket_grants,
             health_secrets,
             notifier,
@@ -740,7 +822,7 @@ fn analytics_worker_config(
                 );
             }
             StoreSelection::Embedded {
-                paths: crate::analytics_install::paths(config),
+                paths: Box::new(crate::analytics_install::paths(config)),
                 port: config.analytics.embedded_port,
                 database: config.analytics_name(),
             }

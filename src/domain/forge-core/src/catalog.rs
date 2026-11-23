@@ -153,6 +153,33 @@ impl Action {
                 "Deploy stacks with privileged settings (host network, mounts, capabilities).",
                 Admin,
             ),
+            Action::SwarmManage => info(
+                "Containers",
+                "Manage Docker Swarm",
+                "Create and join swarms, and drain, promote, demote or remove swarm nodes.",
+                Admin,
+            ),
+            Action::ImageManage => {
+                info("Containers", "Manage images", "Pull, push, tag, remove and prune Docker images.", Write)
+            }
+            Action::VolumeManage => {
+                info("Containers", "Manage volumes", "Create, remove and prune Docker volumes.", Write)
+            }
+            Action::NetworkManage => {
+                info("Containers", "Manage networks", "Create, remove, connect and prune Docker networks.", Write)
+            }
+            Action::RegistryManage => info(
+                "Containers",
+                "Manage registries",
+                "Add, change and remove container registries and their credentials.",
+                Admin,
+            ),
+            Action::WebhookManage => info(
+                "Services",
+                "Manage deploy webhooks",
+                "Create, rotate and remove webhooks that let CI deploy a service or stack.",
+                Admin,
+            ),
             Action::Deploy => info("Services", "Deploy", "Deploy and update services.", Write),
             Action::DeployApprove => info(
                 "Services",

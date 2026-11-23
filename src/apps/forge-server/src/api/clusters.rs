@@ -3,7 +3,7 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use forge_core::model::{Cluster, Server};
+use forge_core::model::{Cluster, ClusterMode, Server};
 use forge_core::ports::{ClusterRepository, FabricRepository, ServerRepository, TenancyRepository};
 use forge_core::*;
 use serde::Deserialize;
@@ -14,7 +14,7 @@ use crate::auth::Ws;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
-fn cluster_ref(id: ClusterId) -> EntityRef {
+pub(super) fn cluster_ref(id: ClusterId) -> EntityRef {
     EntityRef::new(EntityKind::Cluster, id)
 }
 
@@ -76,6 +76,11 @@ pub struct ClusterInput {
     /// Absent keeps the current image, `""` removes it, else a data URL.
     #[serde(default)]
     pub icon: Option<String>,
+    /// `default` or `swarm`; set at creation only. Absent means `default` on
+    /// create and "unchanged" on update.
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub mode: Option<ClusterMode>,
 }
 
 /// Largest accepted badge image (the data URL, base64 included).
@@ -123,10 +128,13 @@ pub async fn create(
         environment_id: req.environment_id,
         abbr: valid_abbr(req.abbr.as_deref().unwrap_or(""))?,
         icon: valid_icon(req.icon.as_deref().unwrap_or(""))?,
+        mode: req.mode.unwrap_or_default(),
         created_at: state.clock.now(),
     };
     state.store.create_cluster(&c).await?;
-    caller.audit("cluster.create", &cluster_ref(c.id), Some(ws), json!({ "name": c.name })).await;
+    caller
+        .audit("cluster.create", &cluster_ref(c.id), Some(ws), json!({ "name": c.name, "mode": c.mode.as_str() }))
+        .await;
     Ok((StatusCode::CREATED, Json(c)))
 }
 
@@ -143,6 +151,9 @@ pub async fn update(
 ) -> ApiResult<Json<Cluster>> {
     caller.authorize(Action::WorkspaceManage, cluster_ref(id)).await?;
     let mut c = state.store.get_cluster(id).await?;
+    if req.mode.is_some_and(|m| m != c.mode) {
+        return Err(ApiError::bad_request("a cluster's mode cannot be changed after it is created"));
+    }
     check_env(&state, c.workspace_id, req.environment_id).await?;
     c.name = valid_name(&req.name)?;
     c.description = req.description.chars().take(500).collect();
@@ -186,6 +197,11 @@ pub struct AssignNode {
     #[serde(default)]
     #[schemars(with = "Option<String>")]
     pub environment_id: Option<EnvironmentId>,
+    /// With a Swarm `cluster_id`: join the node to the cluster's swarm in this
+    /// role right away (`swarm.manage`, MFA). Absent: assign only.
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub swarm_role: Option<forge_core::swarm::MemberRole>,
 }
 
 /// `PATCH /servers/{id}`: move a node into a cluster and/or environment.
@@ -261,6 +277,16 @@ pub async fn assign(
             json!({ "cluster_id": req.cluster_id, "environment_id": req.environment_id }),
         )
         .await;
+    if let (Some(c), Some(role)) = (req.cluster_id, req.swarm_role) {
+        let join = super::swarm::JoinInput {
+            server_id: id,
+            role,
+            advertise_addr: None,
+            default_addr_pool: Vec::new(),
+            autolock: false,
+        };
+        super::swarm::start_join(&state, &caller, c, join).await?;
+    }
     Ok(Json(state.store.get_server(id).await?))
 }
 
@@ -276,6 +302,13 @@ fn is_edge(profile: &Value, node: ServerId) -> bool {
 /// Roles a node has in its cluster that must move before the node does.
 async fn handover_blockers(state: &AppState, node: ServerId, cluster: ClusterId) -> ApiResult<()> {
     let mut roles = Vec::new();
+    if let Some(m) = forge_core::swarm::SwarmRepository::get_member(&state.store, node).await?
+        && m.cluster_id == cluster
+    {
+        // Failed members too: the node may still be in the swarm until a
+        // forced leave has removed it.
+        roles.push("Docker Swarm member (Cluster → Swarm → Leave)");
+    }
     if let Some(p) = forge_core::ports::ClusterProfileRepository::get_cluster_profile(&state.store, cluster).await?
         && is_edge(&p.profile, node)
     {

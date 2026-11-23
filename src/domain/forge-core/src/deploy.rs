@@ -267,6 +267,9 @@ pub trait DeploymentRepository: Send + Sync + std::fmt::Debug {
     async fn list_events(&self, id: DeploymentId, after_seq: i64, limit: u32) -> DomainResult<Vec<DeploymentEvent>>;
     async fn put_slot(&self, s: &SlotRecord) -> DomainResult<()>;
     async fn delete_slot(&self, app: ServiceId, server: ServerId, slot: &str) -> DomainResult<()>;
+    /// Replaces every slot row of `app` with `rows`, in one transaction (a
+    /// half-written routing change never reaches the edge).
+    async fn replace_slots(&self, app: ServiceId, rows: &[SlotRecord]) -> DomainResult<()>;
     async fn list_slots(&self, app: ServiceId) -> DomainResult<Vec<SlotRecord>>;
     /// Copies of several services (the ingress resolves many at once).
     async fn list_slots_of(&self, apps: &[ServiceId]) -> DomainResult<Vec<SlotRecord>>;

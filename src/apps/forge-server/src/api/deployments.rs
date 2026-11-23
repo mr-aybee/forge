@@ -105,6 +105,19 @@ async fn authorize(state: &AppState, caller: &Caller, p: &Prepared) -> ApiResult
     let spec = crate::jobs::app::build_spec(&crate::deploy::release_app(&p.app, &p.release), None)
         .map_err(ApiError::bad_request)?;
     let mut mounts = std::collections::BTreeSet::new();
+    if let Some(sw) = &p.swarm {
+        // In a swarm a task may run on any node: host binds are approved
+        // only inside an approved root on every node (D-156).
+        let settings = spec.swarm.clone().unwrap_or_default();
+        let def = forge_catalog::swarm_service::service_def(
+            &spec,
+            &settings,
+            &p.app.id.to_string(),
+            &p.app.environment_id.to_string(),
+        )
+        .map_err(ApiError::bad_request)?;
+        mounts.extend(state.swarm.privileged_binds(sw.cluster, &def.bind_sources()).await?);
+    }
     for n in &p.nodes {
         let roots = crate::stacks::bind_roots(&state.store, *n).await;
         mounts.extend(crate::jobs::app::privileged_mounts(&spec, &roots));
@@ -122,7 +135,9 @@ async fn prepare(
     input: &DocInput,
 ) -> ApiResult<Prepared> {
     let doc = crate::deploy::read_document(&input.yaml, input.environment.as_deref())?;
-    Ok(state.deploy.prepare(ws, &doc, &input.yaml, &caller.principal()).await?)
+    let p = state.deploy.prepare(ws, &doc, &input.yaml, &caller.principal()).await?;
+    state.swarm.check_runtime(p.app.environment_id, &p.app.runtime).await?;
+    Ok(p)
 }
 
 async fn next_number(state: &AppState, app: ServiceId) -> DomainResult<i64> {

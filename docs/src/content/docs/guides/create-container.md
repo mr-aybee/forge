@@ -23,7 +23,7 @@ expose and take it down the same way.
 
 ## Steps
 
-1. Open the node, select the **Containers** tab, then **Create** → **Create
+1. Open the node, select the **Docker** tab (**Containers**), then **Create** → **Create
    container**. You can also start from the stack list at `/stacks` →
    **Create container**.
    The **New container** page opens, with the node (and, from the stack
@@ -59,7 +59,7 @@ stack** to manage it.
 
 ## Verify
 
-- The container appears in the node's **Containers** tab under **stacks**,
+- The container appears in the node's **Docker → Containers** tab under **stacks**,
   and in the stack list (`/stacks`) as a stack of kind `container`, with state
   `running`.
 - **Operations → Audit log** shows `stack.create` and `stack.deploy`.

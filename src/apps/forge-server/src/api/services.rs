@@ -31,11 +31,14 @@ use crate::state::AppState;
 
 /// A service as an authorization resource. Its parents are its environment
 /// and the workspace, so grants there cover it too (#13).
-fn svc_ref(id: ServiceId) -> EntityRef {
+/// Audit name of a service change.
+pub(super) const AUDIT_UPDATE: &str = "service.update";
+
+pub(super) fn svc_ref(id: ServiceId) -> EntityRef {
     EntityRef::new(forge_core::EntityKind::Service, id)
 }
 
-fn ns_ref(id: EnvironmentId) -> EntityRef {
+pub(super) fn ns_ref(id: EnvironmentId) -> EntityRef {
     EntityRef::new(EntityKind::Environment, id)
 }
 
@@ -195,6 +198,11 @@ pub struct AppInput {
     pub read_only: bool,
     #[serde(default)]
     pub log_max_mb: u32,
+    /// Container services in a Docker Swarm cluster: replicas, placement,
+    /// restart and update behaviour (D-154).
+    #[serde(default)]
+    #[schemars(with = "Option<Value>")]
+    pub swarm: Option<forge_catalog::swarm_service::SwarmSettings>,
 }
 
 const fn yes() -> bool {
@@ -205,6 +213,9 @@ const fn yes() -> bool {
 fn apply(state: &AppState, app: &mut Service, ns_slug: &str, input: AppInput) -> ApiResult<()> {
     if !matches!(input.runtime.as_str(), "systemd" | "container") {
         return Err(ApiError::bad_request("runtime must be systemd or container"));
+    }
+    if let Some(s) = &input.swarm {
+        s.validate().map_err(ApiError::bad_request)?;
     }
     let mut seen = HashSet::new();
     let mut env = Vec::new();
@@ -259,6 +270,7 @@ fn apply(state: &AppState, app: &mut Service, ns_slug: &str, input: AppInput) ->
         "stop_timeout_secs": input.stop_timeout_secs,
         "read_only": input.read_only,
         "log_max_mb": input.log_max_mb,
+        "swarm": input.swarm,
     });
     if let (Some(h), Some(spec)) = (health, app.spec.as_object_mut()) {
         spec.insert("health".into(), h);
@@ -297,6 +309,11 @@ pub async fn create(
         updated_at: now,
     };
     apply(&state, &mut app, &crate::names::environment_slug(&ns.name), input)?;
+    state.swarm.check_runtime(ns.id, &app.runtime).await?;
+    if state.swarm.swarm_of_environment(app.environment_id).await?.is_some() {
+        // The whole Swarm definition is checked now, not first at deploy.
+        crate::jobs::swarm_service::binds_of(&app).map_err(ApiError::bad_request)?;
+    }
     state.store.put_service(&app).await?;
     caller
         .audit(
@@ -319,11 +336,16 @@ pub async fn update(
     caller.authorize(Action::Deploy, ns_ref(app.environment_id)).await?;
     let ns_slug = app.spec.get("environment").and_then(Value::as_str).unwrap_or_default().to_owned();
     apply(&state, &mut app, &ns_slug, input)?;
+    state.swarm.check_runtime(app.environment_id, &app.runtime).await?;
+    if state.swarm.swarm_of_environment(app.environment_id).await?.is_some() {
+        // The whole Swarm definition is checked now, not first at deploy.
+        crate::jobs::swarm_service::binds_of(&app).map_err(ApiError::bad_request)?;
+    }
     state.store.put_service(&app).await?;
     let keys: Vec<&str> = app.env.iter().map(|e| e.key.as_str()).collect();
     caller
         .audit(
-            "service.update",
+            AUDIT_UPDATE,
             &ns_ref(app.environment_id),
             Some(app.workspace_id),
             json!({ "service": app.name, "env_keys": keys }),
@@ -335,6 +357,18 @@ pub async fn update(
 pub async fn delete(State(state): State<AppState>, caller: Caller, Path(id): Path<ServiceId>) -> ApiResult<StatusCode> {
     let app = load_own(&state, id).await?;
     caller.authorize(Action::Deploy, ns_ref(app.environment_id)).await?;
+    // A Swarm service must be removed from the swarm first.
+    if let Some(cluster) = state.swarm.swarm_of_environment(app.environment_id).await? {
+        for slot in ["", "a", "b"] {
+            let op = forge_catalog::swarm::SwarmOp::ServiceStatus { service_id: app.id.to_string(), slot: slot.into() };
+            let status: forge_catalog::swarm::SwarmServiceStatus =
+                serde_json::from_value(state.swarm.run(cluster, &caller.principal().to_string(), &op).await?)
+                    .map_err(forge_core::DomainError::internal)?;
+            if status.exists {
+                return Err(ApiError::conflict("remove the service from the swarm first"));
+            }
+        }
+    }
     let instances = state.store.list_instances(id).await?;
     if instances.iter().any(|i| i.status != "pending") {
         return Err(ApiError::conflict("remove the service from its nodes first"));
@@ -489,6 +523,17 @@ pub async fn deploy(
 ) -> ApiResult<(StatusCode, Json<Vec<Job>>)> {
     let app = load_own(&state, id).await?;
     caller.authorize(Action::Deploy, svc_ref(app.id)).await?;
+    // In a Swarm cluster the swarm places the tasks: one job on a manager.
+    if state.swarm.swarm_of_environment(app.environment_id).await?.is_some() {
+        let job = super::swarm::start_service_action(
+            &state,
+            &caller,
+            &app,
+            crate::jobs::swarm_service::ServiceAction::Deploy,
+        )
+        .await?;
+        return Ok((StatusCode::ACCEPTED, Json(vec![job])));
+    }
     let instances = state.store.list_instances(id).await?;
     if instances.is_empty() {
         return Err(ApiError::conflict("choose the nodes this service runs on first"));

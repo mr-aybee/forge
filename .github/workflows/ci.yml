@@ -115,8 +115,9 @@ jobs:
   rust-windows:
     name: Rust (Windows)
     needs: plan
-    # Windows-only code lives in the agent.
-    if: needs.plan.outputs.full == 'true' || needs.plan.outputs.agent == 'true'
+    # Windows-only code lives in the agent. Disabled: CI covers Linux only.
+    # Windows is tested on a local Windows machine first, then re-enabled here.
+    if: false
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

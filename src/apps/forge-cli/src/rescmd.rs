@@ -29,7 +29,7 @@ fn looks_like_id(s: &str) -> bool {
 }
 
 /// An environment id from an id or a name.
-async fn resolve_environment(api: &mut Api, ns: &str) -> Result<String> {
+pub(crate) async fn resolve_environment(api: &mut Api, ns: &str) -> Result<String> {
     if looks_like_id(ns) {
         return Ok(ns.to_owned());
     }
@@ -56,6 +56,8 @@ const STACK_COLS: &[Col] = &[
 
 #[derive(Subcommand, Debug)]
 pub enum StacksCmd {
+    #[command(flatten)]
+    Templates(crate::containercmd::TemplatesCmd),
     /// Compose stacks you can see.
     List {
         /// Only this environment (id or name).
@@ -346,9 +348,13 @@ async fn jobs_result(g: &Global, api: &mut Api, started: Value, wait: bool, time
 }
 
 pub async fn stacks(g: &Global, cmd: StacksCmd) -> Result<()> {
+    if let StacksCmd::Templates(c) = cmd {
+        return crate::containercmd::templates(g, c).await;
+    }
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
     match cmd {
+        StacksCmd::Templates(_) => Ok(()),
         StacksCmd::Edit(e) => stack_edit(g, &mut api, &t.server, e).await,
         StacksCmd::List { environment, node, paging } => {
             let mut q = Vec::new();
@@ -486,6 +492,9 @@ pub async fn stacks(g: &Global, cmd: StacksCmd) -> Result<()> {
 
 #[derive(Subcommand, Debug)]
 pub enum ServicesCmd {
+    /// The service on Docker Swarm: status, scale, restart, rollback, logs.
+    #[command(subcommand)]
+    Swarm(crate::containercmd::ServiceSwarmCmd),
     /// Services you can see.
     List {
         /// Only this environment (id or name).
@@ -765,9 +774,13 @@ pub(crate) async fn resolve_app(api: &mut Api, app: &str, environment: Option<&s
 }
 
 pub async fn services(g: &Global, cmd: ServicesCmd) -> Result<()> {
+    if let ServicesCmd::Swarm(c) = cmd {
+        return crate::containercmd::service_swarm(g, c).await;
+    }
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
     match cmd {
+        ServicesCmd::Swarm(_) => Ok(()),
         ServicesCmd::List { environment, cluster, paging } => {
             let mut q = Vec::new();
             if let Some(ns) = environment {

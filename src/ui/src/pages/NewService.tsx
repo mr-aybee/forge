@@ -9,7 +9,7 @@ import { NewEnvironmentModal } from "../components/EnvironmentDialogs";
 import { ProjectModal } from "../components/ProjectDialogs";
 import { CreateBasics, type CreateBasicsValue } from "../components/service-editor/BasicsSection";
 import { ServiceEditor } from "../components/service-editor/ServiceEditor";
-import { allIssues, cleanInput, emptyInput, serviceFacts } from "../components/service-editor/sections";
+import { allIssues, cleanInput, emptyInput, forSwarm, serviceFacts } from "../components/service-editor/sections";
 import { ActionBar, Button, Empty, ErrorNote, PageCrumb, PageHeader, Skeleton } from "../components/ui";
 
 /**
@@ -45,7 +45,10 @@ export function NewService() {
   const env = environments.find((n) => n.id === basics.environment && n.project_id === basics.project);
   const facts = serviceFacts(env?.name ?? "", basics.name);
   const basicsState = { mode: "create" as const, environment: env?.id ?? "", name: basics.name };
-  const issues = allIssues(form.input, basicsState);
+  // A Swarm cluster runs containers only, with swarm settings; derived so a changed environment never leaves stale settings.
+  const swarm = clusters.find((c) => c.id === env?.cluster_id)?.mode === "swarm";
+  const input = forSwarm(form.input, swarm);
+  const issues = allIssues(input, basicsState);
   const busy = pending !== null;
 
   const back = search.cluster ? (
@@ -60,11 +63,11 @@ export function NewService() {
     if (!env || issues.length) return;
     setPending(andDeploy ? "deploy" : "create");
     try {
-      const svc = await save.mutateAsync({ ...cleanInput(form.input), environment_id: env.id, name: basics.name });
-      if (basics.nodes.length) await place.mutateAsync({ id: svc.id, placements: basics.nodes.map((server_id) => ({ server_id, role: "active" })) });
+      const svc = await save.mutateAsync({ ...cleanInput(input), environment_id: env.id, name: basics.name });
+      if (basics.nodes.length && !swarm) await place.mutateAsync({ id: svc.id, placements: basics.nodes.map((server_id) => ({ server_id, role: "active" })) });
       if (andDeploy) {
         const jobs = await deploy.mutateAsync(svc.id);
-        toast(`Created ${svc.name}; deploying to ${jobs.length} node${jobs.length === 1 ? "" : "s"}`);
+        toast(swarm ? `Created ${svc.name}; deploying to the swarm` : `Created ${svc.name}; deploying to ${jobs.length} node${jobs.length === 1 ? "" : "s"}`);
       } else toast(`Created ${svc.name}`);
       void navigate({ to: "/services/$serviceId", params: { serviceId: svc.id } });
     } catch (e) {
@@ -77,7 +80,7 @@ export function NewService() {
   const loading = envQ.isLoading || projectsQ.isLoading;
   const error = envQ.error ?? projectsQ.error;
   const noProjects = !loading && !error && projects.length === 0;
-  const deployWhy = issues[0] ?? (basics.nodes.length === 0 ? "Choose nodes under Basics → Placement first" : undefined);
+  const deployWhy = issues[0] ?? (!swarm && basics.nodes.length === 0 ? "Choose nodes under Basics → Placement first" : undefined);
 
   return (
     <form
@@ -111,8 +114,9 @@ export function NewService() {
         ) : (
           <ServiceEditor
             mode="create"
-            value={form.input}
-            onChange={(input) => setForm((f) => ({ ...f, input }))}
+            value={input}
+            swarm={swarm}
+            onChange={(next) => setForm((f) => ({ ...f, input: next }))}
             basicsState={basicsState}
             facts={facts}
             basics={
@@ -125,13 +129,14 @@ export function NewService() {
                 servers={servers}
                 onNewProject={() => setDialog("project")}
                 onNewEnvironment={() => setDialog("env")}
+                swarm={swarm}
               />
             }
           />
         )}
       </div>
 
-      <ActionBar note={issues.length ? <span className="text-warn">{issues[0]}</span> : basics.nodes.length ? `Runs on ${basics.nodes.length} node${basics.nodes.length === 1 ? "" : "s"} after it is deployed.` : "Nothing runs until you place and deploy it."}>
+      <ActionBar note={issues.length ? <span className="text-warn">{issues[0]}</span> : swarm ? "The swarm places the tasks when you deploy." : basics.nodes.length ? `Runs on ${basics.nodes.length} node${basics.nodes.length === 1 ? "" : "s"} after it is deployed.` : "Nothing runs until you place and deploy it."}>
         <Link to="/services" search={search.cluster ? { cluster: search.cluster } : {}}>
           <Button type="button" variant="ghost">
             Cancel

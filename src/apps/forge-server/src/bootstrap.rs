@@ -140,6 +140,7 @@ pub async fn local_enroll_token(
                 environment_id: None,
                 abbr: String::new(),
                 icon: None,
+                mode: Default::default(),
                 created_at: state.clock.now(),
             };
             state.store.create_cluster(&c).await?;

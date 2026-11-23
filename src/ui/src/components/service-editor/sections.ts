@@ -3,8 +3,9 @@
  * each kind shows (in rail order), per-section status for the rail markers,
  * and the conversions between a service and its editable input. No React.
  */
-import { Activity, Boxes, Cpu, HardDrive, Network, Package, ServerCog, Settings2, SquareTerminal, Variable, Container, IdCard, type LucideIcon } from "lucide-react";
+import { Activity, Boxes, Cpu, HardDrive, Network, Package, ServerCog, Settings2, SquareTerminal, Variable, Container, IdCard, Layers, type LucideIcon } from "lucide-react";
 
+import { defaultSwarmSettings, normSwarmSettings } from "../../api/swarm";
 import type { EditableRuntime, Service, ServiceInput, ServiceRuntime } from "../../api/types";
 
 /** The kinds a user picks between, shown as two large cards. */
@@ -31,7 +32,7 @@ export const RUNTIMES: { id: ServiceRuntime; label: string; icon: LucideIcon; he
   { id: "compose-service", label: "Compose service", icon: Container, help: "Registered by a compose stack; managed on its stack." },
 ];
 
-export type SectionId = "basics" | "runtime" | "start" | "resources" | "env" | "storage" | "health" | "advanced" | "image" | "ports" | "command" | "volumes";
+export type SectionId = "basics" | "runtime" | "start" | "resources" | "env" | "storage" | "health" | "advanced" | "image" | "ports" | "command" | "volumes" | "swarm";
 
 export interface SectionMeta {
   id: SectionId;
@@ -54,12 +55,32 @@ const S: Record<SectionId, SectionMeta> = {
   volumes: { id: "volumes", label: "Volumes", icon: HardDrive, hint: "Bind mounts: /host/path:/container/path[:ro]." },
   health: { id: "health", label: "Health checks", icon: Activity, hint: "How Forge and Docker decide that the service is healthy." },
   advanced: { id: "advanced", label: "Advanced", icon: Settings2, hint: "Rarely needed options." },
+  swarm: { id: "swarm", label: "Swarm", icon: Layers, hint: "Replicas, where tasks may run, and how updates and restarts roll out." },
 };
 
 export const SECTIONS: Record<EditableRuntime, SectionMeta[]> = {
   systemd: [S.basics, S.runtime, S.start, S.resources, S.env, S.storage, S.health, S.advanced],
   container: [S.basics, S.image, S.ports, S.command, S.resources, S.env, S.volumes, S.health, { ...S.advanced, hint: "User, host name, labels, log rotation, and the whole container as compose YAML." }],
 };
+
+/** The sections of an input: a container in a Swarm cluster (`swarm` set) also gets the Swarm section. */
+export const sectionsFor = (v: ServiceInput): SectionMeta[] =>
+  v.runtime === "container" && v.swarm ? [...SECTIONS.container.slice(0, 3), S.swarm, ...SECTIONS.container.slice(3)] : SECTIONS[v.runtime];
+
+/** The input for an environment in (or out of) a Swarm cluster: container with settings, or no `swarm` at all. */
+export function forSwarm(v: ServiceInput, swarm: boolean): ServiceInput {
+  if (!swarm) {
+    if (v.swarm === undefined) return v;
+    const { swarm: _drop, ...rest } = v;
+    return rest;
+  }
+  const c = v.runtime === "container" ? v : switchKind(v, "container");
+  return c.swarm ? c : { ...c, swarm: defaultSwarmSettings() };
+}
+
+/** Docker placement constraint: key, `==` or `!=`, value. */
+export const CONSTRAINT_RE = /^(node\.(id|hostname|role|platform\.os|platform\.arch)|(node|engine)\.labels\.[A-Za-z0-9_.-]+)\s*(==|!=)\s*\S+$/;
+export const SPREAD_RE = /^node\.labels\.[A-Za-z0-9_.-]+$/;
 
 export const sectionDomId = (id: SectionId) => `service-section-${id}`;
 
@@ -127,6 +148,17 @@ export function sectionIssues(id: SectionId, v: ServiceInput, b: BasicsState): {
       if (v.runtime === "container" && v.extra_hosts.some((h) => h && !HOST_RE.test(h))) errors.push("Extra hosts: use name:ipv4.");
       if (v.log_max_mb < 0) errors.push("Log rotation cannot be negative.");
       break;
+    case "swarm": {
+      const w = v.swarm;
+      if (!w) break;
+      if (w.mode === "replicated" && (!Number.isInteger(w.replicas) || w.replicas < 1 || w.replicas > 1000)) errors.push("Replicas: 1 to 1000.");
+      if (w.constraints.some((c) => c && !CONSTRAINT_RE.test(c))) errors.push("Constraints: enter a value for each row.");
+      if (w.spread.filter(Boolean).length > 4) errors.push("Spread: at most 4 labels.");
+      if (w.spread.some((x) => x && !SPREAD_RE.test(x))) errors.push("Spread: use node.labels.<name>.");
+      if (w.max_per_node < 0 || w.update.parallelism < 0 || w.restart.max_attempts < 0) errors.push("Counts cannot be negative.");
+      if (w.update.max_failure_ratio < 0 || w.update.max_failure_ratio > 1) errors.push("Failure ratio: 0 to 1.");
+      break;
+    }
     case "runtime":
     case "storage":
       break;
@@ -136,7 +168,7 @@ export function sectionIssues(id: SectionId, v: ServiceInput, b: BasicsState): {
 
 /** Every problem of the input for its kind, for the action bar. */
 export function allIssues(v: ServiceInput, b: BasicsState): string[] {
-  return SECTIONS[v.runtime].flatMap((s) => sectionIssues(s.id, v, b).messages);
+  return sectionsFor(v).flatMap((s) => sectionIssues(s.id, v, b).messages);
 }
 
 // ------------------------------------------------------------------ conversions
@@ -194,6 +226,7 @@ export function toInput(a: Service): ServiceInput {
     stop_timeout_secs: s.stop_timeout_secs ?? 0,
     read_only: s.read_only ?? false,
     log_max_mb: s.log_max_mb ?? 0,
+    ...(s.swarm ? { swarm: normSwarmSettings(s.swarm) } : {}),
   };
 }
 
@@ -220,6 +253,7 @@ export function cleanInput(v: ServiceInput): ServiceInput {
     volumes: v.volumes.filter(Boolean),
     extra_hosts: v.extra_hosts.filter(Boolean),
     env: v.env.filter((e) => e.key),
+    ...(v.swarm ? { swarm: { ...v.swarm, constraints: v.swarm.constraints.filter(Boolean), spread: v.swarm.spread.filter(Boolean) } } : {}),
   };
 }
 

@@ -25,6 +25,7 @@
 
 pub mod apps;
 pub mod deploy;
+pub mod docker_ops;
 pub mod docker_tls;
 pub mod fabric;
 pub mod health;
@@ -32,8 +33,12 @@ pub mod ingress;
 pub mod integration;
 pub mod names;
 pub mod sites;
+pub mod stack_templates;
 pub mod stacks;
 pub mod storage;
+pub mod swarm;
+pub mod swarm_rollout;
+pub mod swarm_service;
 pub mod versions;
 
 use std::collections::BTreeMap;

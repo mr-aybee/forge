@@ -62,6 +62,39 @@ pub struct Environment {
     pub created_at: Timestamp,
 }
 
+/// How a cluster orchestrates its workloads (D-154). Chosen when the cluster
+/// is created; it cannot be changed afterwards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClusterMode {
+    /// Forge's own orchestration: system services and containers.
+    #[default]
+    Default,
+    /// Docker Swarm schedules containers; container services only.
+    Swarm,
+}
+
+impl ClusterMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Swarm => "swarm",
+        }
+    }
+}
+
+impl std::str::FromStr for ClusterMode {
+    type Err = crate::DomainError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "default" => Ok(Self::Default),
+            "swarm" => Ok(Self::Swarm),
+            other => Err(crate::DomainError::internal(format!("unknown cluster mode {other:?}"))),
+        }
+    }
+}
+
 /// A named group of nodes inside a workspace. Services and sites run on a
 /// cluster; environments may map onto clusters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +110,9 @@ pub struct Cluster {
     /// Badge image as a `data:image/...;base64,` URL.
     #[serde(default)]
     pub icon: Option<String>,
+    /// Orchestration mode; clusters created before modes existed are `default`.
+    #[serde(default)]
+    pub mode: ClusterMode,
     pub created_at: Timestamp,
 }
 

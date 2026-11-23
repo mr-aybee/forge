@@ -824,12 +824,16 @@ pub enum ClustersCmd {
     /// The cluster's ingress profile: get, set, apply, remove.
     #[command(subcommand)]
     Ingress(crate::ingresscmd::IngressCmd),
+    /// Docker Swarm of a Swarm-mode cluster: members, roles, tokens.
+    #[command(subcommand)]
+    Swarm(crate::containercmd::ClusterSwarmCmd),
 }
 
 pub async fn clusters(g: &Global, cmd: ClustersCmd) -> Result<()> {
     let cmd = match cmd {
         ClustersCmd::Admin(a) => return crate::admincmd::cluster_admin(g, a).await,
         ClustersCmd::Ingress(i) => return crate::ingresscmd::run(g, i).await,
+        ClustersCmd::Swarm(s) => return crate::containercmd::cluster_swarm(g, s).await,
         other => other,
     };
     let t = target(g)?;
@@ -847,7 +851,7 @@ pub async fn clusters(g: &Global, cmd: ClustersCmd) -> Result<()> {
             let v = api.get(&format!("/api/v1/clusters/{id}")).await?;
             show(g, &v, None)
         }
-        ClustersCmd::Admin(_) | ClustersCmd::Ingress(_) => Ok(()),
+        ClustersCmd::Admin(_) | ClustersCmd::Ingress(_) | ClustersCmd::Swarm(_) => Ok(()),
     }
 }
 

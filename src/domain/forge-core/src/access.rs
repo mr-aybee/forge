@@ -206,6 +206,28 @@ pub enum Action {
     /// Docker socket, binds outside approved roots); MFA, administrators.
     #[serde(rename = "stack.privileged")]
     StackPrivileged,
+    /// Create, join and leave a Docker Swarm, and change swarm nodes (role,
+    /// availability, labels, removal) in a Swarm cluster (D-154).
+    /// Administrators, MFA.
+    #[serde(rename = "swarm.manage")]
+    SwarmManage,
+    /// Pull, push, tag, remove and prune Docker images on a node (D-157).
+    #[serde(rename = "docker.image.manage")]
+    ImageManage,
+    /// Create, remove and prune Docker volumes on a node (D-157).
+    #[serde(rename = "docker.volume.manage")]
+    VolumeManage,
+    /// Create, remove, connect and prune Docker networks on a node (D-157).
+    #[serde(rename = "docker.network.manage")]
+    NetworkManage,
+    /// Add, change and remove container registries and their credentials
+    /// (D-158). Administrators, MFA.
+    #[serde(rename = "registry.manage")]
+    RegistryManage,
+    /// Create, rotate and remove deploy webhooks (D-159). A webhook is a
+    /// long-lived deploy credential: MFA.
+    #[serde(rename = "webhook.manage")]
+    WebhookManage,
     /// Send an uploaded TLS certificate's private key to an edge node when an
     /// endpoint is applied (administrators, MFA).
     #[serde(rename = "certificate.use")]
@@ -213,7 +235,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 49] = [
+    pub const ALL: [Action; 55] = [
         Action::View,
         Action::AuditRead,
         Action::WorkspaceCreate,
@@ -262,6 +284,12 @@ impl Action {
         Action::FileNode,
         Action::StackManage,
         Action::StackPrivileged,
+        Action::SwarmManage,
+        Action::ImageManage,
+        Action::VolumeManage,
+        Action::NetworkManage,
+        Action::RegistryManage,
+        Action::WebhookManage,
         Action::CertificateUse,
     ];
 
@@ -316,6 +344,12 @@ impl Action {
             Action::FileNode => "file.node",
             Action::StackManage => "stack.manage",
             Action::StackPrivileged => "stack.privileged",
+            Action::SwarmManage => "swarm.manage",
+            Action::ImageManage => "docker.image.manage",
+            Action::VolumeManage => "docker.volume.manage",
+            Action::NetworkManage => "docker.network.manage",
+            Action::RegistryManage => "registry.manage",
+            Action::WebhookManage => "webhook.manage",
             Action::CertificateUse => "certificate.use",
         }
     }

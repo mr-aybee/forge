@@ -128,6 +128,11 @@ pub struct AppSpec {
     /// commit, or an archive checked by its SHA-256).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<crate::deploy::ArtifactRef>,
+    /// Container services in a Swarm cluster (D-154): replicas, placement,
+    /// restart and update behaviour. Never sent to a node: Swarm clusters
+    /// run the service through a manager.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swarm: Option<crate::swarm_service::SwarmSettings>,
 }
 
 impl std::fmt::Debug for AppSpec {
@@ -163,6 +168,7 @@ impl std::fmt::Debug for AppSpec {
             slot,
             release,
             artifact,
+            swarm,
         } = self;
         let env: Vec<String> = env.iter().map(|(k, _)| format!("{k}=***")).collect();
         f.debug_struct("AppSpec")
@@ -195,6 +201,7 @@ impl std::fmt::Debug for AppSpec {
             .field("release", release)
             // URLs may carry a signed query: the kind only.
             .field("artifact", &artifact.as_ref().map(crate::deploy::ArtifactRef::kind))
+            .field("swarm", swarm)
             .finish()
     }
 }
@@ -755,6 +762,7 @@ mod tests {
             slot: String::new(),
             release: String::new(),
             artifact: None,
+            swarm: None,
             log_max_mb: 0,
         }
     }

@@ -1285,3 +1285,143 @@ Example `app.json` for a native service with a runtime:
 Health checks beyond the container `healthcheck` are not part of the
 definition; an update keeps them. See
 [`forge services health`](#forge-services-health).
+
+## Docker Swarm
+
+For a service in a Swarm-mode cluster (see
+[Docker Swarm](/docs/guides/docker-swarm/)). Changes need `deploy` on the
+service and start a job; add `--wait` to wait for it.
+
+### forge services swarm status
+
+The Swarm service: settings, tasks, HA report
+
+**Synopsis**
+
+```text
+forge services swarm status [OPTIONS] <SERVICE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<service>` | string | - | yes | Service id or name | - |
+| `--environment` | string | - | no | The service's environment (id or name), when the name is ambiguous | - |
+
+### forge services swarm deploy
+
+Apply the current spec to the swarm (skipped when unchanged)
+
+**Synopsis**
+
+```text
+forge services swarm deploy [OPTIONS] <SERVICE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<service>` | string | - | yes | Service id or name | - |
+| `--environment` | string | - | no | The service's environment (id or name), when the name is ambiguous | - |
+| `--wait` | flag | - | no | Wait for the job to finish (exit 10 when it fails) | - |
+| `--timeout` | integer | `900` | no | Seconds `--wait` waits | - |
+
+### forge services swarm scale
+
+Set the replica count (0 to 1000)
+
+**Synopsis**
+
+```text
+forge services swarm scale [OPTIONS] <SERVICE> <REPLICAS>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<service>` | string | - | yes | Service id or name | - |
+| `<replicas>` | string | - | yes | Replica count (0 to 1000) | - |
+| `--environment` | string | - | no | The service's environment (id or name), when the name is ambiguous | - |
+| `--wait` | flag | - | no | Wait for the job to finish (exit 10 when it fails) | - |
+| `--timeout` | integer | `900` | no | Seconds `--wait` waits | - |
+
+### forge services swarm restart
+
+Restart every task, one batch at a time
+
+**Synopsis**
+
+```text
+forge services swarm restart [OPTIONS] <SERVICE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<service>` | string | - | yes | Service id or name | - |
+| `--environment` | string | - | no | The service's environment (id or name), when the name is ambiguous | - |
+| `--wait` | flag | - | no | Wait for the job to finish (exit 10 when it fails) | - |
+| `--timeout` | integer | `900` | no | Seconds `--wait` waits | - |
+
+### forge services swarm rollback
+
+Go back to the previous release
+
+**Synopsis**
+
+```text
+forge services swarm rollback [OPTIONS] <SERVICE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<service>` | string | - | yes | Service id or name | - |
+| `--environment` | string | - | no | The service's environment (id or name), when the name is ambiguous | - |
+| `--yes` | flag | - | no | Skip the confirmation prompt | - |
+| `--wait` | flag | - | no | Wait for the job to finish (exit 10 when it fails) | - |
+| `--timeout` | integer | `900` | no | Seconds `--wait` waits | - |
+
+### forge services swarm remove
+
+Remove the Swarm service (the Forge service stays)
+
+**Synopsis**
+
+```text
+forge services swarm remove [OPTIONS] <SERVICE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<service>` | string | - | yes | Service id or name | - |
+| `--environment` | string | - | no | The service's environment (id or name), when the name is ambiguous | - |
+| `--yes` | flag | - | no | Skip the confirmation prompt | - |
+| `--wait` | flag | - | no | Wait for the job to finish (exit 10 when it fails) | - |
+| `--timeout` | integer | `900` | no | Seconds `--wait` waits | - |
+
+### forge services swarm logs
+
+The last lines of the service's logs
+
+**Synopsis**
+
+```text
+forge services swarm logs [OPTIONS] <SERVICE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<service>` | string | - | yes | Service id or name | - |
+| `--environment` | string | - | no | The service's environment (id or name), when the name is ambiguous | - |
+| `--tail` | integer | `200` | no | Lines from the end | - |
+

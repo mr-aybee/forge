@@ -64,6 +64,7 @@ async fn api_stays_fast_with_1000_nodes_and_15000_apps() {
             environment_id: None,
             abbr: String::new(),
             icon: None,
+            mode: Default::default(),
             created_at: now,
         };
         s.create_cluster(&cl).await.unwrap();

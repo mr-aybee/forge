@@ -40,6 +40,8 @@ pub fn page_of(path: &[&str]) -> &'static str {
             "alerts" => "alerts",
             "tunnel" => "tunnel",
             "docker" => "docker",
+            "registries" => "registries",
+            "webhooks" => "webhooks",
             "deploy" => "deploy",
             "storage" => "storage",
             "vault" => "vault",

@@ -2,13 +2,14 @@ import * as Tabs from "@radix-ui/react-tabs";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { IpTags, useClusterFabric } from "../components/IpTag";
 import { nodeName } from "../api/types";
-import { Container, Gauge, Network, Pencil, Plus, Server, UserMinus } from "lucide-react";
+import { Boxes, Container, Gauge, Network, Pencil, Plus, Server, UserMinus } from "lucide-react";
 import { useState } from "react";
 
 import { useServices, useAssignServer, useClusters, useOnboardingNodes, useServers } from "../api/hooks";
 import type { ClusterTab } from "../app/router";
 import { ClusterContainersTab } from "../components/cluster/ClusterContainersTab";
 import { ClusterNetworkTab } from "../components/cluster/ClusterNetworkTab";
+import { ClusterSwarmTab } from "../components/cluster/ClusterSwarmTab";
 import { errorText, useToast } from "../app/toast";
 import { emptyNodeFilter, NodeList, type NodeFilter } from "../components/NodeList";
 import { useLatestMetrics } from "../components/NodeTable";
@@ -116,7 +117,7 @@ export function ClusterDetail() {
           ]}
         />
       </div>
-      <Tabs.Root value={tab} onValueChange={setTab}>
+      <Tabs.Root value={tab === "swarm" && cluster.mode !== "swarm" ? "overview" : tab} onValueChange={setTab}>
         <Tabs.List className="mb-4 flex gap-1 overflow-x-auto border-b border-line" aria-label="Cluster sections">
           <Tabs.Trigger value="overview" className={tabTrigger}>
             <Gauge className="size-4" /> Overview
@@ -127,6 +128,11 @@ export function ClusterDetail() {
           <Tabs.Trigger value="containers" className={tabTrigger}>
             <Container className="size-4" /> Containers
           </Tabs.Trigger>
+          {cluster.mode === "swarm" && (
+            <Tabs.Trigger value="swarm" className={tabTrigger}>
+              <Boxes className="size-4" /> Swarm
+            </Tabs.Trigger>
+          )}
         </Tabs.List>
         <Tabs.Content value="network">
           <ClusterNetworkTab clusterId={clusterId} />
@@ -134,6 +140,11 @@ export function ClusterDetail() {
         <Tabs.Content value="containers">
           <ClusterContainersTab clusterId={clusterId} />
         </Tabs.Content>
+        {cluster.mode === "swarm" && (
+          <Tabs.Content value="swarm">
+            <ClusterSwarmTab clusterId={clusterId} />
+          </Tabs.Content>
+        )}
         <Tabs.Content value="overview">
       <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
         <Stat

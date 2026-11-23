@@ -211,6 +211,7 @@ async fn cluster_membership_adds_second_parent() {
         environment_id: None,
         abbr: String::new(),
         icon: None,
+        mode: Default::default(),
         created_at: Timestamp(1),
     };
     s.create_cluster(&cluster).await.unwrap();
@@ -280,6 +281,7 @@ async fn resolve_many_matches_resolve_for_servers() {
         environment_id: None,
         abbr: String::new(),
         icon: None,
+        mode: Default::default(),
         created_at: Timestamp(1),
     };
     s.create_cluster(&cluster).await.unwrap();
@@ -334,6 +336,7 @@ fn cluster_in(ws: WorkspaceId, name: &str) -> Cluster {
         environment_id: None,
         abbr: String::new(),
         icon: None,
+        mode: Default::default(),
         created_at: Timestamp(1),
     }
 }
@@ -612,4 +615,150 @@ async fn bucket_grants_round_trip_and_go_with_their_store() {
     assert!(s.get_bucket_grant(other.id).await.unwrap().is_none());
     assert!(s.list_live_bucket_grants(bob.id, Timestamp(0)).await.unwrap().is_empty());
     assert_eq!(ids(s.list_live_bucket_grants(ada.id, Timestamp(0)).await.unwrap()), [read.id]);
+}
+
+/// Swarm state (D-154): one swarm row per cluster, one member row per node,
+/// sealed tokens kept as given; both go when the cluster is deleted.
+#[tokio::test]
+async fn swarm_rows_round_trip_and_go_with_the_cluster() {
+    use forge_core::swarm::{ClusterSwarm, MemberRole, MemberState, SwarmMember, SwarmRepository};
+    let (store, _d) = store().await;
+    let (ws, _) = seed_workspace(&store).await;
+    let cluster = cluster_in(ws.id, "swarm-eu");
+    store.create_cluster(&cluster).await.unwrap();
+    let swarm = ClusterSwarm {
+        cluster_id: cluster.id,
+        swarm_id: "s1".into(),
+        port: 2377,
+        default_addr_pool: vec!["10.20.0.0/16".into()],
+        autolock: true,
+        tokens_sealed: Some("sealed".into()),
+        founder: None,
+        updated_at: Timestamp(1),
+    };
+    // Only the first claim wins; the recorded swarm id is found again.
+    assert!(store.claim_swarm(&swarm).await.unwrap());
+    assert!(!store.claim_swarm(&swarm).await.unwrap());
+    assert_eq!(store.cluster_of_swarm("s1").await.unwrap(), Some(cluster.id));
+    assert_eq!(store.cluster_of_swarm("").await.unwrap(), None);
+    store.put_swarm(&swarm).await.unwrap();
+    assert_eq!(store.get_swarm(cluster.id).await.unwrap(), Some(swarm.clone()));
+    let server = Server {
+        role: forge_core::model::NodeRole::Worker,
+        display_name: None,
+        id: ServerId::new(),
+        workspace_id: ws.id,
+        environment_id: None,
+        cluster_id: Some(cluster.id),
+        hostname: "lab-a".into(),
+        os: "linux".into(),
+        arch: "x86_64".into(),
+        agent_version: "0.1.0".into(),
+        status: AgentStatus::Pending,
+        last_seen_at: None,
+        cert_serial: None,
+        cert_not_after: None,
+        created_at: Timestamp(1),
+    };
+    store.create_server(&server).await.unwrap();
+    let mut m = SwarmMember {
+        server_id: server.id,
+        cluster_id: cluster.id,
+        node_id: String::new(),
+        role: MemberRole::Manager,
+        advertise_addr: String::new(),
+        manager_addr: String::new(),
+        state: MemberState::Joining,
+        error: String::new(),
+        updated_at: Timestamp(2),
+    };
+    store.put_member(&m).await.unwrap();
+    m.state = MemberState::Joined;
+    m.node_id = "n1".into();
+    store.put_member(&m).await.unwrap();
+    assert_eq!(store.list_members(cluster.id).await.unwrap(), vec![m.clone()]);
+    assert_eq!(store.get_member(server.id).await.unwrap(), Some(m));
+    store.delete_cluster(cluster.id).await.unwrap();
+    assert!(store.get_swarm(cluster.id).await.unwrap().is_none());
+    assert!(store.get_member(server.id).await.unwrap().is_none());
+}
+
+/// Registries (D-158): one per host per workspace, the sealed secret kept as
+/// given.
+#[tokio::test]
+async fn registries_round_trip_one_per_host() {
+    use forge_core::registries::{Registry, RegistryKind, RegistryRepository};
+    let (store, _d) = store().await;
+    let (ws, _) = seed_workspace(&store).await;
+    let mut r = Registry {
+        id: RegistryId::new(),
+        workspace_id: ws.id,
+        name: "GitHub".into(),
+        kind: RegistryKind::Ghcr,
+        host: "ghcr.io".into(),
+        username: "bot".into(),
+        secret_sealed: "sealed".into(),
+        allow_push: false,
+        created_by: Principal::User(UserId::new()),
+        created_at: Timestamp(1),
+        updated_at: Timestamp(1),
+    };
+    store.create_registry(&r).await.unwrap();
+    let dup = Registry { id: RegistryId::new(), ..r.clone() };
+    assert!(matches!(store.create_registry(&dup).await, Err(DomainError::Conflict(_))));
+    r.username = "robot".into();
+    r.updated_at = Timestamp(2);
+    store.update_registry(&r).await.unwrap();
+    assert_eq!(store.get_registry(r.id).await.unwrap(), Some(r.clone()));
+    assert_eq!(store.list_registries(ws.id).await.unwrap(), vec![r.clone()]);
+    store.delete_registry(r.id).await.unwrap();
+    assert!(store.get_registry(r.id).await.unwrap().is_none());
+    assert!(matches!(store.update_registry(&r).await, Err(DomainError::NotFound(_))), "no silent update")
+}
+
+/// Webhooks (D-159): found by token hash; deliveries stay bounded and go
+/// with the hook.
+#[tokio::test]
+async fn webhooks_round_trip_and_keep_bounded_deliveries() {
+    use forge_core::webhooks::*;
+    let (store, _d) = store().await;
+    let (ws, _) = seed_workspace(&store).await;
+    let w = Webhook {
+        id: WebhookId::new(),
+        workspace_id: ws.id,
+        name: "ci".into(),
+        target: WebhookTarget::Service { id: ServiceId::new() },
+        token_hash: "h1".into(),
+        token_hint: "whk_ab".into(),
+        signature: Signature::Github,
+        secret_sealed: Some("sealed".into()),
+        tag_pattern: Some("v*".into()),
+        enabled: true,
+        created_by: Principal::User(UserId::new()),
+        created_at: Timestamp(1),
+        updated_at: Timestamp(1),
+        last_delivery_at: None,
+    };
+    store.create_webhook(&w).await.unwrap();
+    assert_eq!(store.webhook_by_token_hash("h1").await.unwrap().map(|x| x.id), Some(w.id));
+    assert!(store.webhook_by_token_hash("h2").await.unwrap().is_none());
+    for i in 0..(DELIVERIES_KEPT + 5) {
+        let d = Delivery {
+            id: WebhookDeliveryId::new(),
+            webhook_id: w.id,
+            at: Timestamp(i64::from(i) + 10),
+            outcome: DeliveryOutcome::Accepted,
+            reason: String::new(),
+            job_id: None,
+            tag: Some("v1".into()),
+            source_ip: "192.0.2.1".into(),
+        };
+        store.add_delivery(&d).await.unwrap();
+    }
+    let all = store.list_deliveries(w.id, 1000).await.unwrap();
+    assert_eq!(all.len(), DELIVERIES_KEPT as usize);
+    assert_eq!(all[0].at, Timestamp(i64::from(DELIVERIES_KEPT) + 14), "newest first");
+    assert_eq!(store.get_webhook(w.id).await.unwrap().unwrap().last_delivery_at, Some(all[0].at));
+    store.delete_webhook(w.id).await.unwrap();
+    assert!(store.list_deliveries(w.id, 10).await.unwrap().is_empty());
 }

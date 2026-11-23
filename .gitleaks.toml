@@ -1,0 +1,22 @@
+# Secret scanning (gitleaks). Findings below are reviewed false positives:
+# the release *public* key that installers pin, documentation placeholders,
+# and recipes that read a password from the environment at run time.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Reviewed false positives"
+paths = [
+  '''target/''',
+  '''node_modules/''',
+  '''(^|/)dist/''',
+]
+regexes = [
+  # The Ed25519 release public key, pinned on purpose.
+  '''bFMJk9wv3XFOhOtPya-idWiatNVVVcktN62sOnQr29U''',
+  # Documentation placeholder access key.
+  '''FAK3X9Q2M7T1ZB6W4KHD''',
+  # Package recipes: the password comes from the package environment.
+  '''-u "elastic:\$\(pkg_env_get''',
+  '''-u "admin:\$\(pkg_env_get''',
+]

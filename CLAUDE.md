@@ -46,6 +46,7 @@ cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings   # alias: cargo lint
 cargo test --workspace                                  # includes kill-and-resume tests
 cargo deny check && cargo audit
+docker run --rm -v "$PWD":/repo zricethezav/gitleaks:v8.21.2 dir /repo --no-banner   # secret scan (.gitleaks.toml)
 (cd src/ui && npm ci && npm run build)
 (cd docs && npm ci && npm run build)                    # must have no broken links
 (cd website && npm ci && npm run build)

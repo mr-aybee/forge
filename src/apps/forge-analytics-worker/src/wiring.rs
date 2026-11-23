@@ -95,7 +95,7 @@ async fn store(config: &WorkerConfig, password: Option<&str>, clock: Arc<dyn Clo
         }
         StoreSelection::Clickhouse { url } => ClickHouseTarget::from_url(url, password, "clickhouse"),
         StoreSelection::Embedded { paths, port, database } => {
-            let (p, engine_config) = (paths.clone(), EngineConfig::of(*port, &config.tuning));
+            let (p, engine_config) = ((**paths).clone(), EngineConfig::of(*port, &config.tuning));
             let pw = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
                 let pw = embedded::password(&p)?;
                 embedded::write_config(&p, &engine_config, &pw)?;
@@ -103,7 +103,7 @@ async fn store(config: &WorkerConfig, password: Option<&str>, clock: Arc<dyn Clo
             })
             .await??;
             let target = ClickHouseTarget::from_url(&embedded::url(*port, database), Some(&pw), "embedded");
-            let managed = Arc::new(ManagedEngine::new(paths.clone(), *port));
+            let managed = Arc::new(ManagedEngine::new((**paths).clone(), *port));
             let store =
                 ClickHouse::new(target.map_err(|e| anyhow::anyhow!("{e}"))?).map_err(|e| anyhow::anyhow!("{e}"))?;
             return Ok(Stores { managed: Some(managed), ..clickhouse(store, batch_rows) });

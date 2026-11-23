@@ -52,6 +52,8 @@ fn default_allowed() -> Vec<String> {
         "tunnel".into(),
         "container_exec".into(),
         "docker_tls".into(),
+        "swarm".into(),
+        "docker".into(),
     ]
 }
 

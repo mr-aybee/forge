@@ -1540,3 +1540,17 @@ Update this table in the pull request that finishes an item.
 | U8 | Interaction and accessibility | Medium | Open |
 | U9 | Duplicated UI helpers | Medium | Open |
 | U10 | Low-impact UI items | Low | Open |
+
+## Container platform (feat/container-platform), left for later
+
+Found by the branch's quality review. These are not bugs, just debt to pay down when the code is next touched:
+
+- **Untyped Swarm states:** `SwarmStatus.state`, `SwarmTask.state` and `desired_state`, and the service `update_state` are strings. Make them serde enums with an `Unknown` fallback.
+- **Untyped Docker JSON in the agent:** `src/apps/forge-agent/src/{swarm,docker_ops}.rs` build their views from untyped Docker JSON (`v["X"].as_str().unwrap_or_default()`). Read typed `#[serde(default)]` structs instead, and give the agent its own Docker error enum.
+- **Long functions:** split `deploy.rs` (`start`, `prepare`), `api/docker_resources.rs` (`op`), `forge_catalog::swarm_service::engine_spec` and `api/hooks.rs` (`fire`) into named steps.
+- **Handlers calling handlers:** webhooks call the deploy handlers (`services::deploy`, `stacks::deploy`). Move the deploy use cases into services that both can call.
+- **Repeated helpers:** `ws_ref`, `server_ref` and `cluster_ref` are repeated. Add `EntityRef::workspace/server/cluster` in `forge-core`.
+- **N+1 queries in the swarm view:** add `ServerRepository::get_servers` and `FileRepository::list_roots_for` batch reads for `SwarmService::view` and `privileged_binds`.
+- **Live-node cache:** give it single-flight, and cache `service_get` status for 5 seconds.
+- **Unbounded lists:** add clamped `limit` parameters to the registry and webhook lists.
+

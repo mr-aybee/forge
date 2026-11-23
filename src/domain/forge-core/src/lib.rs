@@ -24,13 +24,16 @@ pub mod permissions;
 pub mod pins;
 pub mod ports;
 pub mod public_address;
+pub mod registries;
 pub mod remote;
 pub mod silences;
 pub mod spool;
 pub mod stacks;
 pub mod storage;
+pub mod swarm;
 pub mod tags;
 pub mod tunnels;
+pub mod webhooks;
 
 pub use access::{AccessRequest, Action, AuthzContext, EntityKind, EntityRef, Principal, ResourceRef, Role};
 pub use backoff::Backoff;

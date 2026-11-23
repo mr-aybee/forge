@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { ChevronRight, Container, History, Database, Globe, HeartPulse, LayoutDashboard, Loader2, Rocket, Settings2, Trash2, Waypoints } from "lucide-react";
+import { ChevronRight, Container, History, Database, Globe, HeartPulse, LayoutDashboard, Loader2, Rocket, Settings2, Trash2, Waypoints, Webhook } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ApiError, get } from "../api/client";
@@ -26,7 +26,7 @@ import { errorText, useToast } from "../app/toast";
 import { useTerminals } from "../app/terminals";
 import { EditBasics } from "../components/service-editor/BasicsSection";
 import { ServiceEditor } from "../components/service-editor/ServiceEditor";
-import { RUNTIMES, allIssues, cleanInput, serviceFacts, toInput } from "../components/service-editor/sections";
+import { RUNTIMES, allIssues, cleanInput, forSwarm, sectionDomId, serviceFacts, toInput } from "../components/service-editor/sections";
 import { HealthTab } from "../components/health/HealthTab";
 import { HealthWarnings } from "../components/health/InstanceHealth";
 import { IpTags, leaseOf, useClusterFabric } from "../components/IpTag";
@@ -41,8 +41,11 @@ import { Button, Confirm, Drawer, Empty, ErrorNote, RowMenu, Modal, PageCrumb, P
 import { TagEditor } from "../components/TagEditor";
 import { AppStorageTab } from "../components/storage/AppStorageTab";
 import { ReleasesTab } from "../components/deploy/ReleasesTab";
+import { WebhooksTab } from "../components/deploy/WebhooksTab";
 import { LogIngestKeys, OpenLogStream } from "../components/logs/LogIngestKeys";
 import { ServiceNodes } from "../components/service/ServiceNodes";
+import { ServiceSwarm } from "../components/service/ServiceSwarm";
+import { useServiceSwarmAction } from "../api/swarm";
 import { ServiceStatusStrip } from "../components/service/ServiceStatusStrip";
 import { ServiceSummary } from "../components/service/ServiceSummary";
 import { ServicePorts } from "../components/tunnels/ServicePorts";
@@ -139,7 +142,10 @@ function ServicePage({ appId }: { appId: string }) {
     retry: false,
   });
 
-  const saved = a && !isStackService(a) ? toInput(a) : undefined;
+  // Services in a Swarm cluster: the swarm places the tasks, so no node instances.
+  const swarm = clusters.find((c) => c.id === ns0?.cluster_id)?.mode === "swarm";
+  const swarmAct = useServiceSwarmAction(appId);
+  const saved = a && !isStackService(a) ? forSwarm(toInput(a), swarm) : undefined;
   const form = draft ?? saved;
   const dirty = !!draft && !!saved && JSON.stringify(saved) !== JSON.stringify(draft);
 
@@ -174,6 +180,12 @@ function ServicePage({ appId }: { appId: string }) {
   };
   const replicas = a.instances.filter((i) => i.role !== "standby").length;
   const deployedSomewhere = a.instances.some((i) => i.status !== "pending");
+  const deployNow = () =>
+    swarm
+      ? swarmAct.mutate({ kind: "deploy" }, { onSuccess: () => toast("Deploying to the swarm"), onError: (e) => toast(errorText(e), "error") })
+      : deploy.mutate(a.id, { onSuccess: (jobs) => toast(`Deploying to ${jobs.length} node${jobs.length === 1 ? "" : "s"}`), onError: (e) => toast(errorText(e), "error") });
+  const deployBusy = deploy.isPending || swarmAct.isPending;
+  const deployWhyHeader = dirty ? "Save changes first" : !swarm && a.instances.length === 0 ? "Choose nodes first" : undefined;
   const clusterId = ns?.cluster_id ?? undefined;
   const noProfile = !!clusterId && profile.isSuccess && !profile.data?.profile?.ingress;
   const exposeWhy = !clusterId
@@ -214,11 +226,11 @@ function ServicePage({ appId }: { appId: string }) {
             <OpenLogStream appId={a.id} />
             <Button
               variant="primary"
-              disabled={deploy.isPending || a.instances.length === 0 || !!dirty}
-              title={dirty ? "Save changes first" : a.instances.length === 0 ? "Choose nodes first" : "Deploy to every node"}
-              onClick={() => deploy.mutate(a.id, { onSuccess: (jobs) => toast(`Deploying to ${jobs.length} node${jobs.length === 1 ? "" : "s"}`), onError: (e) => toast(errorText(e), "error") })}
+              disabled={deployBusy || !!deployWhyHeader}
+              title={deployWhyHeader ?? (swarm ? "Create or update the Docker service in the swarm" : "Deploy to every node")}
+              onClick={deployNow}
             >
-              {deploy.isPending ? <Loader2 className="size-4 animate-spin" /> : <Rocket className="size-4" />} Deploy
+              {deployBusy ? <Loader2 className="size-4 animate-spin" /> : <Rocket className="size-4" />} Deploy
             </Button>
             <RowMenu
               label="More actions"
@@ -230,7 +242,7 @@ function ServicePage({ appId }: { appId: string }) {
                   icon: Trash2,
                   danger: true,
                   disabled: deployedSomewhere,
-                  hint: deployedSomewhere ? "Remove it from its nodes first (node ⋯ → Remove from node)" : undefined,
+                  hint: deployedSomewhere ? "Remove it from its nodes first (node ⋯ → Remove from node)" : swarm ? "Remove it from the swarm first (Swarm → Remove)" : undefined,
                   onSelect: () => setConfirmDelete(true),
                 },
               ]}
@@ -256,6 +268,7 @@ function ServicePage({ appId }: { appId: string }) {
             ["health", "Health Checks", HeartPulse],
             ["storage", "Storage", Database],
             ["releases", "Releases", History],
+            ["webhooks", "Webhooks", Webhook],
           ] as const
         ).map(([id, label, Icon]) => (
           <button key={id} onClick={() => setTab(id)} className={`press -mb-px inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-[13px] whitespace-nowrap focus-visible:outline-2 focus-visible:outline-accent ${tab === id ? "border-accent text-accent" : "border-transparent text-muted hover:text-fg"}`}>
@@ -272,13 +285,25 @@ function ServicePage({ appId }: { appId: string }) {
       )}
       <div key={tab} className="view-enter" hidden={tab === "health"}>
       {tab === "health" ? null : tab === "releases" ? (
-        <ReleasesTab app={a} />
+        <ReleasesTab app={a} swarm={swarm} />
+      ) : tab === "webhooks" ? (
+        <WebhooksTab target={{ kind: "service", id: a.id }} targetName={a.name} />
       ) : tab === "storage" ? (
         <AppStorageTab app={a} />
       ) : tab === "overview" ? (
         <div className="space-y-3">
           <ServiceStatusStrip a={a} nodes={nodes} health={health.data?.instances} onLogKeys={() => document.getElementById("log-ingest-keys")?.scrollIntoView({ behavior: "smooth", block: "center" })} />
           <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
+            {swarm ? (
+              <ServiceSwarm
+                a={a}
+                onEditSettings={() => {
+                  setTab("configuration");
+                  // The editor mounts on the next render; then scroll to its Swarm section.
+                  window.setTimeout(() => document.getElementById(sectionDomId("swarm"))?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+                }}
+              />
+            ) : (
             <Panel title={`Nodes · ${a.instances.length}`}>
               <ServiceNodes
                 a={a}
@@ -293,6 +318,7 @@ function ServicePage({ appId }: { appId: string }) {
                 onAdd={(n) => (a.instances.length ? setPlacing(n) : setPlacement(n.id, "active"))}
               />
             </Panel>
+            )}
             <Panel title="Summary">
               <ServiceSummary a={a} environmentName={ns?.name} nodeName={hostOf} />
             </Panel>
@@ -323,6 +349,7 @@ function ServicePage({ appId }: { appId: string }) {
           onChange={setDraft}
           onDiscard={() => setDraft(undefined)}
           saving={saving}
+          swarm={swarm}
           basics={<EditBasics service={a} environment={ns} project={projects.find((g) => g.id === ns?.project_id)} cluster={clusters.find((c) => c.id === ns?.cluster_id)} nodeNameOf={hostOf} />}
           facts={facts}
           onSave={async (andDeploy) => {
@@ -330,7 +357,10 @@ function ServicePage({ appId }: { appId: string }) {
             try {
               await save.mutateAsync({ id: a.id, ...cleanInput(form) });
               setDraft(undefined);
-              if (andDeploy) {
+              if (andDeploy && swarm) {
+                await swarmAct.mutateAsync({ kind: "deploy" });
+                toast("Saved; deploying to the swarm");
+              } else if (andDeploy) {
                 const jobs = await deploy.mutateAsync(a.id);
                 toast(`Saved; deploying to ${jobs.length} node${jobs.length === 1 ? "" : "s"}`);
               } else toast("Saved. Deploy applies it to the nodes.");
@@ -544,6 +574,7 @@ function ConfigurationTab({
   saving,
   basics,
   facts,
+  swarm,
 }: {
   a: Service;
   form: ServiceInput;
@@ -554,14 +585,15 @@ function ConfigurationTab({
   saving: "save" | "deploy" | null;
   basics: React.ReactNode;
   facts: ReturnType<typeof serviceFacts>;
+  swarm: boolean;
 }) {
   const basicsState = { mode: "edit" as const, environment: a.environment_id, name: a.name };
   const issues = allIssues(form, basicsState);
   const denied = a.can_deploy === false;
-  const deployWhy = issues[0] ?? (denied ? "Needs the deploy permission on this environment" : a.instances.length === 0 ? "Choose nodes on the Overview tab first" : undefined);
+  const deployWhy = issues[0] ?? (denied ? "Needs the deploy permission on this environment" : !swarm && a.instances.length === 0 ? "Choose nodes on the Overview tab first" : undefined);
   return (
     <div>
-      <ServiceEditor mode="edit" value={form} onChange={onChange} basics={basics} basicsState={basicsState} facts={facts} serviceId={a.id} />
+      <ServiceEditor mode="edit" swarm={swarm} value={form} onChange={onChange} basics={basics} basicsState={basicsState} facts={facts} serviceId={a.id} />
       <UnsavedBar
         dirty={dirty}
         summary={issues[0]}

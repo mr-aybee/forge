@@ -38,6 +38,25 @@ Environments created before environments belonged to clusters can be
 *unassigned*. They keep working and show as **Unassigned** until someone moves
 them into a cluster. New environments always need a cluster.
 
+## Cluster modes
+
+Every cluster has a **mode**. You choose it when you create the cluster, and
+it cannot be changed afterwards.
+
+| Mode | Orchestrates with | Runs | Nodes need |
+| --- | --- | --- | --- |
+| **Default** | Forge itself | System services and containers | The Forge agent |
+| **Docker Swarm** | Docker Swarm | Container services only | The Forge agent and Docker Engine |
+
+Default mode keeps Forge's own deployment engine: Forge places each service
+on nodes and rolls out releases node by node. In Swarm mode, Forge turns the
+cluster's nodes into a Docker Swarm and hands scheduling, replicas and
+rolling updates to Swarm. Projects, environments and services work the same
+way in both modes, and Forge stays the one place you deploy from.
+
+Clusters created before modes existed are Default clusters and behave as
+before.
+
 ## Permissions follow the structure
 
 Roles can be granted on everything (the workspace), or on a single tenant,
