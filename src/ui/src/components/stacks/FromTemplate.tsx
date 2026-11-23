@@ -299,7 +299,7 @@ function TemplateForm({
           <div id="template-compose" className="relative border-t border-line">
             {template.compose && (
               <div className="absolute top-1.5 right-1.5">
-                <CopyButton value={template.compose} />
+                <CopyButton text={template.compose} />
               </div>
             )}
             <pre className="max-h-96 overflow-auto px-2.5 py-2 font-mono text-[11px] whitespace-pre select-text">
