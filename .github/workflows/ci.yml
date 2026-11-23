@@ -115,8 +115,8 @@ jobs:
   rust-windows:
     name: Rust (Windows)
     needs: plan
-    # Windows-only code lives in the agent. Disabled for now: Windows support
-    # is paused until it is fixed and re-enabled deliberately.
+    # Windows-only code lives in the agent. Disabled: CI covers Linux only.
+    # Windows is tested on a local Windows machine first, then re-enabled here.
     if: false
     runs-on: windows-latest
     steps:
