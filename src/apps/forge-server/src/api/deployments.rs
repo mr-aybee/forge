@@ -342,19 +342,25 @@ pub async fn get(
     Path(id): Path<DeploymentId>,
 ) -> ApiResult<Json<DeploymentView>> {
     let (d, app) = load_deployment(&state, &caller, id).await?;
-    let plan: cat::Plan = serde_json::from_value(d.plan.clone()).map_err(forge_core::DomainError::internal)?;
-    let names = node_names(&state, &plan).await?;
+    let steps = step_lines(&state, &d.plan).await?;
     let events = state.store.list_events(d.id, 0, 1_000).await?;
     let can_control = caller.can(Action::Deploy, svc_ref(app.id)).await;
     let can_approve = d.created_by != caller.principal() && caller.can(Action::DeployApprove, svc_ref(app.id)).await;
-    Ok(Json(DeploymentView {
-        steps: plan.steps.iter().map(|s| s.describe(&names)).collect(),
-        service: app.name,
-        deployment: d,
-        events,
-        can_control,
-        can_approve,
-    }))
+    Ok(Json(DeploymentView { steps, service: app.name, deployment: d, events, can_control, can_approve }))
+}
+
+/// The plan's steps for people. A deployment stores a per-node [`cat::Plan`]
+/// (which always has `targets`) or, on a Swarm cluster, a
+/// [`SwarmPlan`](forge_catalog::swarm_rollout::SwarmPlan) (see `deploy.rs`).
+async fn step_lines(state: &AppState, stored: &serde_json::Value) -> DomainResult<Vec<String>> {
+    if stored.get("targets").is_some() {
+        let plan: cat::Plan = serde_json::from_value(stored.clone()).map_err(forge_core::DomainError::internal)?;
+        let names = node_names(state, &plan).await?;
+        return Ok(plan.steps.iter().map(|s| s.describe(&names)).collect());
+    }
+    let plan: forge_catalog::swarm_rollout::SwarmPlan =
+        serde_json::from_value(stored.clone()).map_err(forge_core::DomainError::internal)?;
+    Ok(plan.steps.iter().map(forge_catalog::swarm_rollout::SwarmStep::describe).collect())
 }
 
 async fn node_names(state: &AppState, plan: &cat::Plan) -> DomainResult<std::collections::BTreeMap<String, String>> {

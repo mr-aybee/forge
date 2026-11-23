@@ -66,6 +66,10 @@ pub struct SwarmPlan {
     pub from_slot: Option<String>,
     pub update: UpdatePolicy,
     pub steps: Vec<SwarmStep>,
+    /// No task serves for a while: a recreate, or a stop-first update whose
+    /// batch is every replica (accepted only with `allowDowntime`).
+    #[serde(default)]
+    pub downtime: bool,
 }
 
 /// What the planner needs to know.
@@ -121,15 +125,28 @@ pub fn plan(input: &SwarmPlanInput<'_>) -> Result<SwarmPlan, String> {
             if input.serving.is_some_and(|s| !s.is_empty()) {
                 return Err("this service runs in slots (Blue-Green or Canary); keep that strategy".into());
             }
-            if p.strategy == Strategy::Recreate {
+            let downtime = if p.strategy == Strategy::Recreate {
                 update.parallelism = 0;
                 update.order = UpdateOrder::StopFirst;
-            }
+                true
+            } else if update.order == UpdateOrder::StopFirst && update.parallelism >= r && input.serving.is_some() {
+                // As on nodes: stop-first over every running copy at once.
+                if !p.allow_downtime {
+                    return Err(format!(
+                        "stop-first with {} would stop every running task at once; run more replicas, lower \
+                         batchSize, or set strategy.allowDowntime: true",
+                        if r == 1 { "one replica".to_owned() } else { format!("batches of {}", update.parallelism) }
+                    ));
+                }
+                true
+            } else {
+                false
+            };
             let mut steps = Vec::new();
             approve(&mut steps);
             steps.push(SwarmStep::Deploy { slot: String::new(), replicas: r });
             steps.push(SwarmStep::Gate { slot: String::new() });
-            Ok(SwarmPlan { strategy: p.strategy, slot: String::new(), from_slot, update, steps })
+            Ok(SwarmPlan { strategy: p.strategy, slot: String::new(), from_slot, update, steps, downtime })
         }
         Strategy::BlueGreen | Strategy::Canary => {
             if !input.routed {
@@ -178,7 +195,7 @@ pub fn plan(input: &SwarmPlanInput<'_>) -> Result<SwarmPlan, String> {
             if let Some(o) = old {
                 steps.push(SwarmStep::Scale { slot: o, replicas: 0 });
             }
-            Ok(SwarmPlan { strategy: p.strategy, slot: new, from_slot, update, steps })
+            Ok(SwarmPlan { strategy: p.strategy, slot: new, from_slot, update, steps, downtime: false })
         }
     }
 }
@@ -212,6 +229,25 @@ mod tests {
         );
         let plan = super::plan(&input(&policy(Strategy::Recreate), Some(""), false)).unwrap();
         assert_eq!((plan.update.parallelism, plan.update.order), (0, UpdateOrder::StopFirst));
+    }
+
+    #[test]
+    fn stop_first_over_every_replica_needs_allow_downtime() {
+        let mut p = policy(Strategy::Rolling);
+        p.replacement = crate::deploy::Replacement::StopFirst;
+        p.batch_size = 4;
+        p.allow_downtime = false; // as a deployment document defaults it
+        // Nothing serves yet: a first deploy has no running copy to lose.
+        assert!(!plan(&input(&p, None, false)).unwrap().downtime);
+        let e = plan(&input(&p, Some(""), false)).unwrap_err();
+        assert!(e.contains("allowDowntime"), "{e}");
+        p.allow_downtime = true;
+        assert!(plan(&input(&p, Some(""), false)).unwrap().downtime);
+        // Smaller batches keep tasks serving.
+        p.batch_size = 1;
+        p.allow_downtime = false;
+        assert!(!plan(&input(&p, Some(""), false)).unwrap().downtime);
+        assert!(plan(&input(&policy(Strategy::Recreate), Some(""), false)).unwrap().downtime);
     }
 
     #[test]
