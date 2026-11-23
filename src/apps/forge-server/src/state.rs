@@ -380,6 +380,7 @@ impl Services {
             swarm: swarm.clone(),
             swarms: Arc::new(store.clone()),
             services: Arc::new(store.clone()),
+            deploys: Arc::new(store.clone()),
             envelope: envelope.clone(),
         }));
         registry.register(Arc::new(crate::jobs::swarm::SwarmMemberJob {

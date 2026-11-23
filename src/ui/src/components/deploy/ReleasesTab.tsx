@@ -37,7 +37,7 @@ function Section({ title, actions, children }: { title: string; actions?: React.
   );
 }
 
-export function ReleasesTab({ app }: { app: Service }) {
+export function ReleasesTab({ app, swarm = false }: { app: Service; swarm?: boolean }) {
   const toast = useToast();
   const releases = useReleases(app.id);
   const deployments = useAppDeployments(app.id);
@@ -106,7 +106,9 @@ export function ReleasesTab({ app }: { app: Service }) {
         ) : slots.isError ? (
           <ErrorNote error={slots.error} />
         ) : !slots.data?.slots.length ? (
-          <p className="px-4 py-3 text-xs text-muted">No running copies yet. Apply a release to start one.</p>
+          <p className="px-4 py-3 text-xs text-muted">
+            {swarm ? "Docker Swarm places this service's tasks; see Overview → Swarm for where they run." : "No running copies yet. Apply a release to start one."}
+          </p>
         ) : (
           <Table head={["Node", "Slot", "Release", "Traffic", "State", "Ports"]}>
             {slots.data.slots.map((s) => (
@@ -241,6 +243,7 @@ export function ReleasesTab({ app }: { app: Service }) {
       {openRel !== undefined && <ReleaseSource appId={app.id} number={openRel} onClose={() => setOpenRel(undefined)} />}
       {applyOpen && (
         <ApplyYamlDialog
+          swarm={swarm}
           onClose={() => setApplyOpen(false)}
           onStarted={(id) => {
             setApplyOpen(false);
@@ -295,7 +298,7 @@ function ReleaseSource({ appId, number, onClose }: { appId: string; number: numb
   );
 }
 
-function ApplyYamlDialog({ onClose, onStarted }: { onClose: () => void; onStarted: (deploymentId: string) => void }) {
+function ApplyYamlDialog({ swarm, onClose, onStarted }: { swarm: boolean; onClose: () => void; onStarted: (deploymentId: string) => void }) {
   const toast = useToast();
   const [yaml, setYaml] = useState("");
   const plan = usePlanYaml();
@@ -321,7 +324,7 @@ function ApplyYamlDialog({ onClose, onStarted }: { onClose: () => void; onStarte
     <Modal open onOpenChange={(o) => !o && onClose()} title="Apply YAML" description="Plan a deployment spec, review what happens, then apply it." width={760}>
       <TextArea aria-label="Deployment YAML" rows={14} spellCheck={false} value={yaml} onChange={(e) => setYaml(e.target.value)} placeholder={"apiVersion: forge/v1\nkind: Deployment\nmetadata:\n  name: …\n  environment: …"} />
       {plan.isError && <ErrorNote error={errorText(plan.error)} />}
-      {current && <PlanSummary p={current} />}
+      {current && <PlanSummary p={current} swarm={swarm} />}
       <div className="mt-4 flex justify-end gap-2">
         <Button onClick={onClose}>Cancel</Button>
         <Button disabled={!yaml.trim() || plan.isPending} onClick={doPlan}>
@@ -335,7 +338,7 @@ function ApplyYamlDialog({ onClose, onStarted }: { onClose: () => void; onStarte
   );
 }
 
-function PlanSummary({ p }: { p: PlanView }) {
+function PlanSummary({ p, swarm }: { p: PlanView; swarm: boolean }) {
   return (
     <div className="mt-3 space-y-2 rounded-md border border-line p-3 text-[13px]">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
@@ -365,13 +368,14 @@ function PlanSummary({ p }: { p: PlanView }) {
         {p.artifact || "—"}
       </div>
       <div className="text-xs">
-        <span className="text-muted">Nodes</span> {p.nodes.length ? p.nodes.join(", ") : "—"}
+        <span className="text-muted">Nodes</span> {p.nodes.length ? p.nodes.join(", ") : swarm ? <span className="text-muted">placed by Docker Swarm</span> : "—"}
         {p.added_nodes.length > 0 && <span className="text-ok"> · +{p.added_nodes.join(", ")}</span>}
         {p.removed_nodes.length > 0 && <span className="text-bad"> · −{p.removed_nodes.join(", ")}</span>}
       </div>
       <div>
         <div className="mb-1 text-xs font-medium text-muted">What happens</div>
         <ol className="list-decimal space-y-0.5 pl-5 text-xs">
+          {p.steps.length === 0 && <li className="list-none text-faint">—</li>}
           {p.steps.map((s, i) => (
             <li key={i}>{s}</li>
           ))}

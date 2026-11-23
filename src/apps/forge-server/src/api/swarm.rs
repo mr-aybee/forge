@@ -307,9 +307,9 @@ pub(super) async fn start_service_action(
         Vec::new()
     };
     let slot = state.swarm.serving_slot(app.id).await?;
-    if action == ServiceAction::Deploy && !slot.is_empty() {
+    if matches!(action, ServiceAction::Deploy | ServiceAction::Rollback) && !slot.is_empty() {
         return Err(ApiError::conflict(
-            "this service runs in slots (Blue-Green or Canary): roll it out as a release from Deployments",
+            "this service runs in slots (Blue-Green or Canary): deploy or roll back a release from Deployments",
         ));
     }
     let resource = if privileged_binds.is_empty() {

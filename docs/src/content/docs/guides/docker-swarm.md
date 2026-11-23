@@ -139,6 +139,14 @@ clusters too. Forge plans the steps for the swarm instead of for single nodes:
 `blue-green` and `canary` need a site in front of the service, so the edge
 can move traffic between the two versions.
 
+Ports 20000 to 29999 are reserved for these two versions: a service in a
+Swarm cluster cannot publish a port in that range.
+
+If a rollout fails or you abort it, Forge puts the release that served
+before back in place. For `blue-green` and `canary` that means the old
+version is scaled up, checked, and given all traffic again; once all traffic
+had moved to the new version, Forge leaves it there.
+
 The service page shows an **HA readiness** score: more than one task, tasks
 spread over nodes, a health check, restarts, rollback on failure, and at
 least three managers.

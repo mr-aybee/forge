@@ -26,7 +26,7 @@ import { errorText, useToast } from "../app/toast";
 import { useTerminals } from "../app/terminals";
 import { EditBasics } from "../components/service-editor/BasicsSection";
 import { ServiceEditor } from "../components/service-editor/ServiceEditor";
-import { RUNTIMES, allIssues, cleanInput, forSwarm, serviceFacts, toInput } from "../components/service-editor/sections";
+import { RUNTIMES, allIssues, cleanInput, forSwarm, sectionDomId, serviceFacts, toInput } from "../components/service-editor/sections";
 import { HealthTab } from "../components/health/HealthTab";
 import { HealthWarnings } from "../components/health/InstanceHealth";
 import { IpTags, leaseOf, useClusterFabric } from "../components/IpTag";
@@ -283,7 +283,7 @@ function ServicePage({ appId }: { appId: string }) {
       )}
       <div key={tab} className="view-enter" hidden={tab === "health"}>
       {tab === "health" ? null : tab === "releases" ? (
-        <ReleasesTab app={a} />
+        <ReleasesTab app={a} swarm={swarm} />
       ) : tab === "storage" ? (
         <AppStorageTab app={a} />
       ) : tab === "overview" ? (
@@ -291,7 +291,14 @@ function ServicePage({ appId }: { appId: string }) {
           <ServiceStatusStrip a={a} nodes={nodes} health={health.data?.instances} onLogKeys={() => document.getElementById("log-ingest-keys")?.scrollIntoView({ behavior: "smooth", block: "center" })} />
           <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
             {swarm ? (
-              <ServiceSwarm a={a} />
+              <ServiceSwarm
+                a={a}
+                onEditSettings={() => {
+                  setTab("configuration");
+                  // The editor mounts on the next render; then scroll to its Swarm section.
+                  window.setTimeout(() => document.getElementById(sectionDomId("swarm"))?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+                }}
+              />
             ) : (
             <Panel title={`Nodes · ${a.instances.length}`}>
               <ServiceNodes

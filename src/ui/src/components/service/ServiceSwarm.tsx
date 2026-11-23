@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { Layers, Loader2, RefreshCw, RotateCcw, RotateCw, Rocket, Scale, Trash2 } from "lucide-react";
+import { Check, Layers, Loader2, Settings2, X, RefreshCw, RotateCcw, RotateCw, Rocket, Scale, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import type { Service } from "../../api/types";
@@ -18,7 +18,7 @@ const taskMs = (t: SwarmTask) => (typeof t.updated_at === "number" ? t.updated_a
 const LABEL: Record<ServiceSwarmAction["kind"], string> = { deploy: "Deploy", scale: "Scale", restart: "Restart", rollback: "Roll back", remove: "Remove" };
 
 /** The Swarm panel of a service in a Swarm cluster: status, actions, tasks and logs. */
-export function ServiceSwarm({ a }: { a: Service }) {
+export function ServiceSwarm({ a, onEditSettings }: { a: Service; onEditSettings?: () => void }) {
   const q = useServiceSwarm(a.id);
   const v = q.data;
   const cluster = useSwarm(v?.cluster_id ?? "", !!v?.cluster_id).data;
@@ -83,6 +83,7 @@ export function ServiceSwarm({ a }: { a: Service }) {
       }
     >
       <StatusLine v={v} />
+      <HaReadiness v={v} onEdit={onEditSettings} />
       {v.status_error && <ErrorNote error={`Swarm status unavailable: ${v.status_error}`} />}
       {s && !exists ? (
         <Empty icon={<Layers className="size-5" />} title="Not in the swarm yet" action={<Button variant="primary" disabled={denied || pending !== null} title={deniedWhy} onClick={() => run({ kind: "deploy" })}><Rocket className="size-4" /> Deploy</Button>}>
@@ -190,6 +191,42 @@ function StatusLine({ v }: { v: ServiceSwarmView }) {
           </span>
         </span>
       )}
+    </div>
+  );
+}
+
+const haTone = (n: number): Tone => (n >= 80 ? "ok" : n >= 50 ? "warn" : "bad");
+
+/** HA readiness: the server's score and checklist; hidden when an older server sends no checks. */
+function HaReadiness({ v, onEdit }: { v: ServiceSwarmView; onEdit?: () => void }) {
+  const { score, checks } = v.ha;
+  if (checks.length === 0) return null;
+  const failing = checks.filter((c) => !c.ok).length;
+  return (
+    <div className="border-b border-line px-3 py-2 text-xs">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium text-muted">HA readiness</span>
+        <Badge tone={haTone(score)}>
+          <span className="font-mono tabular-nums">{score}</span>/100
+        </Badge>
+        <span className="text-faint">{failing === 0 ? "all checks pass" : `${failing} of ${checks.length} checks fail`}</span>
+        {onEdit && (
+          <Button variant="ghost" className="ml-auto" onClick={onEdit} title="Configuration → Swarm">
+            <Settings2 className="size-4" /> Edit Swarm settings
+          </Button>
+        )}
+      </div>
+      <ul className="mt-1.5 grid gap-x-6 gap-y-0.5 sm:grid-cols-2">
+        {checks.map((c) => (
+          <li key={c.name} className="flex min-w-0 items-start gap-1.5">
+            {c.ok ? <Check className="mt-px size-3.5 shrink-0 text-ok" aria-label="Passes" /> : <X className="mt-px size-3.5 shrink-0 text-bad" aria-label="Fails" />}
+            <span className="min-w-0">
+              <span className={c.ok ? "text-muted" : "text-fg"}>{c.name}</span>
+              {!c.ok && c.hint && <span className="block text-faint">{c.hint}</span>}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

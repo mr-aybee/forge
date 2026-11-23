@@ -246,6 +246,21 @@ pub fn slot_ok(slot: &str) -> bool {
 /// Label carrying the slot on a Swarm service.
 pub const SLOT_LABEL: &str = "forge.slot";
 
+/// Label (on the service and on its containers) with the fingerprint of the
+/// definition: an identical re-send is skipped, and tasks of the current
+/// definition can be told from older ones.
+pub const SPEC_LABEL: &str = "forge.spec";
+
+/// FNV-1a (64 bit): a stable fingerprint, not a security measure.
+fn fingerprint(v: &Value) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in v.to_string().bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
 /// The overlay network of environment `environment_id`.
 #[must_use]
 pub fn network_name(environment_id: &str) -> String {
@@ -528,6 +543,22 @@ impl ServiceDef {
         if self.ports.len() > 64 || self.ports.iter().any(|p| p.target == 0 || p.published == Some(0)) {
             return Err("invalid port".into());
         }
+        // Slot ports are Forge's: a slot publishes only there, and nothing
+        // else may, so one service can never take another's slot port.
+        let slot_range = crate::deploy::SLOT_PORTS;
+        for p in self.ports.iter().filter_map(|p| p.published) {
+            if self.slot.is_empty() == slot_range.contains(&p) {
+                return Err(if self.slot.is_empty() {
+                    format!(
+                        "port {p} is reserved for Forge's deployment slots ({}-{})",
+                        slot_range.start(),
+                        slot_range.end()
+                    )
+                } else {
+                    format!("slot port {p} is outside Forge's slot range")
+                });
+            }
+        }
         self.settings.validate()
     }
 
@@ -649,7 +680,7 @@ impl ServiceDef {
                 v
             })
             .collect();
-        json!({
+        let mut spec = json!({
             "Name": service_name(&self.service_id, &self.slot),
             "Labels": {
                 MANAGED_LABEL: "true",
@@ -664,7 +695,11 @@ impl ServiceDef {
             "UpdateConfig": update,
             "RollbackConfig": rollback,
             "EndpointSpec": { "Mode": "vip", "Ports": ports },
-        })
+        });
+        let print = fingerprint(&spec);
+        spec["Labels"][SPEC_LABEL] = json!(print);
+        spec["TaskTemplate"]["ContainerSpec"]["Labels"][SPEC_LABEL] = json!(print);
+        spec
     }
 }
 
@@ -758,6 +793,9 @@ mod tests {
         assert_eq!(v["Name"], "forge-01900000000070008000000000000001");
         assert_eq!(v["Labels"][MANAGED_LABEL], "true");
         assert_eq!(v["Labels"][SERVICE_ID_LABEL], SVC);
+        let print = v["Labels"][SPEC_LABEL].as_str().unwrap().to_owned();
+        assert_eq!(v["TaskTemplate"]["ContainerSpec"]["Labels"][SPEC_LABEL], print.as_str());
+        assert_eq!(d.engine_spec()["Labels"][SPEC_LABEL], print.as_str(), "stable");
         assert_eq!(v["Mode"]["Replicated"]["Replicas"], 3);
         let c = &v["TaskTemplate"]["ContainerSpec"];
         assert_eq!(c["Image"], "nginx:1.27");
@@ -855,6 +893,9 @@ mod tests {
     fn slots_publish_their_own_ports() {
         let d = def(&SwarmSettings::default()).unwrap();
         let ports = std::collections::BTreeMap::from([(80, 21000), (9000, 21001)]);
+        let mut reserved = app();
+        reserved.ports = vec!["21000:80".into()];
+        assert!(service_def(&reserved, &SwarmSettings::default(), SVC, ENV).is_err(), "slot ports are Forge's");
         let a = d.clone().into_slot("a", &ports).unwrap();
         let v = a.engine_spec();
         assert_eq!(v["Name"], "forge-01900000000070008000000000000001-a");

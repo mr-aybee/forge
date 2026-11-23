@@ -13,7 +13,9 @@ use forge_catalog::swarm::{
 };
 use serde_json::{Value, json};
 
-use forge_catalog::swarm_service::{MANAGED_LABEL, SERVICE_ID_LABEL, SLOT_LABEL, network_name, service_name};
+use forge_catalog::swarm_service::{
+    MANAGED_LABEL, SERVICE_ID_LABEL, SLOT_LABEL, SPEC_LABEL, network_name, service_name,
+};
 
 use crate::docker::api;
 
@@ -116,9 +118,14 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
                     Ok(json!({ "id": created["ID"], "created": true }))
                 }
                 Some(cur) => {
+                    let id = cur["ID"].as_str().ok_or("Docker did not report the service id")?;
+                    // The same definition again (a retried step): no update,
+                    // so Swarm's previous spec stays the release before.
+                    if cur["Spec"]["Labels"][SPEC_LABEL] == spec["Labels"][SPEC_LABEL] {
+                        return Ok(json!({ "id": id, "created": false, "unchanged": true }));
+                    }
                     let version =
                         cur["Version"]["Index"].as_u64().ok_or("Docker did not report the service version")?;
-                    let id = cur["ID"].as_str().ok_or("Docker did not report the service id")?;
                     api("POST", &format!("/services/{id}/update?version={version}"), Some(&spec), QUICK).await?;
                     Ok(json!({ "id": id, "created": false }))
                 }
@@ -225,6 +232,8 @@ async fn service_status(service_id: &str, slot: &str) -> Result<SwarmServiceStat
 pub(crate) fn status_from(svc: &Value, tasks: &Value) -> SwarmServiceStatus {
     let tasks: Vec<SwarmTask> = tasks.as_array().map(|a| a.iter().map(task_view).collect()).unwrap_or_default();
     let replicated = svc["Spec"]["Mode"]["Replicated"].is_object();
+    let spec = svc["Spec"]["Labels"][SPEC_LABEL].as_str().unwrap_or_default().to_owned();
+    let live = |t: &&SwarmTask| t.state == "running" && t.desired_state == "running";
     SwarmServiceStatus {
         exists: true,
         id: svc["ID"].as_str().unwrap_or_default().to_owned(),
@@ -234,7 +243,9 @@ pub(crate) fn status_from(svc: &Value, tasks: &Value) -> SwarmServiceStatus {
         } else {
             tasks.iter().filter(|t| t.desired_state == "running").count() as u64
         },
-        running: tasks.iter().filter(|t| t.state == "running" && t.desired_state == "running").count() as u64,
+        running: tasks.iter().filter(live).count() as u64,
+        running_current: tasks.iter().filter(live).filter(|t| !spec.is_empty() && t.spec == spec).count() as u64,
+        spec,
         update_state: svc["UpdateStatus"]["State"].as_str().unwrap_or_default().to_owned(),
         update_message: svc["UpdateStatus"]["Message"].as_str().unwrap_or_default().to_owned(),
         image: svc["Spec"]["TaskTemplate"]["ContainerSpec"]["Image"].as_str().unwrap_or_default().to_owned(),
@@ -251,6 +262,7 @@ fn task_view(t: &Value) -> SwarmTask {
         desired_state: t["DesiredState"].as_str().unwrap_or_default().to_owned(),
         error: t["Status"]["Err"].as_str().unwrap_or_default().to_owned(),
         image: t["Spec"]["ContainerSpec"]["Image"].as_str().unwrap_or_default().to_owned(),
+        spec: t["Spec"]["ContainerSpec"]["Labels"][SPEC_LABEL].as_str().unwrap_or_default().to_owned(),
         updated_at: t["UpdatedAt"].as_str().unwrap_or_default().to_owned(),
     }
 }
@@ -413,17 +425,18 @@ mod tests {
 
     #[test]
     fn service_status_counts_running_tasks() {
-        let svc = json!({"ID": "s1", "Spec": {"Mode": {"Replicated": {"Replicas": 3}},
+        let svc = json!({"ID": "s1", "Spec": {"Mode": {"Replicated": {"Replicas": 3}}, "Labels": {"forge.spec": "new"},
             "TaskTemplate": {"ContainerSpec": {"Image": "nginx:1.27"}}},
             "UpdateStatus": {"State": "updating", "Message": "update in progress"}});
         let tasks = json!([
-            {"ID": "t1", "NodeID": "n1", "Slot": 1, "DesiredState": "running", "Status": {"State": "running"}},
+            {"ID": "t1", "NodeID": "n1", "Slot": 1, "DesiredState": "running", "Status": {"State": "running"},
+             "Spec": {"ContainerSpec": {"Labels": {"forge.spec": "old"}}}},
             {"ID": "t2", "NodeID": "n2", "Slot": 2, "DesiredState": "running", "Status": {"State": "starting"}},
             {"ID": "t3", "NodeID": "n2", "Slot": 3, "DesiredState": "shutdown", "Status": {"State": "failed", "Err": "exit 1"}}
         ]);
         let s = status_from(&svc, &tasks);
         assert!(s.exists);
-        assert_eq!((s.desired, s.running), (3, 1));
+        assert_eq!((s.desired, s.running, s.running_current), (3, 1, 0), "the running task is an old one");
         assert_eq!(s.update_state, "updating");
         assert_eq!(s.tasks[2].error, "exit 1");
         assert_eq!(s.image, "nginx:1.27");

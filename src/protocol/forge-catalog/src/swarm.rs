@@ -331,6 +331,9 @@ pub struct SwarmTask {
     pub desired_state: String,
     pub error: String,
     pub image: String,
+    /// Fingerprint of the definition this task runs (`forge.spec`).
+    #[serde(default)]
+    pub spec: String,
     /// RFC 3339 time of the last state change.
     pub updated_at: String,
 }
@@ -345,6 +348,12 @@ pub struct SwarmServiceStatus {
     /// Replicas asked for (replicated mode).
     pub desired: u64,
     pub running: u64,
+    /// Running tasks of the current definition (see `spec`).
+    #[serde(default)]
+    pub running_current: u64,
+    /// Fingerprint of the service's current definition.
+    #[serde(default)]
+    pub spec: String,
     /// Rolling update: `updating`, `completed`, `paused`, `rollback_started`,
     /// `rollback_completed`, … (empty before the first update).
     pub update_state: String,

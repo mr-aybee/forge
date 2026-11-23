@@ -308,6 +308,36 @@ export interface ServiceSwarmView {
   settings: SwarmSettings;
   status: SwarmServiceStatus | null;
   status_error: string | null;
+  /** High-availability readiness of the settings and swarm; older servers send none (score 0, no checks). */
+  ha: SwarmHa;
+}
+
+export interface SwarmHaCheck {
+  name: string;
+  ok: boolean;
+  /** What to change when the check fails. */
+  hint: string;
+}
+
+export interface SwarmHa {
+  /** 0 to 100. */
+  score: number;
+  checks: SwarmHaCheck[];
+}
+
+function normHa(v: unknown): SwarmHa {
+  const o = rec(v);
+  const score = num(o.score) ?? 0;
+  return {
+    score: Math.max(0, Math.min(100, Math.round(score))),
+    checks: arr(o.checks)
+      .map((c) => {
+        const x = rec(c);
+        const name = str(x.name);
+        return name ? { name, ok: x.ok === true, hint: str(x.hint) ?? "" } : null;
+      })
+      .filter((c): c is SwarmHaCheck => c !== null),
+  };
 }
 
 export type ServiceSwarmAction = { kind: "deploy" } | { kind: "scale"; replicas: number } | { kind: "restart" } | { kind: "rollback" } | { kind: "remove" };
@@ -350,6 +380,7 @@ export function normServiceSwarm(v: unknown): ServiceSwarmView {
         }
       : null,
     status_error: str(o.status_error) ?? null,
+    ha: normHa(o.ha),
   };
 }
 

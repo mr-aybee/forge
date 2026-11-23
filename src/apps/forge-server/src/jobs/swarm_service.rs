@@ -86,6 +86,7 @@ pub struct SwarmServiceJob {
     pub swarm: Arc<crate::swarm::SwarmService>,
     pub swarms: Arc<dyn SwarmRepository>,
     pub services: Arc<dyn ServiceRepository>,
+    pub deploys: Arc<dyn forge_core::deploy::DeploymentRepository>,
     pub envelope: Envelope,
 }
 
@@ -120,7 +121,10 @@ pub fn progress(action: ServiceAction, s: &SwarmServiceStatus) -> Progress {
             Progress::Failed(format!("Swarm rolled the update back: {}", s.update_message))
         }
         "updating" | "rollback_started" => Progress::Running,
-        _ if s.running >= s.desired => Progress::Done,
+        // Tasks of the current definition only (older ones still run while
+        // Swarm picks the update up); services from before fingerprints
+        // count every running task.
+        _ if (if s.spec.is_empty() { s.running } else { s.running_current }) >= s.desired => Progress::Done,
         _ => Progress::Running,
     }
 }
@@ -225,6 +229,18 @@ impl SwarmServiceJob {
                 let op = SwarmOp::EnsureNetwork { environment_id: app.environment_id.to_string() };
                 self.op(ctx, manager, "network_op", &op, QUICK_WAIT).await.map(|_| ())
             }
+            // Remove takes every slot's service away, and the slots'
+            // traffic rows, so nothing is left behind.
+            1 if p.action == ServiceAction::Remove => {
+                for slot in ["", "a", "b"] {
+                    let op = SwarmOp::ServiceRemove { service_id: p.service_id.to_string(), slot: slot.into() };
+                    self.op(ctx, manager, &format!("remove_op_{slot}"), &op, QUICK_WAIT).await?;
+                }
+                for row in self.deploys.list_slots(p.service_id).await.map_err(retry)? {
+                    self.deploys.delete_slot(p.service_id, row.server_id, &row.slot).await.map_err(retry)?;
+                }
+                Ok(())
+            }
             1 => {
                 let app = self
                     .services
@@ -283,6 +299,13 @@ mod tests {
         assert!(matches!(progress(ServiceAction::Deploy, &status(3, 2, "paused")), Progress::Failed(_)));
         assert_eq!(progress(ServiceAction::Rollback, &status(3, 3, "rollback_completed")), Progress::Done);
         assert_eq!(progress(ServiceAction::Deploy, &status(3, 3, "rollback_started")), Progress::Running);
+        // Old tasks still running while Swarm picks up the new definition.
+        let mut updating = status(3, 3, "");
+        updating.spec = "new".into();
+        updating.running_current = 0;
+        assert_eq!(progress(ServiceAction::Deploy, &updating), Progress::Running);
+        updating.running_current = 3;
+        assert_eq!(progress(ServiceAction::Deploy, &updating), Progress::Done);
         let gone = SwarmServiceStatus::default();
         assert_eq!(progress(ServiceAction::Remove, &gone), Progress::Done);
         assert!(matches!(progress(ServiceAction::Scale { replicas: 2 }, &gone), Progress::Failed(_)));

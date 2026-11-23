@@ -307,6 +307,10 @@ pub async fn create(
     };
     apply(&state, &mut app, &crate::names::environment_slug(&ns.name), input)?;
     state.swarm.check_runtime(ns.id, &app.runtime).await?;
+    if state.swarm.swarm_of_environment(app.environment_id).await?.is_some() {
+        // The whole Swarm definition is checked now, not first at deploy.
+        crate::jobs::swarm_service::binds_of(&app).map_err(ApiError::bad_request)?;
+    }
     state.store.put_service(&app).await?;
     caller
         .audit(
@@ -330,6 +334,10 @@ pub async fn update(
     let ns_slug = app.spec.get("environment").and_then(Value::as_str).unwrap_or_default().to_owned();
     apply(&state, &mut app, &ns_slug, input)?;
     state.swarm.check_runtime(app.environment_id, &app.runtime).await?;
+    if state.swarm.swarm_of_environment(app.environment_id).await?.is_some() {
+        // The whole Swarm definition is checked now, not first at deploy.
+        crate::jobs::swarm_service::binds_of(&app).map_err(ApiError::bad_request)?;
+    }
     state.store.put_service(&app).await?;
     let keys: Vec<&str> = app.env.iter().map(|e| e.key.as_str()).collect();
     caller

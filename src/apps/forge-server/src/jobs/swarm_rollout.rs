@@ -6,17 +6,25 @@
 //! * `Deploy` builds the release's typed service definition (the slot's
 //!   own ports for Blue-Green and Canary), re-checks host binds against
 //!   `stack.privileged`, and creates or updates the slot's Swarm service.
-//! * `Gate` waits until the slot runs all its tasks, healthy.
-//! * `Route` writes the slots' traffic weights for every node of the swarm
-//!   (the routing mesh answers on each) and re-applies the sites in front
-//!   of the service, so the edge moves traffic.
+//! * `Gate` waits until the slot runs all its tasks of the *new*
+//!   definition (tasks carry its fingerprint), healthy.
+//! * `Route` writes the slots' traffic weights for the swarm's nodes (the
+//!   routing mesh answers on each; rows of nodes that left are removed) and
+//!   re-applies the sites in front of the service, so the edge moves traffic.
 //! * `Wait` watches the new slot; tasks that stop running fail the rollout.
 //!
-//! On failure, traffic goes back to the slot that served before and the new
-//! slot is scaled to zero; an unslotted service is rolled back by Swarm
-//! (unless Swarm already did). Every step can run again: applying the same
-//! definition, scaling to the same count and writing the same weights are
-//! no-ops.
+//! Failure and abort never rely on Swarm's "previous spec" (a re-sent update
+//! can make it the new one):
+//! * unslotted: Forge applies the release that served before again. An
+//!   identical definition is a no-op on the node, so this is safe even when
+//!   nothing was applied yet;
+//! * slotted, before all traffic moved: the old slot is scaled back up and
+//!   checked before traffic returns to it, then the new slot goes to zero;
+//! * slotted, after all traffic moved: the new release serves; nothing is
+//!   moved back (the old slot may already be at zero).
+//!
+//! Every step can run again: identical definitions are skipped on the node,
+//! and scaling and weights are absolute.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -24,8 +32,8 @@ use std::time::Duration;
 use forge_catalog::deploy::{ArtifactRef, SLOT_PORTS};
 use forge_catalog::swarm::{SwarmOp, SwarmServiceStatus};
 use forge_catalog::swarm_rollout::{SwarmPlan, SwarmStep};
-use forge_catalog::swarm_service::service_def;
-use forge_core::deploy::{Deployment, DeploymentKind, DeploymentState, SlotRecord};
+use forge_catalog::swarm_service::{ServiceDef, UpdatePolicy, service_def};
+use forge_core::deploy::{Deployment, DeploymentKind, DeploymentState, Release, SlotRecord};
 use forge_core::swarm::{MemberRole, MemberState};
 use forge_core::{ClusterId, ServerId};
 use forge_jobs::{StepContext, StepError};
@@ -40,8 +48,22 @@ use crate::jobs::swarm_service::{Progress, ServiceAction, progress};
 const OP_WAIT: Duration = Duration::from_secs(60);
 const POLL: Duration = Duration::from_secs(3);
 
+/// Job-state and operation keys (one definition each).
+const KEY_STATUS: &str = "status_op";
+const KEY_RESTORE_APPLY: &str = "restore_apply_op";
+const KEY_RESTORE_SCALE_OLD: &str = "restore_scale_old_op";
+const KEY_RESTORE_SCALE_NEW: &str = "restore_scale_new_op";
+
+fn ports_key(slot: &str) -> String {
+    format!("ports_{slot}")
+}
+
 fn failed(e: impl std::fmt::Display) -> Stop {
     Stop::Failed(e.to_string())
+}
+
+fn slot_name(slot: &str) -> String {
+    if slot.is_empty() { "the service".into() } else { format!("slot {slot}") }
 }
 
 /// What every step of one Swarm rollout needs.
@@ -51,8 +73,12 @@ struct Rollout<'a> {
     plan: &'a SwarmPlan,
 }
 
-fn slot_name(slot: &str) -> String {
-    if slot.is_empty() { "the service".into() } else { format!("slot {slot}") }
+/// How a definition is built for one apply.
+struct DefFor<'a> {
+    release: &'a Release,
+    slot: &'a str,
+    replicas: u32,
+    update: Option<&'a UpdatePolicy>,
 }
 
 impl DeployJob {
@@ -68,18 +94,13 @@ impl DeployJob {
         if d.state == DeploymentState::Pending {
             d.state = DeploymentState::Running;
             self.save(d).await.map_err(stop_error)?;
-            self.event(
-                d.id,
-                "info",
-                None,
-                format!(
-                    "rolling out release {} on Docker Swarm ({}, {} steps)",
-                    d.release_number,
-                    d.strategy,
-                    plan.steps.len()
-                ),
-            )
-            .await;
+            let line = format!(
+                "rolling out release {} on Docker Swarm ({}, {} steps)",
+                d.release_number,
+                d.strategy,
+                plan.steps.len()
+            );
+            self.event(d.id, "info", None, line).await;
         }
         let ro = Rollout { run: r, cluster, plan: &plan };
         let mut outcome = Ok(());
@@ -140,7 +161,36 @@ impl DeployJob {
         slot: &str,
     ) -> Done<SwarmServiceStatus> {
         let op = SwarmOp::ServiceStatus { service_id: sid.to_owned(), slot: slot.to_owned() };
-        serde_json::from_value(self.swarm_op(ctx, cluster, "status_op", &op).await?).map_err(failed)
+        serde_json::from_value(self.swarm_op(ctx, cluster, KEY_STATUS, &op).await?).map_err(failed)
+    }
+
+    /// Waits until `slot` runs all its tasks of its current definition.
+    async fn gate(&self, ctx: &mut StepContext, d: &Deployment, ro: &Rollout<'_>, slot: &str) -> Done {
+        let (r, cluster) = (ro.run, ro.cluster);
+        let sid = r.app.id.to_string();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(r.policy.startup_timeout_secs.max(30));
+        loop {
+            self.aborted(d.id).await?;
+            let s = self.slot_status(ctx, cluster, &sid, slot).await?;
+            match progress(ServiceAction::Deploy, &s) {
+                Progress::Done => {
+                    let line = format!("{} runs {} of {} tasks", slot_name(slot), s.running_current, s.desired);
+                    self.event(d.id, "info", None, line).await;
+                    return Ok(());
+                }
+                Progress::Failed(why) => return Err(Stop::Failed(why)),
+                Progress::Running if tokio::time::Instant::now() >= deadline => {
+                    return Err(Stop::Failed(format!(
+                        "{} did not become ready within {} s: {} of {} tasks running",
+                        slot_name(slot),
+                        r.policy.startup_timeout_secs,
+                        s.running_current,
+                        s.desired
+                    )));
+                }
+                Progress::Running => tokio::time::sleep(POLL).await,
+            }
+        }
     }
 
     async fn swarm_step(
@@ -154,37 +204,19 @@ impl DeployJob {
         let (r, cluster, plan) = (ro.run, ro.cluster, ro.plan);
         let sid = r.app.id.to_string();
         match step {
-            SwarmStep::Deploy { slot, replicas } => self.swarm_deploy(ctx, d, ro, index, slot, *replicas).await,
-            SwarmStep::Gate { slot } => {
-                let deadline = tokio::time::Instant::now() + Duration::from_secs(r.policy.startup_timeout_secs.max(30));
-                loop {
-                    self.aborted(d.id).await?;
-                    let s = self.slot_status(ctx, cluster, &sid, slot).await?;
-                    match progress(ServiceAction::Deploy, &s) {
-                        Progress::Done => {
-                            self.event(
-                                d.id,
-                                "info",
-                                None,
-                                format!("{} runs {} of {} tasks", slot_name(slot), s.running, s.desired),
-                            )
-                            .await;
-                            return Ok(());
-                        }
-                        Progress::Failed(why) => return Err(Stop::Failed(why)),
-                        Progress::Running if tokio::time::Instant::now() >= deadline => {
-                            return Err(Stop::Failed(format!(
-                                "{} did not become ready within {} s: {} of {} tasks running",
-                                slot_name(slot),
-                                r.policy.startup_timeout_secs,
-                                s.running,
-                                s.desired
-                            )));
-                        }
-                        Progress::Running => tokio::time::sleep(POLL).await,
-                    }
-                }
+            SwarmStep::Deploy { slot, replicas } => {
+                let release = self.fresh_release(r).await?;
+                let f = DefFor { release: &release, slot, replicas: *replicas, update: Some(&plan.update) };
+                let def = self.swarm_def(ctx, ro, &f).await?;
+                let net = SwarmOp::EnsureNetwork { environment_id: r.app.environment_id.to_string() };
+                self.swarm_op(ctx, cluster, &format!("network_op_{index}"), &net).await?;
+                let apply = SwarmOp::ServiceApply { def: Box::new(def) };
+                self.swarm_op(ctx, cluster, &format!("apply_op_{index}"), &apply).await?;
+                let line = format!("release {} applied to {} ({replicas} tasks)", d.release_number, slot_name(slot));
+                self.event(d.id, "info", None, line).await;
+                Ok(())
             }
+            SwarmStep::Gate { slot } => self.gate(ctx, d, ro, slot).await,
             SwarmStep::Scale { slot, replicas } => {
                 let op = SwarmOp::ServiceScale { service_id: sid, slot: slot.clone(), replicas: *replicas };
                 self.swarm_op(ctx, cluster, &format!("scale_op_{index}"), &op).await?;
@@ -202,6 +234,9 @@ impl DeployJob {
                 while tokio::time::Instant::now() < end {
                     self.aborted(d.id).await?;
                     let s = self.slot_status(ctx, cluster, &sid, &plan.slot).await?;
+                    if !s.exists {
+                        return Err(Stop::Failed(format!("{} is gone from the swarm", slot_name(&plan.slot))));
+                    }
                     if s.running < s.desired {
                         return Err(Stop::Failed(format!(
                             "{} dropped to {} of {} running tasks",
@@ -210,11 +245,8 @@ impl DeployJob {
                             s.desired
                         )));
                     }
-                    tokio::time::sleep(
-                        POLL.min(end.saturating_duration_since(tokio::time::Instant::now()))
-                            .max(Duration::from_millis(10)),
-                    )
-                    .await;
+                    let left = end.saturating_duration_since(tokio::time::Instant::now());
+                    tokio::time::sleep(POLL.min(left).max(Duration::from_millis(10))).await;
                 }
                 Ok(())
             }
@@ -222,64 +254,52 @@ impl DeployJob {
         }
     }
 
-    async fn swarm_deploy(
-        &self,
-        ctx: &mut StepContext,
-        d: &Deployment,
-        ro: &Rollout<'_>,
-        index: usize,
-        slot: &str,
-        replicas: u32,
-    ) -> Done {
-        let (r, cluster, plan) = (ro.run, ro.cluster, ro.plan);
-        let release = self.fresh_release(r).await?;
-        let mut spec = self.runner.resolved_spec(&release_app(&r.app, &release)).await?;
-        // Releases without a recorded artifact keep the spec's image, as node
-        // rollouts do (`copy_spec`).
-        if let Some(image) =
-            serde_json::from_value::<ArtifactRef>(release.artifact.clone()).ok().and_then(|a| a.image_ref())
-        {
-            spec.image = image;
+    /// The typed definition of `f.release` for one slot, with host binds
+    /// re-checked against `stack.privileged`.
+    async fn swarm_def(&self, ctx: &mut StepContext, ro: &Rollout<'_>, f: &DefFor<'_>) -> Done<ServiceDef> {
+        let (r, cluster) = (ro.run, ro.cluster);
+        let mut spec = self.runner.resolved_spec(&release_app(&r.app, f.release)).await?;
+        // A release without a recorded artifact keeps the spec's image, as
+        // node rollouts do (`copy_spec`); a recorded one must parse.
+        if !f.release.artifact.is_null() {
+            let a: ArtifactRef = serde_json::from_value(f.release.artifact.clone())
+                .map_err(|e| Stop::Failed(format!("the release's artifact is unreadable: {e}")))?;
+            if let Some(image) = a.image_ref() {
+                spec.image = image;
+            }
         }
         let mut settings = spec.swarm.clone().unwrap_or_default();
-        settings.replicas = replicas;
-        settings.update = plan.update.clone();
+        settings.replicas = f.replicas;
+        if let Some(u) = f.update {
+            settings.update = u.clone();
+        }
         let sid = r.app.id.to_string();
         let mut def = service_def(&spec, &settings, &sid, &r.app.environment_id.to_string()).map_err(failed)?;
-        // Host binds outside the swarm's approved roots need stack.privileged.
         let needed = self.swarm.privileged_binds(cluster, &def.bind_sources()).await?;
         if let Some(b) = needed.iter().find(|b| !r.payload.privileged_mounts.contains(b)) {
             return Err(Stop::Failed(format!(
-                "host folder `{b}` is outside the approved file roots of the swarm's nodes; it needs stack.privileged (an administrator with MFA)"
+                "host folder `{b}` is outside the approved file roots of the swarm's nodes; it needs \
+                 stack.privileged (an administrator with MFA)"
             )));
         }
-        if !slot.is_empty() {
+        if !f.slot.is_empty() {
             let count = u32::try_from(def.ports.len()).unwrap_or(u32::MAX);
-            let own = self.deploys.slot_ports(r.app.id, slot, count, (*SLOT_PORTS.start(), *SLOT_PORTS.end())).await?;
+            let range = (*SLOT_PORTS.start(), *SLOT_PORTS.end());
+            let own = self.deploys.slot_ports(r.app.id, f.slot, count, range).await?;
             let by_target: BTreeMap<u16, u16> = def.ports.iter().zip(&own).map(|(p, o)| (p.target, *o)).collect();
             // Service port (published, else container port) → slot port, as
             // node rollouts record it for the edge.
             let service_ports: BTreeMap<String, u16> =
                 def.ports.iter().zip(&own).map(|(p, o)| (p.published.unwrap_or(p.target).to_string(), *o)).collect();
-            ctx.set_state(&format!("ports_{slot}"), json!(service_ports));
-            def = def.into_slot(slot, &by_target).map_err(failed)?;
+            ctx.set_state(&ports_key(f.slot), json!(service_ports));
+            def = def.into_slot(f.slot, &by_target).map_err(failed)?;
         }
-        let net = SwarmOp::EnsureNetwork { environment_id: r.app.environment_id.to_string() };
-        self.swarm_op(ctx, cluster, &format!("network_op_{index}"), &net).await?;
-        let apply = SwarmOp::ServiceApply { def: Box::new(def) };
-        self.swarm_op(ctx, cluster, &format!("apply_op_{index}"), &apply).await?;
-        self.event(
-            d.id,
-            "info",
-            None,
-            format!("release {} applied to {} ({replicas} tasks)", d.release_number, slot_name(slot)),
-        )
-        .await;
-        Ok(())
+        Ok(def)
     }
 
     /// Writes `weight` for `slot` and the rest for `other` on every node of
-    /// the swarm, then re-applies the sites in front of the service.
+    /// the swarm (and drops rows of nodes that are not in it), then
+    /// re-applies the sites in front of the service.
     async fn swarm_route(
         &self,
         ctx: &StepContext,
@@ -299,8 +319,11 @@ impl DeployJob {
             .map(|m| m.server_id)
             .collect();
         let rows = self.deploys.list_slots(r.app.id).await?;
+        for stale in rows.iter().filter(|x| !members.contains(&x.server_id)) {
+            self.deploys.delete_slot(r.app.id, stale.server_id, &stale.slot).await?;
+        }
         let ports_of = |s: &str| -> Value {
-            ctx.state_value(&format!("ports_{s}"))
+            ctx.state_value(&ports_key(s))
                 .cloned()
                 .or_else(|| rows.iter().find(|x| x.slot == s).map(|x| x.ports.clone()))
                 .unwrap_or_else(|| json!({}))
@@ -339,44 +362,88 @@ impl DeployJob {
         Ok(())
     }
 
-    /// Ends a failed or aborted Swarm rollout (see the module docs).
-    async fn swarm_fail(&self, ctx: &mut StepContext, d: &mut Deployment, ro: &Rollout<'_>, why: &str, aborted: bool) {
+    /// The index of the step that moved all traffic to the new slot.
+    fn full_route_index(plan: &SwarmPlan) -> Option<usize> {
+        plan.steps.iter().position(|s| matches!(s, SwarmStep::Route { slot, weight: 100, .. } if *slot == plan.slot))
+    }
+
+    /// Puts the service back to what served before (see the module docs).
+    /// `Ok(true)` when something was restored.
+    async fn swarm_restore(&self, ctx: &mut StepContext, d: &Deployment, ro: &Rollout<'_>) -> Done<bool> {
         let (r, cluster, plan) = (ro.run, ro.cluster, ro.plan);
-        self.event(d.id, "error", None, why.to_owned()).await;
         let sid = r.app.id.to_string();
-        let mut rolled_back = false;
-        let cleanup: Done = async {
-            if plan.slot.is_empty() {
-                // Swarm may have rolled back on its own (failure action).
-                let s = self.slot_status(ctx, cluster, &sid, "").await?;
-                let swarm_did = s.update_state.starts_with("rollback");
-                if !swarm_did && !aborted && r.policy.auto_rollback && d.from_release > 0 && s.exists {
-                    let op = SwarmOp::ServiceRollback { service_id: sid.clone(), slot: String::new() };
-                    self.swarm_op(ctx, cluster, "fail_rollback_op", &op).await?;
-                }
-                rolled_back = swarm_did || (!aborted && r.policy.auto_rollback && d.from_release > 0);
-                return Ok(());
+        if plan.slot.is_empty() {
+            if d.from_release == 0 {
+                return Ok(false);
             }
-            if let Some(old) = plan.from_slot.as_deref().filter(|o| !o.is_empty()) {
-                self.swarm_route(ctx, d, ro, old, 100, &plan.slot).await?;
-                rolled_back = true;
-            }
+            let previous = self
+                .releases
+                .release_by_number(r.app.id, d.from_release)
+                .await?
+                .ok_or_else(|| Stop::Failed(format!("release {} is gone", d.from_release)))?;
+            let replicas = previous.spec["swarm"]["replicas"].as_u64().map_or(1, |n| u32::try_from(n).unwrap_or(1));
+            let f = DefFor { release: &previous, slot: "", replicas, update: None };
+            let def = self.swarm_def(ctx, ro, &f).await?;
+            let apply = SwarmOp::ServiceApply { def: Box::new(def) };
+            self.swarm_op(ctx, cluster, KEY_RESTORE_APPLY, &apply).await?;
+            return Ok(true);
+        }
+        let done = usize::try_from(d.step).unwrap_or(0);
+        if Self::full_route_index(plan).is_some_and(|i| i < done) {
+            // All traffic is on the new release already: leave it there.
+            return Ok(false);
+        }
+        let Some(old) = plan.from_slot.as_deref().filter(|o| !o.is_empty()) else {
             let s = self.slot_status(ctx, cluster, &sid, &plan.slot).await?;
             if s.exists {
-                let op = SwarmOp::ServiceScale { service_id: sid.clone(), slot: plan.slot.clone(), replicas: 0 };
-                self.swarm_op(ctx, cluster, "fail_scale_op", &op).await?;
+                let op = SwarmOp::ServiceScale { service_id: sid, slot: plan.slot.clone(), replicas: 0 };
+                self.swarm_op(ctx, cluster, KEY_RESTORE_SCALE_NEW, &op).await?;
             }
-            Ok(())
-        }
-        .await;
-        if let Err(Stop::Retry(m) | Stop::Failed(m) | Stop::Aborted(m)) = cleanup {
-            self.event(d.id, "warn", None, format!("could not restore the previous state: {m}")).await;
-        } else if rolled_back {
-            self.event(d.id, "info", None, "traffic is back on the previous release".into()).await;
-        }
+            return Ok(false);
+        };
+        let full = plan
+            .steps
+            .iter()
+            .filter_map(|s| match s {
+                SwarmStep::Deploy { replicas, .. } | SwarmStep::Scale { replicas, .. } => Some(*replicas),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(1);
+        let op = SwarmOp::ServiceScale { service_id: sid.clone(), slot: old.to_owned(), replicas: full };
+        self.swarm_op(ctx, cluster, KEY_RESTORE_SCALE_OLD, &op).await?;
+        self.gate(ctx, d, ro, old).await?;
+        self.swarm_route(ctx, d, ro, old, 100, &plan.slot).await?;
+        let op = SwarmOp::ServiceScale { service_id: sid, slot: plan.slot.clone(), replicas: 0 };
+        self.swarm_op(ctx, cluster, KEY_RESTORE_SCALE_NEW, &op).await?;
+        Ok(true)
+    }
+
+    /// Ends a failed or aborted Swarm rollout.
+    async fn swarm_fail(&self, ctx: &mut StepContext, d: &mut Deployment, ro: &Rollout<'_>, why: &str, aborted: bool) {
+        let r = ro.run;
+        self.event(d.id, "error", None, why.to_owned()).await;
+        let restored = if aborted || r.policy.auto_rollback {
+            match self.swarm_restore(ctx, d, ro).await {
+                Ok(true) => {
+                    self.event(d.id, "info", None, format!("release {} serves again", d.from_release)).await;
+                    true
+                }
+                Ok(false) => {
+                    self.event(d.id, "info", None, "nothing to restore".into()).await;
+                    false
+                }
+                Err(Stop::Retry(m) | Stop::Failed(m) | Stop::Aborted(m)) => {
+                    self.event(d.id, "warn", None, format!("could not restore the previous release: {m}")).await;
+                    false
+                }
+            }
+        } else {
+            false
+        };
         d.state = if aborted {
             DeploymentState::Aborted
-        } else if rolled_back && d.kind == DeploymentKind::Apply {
+        } else if restored && d.kind == DeploymentKind::Apply {
             DeploymentState::RolledBack
         } else {
             DeploymentState::Failed
@@ -388,14 +455,8 @@ impl DeployJob {
             return;
         }
         let action = if aborted { "deployment.aborted" } else { "deployment.failed" };
-        self.audit(
-            &r.principal,
-            d,
-            action,
-            false,
-            json!({ "service": r.app.name, "release": d.release_number, "error": why }),
-        )
-        .await;
+        let details = json!({ "service": r.app.name, "release": d.release_number, "error": why, "restored": restored });
+        self.audit(&r.principal, d, action, false, details).await;
     }
 }
 
