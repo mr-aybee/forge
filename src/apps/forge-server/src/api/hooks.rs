@@ -45,7 +45,7 @@ async fn record(
         webhook_id: w.id,
         at: state.clock.now(),
         outcome,
-        reason: reason.chars().take(500).collect(),
+        reason: reason.chars().take(MAX_REASON).collect(),
         job_id: job,
         tag,
         source_ip: ip.to_owned(),
@@ -56,10 +56,22 @@ async fn record(
 }
 
 /// The tag a delivery asks for: `?tag=`, else a JSON body's `"tag"`.
+/// Longest tag recorded (Docker's own limit).
+const MAX_TAG: usize = 128;
+/// Longest delivery reason recorded.
+const MAX_REASON: usize = 500;
+
+/// The tag a delivery asks for: `?tag=`, else a JSON body's `"tag"`; cut
+/// before it is recorded (a longer one is refused anyway).
 fn requested_tag(q: &TagQuery, body: &[u8]) -> Option<String> {
-    q.tag.clone().or_else(|| {
-        serde_json::from_slice::<Value>(body).ok().and_then(|v| v.get("tag").and_then(Value::as_str).map(str::to_owned))
-    })
+    q.tag
+        .clone()
+        .or_else(|| {
+            serde_json::from_slice::<Value>(body)
+                .ok()
+                .and_then(|v| v.get("tag").and_then(Value::as_str).map(str::to_owned))
+        })
+        .map(|t| t.chars().take(MAX_TAG + 1).collect())
 }
 
 pub async fn fire(
@@ -91,7 +103,9 @@ pub async fn fire(
     let h = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
     let sig = SignatureHeaders {
         hub_signature_256: h("x-hub-signature-256"),
+        github_delivery: h("x-github-delivery"),
         gitlab_token: h("x-gitlab-token"),
+        gitlab_event: h("x-gitlab-event-uuid"),
         forge_signature: h("x-forge-signature"),
         forge_timestamp: h("x-forge-timestamp"),
     };
@@ -102,7 +116,7 @@ pub async fn fire(
             let status = match r {
                 Rejection::BadSignature | Rejection::Stale => StatusCode::UNAUTHORIZED,
                 Rejection::Disabled => StatusCode::FORBIDDEN,
-                Rejection::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+                Rejection::Replayed => StatusCode::CONFLICT,
                 Rejection::TagNotAllowed | Rejection::TagRefused => StatusCode::UNPROCESSABLE_ENTITY,
             };
             return answer(status, &r.to_string());
@@ -110,7 +124,7 @@ pub async fn fire(
     };
     let caller = match crate::auth::webhook_caller(&state, &w.created_by, w.id).await {
         Ok(Some(c)) => c,
-        Ok(None) | Err(_) => {
+        Ok(None) => {
             record(
                 &state,
                 &w,
@@ -122,6 +136,10 @@ pub async fn fire(
             )
             .await;
             return answer(StatusCode::FORBIDDEN, "the webhook's creator can no longer deploy");
+        }
+        Err(e) => {
+            tracing::error!(webhook = %w.id, error = %e.message, "loading the webhook's creator failed");
+            return answer(StatusCode::SERVICE_UNAVAILABLE, "try again later");
         }
     };
     match deploy(&state, &caller, &w, tag.as_deref()).await {
@@ -177,7 +195,7 @@ async fn deploy(
                 state.webhooks.set_tag(&app, t).await?;
                 caller
                     .audit(
-                        "service.update",
+                        super::services::AUDIT_UPDATE,
                         &super::services::svc_ref(id),
                         Some(app.workspace_id),
                         json!({ "service": app.name, "tag": t, "via": "webhook" }),
@@ -209,11 +227,20 @@ pub async fn job(
     if !state.webhooks.allow_ip(ip) {
         return answer(StatusCode::TOO_MANY_REQUESTS, "too many requests");
     }
-    let Ok(Some(w)) = state.webhooks.by_token(&token).await else {
-        return answer(StatusCode::NOT_FOUND, "no such webhook");
+    let w = match state.webhooks.by_token(&token).await {
+        Ok(Some(w)) => w,
+        Ok(None) => return answer(StatusCode::NOT_FOUND, "no such webhook"),
+        Err(e) => {
+            tracing::error!(error = %e, "webhook lookup failed");
+            return answer(StatusCode::SERVICE_UNAVAILABLE, "try again later");
+        }
     };
     match state.webhooks.job_status(&w, job).await {
         Ok(v) => Json(v).into_response(),
-        Err(_) => answer(StatusCode::NOT_FOUND, "no such job for this webhook"),
+        Err(forge_core::DomainError::NotFound(_)) => answer(StatusCode::NOT_FOUND, "no such job for this webhook"),
+        Err(e) => {
+            tracing::error!(webhook = %w.id, error = %e, "webhook job status failed");
+            answer(StatusCode::SERVICE_UNAVAILABLE, "try again later")
+        }
     }
 }

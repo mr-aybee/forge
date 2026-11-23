@@ -3,9 +3,8 @@
 //! signing secret is shown once and stored sealed. A delivery runs as the
 //! webhook's creator (see `api::hooks`), never with more rights.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
 use forge_core::webhooks::{Signature, Webhook, WebhookRepository, WebhookTarget, tag_ok};
 use forge_core::{Clock, DomainError, DomainResult, Principal, WebhookId, WorkspaceId};
@@ -31,38 +30,7 @@ impl Default for Limits {
     }
 }
 
-/// A sliding-window counter per key, bounded in size.
-#[derive(Debug)]
-pub struct Windows<K> {
-    hits: Mutex<HashMap<K, Vec<Instant>>>,
-}
-
-impl<K> Default for Windows<K> {
-    fn default() -> Self {
-        Self { hits: Mutex::new(HashMap::new()) }
-    }
-}
-
-/// Keys kept at most; the oldest windows are dropped first.
-const MAX_KEYS: usize = 10_000;
-
-impl<K: std::hash::Hash + Eq + Clone> Windows<K> {
-    /// Counts a hit for `key`; `false` when it is over `limit` in `window`.
-    pub fn allow(&self, key: &K, limit: usize, window: Duration) -> bool {
-        let Ok(mut hits) = self.hits.lock() else { return false };
-        let now = Instant::now();
-        if hits.len() >= MAX_KEYS {
-            hits.retain(|_, v| v.last().is_some_and(|t| now.duration_since(*t) < window));
-        }
-        let v = hits.entry(key.clone()).or_default();
-        v.retain(|t| now.duration_since(*t) < window);
-        if v.len() >= limit {
-            return false;
-        }
-        v.push(now);
-        true
-    }
-}
+pub use crate::rate_limit::Windows;
 
 /// What a webhook is created or changed with.
 #[derive(Debug, Clone)]
@@ -97,9 +65,13 @@ pub enum Rejection {
     TagNotAllowed,
     #[error("the tag does not match the webhook's pattern")]
     TagRefused,
-    #[error("too many deliveries; slow down")]
-    RateLimited,
+    #[error("this delivery was already received")]
+    Replayed,
 }
+
+/// How long a delivery id or signature is remembered against replays (it
+/// covers the `forge` timestamp window twice).
+const REPLAY_WINDOW: Duration = Duration::from_secs(600);
 
 #[derive(Debug)]
 pub struct WebhookService {
@@ -111,6 +83,8 @@ pub struct WebhookService {
     pub limits: Limits,
     pub per_hook: Windows<WebhookId>,
     pub per_ip: Windows<std::net::IpAddr>,
+    /// Delivery ids and signatures seen recently, per webhook.
+    pub seen: Windows<(WebhookId, String)>,
 }
 
 fn aad(id: WebhookId) -> String {
@@ -126,10 +100,14 @@ fn check(input: &WebhookInput) -> DomainResult<()> {
     if name.is_empty() || name.len() > 100 || name.chars().any(char::is_control) {
         return Err(invalid("the name is 1 to 100 characters"));
     }
-    if let Some(p) = &input.tag_pattern
-        && (p.is_empty() || p.len() > 128 || !tag_ok(&p.replace('*', "x")))
-    {
-        return Err(invalid("the tag pattern is a tag with `*` wildcards, e.g. v*"));
+    if let Some(p) = &input.tag_pattern {
+        if p.is_empty() || p.len() > 128 || !tag_ok(&p.replace('*', "x")) {
+            return Err(invalid("the tag pattern is a tag with `*` wildcards, e.g. v*"));
+        }
+        // Choosing what to deploy needs more than a URL that may leak.
+        if input.signature == Signature::None {
+            return Err(invalid("a webhook that may change the tag needs a signature"));
+        }
     }
     Ok(())
 }
@@ -144,7 +122,11 @@ fn hmac_hex(key: &[u8], data: &[u8]) -> String {
 #[derive(Debug, Default, Clone)]
 pub struct SignatureHeaders<'a> {
     pub hub_signature_256: Option<&'a str>,
+    /// `X-GitHub-Delivery`: GitHub's id of this delivery.
+    pub github_delivery: Option<&'a str>,
     pub gitlab_token: Option<&'a str>,
+    /// `X-Gitlab-Event-UUID`: GitLab's id of this delivery.
+    pub gitlab_event: Option<&'a str>,
     pub forge_signature: Option<&'a str>,
     pub forge_timestamp: Option<&'a str>,
 }
@@ -192,9 +174,11 @@ impl WebhookService {
         Ok(Minted { webhook, token, secret })
     }
 
-    /// A new token (and secret): the old URL stops working at once.
-    pub async fn rotate(&self, id: WebhookId) -> DomainResult<Minted> {
+    /// A new token (and secret): the old URL stops working at once. The
+    /// webhook now acts as `by`, who holds the new URL.
+    pub async fn rotate(&self, id: WebhookId, by: &Principal) -> DomainResult<Minted> {
         let mut w = self.get(id).await?;
+        w.created_by = by.clone();
         let (token, token_hash, token_hint) = Self::mint_token();
         let (secret, secret_sealed) = self.mint_secret(id, w.signature)?;
         w.token_hash = token_hash;
@@ -207,9 +191,12 @@ impl WebhookService {
 
     /// Changes name, tag pattern and enabled; the target and the signature
     /// kind stay (create a new webhook for another).
-    pub async fn update(&self, id: WebhookId, input: WebhookInput) -> DomainResult<Webhook> {
+    /// The webhook then acts as `by`: whoever changes what it may deploy
+    /// answers for it.
+    pub async fn update(&self, id: WebhookId, by: &Principal, input: WebhookInput) -> DomainResult<Webhook> {
         check(&input)?;
         let mut w = self.get(id).await?;
+        w.created_by = by.clone();
         if input.target != w.target || input.signature != w.signature {
             return Err(invalid("the target and the signature cannot change; create a new webhook"));
         }
@@ -266,7 +253,8 @@ impl WebhookService {
             return Err(DomainError::NotFound("no such job for this webhook".into()));
         }
         let j = self.jobs.get_job(job).await?;
-        Ok(serde_json::json!({ "id": j.id, "kind": j.kind, "status": j.status, "error": j.last_error }))
+        // Status only: error text can name nodes and paths (the console shows it).
+        Ok(serde_json::json!({ "id": j.id, "kind": j.kind, "status": j.status }))
     }
 
     /// Rate limits: per source address first (it also covers bad tokens),
@@ -318,6 +306,19 @@ impl WebhookService {
             if !ok {
                 return Err(Rejection::BadSignature);
             }
+            // The same signed delivery is accepted once: CI ids, else the
+            // signature (which covers the timestamp for `forge`).
+            let marker = match w.signature {
+                Signature::Github => headers.github_delivery.or(headers.hub_signature_256),
+                Signature::Gitlab => headers.gitlab_event,
+                Signature::Forge => headers.forge_signature,
+                Signature::None => None,
+            };
+            if let Some(m) = marker
+                && !self.seen.allow(&(w.id, m.chars().take(200).collect()), 1, REPLAY_WINDOW)
+            {
+                return Err(Rejection::Replayed);
+            }
         }
         match (tag, &w.tag_pattern) {
             (None, _) => Ok(None),
@@ -355,16 +356,6 @@ mod tests {
         assert_eq!(retag("ghcr.io/acme/app", "v2"), "ghcr.io/acme/app:v2");
         assert_eq!(retag("registry:5000/team/app:v1", "v2"), "registry:5000/team/app:v2");
         assert_eq!(retag("app@sha256:abc", "v3"), "app:v3");
-    }
-
-    #[test]
-    fn windows_limit_and_stay_bounded() {
-        let w: Windows<u32> = Windows::default();
-        let win = Duration::from_secs(60);
-        assert!(w.allow(&1, 2, win));
-        assert!(w.allow(&1, 2, win));
-        assert!(!w.allow(&1, 2, win));
-        assert!(w.allow(&2, 2, win), "keys are counted apart");
     }
 
     #[test]

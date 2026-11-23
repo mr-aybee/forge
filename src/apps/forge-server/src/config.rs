@@ -262,6 +262,41 @@ pub struct SecuritySettings {
     /// MFA-guarded actions without a prompt (D-097). When false, no elevated
     /// token can be created and existing ones act as normal tokens.
     pub allow_elevated_tokens: bool,
+    /// `[security.access]`: who may reach the control plane (D-161).
+    pub access: AccessSettings,
+    /// `[security.rate_limit]`: requests per client address (D-161).
+    pub rate_limit: RateLimitSettings,
+}
+
+/// `[security.access]`: CIDR lists (IP addresses or `addr/prefix`). Agents
+/// use their own listener and are not affected.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AccessSettings {
+    /// When not empty, only these reach the console, API, MCP and OAuth.
+    pub allow: Vec<String>,
+    /// Refused everywhere, before any other check.
+    pub deny: Vec<String>,
+    /// When not empty, only these may call deploy webhooks (`/hooks/*`).
+    pub webhooks_allow: Vec<String>,
+    /// When not empty, only these may fetch the node installers and agent
+    /// downloads (`/install.sh`, `/install.ps1`, `/agent/download/*`).
+    pub nodes_allow: Vec<String>,
+}
+
+/// `[security.rate_limit]`: a sliding minute per client address.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct RateLimitSettings {
+    pub enabled: bool,
+    /// Requests from one address (an IPv6 /64) per minute.
+    pub per_ip_per_minute: u32,
+}
+
+impl Default for RateLimitSettings {
+    fn default() -> Self {
+        Self { enabled: true, per_ip_per_minute: 1200 }
+    }
 }
 
 impl Default for SecuritySettings {
@@ -273,6 +308,8 @@ impl Default for SecuritySettings {
             refresh_token_days: 30,
             trusted_proxies: Vec::new(),
             allow_elevated_tokens: true,
+            access: AccessSettings::default(),
+            rate_limit: RateLimitSettings::default(),
         }
     }
 }
@@ -800,6 +837,36 @@ impl ServerConfig {
         for p in &self.security.trusted_proxies {
             p.parse::<crate::throttle::TrustedNet>().map_err(|e| anyhow::anyhow!("[security] trusted_proxies: {e}"))?;
         }
+        let a = &self.security.access;
+        for (key, list) in [
+            ("allow", &a.allow),
+            ("deny", &a.deny),
+            ("webhooks_allow", &a.webhooks_allow),
+            ("nodes_allow", &a.nodes_allow),
+        ] {
+            for n in list {
+                n.parse::<crate::throttle::TrustedNet>()
+                    .map_err(|e| anyhow::anyhow!("[security.access] {key}: {e}"))?;
+            }
+        }
+        let r = &self.security.rate_limit;
+        if r.enabled && r.per_ip_per_minute < 60 {
+            anyhow::bail!("[security.rate_limit] per_ip_per_minute is at least 60");
+        }
+        // Never lock out the machine itself: with an allow list, loopback
+        // and the trusted proxies must be in it.
+        if !a.allow.is_empty() {
+            let lists = self.access_lists();
+            for must in ["127.0.0.1", "::1"].into_iter().map(str::to_owned).chain(self.security.trusted_proxies.clone())
+            {
+                let ip = must.split('/').next().unwrap_or(&must);
+                if let Ok(ip) = ip.parse()
+                    && !lists.permits(ip, "/")
+                {
+                    anyhow::bail!("[security.access] allow must include {must} (loopback and trusted proxies)");
+                }
+            }
+        }
         forge_catalog::names::check_suffix(&self.names.suffix).map_err(|e| anyhow::anyhow!("[names] suffix: {e}"))?;
         if !(1..=10_000).contains(&self.alerts.max_rules_per_workspace) {
             anyhow::bail!("[alerts] max_rules_per_workspace must be 1 to 10000");
@@ -829,6 +896,19 @@ impl ServerConfig {
             anyhow::bail!("[tunnels] default_lifetime_hours must be 1 to max_lifetime_hours");
         }
         Ok(())
+    }
+
+    /// `[security.access]`, parsed (checked by [`Self::validate`]).
+    #[must_use]
+    pub fn access_lists(&self) -> crate::net_access::Lists {
+        let parse = |v: &[String]| v.iter().filter_map(|p| p.parse().ok()).collect();
+        let a = &self.security.access;
+        crate::net_access::Lists {
+            allow: parse(&a.allow),
+            deny: parse(&a.deny),
+            webhooks_allow: parse(&a.webhooks_allow),
+            nodes_allow: parse(&a.nodes_allow),
+        }
     }
 
     /// `[security] trusted_proxies`, parsed (checked by [`Self::validate`]).

@@ -62,6 +62,10 @@ async fn webhooks_deploy_as_their_creator_with_checked_signatures() {
     let (s, _) = admin.post("/api/v1/webhooks", body.clone()).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "MFA first");
     step_up(&mut admin).await;
+    let unsigned =
+        json!({"name": "open", "target": {"kind": "service", "id": sid}, "signature": "none", "tag_pattern": "*"});
+    let (s, _) = admin.post("/api/v1/webhooks", unsigned).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "changing the tag needs a signature");
     let (s, minted) = admin.post("/api/v1/webhooks", body).await;
     assert_eq!(s, StatusCode::CREATED, "{minted}");
     let token = minted["token"].as_str().unwrap().to_owned();
@@ -91,10 +95,14 @@ async fn webhooks_deploy_as_their_creator_with_checked_signatures() {
 
     // A signed delivery with an allowed tag deploys the new tag.
     let good = r#"{"tag":"v2.0.1"}"#;
-    let (s, out) =
-        post(&h.base, &path, &[("x-hub-signature-256", format!("sha256={}", hmac(&secret, good.as_bytes())))], good)
-            .await;
+    let signed = vec![
+        ("x-hub-signature-256", format!("sha256={}", hmac(&secret, good.as_bytes()))),
+        ("x-github-delivery", "delivery-1".to_owned()),
+    ];
+    let (s, out) = post(&h.base, &path, &signed, good).await;
     assert_eq!(s, StatusCode::ACCEPTED, "{out}");
+    let (s, _) = post(&h.base, &path, &signed, good).await;
+    assert_eq!(s, StatusCode::CONFLICT, "a replayed delivery is refused");
     let (_, svc) = admin.get(&format!("/api/v1/services/{sid}")).await;
     assert_eq!(svc["spec"]["image"], "nginx:v2.0.1", "{svc}");
     let status_url = out["status_url"].as_str().unwrap().to_owned();

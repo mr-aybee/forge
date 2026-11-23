@@ -114,6 +114,10 @@ pub struct Services {
     pub files: Arc<forge_files::FileService>,
     /// Docker Swarm in Swarm clusters (D-154).
     pub swarm: Arc<crate::swarm::SwarmService>,
+    /// `[security.access]`, parsed once (D-161).
+    pub access_lists: crate::net_access::Lists,
+    /// API-wide rate limits per client address (D-161).
+    pub limiter: crate::net_access::Limiter,
     /// Deploy webhooks (D-159).
     pub webhooks: Arc<crate::webhooks::WebhookService>,
     /// Container registries and their sealed credentials (D-158).
@@ -138,6 +142,7 @@ pub struct Services {
 
 impl Services {
     pub async fn build(config: ServerConfig) -> anyhow::Result<AppState> {
+        let access_lists = config.access_lists();
         let data = config.data_dir.clone();
         std::fs::create_dir_all(data.join("keys")).with_context(|| format!("creating {}", data.display()))?;
         // Only the service user may read or write the database, its WAL, the
@@ -347,6 +352,7 @@ impl Services {
             limits: crate::webhooks::Limits::default(),
             per_hook: crate::webhooks::Windows::default(),
             per_ip: crate::webhooks::Windows::default(),
+            seen: crate::webhooks::Windows::default(),
         });
         let swarm = Arc::new(crate::swarm::SwarmService {
             swarms: Arc::new(store.clone()),
@@ -657,6 +663,8 @@ impl Services {
             docker_resources,
             registries,
             webhooks,
+            access_lists,
+            limiter: crate::net_access::Limiter::default(),
             bucket_grants,
             health_secrets,
             notifier,

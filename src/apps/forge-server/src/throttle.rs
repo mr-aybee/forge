@@ -55,7 +55,7 @@ impl std::str::FromStr for TrustedNet {
 }
 
 impl TrustedNet {
-    fn contains(&self, ip: IpAddr) -> bool {
+    pub(crate) fn contains(&self, ip: IpAddr) -> bool {
         let bits = |ip: IpAddr| -> (u128, u8) {
             match ip {
                 IpAddr::V4(v) => (u128::from(u32::from(v)), 32),

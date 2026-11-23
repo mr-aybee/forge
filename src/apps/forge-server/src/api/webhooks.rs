@@ -111,7 +111,7 @@ pub async fn update(
     Json(body): Json<WebhookBody>,
 ) -> ApiResult<Json<Webhook>> {
     let w = owned(&state, &caller, id).await?;
-    let updated = state.webhooks.update(id, body.into()).await?;
+    let updated = state.webhooks.update(id, &caller.principal(), body.into()).await?;
     caller
         .audit(
             AUDIT_UPDATE,
@@ -129,7 +129,7 @@ pub async fn rotate(
     Path(id): Path<WebhookId>,
 ) -> ApiResult<Json<Minted>> {
     let w = owned(&state, &caller, id).await?;
-    let minted = state.webhooks.rotate(id).await?;
+    let minted = state.webhooks.rotate(id, &caller.principal()).await?;
     caller.audit(AUDIT_ROTATE, &ws_ref(w.workspace_id), Some(w.workspace_id), json!({ "id": id })).await;
     Ok(Json(minted))
 }

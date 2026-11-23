@@ -488,9 +488,33 @@ pub fn router(state: AppState) -> Router {
             HeaderName::from_static("cross-origin-opener-policy"),
             HeaderValue::from_static("same-origin"),
         ))
-        // Paths only: query strings may carry OAuth codes and must not be logged.
+        // Address lists and rate limits before anything else runs (D-161).
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::net_access::guard))
+        // Paths only: query strings may carry OAuth codes and must not be
+        // logged; a webhook path is its secret and is redacted too.
         .layer(TraceLayer::new_for_http().make_span_with(|req: &axum::http::Request<_>| {
-            tracing::info_span!("http", method = %req.method(), path = %req.uri().path())
+            tracing::info_span!("http", method = %req.method(), path = %log_path(req.uri().path()))
         }))
         .with_state(state)
+}
+
+/// A request path for the log: a webhook's URL token is a secret.
+fn log_path(path: &str) -> std::borrow::Cow<'_, str> {
+    match path.strip_prefix("/hooks/") {
+        Some(rest) => {
+            let tail = rest.split_once('/').map_or(String::new(), |(_, t)| format!("/{t}"));
+            std::borrow::Cow::Owned(format!("/hooks/<redacted>{tail}"))
+        }
+        None => std::borrow::Cow::Borrowed(path),
+    }
+}
+
+#[cfg(test)]
+mod log_path_tests {
+    #[test]
+    fn webhook_tokens_never_reach_the_log() {
+        assert_eq!(super::log_path("/hooks/whk_secret"), "/hooks/<redacted>");
+        assert_eq!(super::log_path("/hooks/whk_secret/jobs/1"), "/hooks/<redacted>/jobs/1");
+        assert_eq!(super::log_path("/api/v1/me"), "/api/v1/me");
+    }
 }

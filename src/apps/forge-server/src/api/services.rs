@@ -31,6 +31,9 @@ use crate::state::AppState;
 
 /// A service as an authorization resource. Its parents are its environment
 /// and the workspace, so grants there cover it too (#13).
+/// Audit name of a service change.
+pub(super) const AUDIT_UPDATE: &str = "service.update";
+
 pub(super) fn svc_ref(id: ServiceId) -> EntityRef {
     EntityRef::new(forge_core::EntityKind::Service, id)
 }
@@ -342,7 +345,7 @@ pub async fn update(
     let keys: Vec<&str> = app.env.iter().map(|e| e.key.as_str()).collect();
     caller
         .audit(
-            "service.update",
+            AUDIT_UPDATE,
             &ns_ref(app.environment_id),
             Some(app.workspace_id),
             json!({ "service": app.name, "env_keys": keys }),
