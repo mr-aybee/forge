@@ -25,6 +25,7 @@
 
 pub mod apps;
 pub mod deploy;
+pub mod docker_ops;
 pub mod docker_tls;
 pub mod fabric;
 pub mod health;

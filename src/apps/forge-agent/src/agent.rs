@@ -287,6 +287,8 @@ impl Agent {
             forge_proto::Command::DockerTlsAction(_) => true,
             // Joining a swarm waits for the managers' consensus.
             forge_proto::Command::SwarmAction(_) => true,
+            // Pulls, pushes and prunes move layers.
+            forge_proto::Command::DockerAction(_) => true,
             _ => false,
         };
         // Stop a running background operation: its task is dropped, which

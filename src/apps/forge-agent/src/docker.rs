@@ -36,6 +36,19 @@ pub(crate) async fn call_at(
     body: Option<&Value>,
     timeout: Duration,
 ) -> Result<(u16, Bytes), String> {
+    call_with_registry_auth(socket, method, path, body, None, timeout).await
+}
+
+/// [`call_at`] with Docker's `X-Registry-Auth` header (pulls and pushes from
+/// private registries). The value is a credential: never logged.
+pub(crate) async fn call_with_registry_auth(
+    socket: &std::path::Path,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    registry_auth: Option<&str>,
+    timeout: Duration,
+) -> Result<(u16, Bytes), String> {
     let run = async {
         let stream = tokio::net::UnixStream::connect(socket)
             .await
@@ -43,11 +56,15 @@ pub(crate) async fn call_at(
         let (mut sender, conn) =
             hyper::client::conn::http1::handshake(TokioIo::new(stream)).await.map_err(|e| e.to_string())?;
         tokio::spawn(conn);
-        let req = Request::builder()
+        let mut req = Request::builder()
             .method(method)
             .uri(format!("http://docker/v1.43{path}"))
             .header("Host", "docker")
-            .header("Content-Type", "application/json")
+            .header("Content-Type", "application/json");
+        if let Some(auth) = registry_auth {
+            req = req.header("X-Registry-Auth", auth);
+        }
+        let req = req
             .body(Full::new(body.map_or_else(Bytes::new, |b| Bytes::from(b.to_string()))))
             .map_err(|e| e.to_string())?;
         let resp = sender.send_request(req).await.map_err(|e| e.to_string())?;

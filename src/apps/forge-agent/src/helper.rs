@@ -78,6 +78,10 @@ pub enum HelperRequest {
     Swarm {
         swarm: forge_catalog::swarm::SwarmOp,
     },
+    /// Docker images, volumes and networks (`crate::docker_ops`, D-157).
+    Docker {
+        docker: forge_catalog::docker_ops::DockerOp,
+    },
     /// Accounts a terminal can log in as (`crate::terminal_accounts`).
     /// Read-only, so the agent may ask without a signed command.
     LoginAccounts {},
@@ -400,6 +404,10 @@ impl HelperRequest {
                 swarm.validate().map_err(|e| format!("rejected: {e}"))?;
                 Ok(req)
             }
+            Self::Docker { docker } => {
+                docker.validate().map_err(|e| format!("rejected: {e}"))?;
+                Ok(req)
+            }
             Self::Process { process } => {
                 process.validate().map_err(|e| format!("rejected: {e}"))?;
                 Ok(req)
@@ -514,6 +522,9 @@ impl HelperRequest {
             C::DockerTlsAction(d) => Self::DockerTls {
                 docker_tls: serde_json::from_str(&d.op_json)
                     .map_err(|e| format!("invalid Docker TLS operation: {e}"))?,
+            },
+            C::DockerAction(d) => Self::Docker {
+                docker: serde_json::from_str(&d.op_json).map_err(|e| format!("invalid Docker operation: {e}"))?,
             },
             C::SwarmAction(s) => Self::Swarm {
                 swarm: serde_json::from_str(&s.op_json).map_err(|e| format!("invalid swarm operation: {e}"))?,

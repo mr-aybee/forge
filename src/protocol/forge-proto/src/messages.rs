@@ -523,7 +523,7 @@ pub struct CommandBody {
     pub principal: String,
     #[prost(
         oneof = "command_body::Command",
-        tags = "10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 30, 31, 32, 33, 34, 38, 39, 40, 41"
+        tags = "10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 30, 31, 32, 33, 34, 38, 39, 40, 41, 42"
     )]
     pub command: Option<command_body::Command>,
 }
@@ -583,6 +583,8 @@ pub mod command_body {
         DockerTlsAction(super::DockerTlsAction),
         #[prost(message, tag = "41")]
         SwarmAction(super::SwarmAction),
+        #[prost(message, tag = "42")]
+        DockerAction(super::DockerAction),
     }
 
     impl Command {
@@ -616,6 +618,7 @@ pub mod command_body {
                 Command::ContainerExecOpen(_) => "container_exec",
                 Command::DockerTlsAction(_) => "docker_tls",
                 Command::SwarmAction(_) => "swarm",
+                Command::DockerAction(_) => "docker",
             }
         }
     }
@@ -752,6 +755,15 @@ pub struct DockerTlsAction {
 /// JSON; D-154). Join tokens in it or its result are secrets.
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct SwarmAction {
+    #[prost(string, tag = "1")]
+    pub op_json: String,
+}
+
+/// Docker image, volume or network operation
+/// (`forge_catalog::docker_ops::DockerOp`, JSON; D-157). Registry
+/// credentials in it are secrets.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct DockerAction {
     #[prost(string, tag = "1")]
     pub op_json: String,
 }
@@ -1036,6 +1048,7 @@ mod oneof_tests {
             command_body::Command::StackAction(StackAction { op_json: "{}".into() }),
             command_body::Command::DockerTlsAction(DockerTlsAction { op_json: "{}".into() }),
             command_body::Command::SwarmAction(SwarmAction { op_json: "{}".into() }),
+            command_body::Command::DockerAction(DockerAction { op_json: "{}".into() }),
             command_body::Command::TerminalAccount(TerminalAccount { name: "forge-ops".into(), sudo: true }),
             command_body::Command::ProcessAction(ProcessAction {
                 op: "signal".into(),
