@@ -358,11 +358,7 @@ impl AnalyticsStore for DuckDb {
             .await
             .map_err(domain)?;
         let dir = self.catalog.root().to_path_buf();
-        let free = tokio::task::spawn_blocking(move || rustix::fs::statvfs(&dir).ok())
-            .await
-            .ok()
-            .flatten()
-            .map(|s| s.f_bavail.saturating_mul(s.f_frsize));
+        let free = tokio::task::spawn_blocking(move || free_disk_bytes(&dir)).await.ok().flatten();
         Ok(EngineStats { memory_used_bytes: used, server_memory_limit_bytes: Some(limit), free_disk_bytes: free })
     }
 
@@ -455,4 +451,17 @@ fn search_err(e: Error) -> DomainError {
         Error::Timeout => DomainError::Internal("analytics: the search took longer than its time limit".into()),
         e => domain(e),
     }
+}
+
+/// Free space on the volume holding `dir`. `None` when it can't be read:
+/// the stat is informational, so an unknown value is shown as unknown.
+#[cfg(unix)]
+fn free_disk_bytes(dir: &std::path::Path) -> Option<u64> {
+    rustix::fs::statvfs(dir).ok().map(|s| s.f_bavail.saturating_mul(s.f_frsize))
+}
+
+/// Not reported on Windows yet (no statvfs); the console shows it as unknown.
+#[cfg(not(unix))]
+fn free_disk_bytes(_dir: &std::path::Path) -> Option<u64> {
+    None
 }
