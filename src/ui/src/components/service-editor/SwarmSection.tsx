@@ -17,6 +17,9 @@ const KEYS = [
   { id: "engine.labels.", label: "Engine label", hint: "value" },
 ] as const;
 
+const FAIL: Record<SwarmFailureAction, string> = { pause: "pauses on failure", rollback: "rolls back on failure", continue: "continues on failure" };
+const RESTART: Record<SwarmRestartCondition, string> = { any: "on any exit", "on-failure": "on non-zero exit", none: "never" };
+
 interface Row {
   key: string;
   label: string;
@@ -58,59 +61,61 @@ function useRowIds(n: number) {
 export function SwarmSection({ value, onChange }: { value: SwarmSettings; onChange: (v: SwarmSettings) => void }) {
   const set = (p: Partial<SwarmSettings>) => onChange({ ...value, ...p });
   const global = value.mode === "global";
+  const badReplicas = value.replicas < 1 || value.replicas > 1000;
   return (
-    <div className="space-y-4">
-      <Grid>
-        <FormField label="Mode" hint={global ? "One task on every node that matches the constraints." : "A fixed number of tasks, placed by the swarm."}>
-          {() => (
-            <Segmented<SwarmServiceMode>
-              label="Mode"
-              value={value.mode}
-              onChange={(mode) => set({ mode })}
-              options={[
-                { id: "replicated", label: "Replicated" },
-                { id: "global", label: "Global" },
-              ]}
-            />
-          )}
-        </FormField>
-        {!global && (
-          <FormField label="Replicas" hint="1 to 1000. Scale later from the service page without a redeploy." error={value.replicas < 1 || value.replicas > 1000 ? "1 to 1000." : undefined}>
-            {(id, invalid) => (
-              <div className="flex items-center gap-1">
-                <IconButton type="button" label="One replica fewer" className="size-8" disabled={value.replicas <= 1} onClick={() => set({ replicas: Math.max(1, value.replicas - 1) })}>
-                  <Minus className="size-4" />
-                </IconButton>
-                <NumberInput id={id} invalid={invalid} className="w-20 text-center" min={1} max={1000} value={value.replicas} onChange={(replicas) => set({ replicas })} />
-                <IconButton type="button" label="One replica more" className="size-8" disabled={value.replicas >= 1000} onClick={() => set({ replicas: Math.min(1000, value.replicas + 1) })}>
-                  <Plus className="size-4" />
-                </IconButton>
-              </div>
-            )}
-          </FormField>
-        )}
-        <FormField label="Published ports" hint={value.publish === "ingress" ? "Routing mesh: every node answers on the port and forwards to a task." : "Only nodes running a task listen; one task per node per port."}>
-          {() => (
-            <Segmented<SwarmPublishMode>
-              label="Published ports"
-              value={value.publish}
-              onChange={(publish) => set({ publish })}
-              options={[
-                { id: "ingress", label: "Ingress mesh" },
-                { id: "host", label: "Host" },
-              ]}
-            />
-          )}
-        </FormField>
-        <FormField label="Max tasks per node" hint="Empty: no limit.">
-          {(id) => <NumberInput id={id} min={0} placeholder="no limit" value={value.max_per_node} onChange={(max_per_node) => set({ max_per_node: Math.max(0, max_per_node) })} />}
-        </FormField>
-      </Grid>
+    <div className="space-y-5">
+      {/* Scheduling: four compact controls in one strip. */}
+      <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Field label="Mode" hint={global ? "One task on every matching node." : "A fixed number of tasks."}>
+          <Segmented<SwarmServiceMode>
+            label="Mode"
+            value={value.mode}
+            onChange={(mode) => set({ mode })}
+            options={[
+              { id: "replicated", label: "Replicated" },
+              { id: "global", label: "Global" },
+            ]}
+          />
+        </Field>
+        <Field label="Replicas" htmlFor="swarm-replicas" hint={global ? "Set by the number of matching nodes." : "1 to 1000; scale later without a redeploy."} error={!global && badReplicas ? "1 to 1000." : undefined}>
+          <div className="inline-flex h-8 items-stretch overflow-hidden rounded-md border border-line bg-panel">
+            <IconButton type="button" label="One replica fewer" className="h-full w-8 rounded-none" disabled={global || value.replicas <= 1} onClick={() => set({ replicas: Math.max(1, value.replicas - 1) })}>
+              <Minus className="size-3.5" />
+            </IconButton>
+            <div className="w-16 border-x border-line [&>input]:h-full [&>input]:rounded-none [&>input]:border-0 [&>input]:text-center">
+              <NumberInput id="swarm-replicas" invalid={!global && badReplicas} min={1} max={1000} value={global ? null : value.replicas} placeholder={global ? "auto" : undefined} onChange={(replicas) => set({ replicas })} />
+            </div>
+            <IconButton type="button" label="One replica more" className="h-full w-8 rounded-none" disabled={global || value.replicas >= 1000} onClick={() => set({ replicas: Math.min(1000, value.replicas + 1) })}>
+              <Plus className="size-3.5" />
+            </IconButton>
+          </div>
+        </Field>
+        <Field label="Max tasks per node" htmlFor="swarm-max" hint="Empty: no limit.">
+          <div className="w-28">
+            <NumberInput id="swarm-max" min={0} placeholder="no limit" value={value.max_per_node} onChange={(max_per_node) => set({ max_per_node: Math.max(0, max_per_node) })} />
+          </div>
+        </Field>
+        <Field label="Published ports" hint={value.publish === "ingress" ? "Every node answers and forwards to a task." : "Only nodes running a task listen."}>
+          <Segmented<SwarmPublishMode>
+            label="Published ports"
+            value={value.publish}
+            onChange={(publish) => set({ publish })}
+            options={[
+              { id: "ingress", label: "Ingress mesh" },
+              { id: "host", label: "Host" },
+            ]}
+          />
+        </Field>
+      </div>
 
-      <Constraints value={value.constraints} onChange={(constraints) => set({ constraints })} />
-      <Spread value={value.spread} onChange={(spread) => set({ spread })} />
+      {/* Placement: where tasks may run and how they spread. */}
+      <div className="rounded-md border border-line">
+        <Constraints value={value.constraints} onChange={(constraints) => set({ constraints })} />
+        <Spread value={value.spread} onChange={(spread) => set({ spread })} />
+      </div>
 
-      <Group title="Rollout" summary={`${value.update.parallelism || "all"} at a time · ${value.update.order} · on failure ${value.update.failure_action}`}>
+      <div className="grid items-start gap-3 lg:grid-cols-2">
+      <Group title="Rollout" summary={`${value.update.parallelism || "all"} at a time · ${value.update.order.replace("-", " ")} · ${FAIL[value.update.failure_action]}`}>
         <Grid>
           <FormField label="Tasks at a time" hint="Empty: all at once.">
             {(id) => <NumberInput id={id} min={0} placeholder="all" value={value.update.parallelism} onChange={(parallelism) => set({ update: { ...value.update, parallelism: Math.max(0, parallelism) } })} />}
@@ -144,7 +149,7 @@ export function SwarmSection({ value, onChange }: { value: SwarmSettings; onChan
         </Grid>
       </Group>
 
-      <Group title="Restart policy" summary={`${value.restart.condition} · ${value.restart.max_attempts || "unlimited"} attempts · ${value.restart.delay_secs}s delay`}>
+      <Group title="Restart policy" summary={`${RESTART[value.restart.condition]} · ${value.restart.max_attempts || "unlimited"} tries · ${value.restart.delay_secs}s apart`}>
         <Grid>
           <FormField label="Restart when">
             {(id) => (
@@ -163,6 +168,39 @@ export function SwarmSection({ value, onChange }: { value: SwarmSettings; onChan
           </FormField>
         </Grid>
       </Group>
+      </div>
+    </div>
+  );
+}
+
+/** A label above one control, with a hint or an error below. */
+function Field({ label, htmlFor, hint, error, children }: { label: string; htmlFor?: string; hint?: string; error?: string; children: ReactNode }) {
+  return (
+    <div className="min-w-0 space-y-1">
+      <label htmlFor={htmlFor} className="block text-xs font-medium text-muted">
+        {label}
+      </label>
+      {children}
+      {error ? (
+        <p className="text-xs text-bad" role="alert">
+          {error}
+        </p>
+      ) : (
+        hint && <p className="text-xs text-faint">{hint}</p>
+      )}
+    </div>
+  );
+}
+
+/** The heading row of a placement block, with its add action on the right. */
+function BlockHead({ title, hint, action }: { title: string; hint: string; action: ReactNode }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2 px-3 pt-2.5 pb-1.5">
+      <p className="text-xs font-medium text-fg">{title}</p>
+      <p className="min-w-0 flex-1 truncate text-xs text-faint" title={hint}>
+        {hint}
+      </p>
+      {action}
     </div>
   );
 }
@@ -176,11 +214,11 @@ function Group({ title, summary, children }: { title: string; summary: string; c
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full min-w-0 items-center gap-2 px-3 py-1.5 text-left focus-visible:outline-2 focus-visible:outline-accent"
+        className="flex w-full min-w-0 items-center gap-2 rounded-md px-3 py-2 text-left hover:bg-panel-2 focus-visible:outline-2 focus-visible:outline-accent"
       >
         <ChevronRight className={`size-3.5 shrink-0 text-muted transition-transform ${open ? "rotate-90" : ""}`} aria-hidden />
         <span className="text-[13px] font-medium">{title}</span>
-        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint" title={summary}>
+        <span className="min-w-0 flex-1 truncate text-right text-xs text-faint" title={summary}>
           {summary}
         </span>
       </button>
@@ -189,53 +227,66 @@ function Group({ title, summary, children }: { title: string; summary: string; c
   );
 }
 
+const ROW = "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5 sm:grid-cols-[10rem_minmax(0,9rem)_4.5rem_minmax(0,1fr)_auto]";
+
 function Constraints({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
   const rows = useRowIds(value.length);
   const setRow = (i: number, p: Partial<Row>) => onChange(value.map((c, j) => (j === i ? format({ ...parse(c), ...p }) : c)));
+  const add = () => {
+    rows.add();
+    onChange([...value, "node.role==worker"]);
+  };
   return (
-    <div className="space-y-1.5">
-      <p className="text-xs font-medium text-muted">Placement constraints</p>
-      {value.length === 0 ? (
-        <p className="rounded-md border border-dashed border-line px-3 py-2 text-xs text-faint">None: tasks may run on any active node of the swarm.</p>
-      ) : (
-        <ul className="divide-y divide-line rounded-md border border-line">
+    <div className="pb-2">
+      <BlockHead
+        title="Run only on nodes where"
+        hint={value.length ? "All rules must match." : "No rules: any active node."}
+        action={
+          <Button type="button" variant="ghost" onClick={add}>
+            <Plus className="size-3.5" /> Rule
+          </Button>
+        }
+      />
+      {value.length > 0 && (
+        <ul className="space-y-1.5 px-3">
           {value.map((c, i) => {
             const r = parse(c);
             const k = KEYS.find((x) => x.id === r.key);
             const isLabel = r.key.endsWith(".labels.");
             const bad = !CONSTRAINT_RE.test(c);
             return (
-              <li key={rows.ids[i]} className="flex flex-wrap items-center gap-1.5 px-2 py-1">
-                <Select aria-label={`Constraint ${i + 1} key`} className="h-7 w-44 py-0 text-xs" value={r.key} onChange={(e) => setRow(i, { key: e.target.value, label: "" })}>
-                  {!k && <option value={r.key}>{r.key}</option>}
-                  {KEYS.map((x) => (
-                    <option key={x.id} value={x.id}>
-                      {x.label}
-                    </option>
-                  ))}
-                </Select>
+              <li key={rows.ids[i]} className={ROW} title={c}>
+                <div className={`col-span-2 sm:col-span-1 ${isLabel ? "" : "sm:col-span-2"}`}>
+                  <Select aria-label={`Rule ${i + 1} attribute`} className="w-full text-xs" value={r.key} onChange={(e) => setRow(i, { key: e.target.value, label: "" })}>
+                    {!k && <option value={r.key}>{r.key}</option>}
+                    {KEYS.map((x) => (
+                      <option key={x.id} value={x.id}>
+                        {x.label}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
                 {isLabel && (
-                  <Input aria-label={`Constraint ${i + 1} label name`} className="h-7 w-32 py-0 font-mono text-xs" placeholder="zone" value={r.label} onChange={(e) => setRow(i, { label: e.target.value.trim() })} />
+                  <Input aria-label={`Rule ${i + 1} label name`} className="h-8 py-0 font-mono text-xs" placeholder="label, e.g. zone" value={r.label} onChange={(e) => setRow(i, { label: e.target.value.trim() })} />
                 )}
-                <Select aria-label={`Constraint ${i + 1} operator`} className="h-7 w-16 py-0 font-mono text-xs" value={r.op} onChange={(e) => setRow(i, { op: e.target.value === "!=" ? "!=" : "==" })}>
-                  <option value="==">==</option>
-                  <option value="!=">!=</option>
-                </Select>
+                <div className="hidden sm:block">
+                  <Select aria-label={`Rule ${i + 1} operator`} className="w-full font-mono text-xs" value={r.op} onChange={(e) => setRow(i, { op: e.target.value === "!=" ? "!=" : "==" })}>
+                    <option value="==">is</option>
+                    <option value="!=">is not</option>
+                  </Select>
+                </div>
                 <Input
-                  aria-label={`Constraint ${i + 1} value`}
+                  aria-label={`Rule ${i + 1} value`}
                   aria-invalid={bad || undefined}
-                  className={`h-7 min-w-24 flex-1 py-0 font-mono text-xs ${bad ? "border-bad" : ""}`}
+                  className={`h-8 py-0 font-mono text-xs ${bad ? "border-bad" : ""}`}
                   placeholder={k?.hint ?? "value"}
                   value={r.value}
                   onChange={(e) => setRow(i, { value: e.target.value.trim() })}
                 />
-                <span className="hidden max-w-56 truncate font-mono text-[11px] text-faint sm:inline" title={c}>
-                  {c}
-                </span>
                 <IconButton
                   type="button"
-                  label={`Remove constraint ${i + 1}`}
-                  className="size-7 hover:text-bad"
+                  label={`Remove rule ${i + 1}`}
+                  className="size-8 hover:text-bad"
                   onClick={() => {
                     rows.remove(i);
                     onChange(value.filter((_, j) => j !== i));
@@ -248,16 +299,6 @@ function Constraints({ value, onChange }: { value: string[]; onChange: (v: strin
           })}
         </ul>
       )}
-      <Button
-        type="button"
-        variant="ghost"
-        onClick={() => {
-          rows.add();
-          onChange([...value, "node.role==worker"]);
-        }}
-      >
-        <Plus className="size-4" /> Add constraint
-      </Button>
     </div>
   );
 }
@@ -265,26 +306,45 @@ function Constraints({ value, onChange }: { value: string[]; onChange: (v: strin
 function Spread({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
   const rows = useRowIds(value.length);
   const name = (s: string) => s.replace(/^node\.labels\./, "");
+  const full = value.length >= 4;
   return (
-    <div className="space-y-1.5">
-      <p className="text-xs font-medium text-muted">Spread over node labels</p>
-      {value.length === 0 ? (
-        <p className="rounded-md border border-dashed border-line px-3 py-2 text-xs text-faint">None. Add a label such as zone to spread tasks evenly over its values.</p>
-      ) : (
-        <ul className="divide-y divide-line rounded-md border border-line">
+    <div className="border-t border-line pb-2.5">
+      <BlockHead
+        title="Spread evenly over"
+        hint={value.length ? "Node labels, in order of priority." : "Not spread: the swarm balances by load."}
+        action={
+          <span title={full ? "At most 4 spread labels" : undefined} className="inline-flex">
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={full}
+              onClick={() => {
+                rows.add();
+                onChange([...value, "node.labels.zone"]);
+              }}
+            >
+              <Plus className="size-3.5" /> Label
+            </Button>
+          </span>
+        }
+      />
+      {value.length > 0 && (
+        <ul className="flex flex-wrap gap-1.5 px-3">
           {value.map((s, i) => {
             const bad = !!s && !SPREAD_RE.test(s);
             return (
-              <li key={rows.ids[i]} className="flex items-center gap-1.5 px-2 py-1">
-                <span className="shrink-0 font-mono text-[11px] text-faint">node.labels.</span>
-                <Input
-                  aria-label={`Spread label ${i + 1}`}
-                  aria-invalid={bad || undefined}
-                  className={`h-7 py-0 font-mono text-xs ${bad ? "border-bad" : ""}`}
-                  placeholder="zone"
-                  value={name(s)}
-                  onChange={(e) => onChange(value.map((x, j) => (j === i ? `node.labels.${e.target.value.trim()}` : x)))}
-                />
+              <li key={rows.ids[i]} className={`flex h-8 items-center rounded-md border bg-panel-2 pl-2 ${bad ? "border-bad" : "border-line"}`}>
+                <span className="font-mono text-[11px] text-faint">node.labels.</span>
+                <div className="w-28 [&>input]:h-7 [&>input]:border-0 [&>input]:bg-transparent [&>input]:px-1">
+                  <Input
+                    aria-label={`Spread label ${i + 1}`}
+                    aria-invalid={bad || undefined}
+                    className="py-0 font-mono text-xs"
+                    placeholder="zone"
+                    value={name(s)}
+                    onChange={(e) => onChange(value.map((x, j) => (j === i ? `node.labels.${e.target.value.trim()}` : x)))}
+                  />
+                </div>
                 <IconButton
                   type="button"
                   label={`Remove spread label ${i + 1}`}
@@ -301,19 +361,6 @@ function Spread({ value, onChange }: { value: string[]; onChange: (v: string[]) 
           })}
         </ul>
       )}
-      <span title={value.length >= 4 ? "At most 4 spread labels" : undefined} className="inline-flex">
-        <Button
-          type="button"
-          variant="ghost"
-          disabled={value.length >= 4}
-          onClick={() => {
-            rows.add();
-            onChange([...value, "node.labels.zone"]);
-          }}
-        >
-          <Plus className="size-4" /> Add spread label
-        </Button>
-      </span>
     </div>
   );
 }
