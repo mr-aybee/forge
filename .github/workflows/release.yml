@@ -266,7 +266,7 @@ jobs:
   cli-macos:
     name: Build forge CLI (macOS)
     needs: version
-    runs-on: macos-14
+    runs-on: macos-15
     env:
       # Same minimum for both architectures, also for the C code `ring` builds.
       MACOSX_DEPLOYMENT_TARGET: "11.0"

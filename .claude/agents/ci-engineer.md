@@ -29,7 +29,7 @@ first.
   - The self-updater depends on the asset names and the signature, so treat
     both as a public contract.
 - **Runners**: GitHub-hosted only (`ubuntu-latest`, `windows-latest`,
-  `macos-14`), which are free for this public repository. Pull requests come
+  `macos-15`), which are free for this public repository. Pull requests come
   from forks, so jobs triggered by `pull_request` never see secrets. Never use
   `pull_request_target`.
 

@@ -33,7 +33,7 @@ There is no scheduled run.
 ### Runners
 
 Every job runs on a GitHub-hosted runner: `ubuntu-latest` for Linux jobs,
-`windows-latest` for the Windows tests and build, and `macos-14` for the
+`windows-latest` for the Windows tests and build, and `macos-15` for the
 macOS CLI. The repository is public, so these minutes are free.
 
 - **Build wrapper.** `scripts/ci/build.sh light|heavy <command>` wraps every
@@ -116,7 +116,7 @@ tag, delete it (`git push origin :refs/tags/<tag>`), fix, and tag again.
    is compiled in (`FORGE_BUILD_VERSION`). The job checks architecture and
    static linking, and that the x86_64 server and worker report the version.
 4. **forge CLI (macOS)**: `aarch64-apple-darwin` and `x86_64-apple-darwin` in
-   one job on `macos-14`; checks each architecture and that only
+   one job on `macos-15`; checks each architecture and that only
    system libraries are linked. Not code-signed or notarised.
 5. **Package and sign**: `scripts/packaging/package.sh` assembles the
    tarballs, the Windows zip, the raw binaries the updater downloads and the
