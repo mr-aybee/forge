@@ -57,17 +57,29 @@ pub struct ServerKeys {
     /// At most [`MAX_SERVER_KEYS`].
     #[prost(message, repeated, tag = "3")]
     pub keys: Vec<ServerKey>,
+    /// Bumped by the server on every change of the key set. A node refuses
+    /// an announcement older than the last it applied, or one with the same
+    /// sequence and other keys (replay). 0: an older server.
+    #[prost(uint64, tag = "4")]
+    pub sequence: u64,
+    /// Fingerprints withdrawn by an operator (`agent-key rotate --now
+    /// --revoke`): unpinned at once and never pinned again by an
+    /// announcement. At most [`MAX_REVOKED_KEYS`].
+    #[prost(string, repeated, tag = "5")]
+    pub revoked: Vec<String>,
 }
 
 /// Most keys in one [`ServerKeys`].
 pub const MAX_SERVER_KEYS: usize = 4;
+/// Most revoked fingerprints in one [`ServerKeys`].
+pub const MAX_REVOKED_KEYS: usize = 16;
 
 #[derive(Clone, PartialEq, Eq, prost::Message)]
 pub struct ServerKey {
     /// 64 lower-case hex digits.
     #[prost(string, tag = "1")]
     pub sha256: String,
-    /// `current` or `next`.
+    /// `current`, `next`, `analytics` or `analytics-next`.
     #[prost(string, tag = "2")]
     pub label: String,
 }

@@ -66,10 +66,15 @@ async fn an_agent_enrolls_and_links_by_an_address_the_certificate_does_not_name(
     let dir = tempfile::tempdir().unwrap();
     let paths = StatePaths::new(dir.path());
     let id = enroll(&paths, AgentConfig::new(h.agent_url.clone()), &t, facts("anywhere")).await.unwrap();
-    // Pinned: the current and the next key.
-    let pinned = forge_agent::pins::load(&paths.pins()).unwrap().fingerprints();
-    let listed: Vec<String> = keys.keys().into_iter().take(2).map(|k| k.sha256).collect();
+    // Pinned: the current and next keys of the hub and of the analytics
+    // worker's listener (its own key, never the hub's).
+    let set = forge_agent::pins::load(&paths.pins()).unwrap();
+    let pinned = set.fingerprints();
+    let listed: Vec<String> = keys.keys().into_iter().take(4).map(|k| k.sha256).collect();
     assert_eq!(pinned, listed);
+    assert!(pinned.contains(&keys.worker_fingerprint()) && keys.worker_fingerprint() != keys.current_fingerprint());
+    assert!(set.server_keys.iter().any(|p| p.label == "analytics"));
+    assert_eq!(set.sequence, keys.sequence());
 
     let _stop = run(paths);
     until(20, "the agent online", async || online(&admin, &id.server_id).await).await;
@@ -142,6 +147,37 @@ async fn a_key_mismatch_is_reported_and_fixed_by_pinning_without_re_enrolling() 
     let mut fixed = wrong.clone();
     fixed.add(&h.app.state.agent_keys.current_fingerprint(), "manual", 0).unwrap();
     forge_agent::pins::save(&paths.pins(), &fixed).unwrap();
+    until(90, "the link back", async || !paths.link_error().exists()).await;
+    ping(&admin, &id.server_id).await;
+}
+
+#[tokio::test]
+async fn an_unreadable_pin_file_fails_closed() {
+    let h = start().await;
+    let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+    let dir = tempfile::tempdir().unwrap();
+    let paths = StatePaths::new(dir.path());
+    let id =
+        enroll(&paths, AgentConfig::new(h.agent_url.clone()), &token(&admin).await, facts("closed")).await.unwrap();
+    let good = std::fs::read_to_string(paths.pins()).unwrap();
+    // At start: refused with a message that says what to do.
+    std::fs::write(paths.pins(), "server_keys = 7").unwrap();
+    let err = format!("{:#}", Agent::load(paths.clone()).unwrap_err());
+    assert!(err.contains("refusing to connect") && err.contains("forge-agent pins list"), "{err}");
+
+    // While running: the link closes instead of falling back to the CA.
+    std::fs::write(paths.pins(), &good).unwrap();
+    let _stop = run(paths.clone());
+    until(20, "the agent online", async || online(&admin, &id.server_id).await).await;
+    std::fs::write(paths.pins(), vec![b'#'; 70 * 1024]).unwrap();
+    // A switch changes the announcement; pinning it reads the broken file.
+    h.app.state.agent_keys.rotate(h.app.state.clock.now(), forge_server::agent_keys::RotateMode::Now).await.unwrap();
+    until(60, "the pin-file report", async || {
+        std::fs::read_to_string(paths.link_error()).is_ok_and(|e| e.contains("cannot be used"))
+    })
+    .await;
+    // Fixed: the agent links again.
+    std::fs::write(paths.pins(), &good).unwrap();
     until(90, "the link back", async || !paths.link_error().exists()).await;
     ping(&admin, &id.server_id).await;
 }

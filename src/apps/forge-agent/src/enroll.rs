@@ -44,7 +44,7 @@ fn save_pins(paths: &StatePaths, token_key: Option<&str>, resp: &EnrollResponse)
     if let Some(signed) = &resp.server_keys {
         let keys = forge_proto::verify_server_keys(&resp.command_public_key, signed, &resp.server_id, now)
             .map_err(|e| anyhow::anyhow!("the server's key announcement is invalid: {e}"))?;
-        set.apply_announcement(&keys.keys, now.0)?;
+        set.apply_verified(&keys, now.0)?;
     }
     if set.is_empty() {
         return Ok(());

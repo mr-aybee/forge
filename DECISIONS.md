@@ -5750,3 +5750,23 @@ Existing agents keep CA plus host-name checks until they receive a pin over
 their existing link; the listener certificate keeps `agent_hostnames`.
 Older agents keep using `analytics_url`. Passkeys stay bound to the name they
 were registered on.
+
+**Security review follow-ups.**
+- The last administrator address is recorded only when the request host is
+  loopback, an address or the host name of the server, a configured name or
+  a match in an explicit (not `*`) allowed-hosts list; changes are audited
+  (`server.last_admin_address.update`). The MCP OAuth issuer and resource
+  use only the pinned address; without one the connector endpoints answer
+  `409 no_public_address`.
+- With allowed hosts `*` the `Origin` checks guarantee same-origin only, not
+  DNS-rebinding protection; the console recommends narrowing the list.
+- Key announcements carry a sequence (bumped on every change of the key
+  set) and a revoked list; nodes refuse older or conflicting ones, unpin
+  revoked keys at once and never re-add them from an announcement. They are
+  valid for 5 minutes. `agent-key rotate --now --revoke` (`agent_key.revoke`).
+- The analytics worker listener has its own key pair (current and next,
+  rotated with the agent key), announced as `analytics` pins; the worker no
+  longer holds the agent hub key.
+- An existing but unusable pin file stops the agent from connecting.
+- Acknowledgements keep only this server's fingerprints, are rate-limited per
+  agent and pruned for deleted nodes. The installers are `no-store`.

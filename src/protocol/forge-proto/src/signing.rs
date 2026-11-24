@@ -88,7 +88,9 @@ impl CommandSigner {
 const SERVER_KEYS_CONTEXT: &[u8] = b"forge-server-keys-v1\0";
 
 /// How long a signed key announcement is accepted after it was issued.
-pub const SERVER_KEYS_MAX_AGE: Duration = Duration::from_secs(3600);
+/// Short, so a captured announcement cannot be replayed for long; the
+/// server signs a fresh one for every heartbeat reply.
+pub const SERVER_KEYS_MAX_AGE: Duration = Duration::from_secs(300);
 
 fn server_keys_message(body: &[u8]) -> Vec<u8> {
     let mut m = Vec::with_capacity(SERVER_KEYS_CONTEXT.len() + body.len());
@@ -130,7 +132,7 @@ pub fn verify_server_keys(
     if now.0 > keys.issued_at_ms + max_age + skew {
         return Err(VerifyError::Expired);
     }
-    if keys.keys.len() > crate::messages::MAX_SERVER_KEYS {
+    if keys.keys.len() > crate::messages::MAX_SERVER_KEYS || keys.revoked.len() > crate::messages::MAX_REVOKED_KEYS {
         return Err(VerifyError::Malformed);
     }
     Ok(keys)
@@ -366,12 +368,21 @@ mod tests {
             server_id: "srv-1".into(),
             issued_at_ms: T0.0,
             keys: vec![crate::messages::ServerKey { sha256: "ab".repeat(32), label: "current".into() }],
+            sequence: 3,
+            revoked: vec!["cd".repeat(32)],
         };
         let signed = s.sign_server_keys(&keys);
         assert_eq!(verify_server_keys(&s.public_key(), &signed, "srv-1", T0), Ok(keys.clone()));
         assert_eq!(verify_server_keys(&s.public_key(), &signed, "srv-2", T0), Err(VerifyError::WrongTarget));
         let late = T0.plus(SERVER_KEYS_MAX_AGE + MAX_CLOCK_SKEW + Duration::from_secs(1));
         assert_eq!(verify_server_keys(&s.public_key(), &signed, "srv-1", late), Err(VerifyError::Expired));
+        assert_eq!(SERVER_KEYS_MAX_AGE, Duration::from_secs(300), "five minutes");
+        let mut many = keys.clone();
+        many.revoked = vec!["cd".repeat(32); crate::messages::MAX_REVOKED_KEYS + 1];
+        assert_eq!(
+            verify_server_keys(&s.public_key(), &s.sign_server_keys(&many), "srv-1", T0),
+            Err(VerifyError::Malformed)
+        );
         let other = CommandSigner::generate().unwrap();
         assert_eq!(verify_server_keys(&other.public_key(), &signed, "srv-1", T0), Err(VerifyError::BadSignature));
         let mut tampered = signed.clone();

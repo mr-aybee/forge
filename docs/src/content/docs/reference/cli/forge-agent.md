@@ -474,7 +474,7 @@ Commands:
 ### forge-agent pins list
 
 Prints one line per pinned key: fingerprint, label (`enrollment`, `current`,
-`next` or `manual`), the time it was added (epoch ms) and, for a retired
+`next`, `analytics`, `analytics-next` or `manual`), the time it was added (epoch ms) and, for a retired
 key, when it was retired.
 
 ```sh
@@ -490,6 +490,7 @@ Pins `<SHA256>`, a 64-character hex fingerprint, with or without the
 | --- | --- | --- | --- | --- | --- |
 | `<SHA256>` | hex string | none | Yes | The key fingerprint to pin | `sha256:<fingerprint>` |
 | `--label` | string | `manual` | No | A name for the key, shown by `pins list` | `--label after-restore` |
+| `--force` | flag | off | No | Pins a key Forge revoked (`agent-key rotate --now --revoke`). Without it such a key is refused with a warning | `--force` |
 
 ```sh
 sudo /usr/local/bin/forge-agent --state-dir /var/lib/forge-agent pins add sha256:<fingerprint>

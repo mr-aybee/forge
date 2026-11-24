@@ -18,10 +18,17 @@
 //! node still reaches a server that was rolled back meanwhile. At most
 //! [`MAX_PINS`] keys are kept; keys added by hand (`pins add`) are never
 //! retired by an announcement.
+//!
+//! **Replay and revocation.** Each announcement carries a sequence the
+//! server bumps on every change of its key set. The file keeps the last
+//! applied sequence and a digest of its keys: an older announcement, or one
+//! with the same sequence and other keys, is refused. Fingerprints Forge
+//! revoked are unpinned at once (never merely retired), remembered, and
+//! never pinned again by an announcement; `pins add` asks for `--force`.
 
 use std::path::{Path, PathBuf};
 
-use forge_proto::messages::{ServerKey, SignedServerKeys};
+use forge_proto::messages::{ServerKey, ServerKeys, SignedServerKeys};
 use serde::{Deserialize, Serialize};
 
 /// Most keys in a pin set.
@@ -36,6 +43,8 @@ pub const FILE: &str = "pins.toml";
 pub const RETIRED_KEPT: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 3600);
 /// Label of keys added by an operator.
 pub const LABEL_MANUAL: &str = "manual";
+/// Most revoked fingerprints remembered.
+pub const MAX_REVOKED: usize = 32;
 /// Label of the key from the enrollment token.
 pub const LABEL_ENROLLMENT: &str = "enrollment";
 
@@ -52,6 +61,12 @@ pub enum PinError {
     Parse(String, String),
     #[error("the key announcement was refused: {0}")]
     Announcement(String),
+    #[error("key announcement {got} is older than the one applied ({applied}); ignored")]
+    Stale { got: u64, applied: u64 },
+    #[error("key announcement {0} names other keys than the one applied with the same sequence; ignored")]
+    Replayed(u64),
+    #[error("{0} was revoked by Forge; add it anyway with --force")]
+    Revoked(String),
 }
 
 /// One pinned key.
@@ -73,8 +88,33 @@ pub struct Pin {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PinSet {
+    /// Sequence of the last applied announcement (0: none, or an older
+    /// server).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub sequence: u64,
+    /// Digest of that announcement's keys and revocations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub announcement_digest: Option<String>,
+    /// Fingerprints Forge revoked; never pinned again by an announcement.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub revoked: Vec<String>,
     #[serde(default)]
     pub server_keys: Vec<Pin>,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // reason: serde's skip_serializing_if signature
+const fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+/// What an announcement says, independent of when it was signed.
+fn announcement_digest(keys: &ServerKeys) -> String {
+    let mut k: Vec<String> =
+        keys.keys.iter().map(|k| format!("{}:{}", k.sha256.to_ascii_lowercase(), k.label)).collect();
+    k.sort();
+    let mut r: Vec<String> = keys.revoked.iter().map(|f| f.to_ascii_lowercase()).collect();
+    r.sort();
+    forge_secrets::crypto::sha256_hex(format!("{}|{}", k.join(","), r.join(",")).as_bytes())
 }
 
 fn canonical(fp: &str) -> Result<String, PinError> {
@@ -101,6 +141,72 @@ impl PinSet {
     #[must_use]
     pub fn contains(&self, fp: &str) -> bool {
         self.server_keys.iter().any(|p| p.sha256 == fp)
+    }
+
+    /// Whether Forge revoked `fp` (any form).
+    #[must_use]
+    pub fn is_revoked(&self, fp: &str) -> bool {
+        canonical(fp).is_ok_and(|fp| self.revoked.contains(&fp))
+    }
+
+    /// [`Self::add`] by an operator: a revoked key needs `force`, which
+    /// also forgets the revocation.
+    pub fn add_checked(&mut self, fp: &str, label: &str, now_ms: i64, force: bool) -> Result<bool, PinError> {
+        let c = canonical(fp)?;
+        if self.revoked.contains(&c) {
+            if !force {
+                return Err(PinError::Revoked(forge_pki::short_fingerprint(&c)));
+            }
+            self.revoked.retain(|r| *r != c);
+        }
+        self.add(&c, label, now_ms)
+    }
+
+    /// Applies a verified announcement: refuses a replay (older sequence,
+    /// or the same sequence with other content), drops revoked keys, then
+    /// [`Self::apply_announcement`]. Returns whether the set changed.
+    pub fn apply_verified(&mut self, keys: &ServerKeys, now_ms: i64) -> Result<bool, PinError> {
+        let digest = announcement_digest(keys);
+        if keys.sequence < self.sequence {
+            return Err(PinError::Stale { got: keys.sequence, applied: self.sequence });
+        }
+        if keys.sequence == self.sequence && keys.sequence > 0 {
+            if self.announcement_digest.as_deref().is_some_and(|d| d != digest) {
+                return Err(PinError::Replayed(keys.sequence));
+            }
+            if self.announcement_digest.is_some() {
+                return Ok(false);
+            }
+        }
+        let mut changed = false;
+        for r in &keys.revoked {
+            let r = canonical(r)?;
+            let before = self.server_keys.len();
+            self.server_keys.retain(|p| p.sha256 != r);
+            changed |= self.server_keys.len() != before;
+            if !self.revoked.contains(&r) {
+                self.revoked.push(r);
+                changed = true;
+            }
+        }
+        if self.revoked.len() > MAX_REVOKED {
+            let extra = self.revoked.len() - MAX_REVOKED;
+            self.revoked.drain(..extra);
+        }
+        let allowed: Vec<ServerKey> = keys
+            .keys
+            .iter()
+            .filter(|k| canonical(&k.sha256).is_ok_and(|fp| !self.revoked.contains(&fp)))
+            .cloned()
+            .collect();
+        changed |= self.apply_announcement(&allowed, now_ms)?;
+        if keys.sequence > 0 && (self.sequence != keys.sequence || self.announcement_digest.as_deref() != Some(&digest))
+        {
+            self.sequence = keys.sequence;
+            self.announcement_digest = Some(digest);
+            changed = true;
+        }
+        Ok(changed)
     }
 
     /// Adds a key (or renames it and makes it active again). Returns
@@ -272,11 +378,21 @@ pub fn apply_signed(
     let keys = forge_proto::verify_server_keys(command_public_key, signed, server_id, now)
         .map_err(|e| PinError::Announcement(e.to_string()))?;
     let mut set = load(path)?;
-    let changed = set.apply_announcement(&keys.keys, now.0)?;
+    let changed = set.apply_verified(&keys, now.0)?;
     if changed {
         save(path, &set)?;
     }
     Ok(changed)
+}
+
+/// What to log when the pin file exists but cannot be used: the agent
+/// then refuses to connect rather than fall back to the CA and host name.
+#[must_use]
+pub fn unreadable_message(e: &PinError, path: &Path) -> String {
+    format!(
+        "the pin file {} cannot be used ({e}); refusing to connect to the control plane. Check it with 'forge-agent pins list', fix or remove it, or pin the key again with 'forge-agent pins fetch'",
+        path.display()
+    )
 }
 
 /// Part of every [`mismatch_message`], to recognise it in an error chain.
@@ -378,6 +494,8 @@ mod tests {
             server_id: "srv-1".into(),
             issued_at_ms: now.0,
             keys: vec![key(1, "current"), key(2, "next")],
+            sequence: 0,
+            revoked: vec![],
         };
         let signed = forge.sign_server_keys(&keys);
         let dir = tempfile::tempdir().unwrap();
@@ -388,6 +506,60 @@ mod tests {
         assert!(load(&path).unwrap().is_empty());
         assert!(apply_signed(&path, &signed, &forge.public_key(), "srv-1", now).unwrap());
         assert_eq!(load(&path).unwrap().fingerprints(), [fp(1), fp(2)]);
+    }
+
+    fn announced(sequence: u64, keys: Vec<ServerKey>, revoked: &[u8]) -> ServerKeys {
+        ServerKeys {
+            server_id: "srv-1".into(),
+            issued_at_ms: 0,
+            keys,
+            sequence,
+            revoked: revoked.iter().map(|n| fp(*n)).collect(),
+        }
+    }
+
+    #[test]
+    fn older_or_conflicting_announcements_are_refused() {
+        let mut set = PinSet::default();
+        assert!(set.apply_verified(&announced(2, vec![key(1, "current"), key(2, "next")], &[]), 0).unwrap());
+        assert_eq!(set.sequence, 2);
+        // The same announcement again (a later heartbeat): nothing to do.
+        assert!(!set.apply_verified(&announced(2, vec![key(2, "next"), key(1, "current")], &[]), 5).unwrap());
+        // Same sequence, other keys: a forged or replayed set.
+        assert!(matches!(
+            set.apply_verified(&announced(2, vec![key(7, "current")], &[]), 6),
+            Err(PinError::Replayed(2))
+        ));
+        // Older: refused, also an old server's unsequenced one.
+        assert!(matches!(
+            set.apply_verified(&announced(1, vec![key(7, "current")], &[]), 7),
+            Err(PinError::Stale { .. })
+        ));
+        assert!(set.apply_verified(&announced(0, vec![key(7, "current")], &[]), 7).is_err());
+        assert_eq!(set.fingerprints(), [fp(1), fp(2)]);
+        // Newer: applied.
+        assert!(set.apply_verified(&announced(3, vec![key(2, "current"), key(3, "next")], &[]), 8).unwrap());
+        // The file round-trips with its sequence.
+        let again = PinSet::parse(&set.to_toml().unwrap(), "t").unwrap();
+        assert_eq!(again, set);
+    }
+
+    #[test]
+    fn revoked_keys_are_removed_at_once_and_never_readded() {
+        let mut set = PinSet::default();
+        set.apply_verified(&announced(1, vec![key(1, "current"), key(2, "next")], &[]), 0).unwrap();
+        set.add(&fp(1), "manual", 0).unwrap();
+        // Revoking 1: gone now, not retired; even a hand-added pin.
+        assert!(set.apply_verified(&announced(2, vec![key(2, "current"), key(3, "next")], &[1]), 1).unwrap());
+        assert_eq!(set.fingerprints(), [fp(2), fp(3)]);
+        assert!(set.is_revoked(&fp(1)));
+        // A later announcement naming it again does not pin it.
+        set.apply_verified(&announced(3, vec![key(1, "current"), key(3, "next")], &[]), 2).unwrap();
+        assert!(!set.contains(&fp(1)));
+        // By hand only with force.
+        assert!(matches!(set.add_checked(&fp(1), "x", 3, false), Err(PinError::Revoked(_))));
+        assert!(set.add_checked(&fp(1), "x", 3, true).unwrap());
+        assert!(set.contains(&fp(1)) && !set.is_revoked(&fp(1)));
     }
 
     #[test]

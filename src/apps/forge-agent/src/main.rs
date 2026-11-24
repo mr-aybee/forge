@@ -65,6 +65,9 @@ enum PinsCmd {
         /// A name for it (default `manual`).
         #[arg(long)]
         label: Option<String>,
+        /// Pin it even though Forge revoked it.
+        #[arg(long)]
+        force: bool,
     },
     /// Removes a pinned key.
     Remove { sha256: String },
@@ -267,6 +270,9 @@ fn print_pins(paths: &StatePaths) -> anyhow::Result<()> {
     if set.is_empty() {
         println!("pinned keys: none ({}); the control plane is checked by its CA and host name", path.display());
     }
+    for r in &set.revoked {
+        println!("revoked: sha256:{r}");
+    }
     for p in &set.server_keys {
         let retired = p.retired_ms.map(|r| format!("  retired {r}")).unwrap_or_default();
         println!("sha256:{}  {}  added {}{retired}", p.sha256, p.label, p.added_ms);
@@ -291,10 +297,10 @@ async fn pins(paths: &StatePaths, cmd: PinsCmd) -> anyhow::Result<()> {
     use forge_core::Clock;
     let path = paths.pins();
     let now = forge_core::SystemClock.now().0;
-    let (fp, label, add) = match cmd {
+    let (fp, label, add, force) = match cmd {
         PinsCmd::List => return print_pins(paths),
-        PinsCmd::Add { sha256, label } => (sha256, label.unwrap_or_else(|| LABEL_MANUAL.into()), true),
-        PinsCmd::Remove { sha256 } => (sha256, String::new(), false),
+        PinsCmd::Add { sha256, label, force } => (sha256, label.unwrap_or_else(|| LABEL_MANUAL.into()), true, force),
+        PinsCmd::Remove { sha256 } => (sha256, String::new(), false, false),
         PinsCmd::Fetch { server, yes } => {
             require_root(paths)?;
             let url = match server {
@@ -308,12 +314,15 @@ async fn pins(paths: &StatePaths, cmd: PinsCmd) -> anyhow::Result<()> {
             if !yes && !confirm("Pin this key? [y/N] ")? {
                 anyhow::bail!("not pinned");
             }
-            (fp, LABEL_MANUAL.to_owned(), true)
+            (fp, LABEL_MANUAL.to_owned(), true, false)
         }
     };
     require_root(paths)?;
     let mut set = p::load(&path)?;
-    let changed = if add { set.add(&fp, &label, now)? } else { set.remove(&fp)? };
+    if add && set.is_revoked(&fp) {
+        eprintln!("warning: Forge revoked {fp}; a revoked key may be in an attacker's hands");
+    }
+    let changed = if add { set.add_checked(&fp, &label, now, force)? } else { set.remove(&fp)? };
     if changed {
         p::save(&path, &set)?;
     }

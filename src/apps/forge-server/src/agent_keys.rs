@@ -16,6 +16,17 @@
 //! rotate`); `--now` switches at once. The old key is kept sealed for one
 //! more rotation, so a switch can be undone by hand.
 //!
+//! **Analytics worker.** The worker's upload listener has its own key
+//! pair (current and next, rotated with the agent key), so the worker
+//! process never holds the agent hub's key. Its fingerprints are announced
+//! as extra pins labelled `analytics` and `analytics-next`; agents accept
+//! any pinned key on both connections.
+//!
+//! **Replay and revocation.** Every change of the key set bumps a sequence
+//! sent in the announcement; nodes refuse an older one. `agent-key rotate
+//! --now --revoke` drops the old keys at once and lists them as revoked, so
+//! nodes unpin them and never pin them again from an announcement.
+//!
 //! **At rest.** The state lives in the settings table (`agent_tls.keys`):
 //! fingerprints, times and the private keys sealed with the server's
 //! envelope key, bound to their fingerprint. Only fingerprints are ever
@@ -53,6 +64,15 @@ pub const AUDIT_KEY_ROTATE: &str = "agent_key.rotate";
 pub const AUDIT_KEY_ROTATE_REQUEST: &str = "agent_key.rotate_request";
 /// Audit: the first key pair was created (new install or upgrade).
 pub const AUDIT_KEY_CREATE: &str = "agent_key.create";
+/// Audit: an operator switched keys and revoked the old ones.
+pub const AUDIT_KEY_REVOKE: &str = "agent_key.revoke";
+/// Label of the analytics worker listener's key.
+pub const LABEL_ANALYTICS: &str = "analytics";
+/// Label of the analytics worker listener's next key.
+pub const LABEL_ANALYTICS_NEXT: &str = "analytics-next";
+/// An agent's acknowledgement that only drops keys is stored at most this
+/// often; one that adds a key of this server is stored at once.
+pub const ACK_MIN_INTERVAL_MS: i64 = 60_000;
 /// Label of the key the listeners serve.
 pub const LABEL_CURRENT: &str = "current";
 /// Label of the key announced for the next switch.
@@ -99,6 +119,29 @@ struct KeyState {
     /// An operator asked for a switch (`agent-key rotate` without `--now`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     rotation_requested_at_ms: Option<i64>,
+    /// Bumped on every change of the announced key set.
+    #[serde(default)]
+    sequence: u64,
+    /// Revoked fingerprints, newest last (at most `MAX_REVOKED_KEYS`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    revoked: Vec<String>,
+    /// The analytics worker listener's key and its successor (absent before
+    /// the upgrade that added them; created at the next start).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    worker: Option<StoredKey>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    worker_next: Option<StoredKey>,
+}
+
+impl KeyState {
+    /// Every fingerprint this server holds and announces.
+    fn known(&self) -> Vec<&str> {
+        [Some(&self.current), Some(&self.next), self.worker.as_ref(), self.worker_next.as_ref()]
+            .into_iter()
+            .flatten()
+            .map(|k| k.sha256.as_str())
+            .collect()
+    }
 }
 
 /// What an agent last reported having pinned.
@@ -127,6 +170,22 @@ pub struct Rotation {
     pub online: usize,
     pub acknowledged: usize,
     pub forced: bool,
+    /// Fingerprints revoked by this switch (`--revoke`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub revoked: Vec<String>,
+    /// The key-set sequence after the switch.
+    pub sequence: u64,
+}
+
+/// How `forge-server agent-key rotate` switches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RotateMode {
+    /// Once the grace period has passed and online agents have the key.
+    WhenReady,
+    /// At once (`--now`).
+    Now,
+    /// At once, revoking the old keys (`--now --revoke`).
+    NowRevoke,
 }
 
 /// What [`AgentKeys::tick`] did.
@@ -184,6 +243,8 @@ impl KeyResolver {
 struct Loaded {
     state: KeyState,
     key: Arc<ControlPlaneKey>,
+    /// The analytics worker listener's key.
+    worker_key: Arc<ControlPlaneKey>,
     not_before: Timestamp,
     not_after: Timestamp,
     /// Bumped on every switch, for the analytics worker's listener.
@@ -215,6 +276,8 @@ pub struct AgentKeys {
     acks: Mutex<BTreeMap<String, AgentAck>>,
     /// When each agent last reported (memory only: who is online).
     seen: Mutex<BTreeMap<String, i64>>,
+    /// When each agent's acknowledgement was last stored (memory only).
+    ack_written: Mutex<BTreeMap<String, i64>>,
 }
 
 fn aad(sha256: &str) -> String {
@@ -233,6 +296,13 @@ fn open(envelope: &Envelope, stored: &StoredKey) -> Result<ControlPlaneKey, Agen
         return Err(AgentKeyError::Mismatch(stored.sha256.clone()));
     }
     Ok(key)
+}
+
+/// The worker listener's key; a state without one (never after
+/// [`AgentKeys::load_or_create`]) is refused rather than sharing the hub key.
+fn open_worker(envelope: &Envelope, state: &KeyState) -> Result<ControlPlaneKey, AgentKeyError> {
+    let w = state.worker.as_ref().ok_or_else(|| AgentKeyError::Mismatch("analytics worker key missing".into()))?;
+    open(envelope, w)
 }
 
 fn certified(
@@ -260,25 +330,47 @@ impl AgentKeys {
     /// start (`forge-server init`, or the first start after an upgrade).
     /// Returns whether keys were created, for the audit trail.
     pub async fn load_or_create(d: AgentKeysDeps, now: Timestamp) -> Result<(Self, bool), AgentKeyError> {
-        let (state, created) = match read_state(d.settings.as_ref()).await? {
+        let (mut state, created) = match read_state(d.settings.as_ref()).await? {
             Some(s) => (s, false),
             None => {
                 let current = seal(&d.envelope, &ControlPlaneKey::generate()?, now)?;
                 let next = seal(&d.envelope, &ControlPlaneKey::generate()?, now)?;
-                let s =
-                    KeyState { current, next, previous: None, current_since_ms: now.0, rotation_requested_at_ms: None };
-                write_state(d.settings.as_ref(), &s, now).await?;
+                let s = KeyState {
+                    current,
+                    next,
+                    previous: None,
+                    current_since_ms: now.0,
+                    rotation_requested_at_ms: None,
+                    sequence: 0,
+                    revoked: Vec::new(),
+                    worker: None,
+                    worker_next: None,
+                };
                 (s, true)
             }
         };
+        // New installs, and the first start after the upgrade that gave the
+        // worker its own key: one more change of the key set.
+        if created || state.worker.is_none() || state.worker_next.is_none() {
+            if state.worker.is_none() {
+                state.worker = Some(seal(&d.envelope, &ControlPlaneKey::generate()?, now)?);
+            }
+            if state.worker_next.is_none() {
+                state.worker_next = Some(seal(&d.envelope, &ControlPlaneKey::generate()?, now)?);
+            }
+            state.sequence += 1;
+            write_state(d.settings.as_ref(), &state, now).await?;
+        }
         let key = Arc::new(open(&d.envelope, &state.current)?);
+        let worker_key = Arc::new(open_worker(&d.envelope, &state)?);
         let (cert, not_before, not_after) = certified(&d.ca, &key, &d.hostnames, now)?;
         let acks = read_acks(d.settings.as_ref()).await?;
         let keys = Self {
-            loaded: RwLock::new(Loaded { state, key, not_before, not_after, generation: 0 }),
+            loaded: RwLock::new(Loaded { state, key, worker_key, not_before, not_after, generation: 0 }),
             resolver: Arc::new(KeyResolver(RwLock::new(cert))),
             acks: Mutex::new(acks),
             seen: Mutex::new(BTreeMap::new()),
+            ack_written: Mutex::new(BTreeMap::new()),
             d,
         };
         Ok((keys, created))
@@ -312,6 +404,11 @@ impl AgentKeys {
                 created_at: Timestamp(l.state.next.created_at_ms),
             },
         ];
+        for (k, label) in [(&l.state.worker, LABEL_ANALYTICS), (&l.state.worker_next, LABEL_ANALYTICS_NEXT)] {
+            if let Some(k) = k {
+                out.push(KeyInfo { sha256: k.sha256.clone(), label, created_at: Timestamp(k.created_at_ms) });
+            }
+        }
         if let Some(p) = &l.state.previous {
             out.push(KeyInfo { sha256: p.sha256.clone(), label: "previous", created_at: Timestamp(p.created_at_ms) });
         }
@@ -324,10 +421,22 @@ impl AgentKeys {
         self.read().generation
     }
 
-    /// A certificate for the current key, for another listener (the
-    /// analytics worker's).
+    /// The key-set sequence nodes are told.
+    #[must_use]
+    pub fn sequence(&self) -> u64 {
+        self.read().state.sequence
+    }
+
+    /// SHA-256 of the analytics worker listener's key.
+    #[must_use]
+    pub fn worker_fingerprint(&self) -> String {
+        self.read().worker_key.fingerprint().to_owned()
+    }
+
+    /// A certificate for the analytics worker's listener: its own key,
+    /// never the agent hub's.
     pub fn listener_certificate(&self, now: Timestamp) -> Result<forge_pki::ServerCertificate, AgentKeyError> {
-        let key = self.read().key.clone();
+        let key = self.read().worker_key.clone();
         Ok(self.d.ca.issue_server_certificate_for_key(&key, &self.d.hostnames, now)?)
     }
 
@@ -335,40 +444,80 @@ impl AgentKeys {
     #[must_use]
     pub fn announcement(&self, server_id: &str, now: Timestamp) -> SignedServerKeys {
         let l = self.read();
+        let mut keys = vec![
+            ServerKey { sha256: l.state.current.sha256.clone(), label: LABEL_CURRENT.into() },
+            ServerKey { sha256: l.state.next.sha256.clone(), label: LABEL_NEXT.into() },
+        ];
+        for (k, label) in [(&l.state.worker, LABEL_ANALYTICS), (&l.state.worker_next, LABEL_ANALYTICS_NEXT)] {
+            if let Some(k) = k {
+                keys.push(ServerKey { sha256: k.sha256.clone(), label: label.into() });
+            }
+        }
         let keys = ServerKeys {
             server_id: server_id.to_owned(),
             issued_at_ms: now.0,
-            keys: vec![
-                ServerKey { sha256: l.state.current.sha256.clone(), label: LABEL_CURRENT.into() },
-                ServerKey { sha256: l.state.next.sha256.clone(), label: LABEL_NEXT.into() },
-            ],
+            keys,
+            sequence: l.state.sequence,
+            revoked: l.state.revoked.clone(),
         };
         drop(l);
         self.d.signer.sign_server_keys(&keys)
     }
 
-    /// Records what an agent reported having pinned. Stored only when the
-    /// set changed; an empty set (an agent that does not pin) is ignored.
+    /// Records what an agent reported having pinned: only fingerprints this
+    /// server holds; an empty result (an agent that pins none of them) is
+    /// ignored. Stored only on a change, and a change that adds none of
+    /// this server's keys at most every [`ACK_MIN_INTERVAL_MS`] per agent,
+    /// so an agent cannot make the server rewrite the setting each beat.
     pub async fn record_ack(&self, server_id: &str, pinned: &[String], now: Timestamp) -> Result<(), AgentKeyError> {
-        if pinned.is_empty() {
-            return Ok(());
-        }
-        let mut keys: Vec<String> = pinned.iter().filter_map(|k| forge_pki::parse_fingerprint(k)).collect();
+        let known: Vec<String> = self.read().state.known().into_iter().map(str::to_owned).collect();
+        let mut keys: Vec<String> =
+            pinned.iter().filter_map(|k| forge_pki::parse_fingerprint(k)).filter(|k| known.contains(k)).collect();
         keys.sort();
         keys.dedup();
-        keys.truncate(16);
+        if keys.is_empty() {
+            return Ok(());
+        }
         self.seen.lock().unwrap_or_else(PoisonError::into_inner).insert(server_id.to_owned(), now.0);
         let snapshot = {
             let mut acks = self.acks.lock().unwrap_or_else(PoisonError::into_inner);
-            if acks.get(server_id).is_some_and(|a| a.keys == keys) {
+            let previous = acks.get(server_id);
+            if previous.is_some_and(|a| a.keys == keys) {
                 return Ok(());
             }
+            let adds = previous.is_none_or(|a| keys.iter().any(|k| !a.keys.contains(k)));
+            let mut written = self.ack_written.lock().unwrap_or_else(PoisonError::into_inner);
+            if !adds && written.get(server_id).is_some_and(|at| now.0 - at < ACK_MIN_INTERVAL_MS) {
+                return Ok(());
+            }
+            written.insert(server_id.to_owned(), now.0);
             acks.insert(server_id.to_owned(), AgentAck { keys, since_ms: now.0 });
             acks.clone()
         };
         let json = serde_json::to_string(&snapshot)?;
         self.d.settings.put_setting(SETTING_ACKS, &json, now).await?;
         Ok(())
+    }
+
+    /// Forgets the acknowledgements of agents not in `existing` (deleted
+    /// nodes). Returns how many were dropped.
+    pub async fn prune_acks(
+        &self,
+        existing: &std::collections::HashSet<String>,
+        now: Timestamp,
+    ) -> Result<usize, AgentKeyError> {
+        let (dropped, snapshot) = {
+            let mut acks = self.acks.lock().unwrap_or_else(PoisonError::into_inner);
+            let before = acks.len();
+            acks.retain(|id, _| existing.contains(id));
+            (before - acks.len(), acks.clone())
+        };
+        if dropped > 0 {
+            self.seen.lock().unwrap_or_else(PoisonError::into_inner).retain(|id, _| existing.contains(id));
+            self.ack_written.lock().unwrap_or_else(PoisonError::into_inner).retain(|id, _| existing.contains(id));
+            self.d.settings.put_setting(SETTING_ACKS, &serde_json::to_string(&snapshot)?, now).await?;
+        }
+        Ok(dropped)
     }
 
     /// Every agent's last reported pins.
@@ -436,7 +585,7 @@ impl AgentKeys {
             self.write().state = stored;
         }
         if matches!(self.rotation_status(now), RotationStatus::Ready) {
-            out.rotated = Some(self.switch(now, false).await?);
+            out.rotated = Some(self.switch(now, false, false).await?);
             return Ok(out);
         }
         let (nb, na) = {
@@ -455,12 +604,15 @@ impl AgentKeys {
         Ok(out)
     }
 
-    /// `forge-server agent-key rotate`: with `now_switch`, switches at once;
+    /// `forge-server agent-key rotate`: with [`RotateMode::Now`], switches at
+    /// once; with [`RotateMode::NowRevoke`], also revokes the old keys;
     /// otherwise asks for a switch once the grace period has passed and
     /// every online agent has the next key. Returns the switch, if made.
-    pub async fn rotate(&self, now: Timestamp, now_switch: bool) -> Result<Option<Rotation>, AgentKeyError> {
-        if now_switch {
-            return Ok(Some(self.switch(now, true).await?));
+    pub async fn rotate(&self, now: Timestamp, mode: RotateMode) -> Result<Option<Rotation>, AgentKeyError> {
+        match mode {
+            RotateMode::Now => return Ok(Some(self.switch(now, true, false).await?)),
+            RotateMode::NowRevoke => return Ok(Some(self.switch(now, true, true).await?)),
+            RotateMode::WhenReady => {}
         }
         let state = {
             let mut l = self.write();
@@ -471,21 +623,39 @@ impl AgentKeys {
         Ok(None)
     }
 
-    /// Switches the listeners to the next key and makes a new next key.
-    /// Store first, then memory: a failed write changes nothing.
-    async fn switch(&self, now: Timestamp, forced: bool) -> Result<Rotation, AgentKeyError> {
+    /// Switches the listeners (agent hub and analytics worker) to their
+    /// next keys and makes new next keys. With `revoke`, the old keys are
+    /// not kept but revoked. Store first, then memory: a failed write
+    /// changes nothing.
+    async fn switch(&self, now: Timestamp, forced: bool, revoke: bool) -> Result<Rotation, AgentKeyError> {
         let (old, next_sha) = {
             let l = self.read();
             (l.state.clone(), l.state.next.sha256.clone())
         };
         let (online, acknowledged) = self.ack_counts(&next_sha, now);
         let fresh = seal(&self.d.envelope, &ControlPlaneKey::generate()?, now)?;
+        let fresh_worker = seal(&self.d.envelope, &ControlPlaneKey::generate()?, now)?;
+        let mut revoked_now = Vec::new();
+        let mut revoked = old.revoked.clone();
+        if revoke {
+            revoked_now.push(old.current.sha256.clone());
+            revoked_now.extend(old.worker.as_ref().map(|w| w.sha256.clone()));
+            revoked.extend(revoked_now.iter().cloned());
+            let max = forge_proto::messages::MAX_REVOKED_KEYS;
+            if revoked.len() > max {
+                revoked.drain(..revoked.len() - max);
+            }
+        }
         let state = KeyState {
-            previous: Some(old.current.clone()),
+            previous: (!revoke).then(|| old.current.clone()),
             current: old.next.clone(),
             next: fresh,
             current_since_ms: now.0,
             rotation_requested_at_ms: None,
+            sequence: old.sequence + 1,
+            revoked,
+            worker: old.worker_next.clone().or_else(|| old.worker.clone()),
+            worker_next: Some(fresh_worker),
         };
         write_state(self.d.settings.as_ref(), &state, now).await?;
         let rotation = Rotation {
@@ -495,6 +665,8 @@ impl AgentKeys {
             online,
             acknowledged,
             forced,
+            revoked: revoked_now,
+            sequence: state.sequence,
         };
         self.apply(state, now)?;
         tracing::info!(from = %rotation.from, to = %rotation.to, online, acknowledged, forced, "agent listener key switched");
@@ -504,11 +676,12 @@ impl AgentKeys {
     /// Serves `state.current` from now on.
     fn apply(&self, state: KeyState, now: Timestamp) -> Result<(), AgentKeyError> {
         let key = Arc::new(open(&self.d.envelope, &state.current)?);
+        let worker_key = Arc::new(open_worker(&self.d.envelope, &state)?);
         let (cert, not_before, not_after) = certified(&self.d.ca, &key, &self.d.hostnames, now)?;
         self.resolver.set(cert);
         let mut l = self.write();
         let generation = l.generation + 1;
-        *l = Loaded { state, key, not_before, not_after, generation };
+        *l = Loaded { state, key, worker_key, not_before, not_after, generation };
         Ok(())
     }
 
@@ -634,7 +807,93 @@ mod tests {
         let signed = a.announcement("srv-1", T0);
         let ann = forge_proto::verify_server_keys(&f.deps.signer.public_key(), &signed, "srv-1", T0).unwrap();
         let fps: Vec<&str> = ann.keys.iter().map(|k| k.sha256.as_str()).collect();
-        assert_eq!(fps, [a.keys()[0].sha256.as_str(), a.keys()[1].sha256.as_str()]);
+        let listed: Vec<String> = a.keys().into_iter().take(4).map(|k| k.sha256).collect();
+        assert_eq!(fps, listed);
+        assert_eq!(ann.sequence, 1);
+        assert!(ann.revoked.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_worker_listener_has_its_own_key_announced_as_analytics() {
+        let f = fixture(AgentTlsSettings::default());
+        let (keys, _) = AgentKeys::load_or_create(f.deps.clone(), T0).await.unwrap();
+        let worker = keys.worker_fingerprint();
+        assert_ne!(worker, keys.current_fingerprint(), "never the agent hub's key");
+        let cert = keys.listener_certificate(T0).unwrap();
+        let der = rustls_pki_types::CertificateDer::pem_slice_iter(cert.cert_pem.as_bytes()).next().unwrap().unwrap();
+        assert_eq!(forge_pki::inspect_server_leaf(der.as_ref(), T0).unwrap().key_fingerprint, worker);
+        let ann =
+            forge_proto::verify_server_keys(&f.deps.signer.public_key(), &keys.announcement("srv-1", T0), "srv-1", T0)
+                .unwrap();
+        assert!(ann.keys.iter().any(|k| k.sha256 == worker && k.label == LABEL_ANALYTICS));
+        // An upgraded state without worker keys gets them, with a new sequence.
+        let mut old: serde_json::Value =
+            serde_json::from_str(&f.settings.0.lock().unwrap()[SETTING_KEYS].clone()).unwrap();
+        old.as_object_mut().unwrap().remove("worker");
+        old.as_object_mut().unwrap().remove("worker_next");
+        old["sequence"] = serde_json::json!(0);
+        f.settings.0.lock().unwrap().insert(SETTING_KEYS.into(), old.to_string());
+        let (up, created) = AgentKeys::load_or_create(f.deps.clone(), T0).await.unwrap();
+        assert!(!created);
+        assert_eq!(up.sequence(), 1);
+        assert_ne!(up.worker_fingerprint(), up.current_fingerprint());
+    }
+
+    #[tokio::test]
+    async fn rotating_with_revoke_drops_and_announces_the_old_keys() {
+        let f = fixture(AgentTlsSettings::default());
+        let (keys, _) = AgentKeys::load_or_create(f.deps.clone(), T0).await.unwrap();
+        let (old, old_worker, seq) = (keys.current_fingerprint(), keys.worker_fingerprint(), keys.sequence());
+        let r = keys.rotate(day(1), RotateMode::NowRevoke).await.unwrap().unwrap();
+        assert_eq!(r.revoked, [old.clone(), old_worker.clone()]);
+        assert_eq!(r.sequence, seq + 1);
+        assert!(keys.keys().iter().all(|k| k.sha256 != old && k.label != "previous"), "not kept");
+        let ann = forge_proto::verify_server_keys(
+            &f.deps.signer.public_key(),
+            &keys.announcement("srv-1", day(1)),
+            "srv-1",
+            day(1),
+        )
+        .unwrap();
+        assert_eq!(ann.revoked, [old, old_worker]);
+        assert_eq!(ann.sequence, seq + 1);
+        // A plain switch keeps the previous key and bumps the sequence too.
+        let r = keys.rotate(day(2), RotateMode::Now).await.unwrap().unwrap();
+        assert!(r.revoked.is_empty() && r.sequence == seq + 2);
+        assert!(keys.keys().iter().any(|k| k.label == "previous"));
+    }
+
+    #[tokio::test]
+    async fn acknowledgements_are_checked_rate_limited_and_pruned() {
+        let f = fixture(AgentTlsSettings::default());
+        let (keys, _) = AgentKeys::load_or_create(f.deps.clone(), T0).await.unwrap();
+        let (current, next) = (keys.keys()[0].sha256.clone(), keys.keys()[1].sha256.clone());
+        let writes = || f.settings.0.lock().unwrap().get(SETTING_ACKS).cloned();
+        // Unknown fingerprints are dropped; none known: nothing stored.
+        keys.record_ack("a", &["ab".repeat(32)], T0).await.unwrap();
+        assert!(writes().is_none());
+        keys.record_ack("a", &[current.clone(), "ab".repeat(32)], T0).await.unwrap();
+        assert_eq!(keys.acknowledgements()["a"].keys, std::slice::from_ref(&current));
+        // Adding a known key is stored at once.
+        let t1 = Timestamp(T0.0 + 1_000);
+        keys.record_ack("a", &[current.clone(), next.clone()], t1).await.unwrap();
+        assert_eq!(keys.acknowledgements()["a"].keys.len(), 2);
+        // Flapping back (a drop only) within a minute is not stored...
+        let t2 = Timestamp(T0.0 + 2_000);
+        let before = writes();
+        keys.record_ack("a", std::slice::from_ref(&current), t2).await.unwrap();
+        assert_eq!(writes(), before);
+        // ...after a minute it is.
+        let t3 = Timestamp(t1.0 + ACK_MIN_INTERVAL_MS);
+        keys.record_ack("a", std::slice::from_ref(&current), t3).await.unwrap();
+        assert_eq!(keys.acknowledgements()["a"].keys, std::slice::from_ref(&current));
+        // Deleted servers are pruned.
+        keys.record_ack("b", std::slice::from_ref(&current), t3).await.unwrap();
+        let existing: std::collections::HashSet<String> = ["b".to_owned()].into();
+        assert_eq!(keys.prune_acks(&existing, t3).await.unwrap(), 1);
+        assert!(!keys.acknowledgements().contains_key("a"));
+        assert!(!writes().unwrap().contains("\"a\""));
+        assert_eq!(keys.prune_acks(&existing, t3).await.unwrap(), 0);
     }
 
     #[tokio::test]
@@ -678,7 +937,7 @@ mod tests {
         assert_eq!(keys.generation(), 1);
         // ...the old key is kept for one rotation, and a fresh next key is made.
         let labels: Vec<(&str, String)> = keys.keys().into_iter().map(|k| (k.label, k.sha256)).collect();
-        assert_eq!(labels[2], ("previous", current));
+        assert!(labels.contains(&("previous", current)));
         assert_eq!(r.next, labels[1].1);
         // The fresh next key waits out its own grace period.
         assert!(matches!(keys.rotation_status(later), RotationStatus::Scheduled { .. }));
@@ -689,14 +948,14 @@ mod tests {
         let f = fixture(AgentTlsSettings { rotate_days: 0, grace_days: 30 });
         let (keys, _) = AgentKeys::load_or_create(f.deps.clone(), T0).await.unwrap();
         assert_eq!(keys.rotation_status(day(5)), RotationStatus::Manual);
-        assert!(keys.rotate(day(5), false).await.unwrap().is_none());
+        assert!(keys.rotate(day(5), RotateMode::WhenReady).await.unwrap().is_none());
         assert_eq!(keys.rotation_status(day(5)), RotationStatus::Grace { until: day(30) });
         assert!(keys.tick(day(5)).await.unwrap().rotated.is_none());
         // `--now` ignores grace and acknowledgements.
         let current = keys.current_fingerprint();
         let next = keys.keys()[1].sha256.clone();
         keys.record_ack("a", std::slice::from_ref(&current), day(6)).await.unwrap();
-        let r = keys.rotate(day(6), true).await.unwrap().unwrap();
+        let r = keys.rotate(day(6), RotateMode::Now).await.unwrap().unwrap();
         assert!(r.forced && r.to == next && r.acknowledged == 0 && r.online == 1);
         // A running server picks up a switch another process (the CLI) made.
         let (server, _) = {
@@ -708,7 +967,7 @@ mod tests {
         };
         assert_eq!(server.current_fingerprint(), next);
         let cli = keys;
-        let r2 = cli.rotate(day(7), true).await.unwrap().unwrap();
+        let r2 = cli.rotate(day(7), RotateMode::Now).await.unwrap().unwrap();
         let out = server.tick(day(7)).await.unwrap();
         assert!(out.picked_up && out.rotated.is_none());
         assert_eq!(server.current_fingerprint(), r2.to);

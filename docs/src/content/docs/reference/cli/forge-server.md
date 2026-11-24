@@ -467,6 +467,7 @@ never key material.
 | `list` | subcommand | | One of the three | Prints every kept key, then each agent and which of the keys it pins | `list` |
 | `rotate` | subcommand | | One of the three | Asks for a switch to the next key | `rotate` |
 | `rotate --now` | flag | off | No | Switches at once, without waiting for the grace period or acknowledgements | `rotate --now` |
+| `rotate --now --revoke` | flag | off | No | Switches at once and revokes the old agent and analytics keys: they are not kept as `previous`, agents unpin them at their next heartbeat and never pin them again from an announcement. Audited as `agent_key.revoke`. Requires `--now` | `rotate --now --revoke` |
 | `--config` | path | built-in defaults | No | The `forge.toml` whose database to use (or `FORGE_CONFIG`) | `--config /etc/forge/forge.toml` |
 
 ### forge-server agent-key show
@@ -495,14 +496,17 @@ reports a key mismatch.
 
 ### forge-server agent-key list
 
-Prints each key with its label (`current`, `next`, or `previous` for the key
-kept for one more rotation so you can roll back) and creation time, then one
+Prints each key with its label (`current`, `next`, `analytics` and
+`analytics-next` for the analytics worker's upload listener, or `previous` for
+the key kept for one more rotation so you can roll back) and creation time, then one
 line per agent with the keys it pins.
 
 ```text
 $ forge-server --config /etc/forge/forge.toml agent-key list
 current  sha256:<current-fingerprint>  created <epoch-ms>
 next     sha256:<next-fingerprint>  created <epoch-ms>
+analytics sha256:<analytics-fingerprint>  created <epoch-ms>
+analytics-next sha256:<analytics-next-fingerprint>  created <epoch-ms>
 
 <server-id>  pins current, next  since <epoch-ms>
 ```
@@ -513,7 +517,9 @@ Without `--now`, records a rotation request: Forge switches to the next key
 once the next key has been announced for `grace_days` and every online agent
 has acknowledged it. With `--now`, it switches at once. Agents that did not
 have the next key then fail to connect until you run
-`forge-agent pins add <fingerprint>` on them.
+`forge-agent pins add <fingerprint>` on them. Add `--revoke` when a key may
+have leaked: the old keys are dropped instead of kept, and agents remove them
+from their pins at once.
 
 ```text
 $ forge-server --config /etc/forge/forge.toml agent-key rotate

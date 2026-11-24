@@ -58,6 +58,9 @@ pub struct Agent {
     /// enrolled before, which checks the CA and host name until Forge
     /// announces its keys over that link.
     pins: crate::pins::PinSet,
+    /// The pin file exists but is unreadable: every connection is refused
+    /// until it is fixed (fail closed).
+    pins_broken: bool,
 }
 
 impl Agent {
@@ -86,13 +89,12 @@ impl Agent {
         executor: Box<dyn CommandExecutor>,
     ) -> anyhow::Result<Self> {
         let endpoint = Endpoint::parse(&config.server_url)?;
-        let pins = match crate::pins::load(&paths.pins()) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::error!(error = %e, "the pinned control-plane keys cannot be read; checking the CA and host name");
-                crate::pins::PinSet::default()
-            }
-        };
+        // Fail closed: only a missing file means "not pinned yet".
+        let pins = crate::pins::load(&paths.pins()).map_err(|e| {
+            let m = crate::pins::unreadable_message(&e, &paths.pins());
+            tracing::error!(error = %e, "{m}");
+            anyhow::anyhow!(m)
+        })?;
         let tls = tls::for_agent(
             &pins.fingerprints(),
             &endpoint.authority(),
@@ -141,6 +143,7 @@ impl Agent {
             container_ack: 0,
             analytics,
             pins,
+            pins_broken: false,
         })
     }
 
@@ -457,8 +460,14 @@ impl Agent {
             }
         };
         // Only when something would change: most heartbeats change nothing.
-        if !self.pins.clone().apply_announcement(&keys.keys, now.0).unwrap_or(true) {
-            return;
+        match self.pins.clone().apply_verified(&keys, now.0) {
+            Ok(false) => return,
+            Err(e @ (crate::pins::PinError::Stale { .. } | crate::pins::PinError::Replayed(_))) => {
+                tracing::warn!(error = %e, "ignoring a control-plane key announcement");
+                return;
+            }
+            // Let the writer report anything else (a full set, say).
+            Ok(true) | Err(_) => {}
         }
         let path = self.paths.pins();
         let result = if crate::pins::root_owned(&self.paths.dir) {
@@ -478,7 +487,11 @@ impl Agent {
         };
         match result {
             Ok(()) => self.reload_pins().await,
-            Err(e) => tracing::warn!(error = %e, "could not pin the control-plane keys; will retry"),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not pin the control-plane keys; will retry");
+                // The pin file may be what failed: re-read it (fails closed).
+                self.reload_pins().await;
+            }
         }
     }
 
@@ -489,7 +502,16 @@ impl Agent {
         let set = match loaded {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => {
-                tracing::warn!(error = %e, "the pinned control-plane keys cannot be read");
+                // Fail closed: never fall back to the CA and host name.
+                let m = crate::pins::unreadable_message(&e, &self.paths.pins());
+                tracing::error!(error = %e, "{m}");
+                if !self.pins_broken {
+                    match self.rebuild_tls(&[], true).await {
+                        Ok(()) => self.pins_broken = true,
+                        Err(e) => tracing::warn!(error = %e, "could not close the link after a pin-file error"),
+                    }
+                }
+                self.note_link_error(Some(&m)).await;
                 return;
             }
             Err(e) => {
@@ -497,26 +519,35 @@ impl Agent {
                 return;
             }
         };
-        if set.fingerprints() == self.pins.fingerprints() {
+        if !self.pins_broken && set.fingerprints() == self.pins.fingerprints() {
             self.pins = set;
             return;
         }
-        if let Err(e) = self.rebuild_tls(&set).await {
+        if let Err(e) = self.rebuild_tls(&set.fingerprints(), false).await {
             tracing::warn!(error = %e, "could not apply the pinned control-plane keys");
             return;
         }
         let shown: Vec<String> = set.fingerprints().iter().map(|f| forge_pki::short_fingerprint(f)).collect();
         tracing::info!(pins = %shown.join(", "), "control-plane key pins updated");
         self.pins = set;
+        self.pins_broken = false;
     }
 
-    async fn rebuild_tls(&mut self, set: &crate::pins::PinSet) -> anyhow::Result<()> {
+    /// New TLS settings for the link and the spool upload: by `pins` (CA
+    /// and host name when empty), or with `closed` accepting no server.
+    async fn rebuild_tls(&mut self, pins: &[String], closed: bool) -> anyhow::Result<()> {
         let (ca, cert, key) = (self.paths.ca(), self.paths.cert(), self.paths.key());
         let (ca, cert, key) = tokio::task::spawn_blocking(move || -> std::io::Result<(String, String, String)> {
             Ok((std::fs::read_to_string(ca)?, std::fs::read_to_string(cert)?, std::fs::read_to_string(key)?))
         })
         .await??;
-        let tls = tls::for_agent(&set.fingerprints(), &self.link.endpoint().authority(), &ca, &cert, &key)?;
+        let endpoint = self.link.endpoint().authority();
+        let tls = if closed {
+            // No key is pinned, so the verifier refuses every server.
+            tls::mutual_pinned(&[], &endpoint, &cert, &key)?
+        } else {
+            tls::for_agent(pins, &endpoint, &ca, &cert, &key)?
+        };
         if let Some(a) = &self.analytics {
             a.set_tls(tls.clone());
         }

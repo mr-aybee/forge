@@ -187,10 +187,14 @@ enum AgentKeyCmd {
     List,
     /// Switches to the next key once the grace period has passed and every
     /// online agent has it; with `--now`, at once (agents without the next
-    /// key then need `forge-agent pins add`).
+    /// key then need `forge-agent pins add`). With `--now --revoke`, the
+    /// old keys are revoked: agents unpin them at once and never pin them
+    /// again (use it when a key may have leaked).
     Rotate {
         #[arg(long)]
         now: bool,
+        #[arg(long, requires = "now")]
+        revoke: bool,
     },
 }
 
@@ -510,7 +514,9 @@ async fn allowed_hosts(config: ServerConfig, action: HostsAction) -> anyhow::Res
 
 /// `forge-server agent-key show|list|rotate [--now]` (D-167).
 async fn agent_key(config: ServerConfig, cmd: AgentKeyCmd) -> anyhow::Result<()> {
-    use forge_server::agent_keys::{AUDIT_KEY_ROTATE, AUDIT_KEY_ROTATE_REQUEST, LABEL_CURRENT, LABEL_NEXT};
+    use forge_server::agent_keys::{
+        AUDIT_KEY_REVOKE, AUDIT_KEY_ROTATE, AUDIT_KEY_ROTATE_REQUEST, LABEL_CURRENT, LABEL_NEXT, RotateMode,
+    };
     let state = Services::build(config).await?;
     let keys = &state.agent_keys;
     let now = state.clock.now();
@@ -537,12 +543,21 @@ async fn agent_key(config: ServerConfig, cmd: AgentKeyCmd) -> anyhow::Result<()>
                 );
             }
         }
-        AgentKeyCmd::Rotate { now: at_once } => {
+        AgentKeyCmd::Rotate { now: at_once, revoke } => {
+            let mode = match (at_once, revoke) {
+                (true, true) => RotateMode::NowRevoke,
+                (true, false) => RotateMode::Now,
+                (false, _) => RotateMode::WhenReady,
+            };
             let next = keys.keys().into_iter().find(|k| k.label == LABEL_NEXT).map(|k| k.sha256).unwrap_or_default();
             let (online, acknowledged) = keys.ack_counts(&next, now);
-            match keys.rotate(now, at_once).await? {
+            match keys.rotate(now, mode).await? {
                 Some(r) => {
-                    state.audit_system(AUDIT_KEY_ROTATE, serde_json::json!(r)).await;
+                    let action = if r.revoked.is_empty() { AUDIT_KEY_ROTATE } else { AUDIT_KEY_REVOKE };
+                    state.audit_system(action, serde_json::json!(r)).await;
+                    for k in &r.revoked {
+                        println!("Revoked {}: agents unpin it at their next heartbeat.", fp(k));
+                    }
                     println!(
                         "Switched to {} ({acknowledged} of {online} agents that pin had it). A running server serves it within a minute. Agents without it: run 'forge-agent pins add {}' on them.",
                         fp(&r.to),

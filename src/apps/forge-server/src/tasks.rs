@@ -81,6 +81,21 @@ pub(crate) async fn agent_key_upkeep(state: AppState, mut shutdown: watch::Recei
             }
             Err(e) => tracing::warn!(error = %e, "agent key upkeep failed; trying again"),
         }
+        prune_key_acks(&state).await;
+    }
+}
+
+/// Drops pin acknowledgements of deleted nodes. A failure skips the tick.
+async fn prune_key_acks(state: &AppState) {
+    let servers = match state.store.list_servers(None).await {
+        Ok(s) => s,
+        Err(e) => return tracing::warn!(error = %e, "could not list nodes to prune key acknowledgements"),
+    };
+    let existing: std::collections::HashSet<String> = servers.iter().map(|s| s.id.to_string()).collect();
+    match state.agent_keys.prune_acks(&existing, state.clock.now()).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(removed = n, "key acknowledgements of deleted nodes removed"),
+        Err(e) => tracing::warn!(error = %e, "could not prune key acknowledgements"),
     }
 }
 
