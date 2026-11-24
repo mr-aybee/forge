@@ -194,7 +194,6 @@ login for the test nodes `node-1`, `node-2` and `node-3`. Stop with
 | `src/apps` | `forge-server`, `forge-analytics-worker`, `forge-agent`, `forge-plugin-runner`, `forge` CLI |
 | `src/ui` | Web console (React + TypeScript) |
 | `src/tools`, `src/plugins` | Fleet benchmark, sample plugin |
-| `website/` | forge.orbyntech.com (React + TypeScript) and its container image |
 | `docs/` | Documentation site, served at `/docs/`: `cd docs; npm ci; npm run dev` |
 | `scripts/` | Dev config, the WSL lab, release packaging and the license |
 | `branding/` | Logo files |

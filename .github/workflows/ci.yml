@@ -6,7 +6,7 @@ name: CI
 #
 #   every push / PR         plan, Rust (Linux): fmt, clippy, build, tests
 #   when their paths change  PostgreSQL build, cargo deny + audit,
-#                            UI + website + docs builds (+ npm audit)
+#                            UI + docs builds (+ npm audit)
 #   "full" (every job above, whatever changed): pushes to master, PRs into
 #   master, "[full-ci]" in the commit message, or a manual run with "full"
 #
@@ -81,7 +81,7 @@ jobs:
           hit() { [ "$full" = true ] || [ "$changed" = "*" ] || echo "$changed" | grep -Eq "$1"; }
           out() { if hit "$2"; then echo "$1=true"; else echo "$1=false"; fi >> "$GITHUB_OUTPUT"; }
           echo "full=$full" >> "$GITHUB_OUTPUT"
-          out web   '^(src/ui/|docs/|website/|LICENSE)'
+          out web   '^(src/ui/|docs/|LICENSE)'
           out store '^(src/adapters/forge-store/|src/domain/|Cargo\.(toml|lock)$)'
           out deps  '^(Cargo\.lock|deny\.toml|.*Cargo\.toml)$'
           out agent '^(src/apps/forge-agent/|src/protocol/|src/domain/)'
@@ -168,7 +168,7 @@ jobs:
           cargo audit
 
   web:
-    name: UI, website and docs
+    name: UI and docs
     needs: [plan, postgres]
     if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.web == 'true' }}
     timeout-minutes: 30
@@ -181,16 +181,12 @@ jobs:
       - name: UI
         working-directory: src/ui
         run: bash "$GITHUB_WORKSPACE/scripts/ci/build.sh" light sh -c 'npm ci && npm run build'
-      - name: Website
-        working-directory: website
-        run: bash "$GITHUB_WORKSPACE/scripts/ci/build.sh" light sh -c 'npm ci && npm run build'
       - name: Docs
         working-directory: docs
         run: bash "$GITHUB_WORKSPACE/scripts/ci/build.sh" light sh -c 'npm ci && npm run build'
       # Advisories in what ships to browsers (dev tooling excluded); high or
       # critical fails the run.
-      - name: npm audit (UI, website and docs)
+      - name: npm audit (UI and docs)
         run: |
           (cd src/ui && npm audit --omit=dev --audit-level=high)
-          (cd website && npm audit --omit=dev --audit-level=high)
           (cd docs && npm audit --omit=dev --audit-level=high)
