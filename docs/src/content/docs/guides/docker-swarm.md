@@ -95,7 +95,8 @@ The service's **Overview** shows a **Swarm** panel instead of the node list:
 
 | Item | Shows or does |
 | --- | --- |
-| Status line | Running and desired tasks, the rollout state and message, the image |
+| Status line | One dot per replica (green: running; orange, pulsing: starting or being replaced; red: failed or missing) with running/desired, the rollout state and message, the image |
+| Replica dots | Select them for each replica's node and state, and to scale with **−** / **+** and **Apply** |
 | **Deploy** | Creates or updates the Docker service from the saved definition |
 | **Scale** | Changes the task count now and saves it as the service's replicas, so later deploys (a webhook, a redeploy) keep it. A global service cannot be scaled |
 | **Restart** | Replaces every task, following the rollout settings |

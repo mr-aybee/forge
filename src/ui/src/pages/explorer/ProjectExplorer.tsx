@@ -6,6 +6,7 @@ import { useIsFetching, useQueryClient } from "@tanstack/react-query";
 
 import { explorerKeys, useExplorerTree } from "../../api/explorer";
 import { useServiceSwarm, useSwarm } from "../../api/swarm";
+import { ReplicaBar } from "../../components/service/ReplicaBar";
 import { fleetKeys, useAllEnvironments, useClusters, useProjects, useServiceAction } from "../../api/hooks";
 import { useObjectStores } from "../../api/storage";
 import type { Environment, Project } from "../../api/types";
@@ -928,9 +929,7 @@ function SwarmDetails({ id }: { id: string }) {
         ) : !st.exists ? (
           <span className="text-xs text-faint">Not deployed to the swarm yet</span>
         ) : (
-          <span className={`font-mono text-xs tabular-nums ${st.running >= st.desired && st.desired > 0 ? "text-ok" : "text-warn"}`}>
-            {st.running}/{st.desired} tasks
-          </span>
+          <ReplicaBar v={v} serviceId={id} hostOf={host} />
         )}
       </Field>
       <Field label="Docker name">

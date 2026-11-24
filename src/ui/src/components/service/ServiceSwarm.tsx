@@ -3,6 +3,7 @@ import { Check, Layers, Loader2, Settings2, X, RefreshCw, RotateCcw, RotateCw, R
 import { useState } from "react";
 
 import type { Service } from "../../api/types";
+import { ReplicaBar } from "./ReplicaBar";
 import { type ServiceSwarmAction, type ServiceSwarmView, type SwarmTask, swarmServiceBusy, useServiceSwarm, useServiceSwarmAction, useServiceSwarmLogs, useSwarm } from "../../api/swarm";
 import { useServers } from "../../api/hooks";
 import { errorText, useToast } from "../../app/toast";
@@ -82,7 +83,7 @@ export function ServiceSwarm({ a, onEditSettings }: { a: Service; onEditSettings
         </span>
       }
     >
-      <StatusLine v={v} />
+      <StatusLine v={v} serviceId={a.id} hostOf={(id) => hostOf(id)?.name} canScale={!denied} />
       <HaReadiness v={v} onEdit={onEditSettings} />
       {v.status_error && <ErrorNote error={`Swarm status unavailable: ${v.status_error}`} />}
       {s && !exists ? (
@@ -142,20 +143,14 @@ export function ServiceSwarm({ a, onEditSettings }: { a: Service; onEditSettings
   );
 }
 
-function StatusLine({ v }: { v: ServiceSwarmView }) {
+function StatusLine({ v, serviceId, hostOf, canScale }: { v: ServiceSwarmView; serviceId: string; hostOf: (nodeId?: string) => string | undefined; canScale: boolean }) {
   const s = v.status;
-  const tone = !s?.exists ? "muted" : s.running >= s.desired && s.desired > 0 ? "ok" : s.running === 0 ? "bad" : "warn";
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-line px-3 py-2 text-xs">
       <span className="flex items-center gap-1.5">
         <span className="text-muted">Tasks</span>
         {s?.exists ? (
-          <Badge tone={tone}>
-            <span className="font-mono tabular-nums">
-              {s.running}/{s.desired}
-            </span>
-            &nbsp;running
-          </Badge>
+          <ReplicaBar v={v} serviceId={serviceId} hostOf={hostOf} canScale={canScale} />
         ) : (
           <span className="text-faint">—</span>
         )}
