@@ -35,7 +35,9 @@ pull requests from forks. Nobody pushes to the main repository directly.
    Fill in the PR template.
 
 The first time you contribute, CI on your PR waits for a maintainer to approve it.
-PRs are squash-merged into `develop`. Releases are tagged on `master`.
+Feature and fix branches (`feat/…`, `fix/…`) are squash-merged into `develop`.
+`develop` is merged into `master` with a merge commit (never squashed), so
+`master` keeps every `develop` commit. Releases are tagged on `master`.
 
 ## Guidelines
 

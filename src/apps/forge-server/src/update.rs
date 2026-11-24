@@ -786,7 +786,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("updates")).unwrap();
         let a = Applied {
             from: "0.0.9".into(),
-            to: "0.0.1".into(),
+            to: "0.0.0".into(),
             at: 0,
             attempts: 0,
             backup: None,
