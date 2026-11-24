@@ -135,7 +135,7 @@ def save(c: dict) -> None:
         json.dump(c, f, indent=2)
 
 
-def start_cp(port: int, c: dict) -> None:
+def start_cp(port: int, c: dict, bind: str = "127.0.0.1") -> None:
     (LAB / "data").mkdir(parents=True, exist_ok=True)
     (LAB / "forge.toml").write_text(config(port))
     ui = ROOT / "src/ui/dist"
@@ -153,7 +153,7 @@ def start_cp(port: int, c: dict) -> None:
         run(["docker", "run", "--rm", *mounts, "-e", f"FORGE_ADMIN_PASSWORD={c['password']}", CP_IMAGE,
              "/opt/forge/bin/forge-server", "--config", "/etc/forge/forge.toml", "init", "--email", c["admin"]],
             capture=True)
-    docker("run", "-d", "--name", CP, "--hostname", CP, "--network", NET, "-p", f"127.0.0.1:{port}:8090",
+    docker("run", "-d", "--name", CP, "--hostname", CP, "--network", NET, "-p", f"{bind}:{port}:8090",
            *mounts, CP_IMAGE, "/opt/forge/bin/forge-server", "--config", "/etc/forge/forge.toml", "serve")
 
 
@@ -237,7 +237,7 @@ def up(a: argparse.Namespace) -> None:
         docker("network", "create", NET)
     say(f"Control plane on {url}")
     c = creds()
-    start_cp(a.port, c)
+    start_cp(a.port, c, a.bind)
     wait_health(url)
     if "token" not in c:
         c["token"] = bootstrap_token(url, c)
@@ -334,7 +334,9 @@ def down(a: argparse.Namespace) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--profile", default="perf", help="cargo profile the binaries come from (default perf)")
-    ap.add_argument("--port", type=int, default=8095, help="console port on 127.0.0.1 (default 8095)")
+    ap.add_argument("--port", type=int, default=8095, help="console port (default 8095)")
+    ap.add_argument("--bind", default="127.0.0.1",
+                    help="host address the console listens on; 0.0.0.0 for every interface (default 127.0.0.1)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("up", help="start (or resume) the lab")
     p.add_argument("--nodes", type=int, default=3)

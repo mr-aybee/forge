@@ -454,3 +454,20 @@ a.press:active {
     animation: none;
   }
 }
+
+
+/* Replica dots: a new replica grows in; a starting one pulses (animate-pulse). */
+@keyframes dot-in {
+  from {
+    transform: scale(0);
+    opacity: 0;
+  }
+}
+.dot-in {
+  animation: dot-in var(--motion-base) var(--ease-out) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dot-in {
+    animation: none;
+  }
+}

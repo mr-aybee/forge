@@ -2,10 +2,11 @@ import { Code2, LayoutGrid } from "lucide-react";
 import { useState } from "react";
 
 import type { ServiceInput } from "../../api/types";
-import { Input, Mono, TextArea } from "../ui";
+import { Input, Mono } from "../ui";
 import { FormField, Grid, ListEditor, NumberInput } from "./parts";
 import { HOST_RE } from "./sections";
 import { fromComposeYaml, toComposeYaml } from "./yaml";
+import { CodeField } from "../CodeField";
 
 /** Form or YAML view of the container's Advanced card; lives in the card header. */
 export function YamlToggle({ yaml, onChange }: { yaml: boolean; onChange: (y: boolean) => void }) {
@@ -83,7 +84,7 @@ function LabelsField({ value, onChange }: { value: [string, string][]; onChange:
   const [text, setText] = useState(() => labelsText(value));
   return (
     <FormField label="Labels" hint="key=value per line. forge.* is reserved.">
-      {(id) => <TextArea id={id} rows={3} value={text} onChange={(e) => setText(e.target.value)} onBlur={() => onChange(parseLabels(text))} placeholder="team=payments" spellCheck={false} />}
+      {(id) => <CodeField id={id} lang="properties" maxLines={10} value={text} onChange={setText} onBlur={() => onChange(parseLabels(text))} placeholder="team=payments" />}
     </FormField>
   );
 }
@@ -93,16 +94,17 @@ function YamlEditor({ value, onChange }: { value: ServiceInput; onChange: (v: Se
   const [error, setError] = useState("");
   return (
     <div className="space-y-2">
-      <TextArea
+      <CodeField
         aria-label="Container definition as compose YAML"
-        aria-invalid={!!error || undefined}
-        rows={Math.max(14, text.split("\n").length + 2)}
-        spellCheck={false}
+        lang="yaml"
+        invalid={!!error}
+        minLines={14}
+        maxLines={40}
         value={text}
-        onChange={(e) => {
-          setText(e.target.value);
+        onChange={(t) => {
+          setText(t);
           try {
-            onChange(fromComposeYaml(e.target.value, value));
+            onChange(fromComposeYaml(t, value));
             setError("");
           } catch (err) {
             setError(err instanceof Error ? err.message : String(err));

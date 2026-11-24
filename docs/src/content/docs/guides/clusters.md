@@ -20,13 +20,16 @@ runs in a cluster. For the model behind it, see [Clusters](/docs/concepts/cluste
 ## Create a cluster
 
 1. Open **Home → Clusters**.
-2. Select **Set up a cluster** to create a cluster with members, a network
-   and the Nginx ingress in one go, or **Empty cluster** for a cluster with
-   only a name.
-3. Enter the **Name** and an optional **Description**. In **Set up a
-   cluster**, also pick the **Members**; the control node takes part in
-   every cluster.
-4. Select **Create cluster** (or run the wizard to the end).
+2. Select **New cluster** and pick a kind:
+   - **Default**: a guided setup of members, the cluster network and the
+     Nginx ingress. Forge places services on nodes.
+   - **Swarm**: Docker Swarm places container services. See
+     [Run Docker Swarm](/docs/guides/docker-swarm/).
+   - **Empty**: only a name; add members, network and ingress later.
+3. Enter the **Name** and an optional **Description**. In **Default**, also
+   pick the **Members**; the control node takes part in every cluster. The
+   mode cannot be changed later.
+4. Select **Create cluster** (or run the setup to the end).
 
 Select the cluster's name on **Home → Clusters** to open its page. It has
 three tabs:

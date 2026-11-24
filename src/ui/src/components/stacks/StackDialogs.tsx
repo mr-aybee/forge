@@ -19,10 +19,11 @@ import {
 import { nodeName, type Job } from "../../api/types";
 import { errorText, useToast } from "../../app/toast";
 import type { Certificate } from "../ingress/types";
-import { Badge, Button, CopyButton, Field, Input, Modal, Select, TextArea } from "../ui";
+import { Badge, Button, CopyButton, Field, Input, Modal, Select } from "../ui";
 import { diffLines } from "./diff";
 import { Designer, ServicePicker, YamlEditor, startBlocker, useMfaRetry } from "./parts";
 import { DiffView } from "./Revisions";
+import { CodeField } from "../CodeField";
 
 type Done = (jobs: Job[]) => void;
 
@@ -142,7 +143,7 @@ export function UpdateDialog({ d, onClose, onSaved }: { d: StackDetail; onClose:
               </span>
             }
           >
-            <TextArea rows={3} value={env} onChange={(e) => setEnv(e.target.value)} placeholder="KEY=value (replaces every stored variable)" spellCheck={false} />
+            <CodeField lang="env" value={env} onChange={setEnv} placeholder="KEY=value (replaces every stored variable)" />
           </Field>
           <div className="space-y-3">
             <Field label="Folder" hint="Blank: /opt/forge/stacks/<environment>/<stack>">

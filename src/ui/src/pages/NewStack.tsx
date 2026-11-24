@@ -41,8 +41,8 @@ import {
   PageCrumb,
   PageHeader,
   Select,
-  TextArea,
 } from "../components/ui";
+import { CodeField } from "../components/CodeField";
 
 const SAMPLE = `services:
   web:
@@ -443,16 +443,7 @@ export function NewStack() {
                     onText={(t, n) => (t ? setEnv(t) : toast(n, "error"))}
                   />
                 </div>
-                <TextArea
-                  rows={5}
-                  value={env}
-                  onChange={(e) => setEnv(e.target.value)}
-                  placeholder={"DB_PASSWORD=…\nAPP_KEY=…"}
-                  spellCheck={false}
-                  autoComplete="off"
-                  aria-label=".env content"
-                  className="block resize-y"
-                />
+                <CodeField lang="env" minLines={5} value={env} onChange={setEnv} placeholder={"DB_PASSWORD=…\nAPP_KEY=…"} aria-label=".env content" />
               </div>
             )}
           </section>

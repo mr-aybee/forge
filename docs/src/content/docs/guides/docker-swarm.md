@@ -23,9 +23,8 @@ see [Cluster modes](/docs/concepts/clusters/#cluster-modes).
 
 ## Steps
 
-1. Go to **Clusters** → **New cluster**. Enter a name, set **Mode** to
-   **Docker Swarm**, then select **Create cluster**. You cannot change the
-   mode later.
+1. Go to **Clusters** → **New cluster** → **Swarm**. Enter a name, then
+   select **Create cluster**. You cannot change the mode later.
 2. Assign your Linux nodes to the cluster: on each node, open **Settings** →
    **Cluster**, or use `PATCH /servers/{id}` with `cluster_id`.
 3. Open the cluster and select the **Swarm** tab. Select **Create swarm**.
@@ -78,10 +77,13 @@ places its tasks, so you do not pick nodes.
 1. Open **Services → New service** and choose an environment of the Swarm
    cluster. **Systemd** is unavailable: a swarm runs containers only.
 2. Fill in **Image**, **Ports** and the other sections as usual.
-3. In **Swarm**, choose **Replicated** with a replica count, or **Global** for
-   one task on every matching node. Add **Placement constraints** (for example
-   **Node role** `==` `worker`, or **Node label** `zone` `==` `a`), **Spread
-   over node labels**, **Max tasks per node** and **Published ports**
+3. In **Swarm**, optionally set **Docker service name** (lowercase letters,
+   digits and `-`, up to 61 characters). Empty means `<environment>-<service>`,
+   for example `prod-postgres`. Choose **Replicated** with a replica count, or **Global** for
+   one task on every matching node. Under **Run on**, select **Rule** to add a
+   placement rule (for example **Node role** `=` `worker`, or **Node label**
+   `zone` `=` `a`). Under **Spread over**, select **Label** to spread tasks
+   over a node label. Then set **Max tasks per node** and **Published ports**
    (**Ingress mesh** or **Host**). **Rollout** and **Restart policy** hold
    the update and restart settings; the defaults update one task at a time
    and pause on failure.
@@ -92,7 +94,8 @@ The service's **Overview** shows a **Swarm** panel instead of the node list:
 
 | Item | Shows or does |
 | --- | --- |
-| Status line | Running and desired tasks, the rollout state and message, the image |
+| Status line | One dot per replica (green: running; orange, pulsing: starting or being replaced; red: failed or missing) with running/desired, the rollout state and message, the image |
+| Replica dots | Select them for each replica's node and state, and to scale with **−** / **+** and **Apply** |
 | **Deploy** | Creates or updates the Docker service from the saved definition |
 | **Scale** | Changes the task count now and saves it as the service's replicas, so later deploys (a webhook, a redeploy) keep it. A global service cannot be scaled |
 | **Restart** | Replaces every task, following the rollout settings |
@@ -118,9 +121,18 @@ you can delete it.
 :::
 
 :::note
-Forge names each Swarm service `forge-<service-id>` and gives each
-environment its own encrypted overlay network that other containers cannot
-join. Forge only changes Swarm services it created for that service.
+Docker names each task container `<service-name>.<replica>.<task-id>`, for
+example `prod-postgres.1.emcnoltw17figl697yaizgvc7`. The task ID is random
+and changes whenever Swarm replaces the task. Docker cannot rename a running
+service, so a changed **Docker service name** applies only after **Remove**
+and **Deploy**. Services created before names were configurable keep the
+name `forge-<service-id>`.
+
+Forge finds its services by the `forge.service.id` label, not by name, and
+only changes Swarm services it created for that service. Each environment
+gets its own encrypted overlay network that other containers cannot join.
+In **Projects**, a Swarm service shows a `swarm` tag, its running tasks and
+the node each one runs on.
 :::
 
 ## Deploy releases with a strategy

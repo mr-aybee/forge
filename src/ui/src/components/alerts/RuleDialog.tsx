@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Check, Loader2, X } from "lucide-react";
+import { Activity, Bell, Check, Crosshair, FilePlus2, LifeBuoy, type LucideIcon, Loader2, Power, Sparkles, Tag, X } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 
 import {
@@ -264,7 +264,10 @@ function toInput(f: Form): RuleInput | string {
 /** "Fires when a node's node.agent.status is offline for 20 seconds; recovers when online." */
 function summary(f: Form, unit: string | undefined): string {
   const scope = SCOPES.find((s) => s.id === f.scopeKind);
-  const who = f.scopeIds.length ? `one of ${f.scopeIds.length} chosen ${scope?.label.toLowerCase() ?? "resources"}` : (scope?.one ?? "a resource");
+  const n = f.scopeIds.length;
+  const plural = scope?.label.toLowerCase() ?? "resources";
+  const singular = (scope?.one ?? "a resource").replace(/^an? /, "");
+  const who = n === 0 ? `any ${singular}` : n === 1 ? `the chosen ${singular}` : `any of ${n} chosen ${plural}`;
   const sfx = unitSuffix(unit);
   const val = (v: string) => (sfx === "%" ? `${v} %` : sfx ? `${v} ${sfx}` : v);
   const what =
@@ -285,7 +288,7 @@ function summary(f: Form, unit: string | undefined): string {
             : `at any point within ${durText(f.window)}`;
   const rec = f.kind === "state" ? (f.recover.length ? `when ${f.recover.join(" or ")}` : "when the condition no longer holds") : f.recoverAt.trim() ? `past ${val(f.recoverAt)}` : "when the condition no longer holds";
   const hold = durMs(f.hold) > 0 ? ` for ${durText(f.hold)}` : "";
-  return `Fires when ${who}'s ${f.subject || "subject"} ${what} ${when}; recovers ${rec}${hold}.`;
+  return `Fires when ${f.subject || "the subject"} on ${who} ${what} ${when}; recovers ${rec}${hold}.`;
 }
 
 /**
@@ -297,28 +300,18 @@ export function RuleDialog({ rule, prefill, onClose }: { rule: AlertRule | null;
   const [templateId, setTemplateId] = useState(prefill?.templateId ?? "");
   const template = templates.data?.find((t) => t.id === templateId);
   const waiting = !rule && !!templateId && templates.isLoading;
-  const picker = rule ? undefined : (
-    <Field label="From template" hint={templates.error ? `Templates could not load: ${errorText(templates.error)}` : template?.description}>
-      <Select value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
-        <option value="">Blank rule</option>
-        {(templates.data ?? []).map((t) => (
-          <option key={t.id} value={t.id}>
-            {t.name} ({t.severity})
-          </option>
-        ))}
-      </Select>
-    </Field>
-  );
+  const picker = rule ? undefined : <TemplatePicker templates={templates.data} loading={templates.isLoading} error={templates.error} value={templateId} onChange={setTemplateId} />;
   return (
     <Modal
       open
       onOpenChange={(o) => !o && onClose()}
-      width={820}
+      width={920}
+      fill
       title={rule ? "Edit rule" : "New alert rule"}
       description={rule ? "Changing the condition, subject or scope starts a new revision; firing alarms of the old one end." : "Start from a template or describe the condition yourself."}
     >
       {waiting ? (
-        <div className="space-y-4">
+        <div className="space-y-4 overflow-y-auto">
           {picker}
           <Skeleton rows={4} />
         </div>
@@ -335,13 +328,85 @@ export function RuleDialog({ rule, prefill, onClose }: { rule: AlertRule | null;
   );
 }
 
-/** A titled block of the form. */
-function Section({ title, children }: { title: string; children: ReactNode }) {
+type Tone = "accent" | "violet" | "teal" | "ok" | "orange" | "warn" | "bad" | "sky";
+
+/** Token classes per tone (spelled out so Tailwind sees them). */
+const TONE: Record<Tone, { chip: string; on: string; dot: string }> = {
+  accent: { chip: "bg-accent-soft text-accent", on: "border-accent bg-accent-soft text-accent", dot: "bg-accent" },
+  violet: { chip: "bg-violet-soft text-violet", on: "border-violet bg-violet-soft text-violet", dot: "bg-violet" },
+  teal: { chip: "bg-teal-soft text-teal", on: "border-teal bg-teal-soft text-teal", dot: "bg-teal" },
+  ok: { chip: "bg-ok-soft text-ok", on: "border-ok bg-ok-soft text-ok", dot: "bg-ok" },
+  orange: { chip: "bg-orange-soft text-orange", on: "border-orange bg-orange-soft text-orange", dot: "bg-orange" },
+  warn: { chip: "bg-warn-soft text-warn", on: "border-warn bg-warn-soft text-warn", dot: "bg-warn" },
+  bad: { chip: "bg-bad-soft text-bad", on: "border-bad bg-bad-soft text-bad", dot: "bg-bad" },
+  sky: { chip: "bg-sky-soft text-sky", on: "border-sky bg-sky-soft text-sky", dot: "bg-sky" },
+};
+
+const SEVERITY: { id: Severity; tone: Tone }[] = [
+  { id: "info", tone: "sky" },
+  { id: "warning", tone: "warn" },
+  { id: "major", tone: "orange" },
+  { id: "critical", tone: "bad" },
+];
+const sevTone = (s: Severity): Tone => SEVERITY.find((x) => x.id === s)?.tone ?? "accent";
+
+/** One numbered step of the form: a card with a gradient head, a tone icon chip and a done mark. */
+function Step({ n, title, hint, icon: Icon, tone, done, children }: { n: number; title: string; hint?: string; icon: LucideIcon; tone: Tone; done: boolean; children: ReactNode }) {
   return (
-    <section className="space-y-2.5 border-t border-line pt-3 first:border-t-0 first:pt-0">
-      <h3 className="text-[11px] font-semibold tracking-wider text-faint uppercase">{title}</h3>
-      {children}
+    <section aria-labelledby={`rule-step-${n}`} className="overflow-hidden rounded-lg border border-line">
+      <header className="card-head flex min-w-0 items-center gap-2 border-b border-line px-3 py-1.5">
+        <span className="grid size-5 shrink-0 place-items-center rounded-full border border-line-strong bg-panel font-mono text-[11px] tabular-nums text-muted">{n}</span>
+        <span className={`grid size-6 shrink-0 place-items-center rounded-md ${TONE[tone].chip}`}>
+          <Icon aria-hidden className="size-3.5" />
+        </span>
+        <h3 id={`rule-step-${n}`} className="text-[13px] font-semibold">
+          {title}
+        </h3>
+        {hint && <span className="min-w-0 truncate text-xs text-faint" title={hint}>{hint}</span>}
+        <span className={`ml-auto inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] ${done ? "bg-ok-soft text-ok" : "bg-panel-2 text-faint"}`}>
+          {done ? <Check aria-hidden className="size-3" /> : <span aria-hidden className="size-1.5 rounded-full bg-faint" />}
+          {done ? "Done" : "To do"}
+        </span>
+      </header>
+      <div className="space-y-3 p-3">{children}</div>
     </section>
+  );
+}
+
+/** Templates as small clickable cards, "Blank rule" first. */
+function TemplatePicker({ templates, loading, error, value, onChange }: { templates: AlertTemplate[] | undefined; loading: boolean; error: unknown; value: string; onChange: (id: string) => void }) {
+  const list = Array.isArray(templates) ? templates : [];
+  const card = (id: string, name: string, desc: string, Icon: LucideIcon, tone: Tone) => {
+    const on = value === id;
+    return (
+      <button
+        key={id || "blank"}
+        type="button"
+        aria-pressed={on}
+        onClick={() => onChange(id)}
+        title={desc}
+        className={`flex min-w-0 items-start gap-2 rounded-md border px-2 py-1.5 text-left transition focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none ${on ? TONE.accent.on : "border-line hover:border-line-strong hover:bg-panel-2"}`}
+      >
+        <span className={`mt-0.5 grid size-5 shrink-0 place-items-center rounded ${TONE[tone].chip}`}>
+          <Icon aria-hidden className="size-3" />
+        </span>
+        <span className="min-w-0">
+          <span className={`block truncate text-xs font-medium ${on ? "text-accent" : "text-fg"}`}>{name}</span>
+          <span className="block truncate text-[11px] text-muted">{desc || "—"}</span>
+        </span>
+      </button>
+    );
+  };
+  return (
+    <div className="space-y-1.5">
+      <span className="block text-xs font-medium text-muted">Start from</span>
+      <div role="group" aria-label="Template" className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+        {card("", "Blank rule", "Describe the condition yourself.", FilePlus2, "accent")}
+        {list.map((t) => card(t.id, t.name, t.description, Bell, sevTone(t.severity)))}
+      </div>
+      {loading && <Skeleton rows={1} />}
+      {!!error && <FormError>Templates could not load: {errorText(error)}. Start from a blank rule.</FormError>}
+    </div>
   );
 }
 
@@ -421,7 +486,9 @@ function RuleForm({ ruleId, initial, picker, onClose }: { ruleId?: string; initi
   }, [catalogue, subjects.data?.seen_health]);
   const patterns = (catalogue ?? []).filter((x) => x.pattern);
   // A subject typed by hand: a pattern (health.<purpose>.<check>) or one the catalogue does not list.
-  const [custom, setCustom] = useState(() => !!f.subject && !fixed.includes(f.subject) && !(catalogue ?? []).some((x) => x.subject === f.subject));
+  // Derived once the catalogue is in, so a listed subject never shows as "custom" while it loads.
+  const [manual, setCustom] = useState(false);
+  const custom = manual || (!!catalogue && !!f.subject && !fixed.includes(f.subject) && !catalogue.some((x) => x.subject === f.subject));
   const grouped = useMemo(() => {
     const out = new Map<string, string[]>();
     for (const s of fixed) {
@@ -443,10 +510,16 @@ function RuleForm({ ruleId, initial, picker, onClose }: { ruleId?: string; initi
   };
   const sfx = unitSuffix(info?.unit);
   const err = typeof input === "string" ? input : undefined;
+  const trig = f.kind === "state" ? f.states.length > 0 : !!f.threshold.trim() && Number.isFinite(Number(f.threshold));
+  const done = {
+    what: !!f.name.trim(),
+    cond: !!f.subject.trim() && !f.subject.includes("{check}") && trig && (f.mode === "at_once" || durMs(f.window) > 0),
+    rec: Number.isFinite(durMs(f.hold)) && (f.kind === "state" || !f.recoverAt.trim() || Number.isFinite(Number(f.recoverAt))),
+  };
 
   return (
     <form
-      className="-mx-5 -mb-5"
+      className="-mx-5 -mb-5 flex min-h-0 flex-1 flex-col"
       onSubmit={(e) => {
         e.preventDefault();
         if (typeof input === "string") return;
@@ -461,24 +534,40 @@ function RuleForm({ ruleId, initial, picker, onClose }: { ruleId?: string; initi
         );
       }}
     >
-      <div className="space-y-4 px-5 pb-4">
-        <Section title="What">
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 pb-4">
+        <Step n={1} title="What" hint="Name it and say how loud it is" icon={Tag} tone="violet" done={done.what}>
           {picker}
-          <div className="grid gap-3 sm:grid-cols-[1fr_160px]">
+          <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
             <Field label="Name">
               <Input value={f.name} maxLength={120} onChange={(e) => set({ name: e.target.value })} autoFocus />
             </Field>
-            <Field label="Severity">
-              <Select value={f.severity} onChange={(e) => set({ severity: e.target.value as Severity })}>
-                {(["critical", "major", "warning", "info"] as const).map((s) => (
-                  <option key={s}>{s}</option>
-                ))}
-              </Select>
-            </Field>
+            <div className="space-y-1">
+              <span id="rule-sev" className="block text-xs font-medium text-muted">
+                Severity
+              </span>
+              <div role="radiogroup" aria-labelledby="rule-sev" className="flex rounded-md border border-line p-0.5">
+                {SEVERITY.map((s) => {
+                  const on = f.severity === s.id;
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={on}
+                      onClick={() => set({ severity: s.id })}
+                      className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-xs capitalize transition focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none ${on ? `${TONE[s.tone].on} font-medium` : "border-transparent text-muted hover:text-fg"}`}
+                    >
+                      <span aria-hidden className={`size-1.5 rounded-full ${TONE[s.tone].dot}`} />
+                      {s.id}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
-        </Section>
+        </Step>
 
-        <Section title="Condition">
+        <Step n={2} title="Condition" hint="What to watch and when it breaches" icon={Activity} tone="accent" done={done.cond}>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field
               label="Subject"
@@ -616,13 +705,13 @@ function RuleForm({ ruleId, initial, picker, onClose }: { ruleId?: string; initi
               <DurationInput label="Minimum spacing" value={f.spacing} onChange={(spacing) => set({ spacing })} />
             </Field>
           )}
-        </Section>
+        </Step>
 
-        <Section title="Watches">
+        <Step n={3} title="Watches" hint="Which resources the rule covers" icon={Crosshair} tone="teal" done>
           <ScopePicker kind={f.scopeKind} ids={f.scopeIds} allowed={info?.scopes} onChange={(scopeKind, scopeIds) => set({ scopeKind, scopeIds })} />
-        </Section>
+        </Step>
 
-        <Section title="Recovery">
+        <Step n={4} title="Recovery" hint="When the alarm clears" icon={LifeBuoy} tone="ok" done={done.rec}>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1">
               <span className="block text-xs font-medium text-muted">{f.kind === "state" ? "Recovers when" : "Recovers past"}</span>
@@ -641,17 +730,21 @@ function RuleForm({ ruleId, initial, picker, onClose }: { ruleId?: string; initi
               <DurationInput label="Hold" value={f.hold} onChange={(hold) => set({ hold })} />
             </Field>
           </div>
-        </Section>
+        </Step>
 
-        <Section title="Enabled">
+        <Step n={5} title="Enabled" icon={Power} tone={f.enabled ? "ok" : "warn"} done>
           <Switch checked={f.enabled} onChange={(enabled) => set({ enabled })} label={f.enabled ? "On: the rule evaluates and raises alarms" : "Off: the rule is kept but does nothing"} />
-        </Section>
+        </Step>
       </div>
 
-      <div className="sticky bottom-0 z-10 space-y-2 border-t border-line bg-panel px-5 py-3">
-        <p className="text-xs text-muted" aria-live="polite">
-          {summary(f, info?.unit)}
-        </p>
+      <div className="shrink-0 space-y-2 border-t border-line bg-panel px-5 py-3">
+        <div className={`flex min-w-0 items-start gap-2 rounded-md border-l-[3px] px-2.5 py-1.5 text-xs ${err ? "border-warn bg-warn-soft" : "border-accent bg-accent-soft"}`}>
+          <Sparkles aria-hidden className={`mt-0.5 size-3.5 shrink-0 ${err ? "text-warn" : "text-accent"}`} />
+          <p className="min-w-0 break-words text-fg" aria-live="polite">
+            <span className={`mr-1.5 inline-block rounded px-1 text-[11px] font-medium capitalize ${TONE[sevTone(f.severity)].chip}`}>{f.severity}</span>
+            {summary(f, info?.unit)}
+          </p>
+        </div>
         {err && <p className="text-xs text-bad">{err}</p>}
         {save.isError && <FormError>{errorText(save.error)}</FormError>}
         <div className="flex justify-end gap-2">

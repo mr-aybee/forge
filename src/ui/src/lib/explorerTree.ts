@@ -37,6 +37,8 @@ export interface TreeService {
   placements: TreePlacement[];
   health: RunHealth;
   rollout: Rollout;
+  /** Runs in a Docker Swarm cluster: the swarm places its tasks, so it has no placements. */
+  swarm: boolean;
 }
 export interface TreeEnv {
   kind: "env";
@@ -102,7 +104,8 @@ function rollupRollout(rs: Rollout[]): Rollout {
 
 const byName = <T extends { name: string }>(a: T, b: T) => a.name.localeCompare(b.name);
 
-export function buildTree(projects: Project[], environments: Environment[], services: Service[], servers: Server[], health: HealthMap = new Map()): TreeProject[] {
+export function buildTree(projects: Project[], environments: Environment[], services: Service[], servers: Server[], health: HealthMap = new Map(), swarmClusters: ReadonlySet<string> = new Set()): TreeProject[] {
+  const swarmEnvs = new Set(environments.filter((e) => e.cluster_id && swarmClusters.has(e.cluster_id)).map((e) => e.id));
   const nodeName = new Map(servers.map((s) => [s.id, s.display_name || s.hostname]));
   const nodeById = new Map(servers.map((s) => [s.id, s]));
   const servicesByEnv = new Map<string, Service[]>();
@@ -127,6 +130,7 @@ export function buildTree(projects: Project[], environments: Environment[], serv
       placements,
       health: rollupHealth(placements.filter((p) => p.instance.role === "active").map((p) => p.health)),
       rollout: rollupRollout(a.instances.map(placementRollout)),
+      swarm: swarmEnvs.has(a.environment_id),
     };
   };
   const env = (n: Environment): TreeEnv => {

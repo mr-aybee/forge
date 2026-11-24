@@ -79,6 +79,8 @@ export function forSwarm(v: ServiceInput, swarm: boolean): ServiceInput {
 }
 
 /** Docker placement constraint: key, `==` or `!=`, value. */
+/** A Docker service name Forge accepts (as `docker_name_ok` on the server). */
+export const DOCKER_NAME_RE = /^(?!-)[a-z0-9-]{1,61}(?<!-)$/;
 export const CONSTRAINT_RE = /^(node\.(id|hostname|role|platform\.os|platform\.arch)|(node|engine)\.labels\.[A-Za-z0-9_.-]+)\s*(==|!=)\s*\S+$/;
 export const SPREAD_RE = /^node\.labels\.[A-Za-z0-9_.-]+$/;
 
@@ -151,6 +153,7 @@ export function sectionIssues(id: SectionId, v: ServiceInput, b: BasicsState): {
     case "swarm": {
       const w = v.swarm;
       if (!w) break;
+      if (w.name && !DOCKER_NAME_RE.test(w.name)) errors.push("Docker service name: lowercase letters, digits and -, up to 61 characters.");
       if (w.mode === "replicated" && (!Number.isInteger(w.replicas) || w.replicas < 1 || w.replicas > 1000)) errors.push("Replicas: 1 to 1000.");
       if (w.constraints.some((c) => c && !CONSTRAINT_RE.test(c))) errors.push("Constraints: enter a value for each row.");
       if (w.spread.filter(Boolean).length > 4) errors.push("Spread: at most 4 labels.");

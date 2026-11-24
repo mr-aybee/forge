@@ -21,7 +21,8 @@ import {
 import { useServers } from "../../api/hooks";
 import type { Service } from "../../api/types";
 import { errorText, useToast } from "../../app/toast";
-import { Badge, Button, Confirm, CopyButton, Drawer, Empty, ErrorNote, Modal, Skeleton, Status, Table, Td, TextArea, ago, time } from "../ui";
+import { Badge, Button, Confirm, CopyButton, Drawer, Empty, ErrorNote, Modal, Skeleton, Status, Table, Td, ago, time } from "../ui";
+import { CodeField } from "../CodeField";
 
 const Num = ({ children }: { children: React.ReactNode }) => <span className="font-mono text-[11px] tabular-nums">{children}</span>;
 
@@ -322,7 +323,7 @@ function ApplyYamlDialog({ swarm, onClose, onStarted }: { swarm: boolean; onClos
 
   return (
     <Modal open onOpenChange={(o) => !o && onClose()} title="Apply YAML" description="Plan a deployment spec, review what happens, then apply it." width={760}>
-      <TextArea aria-label="Deployment YAML" rows={14} spellCheck={false} value={yaml} onChange={(e) => setYaml(e.target.value)} placeholder={"apiVersion: forge/v1\nkind: Deployment\nmetadata:\n  name: …\n  environment: …"} />
+      <CodeField aria-label="Deployment YAML" lang="yaml" minLines={14} maxLines={40} value={yaml} onChange={setYaml} placeholder={"apiVersion: forge/v1\nkind: Deployment\nmetadata:\n  name: …\n  environment: …"} />
       {plan.isError && <ErrorNote error={errorText(plan.error)} />}
       {current && <PlanSummary p={current} swarm={swarm} />}
       <div className="mt-4 flex justify-end gap-2">

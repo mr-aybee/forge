@@ -372,6 +372,9 @@ pub struct SwarmTask {
 pub struct SwarmServiceStatus {
     pub exists: bool,
     pub id: String,
+    /// Docker service name (task containers are `<name>.<replica>.<task>`).
+    #[serde(default)]
+    pub name: String,
     /// `replicated` or `global`.
     pub mode: String,
     /// Replicas asked for (replicated mode).

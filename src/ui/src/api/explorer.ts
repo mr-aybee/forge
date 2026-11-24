@@ -3,7 +3,7 @@ import { useMemo } from "react";
 
 import { buildTree, type CheckStatus, type HealthMap, type TreeProject } from "../lib/explorerTree";
 import { get } from "./client";
-import { useAllEnvironments, useProjects, useServices, useServers } from "./hooks";
+import { useAllEnvironments, useClusters, useProjects, useServices, useServers } from "./hooks";
 import type { HealthSummaryList } from "./types";
 
 /** Query keys of the Project Explorer. */
@@ -43,10 +43,11 @@ export function useExplorerTree(): { tree: TreeProject[]; isLoading: boolean; er
   const services = useServices();
   const servers = useServers();
   const health = useHealthSummary();
-  const tree = useMemo(
-    () => buildTree(projects.data ?? [], environments.data ?? [], services.data ?? [], servers.data ?? [], toHealthMap(health.data)),
-    [projects.data, environments.data, services.data, servers.data, health.data],
-  );
+  const clusters = useClusters();
+  const tree = useMemo(() => {
+    const swarm = new Set((clusters.data ?? []).filter((c) => c.mode === "swarm").map((c) => c.id));
+    return buildTree(projects.data ?? [], environments.data ?? [], services.data ?? [], servers.data ?? [], toHealthMap(health.data), swarm);
+  }, [projects.data, environments.data, services.data, servers.data, health.data, clusters.data]);
   return {
     tree,
     isLoading: projects.isLoading || environments.isLoading || services.isLoading || servers.isLoading,

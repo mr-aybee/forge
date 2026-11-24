@@ -377,7 +377,7 @@ impl DeployService {
             strategy: swarm_plan.strategy,
             slotted: !swarm_plan.slot.is_empty(),
             steps: Vec::new(),
-            downtime: swarm_plan.strategy == forge_catalog::deploy::Strategy::Recreate,
+            downtime: swarm_plan.downtime,
             notes: vec!["Docker Swarm places the tasks on the swarm's nodes".into()],
             targets: Vec::new(),
         };
