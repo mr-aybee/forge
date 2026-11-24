@@ -45,8 +45,11 @@ Network:
 | `55132/tcp` | Nodes to the server | Analytics uploads from agents (mutual TLS) |
 | `443/tcp` out | Server to `github.com` | Downloading releases and updates. Optional |
 
-The installer opens these ports in firewalld or ufw on Linux and in Windows
-Firewall. Open them in any network firewall yourself. See
+The installer opens these ports in the host firewall: firewalld, ufw, or plain
+iptables rules (as on Oracle Cloud images) on Linux, and Windows Firewall on
+Windows. It cannot change your cloud provider's firewall (an AWS security
+group, an Oracle Cloud security list, a Hetzner firewall): allow TCP `8080`,
+`7443` and `55132` there yourself, with **Source port** left as **All**. See
 [Network ports](/docs/reference/network-ports/).
 
 ### Choose an analytics engine
