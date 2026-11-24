@@ -130,7 +130,7 @@ export function ClusterWizard({ open, onOpenChange, onDone }: { open: boolean; o
   const done = log.length > 0 && !running;
 
   return (
-    <Modal open={open} onOpenChange={(o) => !running && onOpenChange(o)} title="Set up a cluster" description="Members, the cluster network and the Nginx ingress. You can change any of it later." wide>
+    <Modal open={open} onOpenChange={(o) => !running && onOpenChange(o)} title="Set up a cluster" description="Members, the cluster network and the Nginx ingress. You can change any of it later." width={960}>
       <ol className="mb-5 flex items-center gap-1 text-xs">
         {STEPS.map((s, i) => (
           <li key={s} className="flex flex-1 items-center gap-1">
