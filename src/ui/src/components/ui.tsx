@@ -509,6 +509,7 @@ export function Modal({
   children,
   wide,
   width,
+  fill,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
@@ -518,16 +519,18 @@ export function Modal({
   wide?: boolean;
   /** Explicit width in px (e.g. an editor beside a preview); overrides `wide`. */
   width?: number;
+  /** The dialog does not scroll; its child is a flex column that scrolls its own body and pins a footer. */
+  fill?: boolean;
 }) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="dlg-overlay fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px]" />
         <Dialog.Content
-          className={`dlg-content fixed top-[8vh] left-1/2 z-50 max-h-[84vh] -translate-x-1/2 overflow-y-auto rounded-xl border border-line bg-panel p-5 shadow-[var(--shadow-pop)]`}
+          className={`dlg-content fixed top-[8vh] left-1/2 z-50 max-h-[84vh] -translate-x-1/2 ${fill ? "flex flex-col overflow-hidden" : "overflow-y-auto"} rounded-xl border border-line bg-panel p-5 shadow-[var(--shadow-pop)]`}
           style={{ width: `min(${width ?? (wide ? 720 : 480)}px, calc(100vw - 32px))` }}
         >
-          <div className="mb-4 flex items-start justify-between gap-4">
+          <div className={`mb-4 flex items-start justify-between gap-4 ${fill ? "shrink-0" : ""}`}>
             <div>
               <Dialog.Title className="text-base font-semibold">{title}</Dialog.Title>
               <Dialog.Description className="mt-1 text-muted">{description ?? ""}</Dialog.Description>
@@ -536,7 +539,7 @@ export function Modal({
               <X className="size-5" />
             </Dialog.Close>
           </div>
-          {children}
+          {fill ? <div className="flex min-h-0 flex-1 flex-col">{children}</div> : children}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
