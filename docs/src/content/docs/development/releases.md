@@ -33,8 +33,8 @@ There is no scheduled run.
 ### Runners
 
 Every job runs on a GitHub-hosted runner: `ubuntu-latest` for Linux jobs,
-`windows-latest` for the Windows tests and build, and `macos-15` for the
-macOS CLI. The repository is public, so these minutes are free.
+`windows-latest` for the Windows tests and build. Nothing is built for
+macOS. The repository is public, so these minutes are free.
 
 - **Build wrapper.** `scripts/ci/build.sh light|heavy <command>` wraps every
   compile and runs it under `nice` and `ionice`. On GitHub-hosted runners it
@@ -115,10 +115,7 @@ tag, delete it (`git push origin :refs/tags/<tag>`), fix, and tag again.
    (`x86_64-pc-windows-msvc`) with `cargo` and `link.exe`. The release version
    is compiled in (`FORGE_BUILD_VERSION`). The job checks architecture and
    static linking, and that the x86_64 server and worker report the version.
-4. **forge CLI (macOS)**: `aarch64-apple-darwin` and `x86_64-apple-darwin` in
-   one job on `macos-15`; checks each architecture and that only
-   system libraries are linked. Not code-signed or notarised.
-5. **Package and sign**: `scripts/packaging/package.sh` assembles the
+4. **Package and sign**: `scripts/packaging/package.sh` assembles the
    tarballs, the Windows zip, the raw binaries the updater downloads and the
    CLI binaries, each package with `dist/MANIFEST.json` naming the version;
    it adds `get-forge.sh` and `get-forge.ps1`. `check-release.sh` checks
@@ -128,10 +125,10 @@ tag, delete it (`git push origin :refs/tags/<tag>`), fix, and tag again.
    verifies the signature independently with OpenSSL the way users do
    (`get-forge.sh --verify-only`). `release-notes.sh` writes the notes. All
    of it is kept as the `release-assets` artifact for 14 days.
-6. **Publish**: creates the release in this repository as a draft, uploads
+5. **Publish**: creates the release in this repository as a draft, uploads
    the assets, then publishes it (pre-release for `-rc-NN`). Only this job
    has write access, through the workflow's `GITHUB_TOKEN`.
-7. **Website image**: builds `website/Dockerfile` and, for a published
+6. **Website image**: builds `website/Dockerfile` and, for a published
    release, pushes it to `ghcr.io/orbyntech/forge-website` (see
    [Website and docs site](/docs/development/website/)).
 

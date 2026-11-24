@@ -16,7 +16,7 @@ publishes for it.
 | `forge-analytics-worker` | `x86_64`, `aarch64`; DuckDB, embedded chDB or ClickHouse | `x86_64`; ClickHouse. DuckDB is built in but not yet verified, so the installer defaults to `off` | not supported |
 | `forge-plugin-runner` | `x86_64`, `aarch64` | `x86_64` | not supported |
 | `forge-agent` + `forge-agent-helper` | `x86_64`, `aarch64`; systemd distributions | `x86_64`; Windows Server 2022 and 2025 (no helper) | not supported |
-| `forge` CLI ([install](/docs/reference/cli/#forge)) | `x86_64`, `aarch64`; static musl | `x86_64` (MSVC) | `arm64`, `x86_64`; macOS 11 or later, when the release includes them |
+| `forge` CLI ([install](/docs/reference/cli/#forge)) | `x86_64`, `aarch64`; static musl | `x86_64` (MSVC) | no release binary; build it from source |
 
 The control plane runs on Debian 12+, Ubuntu 22.04+, RHEL, Rocky and
 Alma 8+ with systemd, and on Windows Server 2019, 2022 and 2025 and
@@ -40,8 +40,8 @@ RHEL-likes) for outbound HTTPS.
 | `SHA256SUMS`, `SHA256SUMS.sig` | SHA-256 of every asset, and its Ed25519 signature |
 | `LICENSE.txt` | The Apache License 2.0 (a copy of the repository's `LICENSE`) |
 
-`<target>` is `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`,
-`x86_64-pc-windows-msvc`, `aarch64-apple-darwin` or `x86_64-apple-darwin`.
+`<target>` is `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` or
+`x86_64-pc-windows-msvc`.
 
 ## Outbound connections from the server
 

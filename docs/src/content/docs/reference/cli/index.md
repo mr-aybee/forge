@@ -22,10 +22,9 @@ listed in the signed `SHA256SUMS`:
 | `forge-cli-x86_64-unknown-linux-musl` | Linux x86_64, any distribution (static, no runtime libraries) |
 | `forge-cli-aarch64-unknown-linux-musl` | Linux arm64, any distribution (static, no runtime libraries) |
 | `forge-cli-x86_64-pc-windows-msvc.exe` | Windows 10 / 11, Windows Server 2019 or later, x86_64 |
-| `forge-cli-aarch64-apple-darwin` | macOS 11 or later, Apple silicon (arm64) |
-| `forge-cli-x86_64-apple-darwin` | macOS 11 or later, Intel (x86_64) |
 
-To build it from source instead, run `cargo build --release -p forge-cli`.
+Releases include no macOS binary. On macOS, and on any other platform, build
+it from source with `cargo build --release -p forge-cli`.
 The binary is `target/release/forge` (`forge.exe` on Windows).
 
 ### Install on Linux
@@ -61,26 +60,11 @@ if (($path -split ';') -notcontains $dir) { [Environment]::SetEnvironmentVariabl
 
 Open a new terminal to pick up the changed `Path`.
 
-### Install on macOS
-
-On an Intel Mac, use `x86_64` instead of `aarch64`:
-
-```sh
-curl -fLO https://github.com/mr-aybee/forge/releases/latest/download/forge-cli-aarch64-apple-darwin
-curl -fLO https://github.com/mr-aybee/forge/releases/latest/download/SHA256SUMS
-grep ' forge-cli-aarch64-apple-darwin$' SHA256SUMS | shasum -a 256 -c
-chmod +x forge-cli-aarch64-apple-darwin
-sudo mv forge-cli-aarch64-apple-darwin /usr/local/bin/forge
-forge --version
-```
-
 :::caution
-The Windows and macOS binaries are not code-signed, and the macOS ones are not
-notarised. Files downloaded with a browser carry a download mark. On Windows,
-SmartScreen then warns before the first start; check the checksum, then run
-`Unblock-File <file>`. On macOS, Gatekeeper refuses to run the file; check
-the checksum, then run `xattr -d com.apple.quarantine <file>`. Files
-downloaded with `curl` or `Invoke-WebRequest` carry no mark.
+The Windows binary is not code-signed. A file downloaded with a browser
+carries a download mark, and SmartScreen then warns before the first start.
+Check the checksum, then run `Unblock-File <file>`. Files downloaded with
+`Invoke-WebRequest` carry no mark.
 :::
 
 To keep it current, run [`forge update`](/docs/reference/cli/update/).
@@ -556,7 +540,7 @@ still land here; each section moved:
 | <span id="forge-agent-helper"></span>`forge-agent-helper` | [forge-agent-helper](/docs/reference/cli/forge-agent-helper/) |
 | <span id="install-on-linux"></span>`Install on Linux` | [install-on-linux](#install-on-linux) |
 | <span id="install-on-windows"></span>`Install on Windows` | [install-on-windows](#install-on-windows) |
-| <span id="install-on-macos"></span>`Install on macOS` | [install-on-macos](#install-on-macos) |
+| <span id="install-on-macos"></span>`Install on macOS` | [install](#install) (build from source) |
 | <span id="update-the-cli"></span>`Update the CLI` | [update](/docs/reference/cli/update/) |
 | <span id="retries"></span>`Retries` | [retries-and-idempotency](#retries-and-idempotency) |
 | <span id="forge-contexts"></span>`forge contexts` | [contexts](/docs/reference/cli/contexts/) |
