@@ -75,9 +75,10 @@ challenge and `finish` verifies the browser's answer.
   challenge in the client data is compared in constant time.
 - **Client data.** The type is `webauthn.create` for registration and
   `webauthn.get` for sign-in and step-up. The origin must equal the origin of
-  `public_url` exactly (scheme, host and port), and cross-origin requests
-  are refused.
-- **Relying party.** The RP ID is the host of `public_url`. The SHA-256 of
+  the request exactly (scheme, host and port: the address the browser is
+  on), and cross-origin requests are refused.
+- **Relying party.** The RP ID is the host of the request (from `Host`, or
+  `X-Forwarded-Host` from a trusted proxy), on an allowed host. The SHA-256 of
   the RP ID must match the hash in the authenticator data.
 - **Flags.** User present (UP) and user verified (UV) must both be set.
   Registration must carry attested credential data; a sign-in must not.
@@ -109,11 +110,91 @@ Outstanding challenges are stored as hashes and expire after 5 minutes.
 
 - Passkeys need the console on HTTPS or `localhost`; browsers refuse
   WebAuthn elsewhere.
-- Passkeys are bound to the host of `public_url`. Changing that host makes
-  every registered passkey unusable.
+- A passkey is bound to the host name it was registered on, as browsers
+  scope them. On another name or IP of the same Forge it is not offered;
+  sign in with a password and code there, or register another passkey.
 - No attestation means no allow-list of authenticator models.
 - Recovery is by an administrator or on the server host; see
   [Passkeys](/docs/guides/passkeys/#recover-access).
+
+## Request addresses
+
+Forge has no fixed address. Each request carries the address the client used:
+the `Host` header, or the last `X-Forwarded-Host` and `X-Forwarded-Proto` from
+a peer in `[security] trusted_proxies`. Forwarded headers from any other peer
+are ignored. A host that is not a valid name or IP literal with an optional
+port gets `400`.
+
+- **Allowed hosts.** The `server.allowed_hosts` setting (default `*`) lists
+  the names Forge answers on. Any other host gets `421 Misdirected Request`
+  with no body. `*.example.com` matches only names under that domain, at a
+  dot boundary. Narrow the list once Forge has a domain.
+- **Same-origin checks.** A browser `Origin` on WebSockets (events,
+  terminal, tunnels) and `/mcp` must equal the request's own origin on an
+  allowed host, or the pinned address. Requests without `Origin` (the CLI,
+  scripts) pass. State-changing API calls also need the double-submit CSRF
+  token.
+- **Links.** Request-derived addresses go only into links a signed-in user
+  receives (Add node commands, device and approval links, the OpenAPI
+  `servers` entry) and into the token-protected `/install.sh` and
+  `/install.ps1`. Emails, alerts, webhooks, OIDC and OAuth always use the
+  pinned public address, or the address an administrator last signed in on.
+  A forged `Host` header therefore cannot redirect links that leave Forge.
+- **HSTS** is sent only on HTTPS responses, never to a plain-HTTP name.
+
+## Pinned server key
+
+Agents do not check the control plane's host name. They check its key.
+
+The agent listener (`3843`) and the analytics upload listener (`3832`)
+present certificates from Forge's internal CA for one long-lived
+control-plane key. Each agent keeps a pin set: the SHA-256 fingerprints of
+the SubjectPublicKeyInfo of the keys it trusts. It accepts the server only if
+the leaf certificate's key is pinned, the certificate is within its validity
+period, and it allows server authentication. Another certificate from the
+same CA with a different key is refused. Because names are not checked, a
+node reaches Forge on any IP or name, through NAT, or across networks.
+
+```
+  enrollment token ── server_key_sha256 ──► pin set (pins.toml, root-owned)
+                                               ▲
+  heartbeat reply ── current + next keys, ─────┘ applied by the root helper
+                     signed by the command key   after it checks the signature
+```
+
+- **Enrollment** pins the key named in the enrollment token.
+- **Renewal** issues a new certificate for the same key, swapped into the
+  listener without a restart. Agents see no change.
+- **Rotation.** The server holds a `current` and a `next` key. Every
+  heartbeat reply announces both, signed with the command key, and agents add
+  the next key to their pin set and report what they pin. After
+  `[agent_tls] rotate_days` (default 365), once the next key has been
+  announced for `grace_days` (default 30) and every online agent has it,
+  the listeners switch. The old key is kept sealed for one more rotation.
+  Agents drop a key 30 days after Forge stops announcing it.
+- **Manual control.** `forge-server agent-key show|list|rotate [--now]` on the
+  server, `forge-agent pins list|add|remove|fetch` on a node. A node offline
+  for the whole grace period, or a forced switch, needs `pins add`.
+- **At rest.** Private keys are sealed with the server's envelope key in the
+  database. Only fingerprints appear in output, the API and audit. On Linux
+  nodes the pin set is owned by root; the agent user cannot change it, and
+  the root helper writes only announcements signed by the command key over
+  an already pinned link. A set holds at most 8 keys.
+- **Older agents.** An agent with no pins keeps checking the CA and the host
+  name until it receives a pin over its existing link.
+
+The trade-off: trust on first use moves to enrollment. The enrollment token
+carries the fingerprint, so a token from the console is enough. `pins fetch`
+trusts whatever answers, and asks you to compare fingerprints first.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Agent log or `forge-agent status`: `server key sha256:… is not pinned (pinned: sha256:…). If the server's key changed, run 'forge-server agent-key show' on the server and 'forge-agent pins add <fingerprint>' on this node. If it did not, something else is answering on <host>:3843.` | The server switched keys while this node missed the announcement, or another machine answers on that address | Compare with `forge-server agent-key show`. If it matches, `forge-agent pins add <fingerprint>`; if not, fix the address. See [The key mismatch error](/docs/reference/cli/forge-agent/#the-key-mismatch-error) |
+| Browser or API: `421 Misdirected Request` | The host is not in **Allowed hosts** | Add it in **Settings → Server**, or run `forge-server allowed-hosts clear` on the server host and restart |
+| Terminal or live updates close at once on a new name | The `Origin` is not the request's own origin on an allowed host, often a proxy that is not in `trusted_proxies` and rewrites `Host` | Add the proxy to `trusted_proxies` and send `X-Forwarded-Host` (see [Reverse proxy headers](/docs/reference/configuration/#reverse-proxy-headers)) |
+| No passkey offered on a new name or IP | Passkeys belong to the name they were registered on; browsers offer them only on HTTPS or `localhost` | Sign in with password and code, then register a passkey on this name |
 
 ## Secrets
 
@@ -145,6 +226,7 @@ decide who gets that far; prefer short grants.
 | User account | That user's scopes | MFA guardrail, audit, revocation |
 | Plugin | Its approved host functions | Intersection, sandbox, quarantine |
 | Agent / server | That server | Per-agent cert, signed commands, no fleet credentials on nodes |
+| Machine on the agent's network path | Nothing | Agents accept only a pinned control-plane key |
 | Control plane | Everything | Admin MFA, signed agent commands, offline backups |
 
 ## Hygiene

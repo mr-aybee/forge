@@ -408,11 +408,150 @@ Real output from a Linux node, with the id and key replaced:
 }
 ```
 
+After the identity, `status` prints the pinned control-plane keys (see
+[`forge-agent pins`](#forge-agent-pins)) and, while the link fails because
+the server's key is not pinned, the last link error:
+
+```text
+sha256:<fingerprint>  enrollment  added <epoch-ms>
+sha256:<fingerprint>  next  added <epoch-ms>
+link error: server key sha256:ab12cd34…ef56 is not pinned (pinned: sha256:9c3d0a11…44f0). If the server's key changed, run 'forge-server agent-key show' on the server and 'forge-agent pins add <fingerprint>' on this node. If it did not, something else is answering on 192.0.2.10:3843.
+```
+
+A node enrolled before key pinning, with no pins yet, prints
+`pinned keys: none (<path>); the control plane is checked by its CA and host name`.
+
 A state directory without `identity.json` (real output, exit code `1`):
 
 ```text
 Error: No such file or directory (os error 2)
 ```
+
+---
+
+## forge-agent pins
+
+Lists and changes the control-plane keys this node pins. The agent accepts
+the control plane only if the SHA-256 of the public key (SubjectPublicKeyInfo)
+in the server's certificate is in this set. It does not check the host name,
+so the node reaches Forge by any address. See
+[Pinned server key](/docs/concepts/security-model/#pinned-server-key).
+
+The agent fills the set itself: enrollment pins the key named in the
+enrollment token, and every heartbeat reply announces the current and next
+keys, signed with Forge's command key. You need these commands only to
+recover a node that missed a rotation, or to set up a node by hand.
+
+**Where the pins live:**
+
+| Platform | File | Owner |
+| --- | --- | --- |
+| Linux, default state directory | `/var/lib/forge-agent-pins/pins.toml` | `root`, readable by `forge-agent`, which cannot change it. The root helper applies signed announcements |
+| Windows, or a non-default `--state-dir` | `pins.toml` in the state directory | The agent's account |
+
+**Who runs it:** `list` runs as root or `forge-agent`. `add`, `remove` and
+`fetch` need root where root owns the file; otherwise they exit with
+`run this as root: the pinned keys belong to root`. The agent uses a change
+from its next connection attempt, without re-enrolling or restarting. Each
+change is logged in the agent log.
+
+A set holds at most 8 keys. A key Forge stops announcing is marked retired
+and dropped 30 days later. Keys you add by hand are never retired by an
+announcement; remove them with `pins remove`.
+
+### Synopsis
+
+```
+Usage: forge-agent pins [OPTIONS] <COMMAND>
+
+Commands:
+  list    Lists the pinned keys
+  add     Pins a key: its SHA-256 from `forge-server agent-key show`
+  remove  Removes a pinned key
+  fetch   Connects to the control plane, shows the key it presents and pins it after you confirm (trust on first use)
+```
+
+### forge-agent pins list
+
+Prints one line per pinned key: fingerprint, label (`enrollment`, `current`,
+`next` or `manual`), the time it was added (epoch ms) and, for a retired
+key, when it was retired.
+
+```sh
+sudo /usr/local/bin/forge-agent --state-dir /var/lib/forge-agent pins list
+```
+
+### forge-agent pins add
+
+Pins `<SHA256>`, a 64-character hex fingerprint, with or without the
+`sha256:` prefix. Take it from `forge-server agent-key show` on the server.
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<SHA256>` | hex string | none | Yes | The key fingerprint to pin | `sha256:<fingerprint>` |
+| `--label` | string | `manual` | No | A name for the key, shown by `pins list` | `--label after-restore` |
+
+```sh
+sudo /usr/local/bin/forge-agent --state-dir /var/lib/forge-agent pins add sha256:<fingerprint>
+```
+
+```text
+pinned <fingerprint>; the agent uses it from its next connection attempt
+```
+
+A set that is full exits with
+`the pin set is full (8 keys); remove one first with 'forge-agent pins remove'`.
+
+### forge-agent pins remove
+
+Removes `<SHA256>` from the set. Prints `unchanged:` when it was not pinned.
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<SHA256>` | hex string | none | Yes | The fingerprint to remove | `sha256:<fingerprint>` |
+
+### forge-agent pins fetch
+
+Connects to the agent endpoint, prints the key fingerprint it presents and
+asks `Pin this key? [y/N]`. Compare the fingerprint with
+`forge-server agent-key show` on the server before you answer `y`. This is
+trust on first use: whoever answers on that address is trusted.
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `--server` | URL | `server_url` from `agent.toml` | No | Agent endpoint to ask | `--server https://192.0.2.10:3843` |
+| `--yes` | flag | off | No | Pin without asking (scripts) | `--yes` |
+
+```text
+$ sudo /usr/local/bin/forge-agent --state-dir /var/lib/forge-agent pins fetch --server https://192.0.2.10:3843
+192.0.2.10:3843 presents key sha256:<fingerprint>
+Compare it with 'forge-server agent-key show' on the server before you pin it.
+Pin this key? [y/N] y
+pinned <fingerprint>; the agent uses it from its next connection attempt
+```
+
+Answering anything but `y` exits with `not pinned` and changes nothing.
+
+:::caution
+Use `--yes` only on a network you trust, or after you checked the
+fingerprint another way. It pins whatever answers on the address.
+:::
+
+### The key mismatch error
+
+When the server presents a key that is not pinned, the link fails with this
+message in the agent log and in `forge-agent status`. The console shows the
+node as offline, because the link never reaches Forge:
+
+```text
+server key sha256:ab12cd34…ef56 is not pinned (pinned: sha256:9c3d0a11…44f0). If the server's key changed, run 'forge-server agent-key show' on the server and 'forge-agent pins add <fingerprint>' on this node. If it did not, something else is answering on 192.0.2.10:3843.
+```
+
+| Cause | Fix |
+| --- | --- |
+| The server switched keys with `agent-key rotate --now`, or while this node was offline for the whole grace period | Run `forge-server agent-key show` on the server, then `forge-agent pins add <current-fingerprint>` on the node |
+| The server was restored or reinstalled with a new key | Same fix; or re-enroll the node |
+| Another machine answers on this address (wrong IP, port forward, interception) | Do not pin. Fix the address in `server_url` in `agent.toml` or the network path |
 
 ---
 

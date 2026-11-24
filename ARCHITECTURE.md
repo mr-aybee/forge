@@ -105,11 +105,18 @@ phases add adapters (PostgreSQL, OpenBao, KMS) without touching services.
    per client address (`X-Forwarded-For` is trusted only from
    `[security] trusted_proxies`). The console may also be published on a
    domain through a cluster ingress edge that terminates TLS and proxies
-   plain HTTP (D-120): browser origins on WebSockets and `/mcp` are only
-   `public_url` and the runtime public address (never the `Host` header);
-   cookies get `Secure` from `cookie_secure` or from `X-Forwarded-Proto:
-   https` sent by a trusted proxy. Links Forge sends people use the public
-   address.
+   plain HTTP (D-120). The console has no fixed address (D-167): each
+   request's address comes from `Host`, or from the last `X-Forwarded-Host`
+   and `X-Forwarded-Proto` of a trusted proxy (`RequestOrigin`), and must
+   match the `server.allowed_hosts` patterns (default `*`) or gets `421`.
+   Browser origins on WebSockets and `/mcp` must equal the request's own
+   origin on an allowed host, or the pinned public address. Request-derived
+   addresses go only into links for signed-in users and the token-protected
+   install scripts; emails, alerts, webhooks, OIDC and OAuth use the pinned
+   public address or the address an administrator last signed in on.
+   Passkeys use the request's host as relying party. Cookies get `Secure`
+   from `cookie_secure` or from `X-Forwarded-Proto: https` sent by a trusted
+   proxy; HSTS only on HTTPS responses.
 2. **CLI ↔ control plane.** The `forge` CLI is a first-party OAuth client
    (`forge-app`) and holds only bearer tokens, kept in the OS credential
    store (or an owner-only file where there is none). It never sees a
@@ -124,7 +131,7 @@ phases add adapters (PostgreSQL, OpenBao, KMS) without touching services.
 3. **AI agent ↔ control plane (MCP).** Agents call `POST /mcp` (when
    `[mcp] enabled`) with a connector token: OAuth with dynamic client
    registration, consent in the console by the person's web session, and a
-   token bound to `<public_url>/mcp` (RFC 8707). Connector tokens are
+   token bound to `<public address>/mcp` (RFC 8707). Connector tokens are
    refused everywhere else, and `/mcp` refuses every other token. Each tool
    call is dispatched in process through the `/api/v1` router, so the
    normal handlers authorize and audit it; the connection's mode
@@ -132,8 +139,18 @@ phases add adapters (PostgreSQL, OpenBao, KMS) without touching services.
    hold MFA, and destructive or MFA-guarded actions need a person. See
    D-061 to D-063.
 4. **Control plane ↔ agent.** Agents dial out; servers need no inbound ports.
-   mTLS with per-agent certificates from the internal CA. Every command is
-   signed (Ed25519), bound to one agent id, expires, and is replay-checked.
+   mTLS with per-agent certificates from the internal CA. Agents trust the
+   server by its **pinned control-plane key** (D-167), not its host name:
+   the agent and upload listeners present CA certificates for one
+   long-lived key, sealed in the database and renewed in place. Agents
+   accept only a leaf whose SubjectPublicKeyInfo SHA-256 is in their pin set
+   (root-owned `pins.toml` on Linux), so they connect on any address. The
+   enrollment token carries the first fingerprint; heartbeat replies
+   announce the current and next keys, signed with the command key, and the
+   server rotates (`[agent_tls]`) only once online agents acknowledge the
+   next key. Agents without pins keep CA plus host-name checks. Every
+   command is signed (Ed25519), bound to one agent id, expires, and is
+   replay-checked.
 5. **Control plane ↔ plugin runner.** Plugins run in a separate process with no
    WASI imports (no files, no network). The only imports are typed host
    functions, which the host checks with *effective permission = user ∩ plugin
@@ -152,9 +169,9 @@ phases add adapters (PostgreSQL, OpenBao, KMS) without touching services.
    `0.0.0.0:3832`) is a second network-facing mTLS endpoint for agents:
    HTTP/2, client certificates verified against the Forge CA, the node
    must be in the pushed active-node list, and a file must name the
-   certificate's node. Its server certificate and key are issued by
-   `forge-server` at each worker start and passed on stdin, never written
-   to disk. The worker does not check revocation itself; a revoked node
+   certificate's node. Its server certificate (for the pinned control-plane
+   key) and key are issued by `forge-server` at each worker start and
+   passed on stdin, never written to disk. The worker does not check revocation itself; a revoked node
    leaves the active list. See D-142.
 7. **Apps ↔ agent (local log listener).** The agent listens on
    `127.0.0.1:5341` and on the Docker bridge gateway (a private IPv4 the

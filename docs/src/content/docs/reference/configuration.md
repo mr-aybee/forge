@@ -14,10 +14,10 @@ rejected, so typos fail loudly.
 | `database_url` | `sqlite:<data_dir>/forge.db` | Older one-line form: `sqlite:…` or `postgres://…`. When set it wins over `[database]`. Env: `FORGE_DATABASE_URL` |
 | `api_listen` | `127.0.0.1:3880` | API + UI listener (plain HTTP; front with TLS) |
 | `agent_listen` | `0.0.0.0:3843` | Agent mTLS listener |
-| `agent_hostnames` | `["localhost", "127.0.0.1"]` | Names/IPs in the agent listener certificate |
-| `public_url` | `http://localhost:3880` | External API/UI URL: the direct address of the console. Default for the [public address](#public-address) in links, and always an allowed browser origin. Also the WebAuthn relying party, the OAuth issuer for AI connectors and the SFTP host default |
-| `agent_public_url` | `https://localhost:3843` | Printed in enrollment instructions |
-| `node_public_url` | `public_url` | API URL as reachable from nodes (installer downloads) |
+| `agent_hostnames` | `["localhost", "127.0.0.1"]` | Names/IPs in the agent listener certificate. Agents that pin the [server key](/docs/concepts/security-model/#pinned-server-key) ignore names; agents enrolled before pinning still check them until they receive a pin |
+| `public_url` | unset | Optional. Pins the console's address: an `http` or `https` origin such as `https://forge.example.com`. Unset, the console answers on any address and links in the console use the address you are on; background links use the [public address](#public-address). Refused at start: a path, a missing scheme, or a listen-everywhere host (`0.0.0.0`, `::`). Env: `FORGE_PUBLIC_URL` (empty means unset). Installer: `--public-url <url>` |
+| `agent_public_url` | `https://localhost:3843` | The agent URL in install commands requested on the pinned address. On any other address, commands use `https://<the host you are on>:<agent_listen port>` |
+| `node_public_url` | the address you are on | API URL nodes download the installer and agent from. Set it when nodes reach the console under another address. Background node work (SSH bootstrap, agent updates) uses it, else `public_url`, else `http://localhost:3880` |
 | `agent_dist_dir` | `<data_dir>/dist` | Agent binaries handed to nodes: `forge-agent-linux-<arch>` and `forge-agent-helper-linux-<arch>` (`x86_64`, `aarch64`), served at `/agent/download/linux/<arch>/<binary>`, and `forge-agent-windows-x86_64.exe`, served at `/agent/download/windows/x86_64/forge-agent`. Releases ship only the Linux builds; a Windows agent build comes only from a source build of your own, which is not verified. The server hashes the builds at start-up and bakes the hashes into the installers, so restart it after you add or replace a build. `MANIFEST.json` in the folder (`{"version": "<version>", "files": {"<file>": "<sha256>"}}`) names the version of these builds: agent updates go to that version, not the server's. A build missing from the manifest, or with another hash, is not served; an unreadable manifest serves nothing. Without a manifest, the builds count as the server's own version. Release packages and the self-updater write it; for your own builds run `python3 scripts/dev/dist_manifest.py <dir> <version>` |
 | `cookie_secure` | `true` | `Secure` flag on session cookies. With `false`, cookies still get `Secure` on requests that a [trusted proxy](#security) reports as HTTPS (`X-Forwarded-Proto: https`) |
 | `environment` | `"production"` | Where this control plane runs: `production`, `staging`, `development` or `test`. It does not decide whether MFA is required (see `[security]`). Env: `FORGE_ENVIRONMENT`. Installer: `--environment <name>` |
@@ -46,7 +46,7 @@ sign-in needs a login challenge. Both are on by default. See
 | `security.captcha_after_failures` | integer (failed sign-ins) | `2` | After this many failed password sign-ins for a sign-in name, or from one client address, within 15 minutes, the next sign-in also needs the characters from an image CAPTCHA (`GET /api/v1/auth/captcha`). Failures count per name and per address, loopback included; a successful sign-in clears the name's count, not the address's. `0` turns it off. Passkey and SSO sign-in are not affected. Env: `FORGE_CAPTCHA_AFTER_FAILURES` |
 | `security.refresh_token_days` | integer (days) | `30` | Absolute lifetime of an app's refresh token, counted from the original sign-in. Refreshing gives new tokens but never extends it; after it the app must sign in again. `1` to `365` |
 | `security.allow_elevated_tokens` | boolean | `true` | API keys and service-account tokens marked elevated count as MFA-verified, so CI can run MFA-guarded actions without a prompt. `false` refuses new elevated tokens (`elevated_tokens_disabled`) and makes existing ones act as normal tokens. Change it with `forge-server elevated-tokens on\|off` and restart. Env: `FORGE_ALLOW_ELEVATED_TOKENS` (`false`, `0`, `off` or `no` turn it off) |
-| `security.trusted_proxies` | list of IP addresses or CIDRs | `[]` | Reverse proxies, such as ingress edge nodes, whose `X-Forwarded-For` and `X-Forwarded-Proto` headers Forge trusts. `X-Forwarded-For` gives the client address for per-address sign-in limits; `X-Forwarded-Proto: https` makes session cookies `Secure` when `cookie_secure = false`. From any other peer both headers are ignored. With the default, Forge uses the TCP peer and ignores the headers. Installer: `--trusted-proxies <list>`. Example: `["127.0.0.1", "10.0.0.0/8"]` |
+| `security.trusted_proxies` | list of IP addresses or CIDRs | `[]` | Reverse proxies, such as ingress edge nodes, whose `X-Forwarded-For`, `X-Forwarded-Host` and `X-Forwarded-Proto` headers Forge trusts. `X-Forwarded-For` gives the client address for per-address sign-in limits. `X-Forwarded-Host` and `X-Forwarded-Proto` give the address the browser used, for links, same-origin checks, [allowed hosts](#allowed-hosts) and passkeys; `X-Forwarded-Proto: https` also makes session cookies `Secure` when `cookie_secure = false`. Forge uses the **last** value of each header. From any other peer the headers are ignored. `0.0.0.0/0` and `::/0` are refused at start. Installer: `--trusted-proxies <list>`. Example: `["127.0.0.1", "10.0.0.0/8"]` |
 
 ```toml
 [security]
@@ -57,6 +57,8 @@ refresh_token_days = 30
 allow_elevated_tokens = true
 trusted_proxies = ["127.0.0.1"]
 ```
+
+See [Reverse proxy headers](#reverse-proxy-headers) for proxy snippets.
 
 At every start the server logs an `MFA policy` info line with
 `required_for_guarded_actions`. When the setting differs from the last start, the audit
@@ -107,38 +109,153 @@ of the console. Keep a way in (SSH to the control plane) when you change it.
 
 ### Public address
 
-The public address is the URL people use to reach the console. Forge puts it
-in every link it sends: alert emails, webhook and Slack payloads
-(`links.alarm`), approval links for AI connectors, device sign-in
-(`verification_uri`), the OIDC redirect and the OpenAPI `servers` entry. It is
-a runtime setting, not a `forge.toml` key.
+Forge needs no fixed address. The console answers on every name and IP of
+the machine, and links built while you use the console (Add node commands,
+onboarding one-liners, device sign-in `verification_uri`, AI connector
+approval links, the OpenAPI `servers` entry) use the address you are on.
+
+The public address is for links built without a request: alert emails,
+webhook and Slack payloads (`links.alarm`), the mail host name, the OIDC
+redirect, the OAuth issuer for AI connectors and the SFTP host default.
+Forge takes the first of these that is set:
 
 | Source | Precedence | How to change it |
 | --- | --- | --- |
-| Runtime setting `server.public_address` | 1 (wins when set) | Console **Administration → Settings**, `forge settings public-address set <url>`, `forge-server public-address set <url>`, installer `--public-address <url>` |
-| `public_url` in `forge.toml` | 2 (fallback) | Edit the file and restart |
+| Runtime setting `server.public_address` | 1 (pinned) | Console **Settings → Server**, `forge settings public-address set <url>`, `forge-server public-address set <url>`, installer `--public-address <url>` |
+| `public_url` in `forge.toml` | 2 (pinned) | Edit the file and restart |
+| Last administrator address `server.last_admin_address` | 3 | Recorded automatically: the address a user with `system.update` on the platform last signed in on (password or passkey). Read-only |
+| none | | Alert links are left out until an administrator signs in |
 
 | Rule | Value |
 | --- | --- |
 | Type | string, an origin: `http` or `https`, a host and an optional port |
-| Default | unset (links use `public_url`) |
+| Default | unset: not pinned |
 | Refused | anything else: a path (even `/forge`), a query, a fragment, a user name or password, another scheme, more than 255 characters |
 | Stored as | lowercase host, default port dropped: `https://Forge.Example.com:443/` becomes `https://forge.example.com` |
 | Applies | at once, for changes made through the API or console. `forge-server public-address` writes the database only: restart a running server to apply it there. The OIDC redirect URL is read at start, so restart after a change when you use SSO |
-| Allowed browser origins | `public_url` and the public address. WebSocket endpoints (events, terminal, tunnels) and `/mcp` refuse any other `Origin`. The `Host` header is never used |
+| Allowed browser origins | the request's own origin on an [allowed host](#allowed-hosts), plus the pinned address. WebSocket endpoints (events, terminal, tunnels) and `/mcp` refuse any other `Origin`. A request with no `Origin` (CLI, scripts) passes |
 | Permission | read: `view` on the platform; change: `system.update` on the platform and an MFA-verified session. Audited as `server.public_address.update` and `server.public_address.clear` |
 
 ```sh
 forge settings public-address set https://forge.example.com
 ```
 
+Pin the address when you use SSO (`[oidc]` refuses to start without one:
+`[oidc] needs a pinned console address`), when AI connectors need a stable
+OAuth issuer, or when alert links must name a domain rather than the address
+an administrator happened to use.
+
 :::note
-Passkeys are bound to the host of `public_url` (the WebAuthn relying party).
-A passkey works only on that host: on the domain, sign in with a password
-and code, or set `public_url` to the domain.
+A passkey belongs to the host name it was registered on (the WebAuthn
+relying party is the address you are on). On another name or IP, sign in
+with a password and code, or register a passkey there too. Browsers offer
+passkeys only on HTTPS or `localhost`.
 :::
 
 See [Publish Forge on a domain](/docs/guides/publish-forge-on-a-domain/).
+
+### Allowed hosts
+
+The host names and IPs the console and API answer on. A request whose host
+(from `Host`, or `X-Forwarded-Host` from a [trusted proxy](#security)) is not
+allowed gets `421 Misdirected Request` with no body. A malformed host gets
+`400`. `/api/health` answers on every host. It is a runtime setting, not a
+`forge.toml` key.
+
+| Rule | Value |
+| --- | --- |
+| Key | `server.allowed_hosts` (JSON list of patterns) |
+| Default | `["*"]`: any host |
+| Patterns | `*`; an exact host name or IP (`forge.example.com`, `192.0.2.10`, `[2001:db8::1]`); `*.<domain>` (one or more labels under it, never `<domain>` itself or `<domain>.other.test`; `<domain>` needs two labels or more, so `*.com` is refused) |
+| Limits | 1 to 64 patterns; duplicates dropped; host names up to 253 characters |
+| How to change it | Console **Settings → Server**, `PUT`/`DELETE /api/v1/server/allowed-hosts`, `forge-server allowed-hosts set\|clear` |
+| Applies | at once through the API or console; restart after `forge-server allowed-hosts` |
+| Permission | `system.update` on the platform and an MFA-verified session. Audited as `server.allowed_hosts.update` and `server.allowed_hosts.clear` |
+
+```sh
+forge-server --config /etc/forge/forge.toml allowed-hosts set forge.example.com localhost 127.0.0.1
+```
+
+:::caution
+Once Forge has a domain, narrow the list to that domain plus the names you
+manage it from. With `*`, the console answers on any name that resolves to
+the machine. Keep `localhost` and `127.0.0.1` if you run commands on the
+server host, or you lock out local tools.
+:::
+
+### Reverse proxy headers
+
+Behind a reverse proxy, list the proxy in `[security] trusted_proxies` and
+have it send the original host and scheme. Forge then builds links, checks
+`Origin`, matches allowed hosts and scopes passkeys on the name the browser
+used.
+
+```toml
+[security]
+trusted_proxies = ["127.0.0.1"]
+```
+
+Nginx:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:3880;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+```
+
+Traefik sets `X-Forwarded-Host`, `X-Forwarded-Proto` and `X-Forwarded-For`
+by default. Route to the API listener:
+
+```yaml
+http:
+  routers:
+    forge:
+      rule: Host(`forge.example.com`)
+      entryPoints: [websecure]
+      service: forge
+      tls: {}
+  services:
+    forge:
+      loadBalancer:
+        servers:
+          - url: http://127.0.0.1:3880
+```
+
+Forge reads only the last value of each header, so a proxy that appends keeps
+client-supplied values out. `X-Forwarded-Proto` must be `http` or `https`.
+
+:::caution
+List only your proxies. A broad range such as `10.0.0.0/8` lets any machine
+in it claim any host and scheme. `0.0.0.0/0` and `::/0` are refused.
+:::
+
+### Agent TLS
+
+The `[agent_tls]` section sets how often the control-plane key that agents
+pin rotates. See [Pinned server key](/docs/concepts/security-model/#pinned-server-key).
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `agent_tls.rotate_days` | integer (days) | `365` | Days a key serves before Forge switches the agent and analytics listeners to the next key. The switch also waits for `grace_days` and for every online agent to acknowledge the next key. `0`: only `forge-server agent-key rotate` switches. `0` to `3650` |
+| `agent_tls.grace_days` | integer (days) | `30` | Days the next key is announced to agents before a switch. `0` to `365`, and less than `rotate_days` when that is not `0` |
+
+```toml
+[agent_tls]
+rotate_days = 365
+grace_days = 30
+```
+
+The listener certificate is renewed with the same key, in place, with no
+restart and no effect on agents. The keys are stored in the database,
+sealed with the server's envelope key; only fingerprints appear in output,
+the API and the audit log.
 
 ### Updates
 
@@ -175,7 +292,7 @@ The `[sftp]` section runs Forge's own SFTP server for
 | --- | --- | --- |
 | `sftp.enabled` | `false` | Run the gateway and allow temporary access. Env: setting `FORGE_SFTP_LISTEN` also enables it |
 | `sftp.listen` | `0.0.0.0:2022` | SFTP listener. Env: `FORGE_SFTP_LISTEN` |
-| `sftp.public_host` | host of `public_url` | Host name shown to users with each access |
+| `sftp.public_host` | host of the [public address](#public-address) | Host name shown to users with each access |
 | `sftp.public_port` | port of `sftp.listen` | Port shown to users, if a proxy or NAT maps another one |
 | `sftp.max_hours` | `168` | Longest lifetime of an access, in hours |
 | `sftp.allow_never_expiry` | `false` | Allow access that never expires. Even then, only users with `file.admin` on the node (**Admin**, **Platform admin**) may choose it. When `false`, `max_hours` caps every access |
@@ -203,7 +320,7 @@ change access that already exists; revoke it or set an expiry.
 ### MCP connectors
 
 The `[mcp]` section serves the [MCP endpoint](/docs/reference/mcp/) at
-`<public_url>/mcp` for AI agents, with OAuth discovery, client registration
+`<public address>/mcp` for AI agents, with OAuth discovery, client registration
 and the consent page. It is off by default. See
 [Connect AI agents](/docs/guides/connect-ai-agents/).
 
@@ -222,8 +339,10 @@ max_mode = "read_only"
 registrations_per_hour = 30
 ```
 
-`public_url` must be the HTTPS URL agents use: it is the OAuth issuer, the
-resource identifier and the only allowed `Origin`.
+Pin the [public address](#public-address) to the HTTPS URL AI agents use: it
+is the OAuth issuer and the resource identifier. Without a pinned address
+Forge uses the last administrator address, which changes when an
+administrator signs in on another name.
 
 ### Port tunnels
 
@@ -362,6 +481,11 @@ rejected.
 | `offered_commands` | string array | written by the agent | Command names an install or update has already offered. Managed by Forge; do not edit. A name listed here but missing from `allowed_commands` was removed on purpose and stays removed |
 | `analytics_url` | string | written by the agent | `https://host:port` of the analytics worker's upload listener, from enrollment. Heartbeat answers keep it current; do not edit. Missing when analytics was off at enrollment |
 
+The control-plane keys the agent pins are not in `agent.toml`. They live in
+`/var/lib/forge-agent-pins/pins.toml` on Linux (owned by root) and in
+`pins.toml` in the state directory on Windows. Manage them with
+[`forge-agent pins`](/docs/reference/cli/forge-agent/#forge-agent-pins).
+
 Default `allowed_commands`: `ping`, `collect_facts`, `service_status`,
 `package`, `container`, `app`, `site`, `dns`, `probe`, `ingress`, `fabric`,
 `storage`, `files`, `access`, `cancel`, `processes`, `process_action`,
@@ -429,7 +553,7 @@ password_file = "/etc/forge/db-password"
 | `worker_memory_limit_mb` | `2048` | Resident memory of the analytics worker process, MiB, above which `forge-server` restarts it. `0` is no limit; otherwise at least `128`. Does not include the embedded engine, which has its own budget (`embedded_memory_mb`). With `duckdb` it does include DuckDB, which runs inside the worker |
 | `worker_binary` | `forge-analytics-worker` next to `forge-server` | Path of the analytics worker binary |
 | `worker_agent_listen` | `0.0.0.0:3832` | Address where the analytics worker accepts spool uploads from agents (HTTP/2 over mTLS). Nodes must reach this port; see [Network ports](/docs/reference/network-ports/) |
-| `worker_agent_url` | `https://<host of agent_public_url>:<port of worker_agent_listen>` | URL agents upload spool files to, sent at enrollment and in every heartbeat answer. Its host must be one of `agent_hostnames`, which the worker's certificate names. Set it when nodes reach the worker under another name or port, for example through NAT |
+| `worker_agent_url` | unset | URL agents upload spool files to. Unset, Forge sends agents the port of `worker_agent_listen`, and each agent dials it on the host of its own `server_url`, so every node uses the address it already reaches Forge by. Agents enrolled before key pinning use `https://<host of agent_public_url>:<port>`. Set it when nodes reach the worker under another name or port, for example through NAT; agents then use it as given |
 | `worker_max_uploads` | `32` with `duckdb`, else `8` | Spool files the worker imports at once, `8` to `32`; with `duckdb`, every file waiting is written in one batch, so more slots mean larger batches; other values stop the server at startup. Each slot is one agent upload in flight, so a higher value stores more rows per second and uses more network. One more upload answers `429` at once; the agent backs off and retries, and the file waits in its spool. On a 2-CPU engine, 4 slots stored about 4,000 rows/s and 32 about 10,000 rows/s (see `scripts/dev/benchmarks/2026-11-21-chdb-capped-node-scaling.md`) |
 | `cpu_quota_vcpu` | `0` | `embedded`: CPU cap of the engine, vCPUs (decimal). `0` is no cap; otherwise 0.1–256. Rounded up to whole CPUs: the engine is pinned to them (CPU affinity) and its thread pools are sized to match. Linux only. `duckdb`: DuckDB's `threads`, rounded up; `0` uses 2 threads |
 | `memory_limit_mb` | none | Removed. Still accepted so an older `forge.toml` loads, but ignored with a warning: `embedded_memory_mb` caps the engine's memory |

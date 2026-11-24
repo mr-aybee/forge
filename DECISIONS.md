@@ -5673,3 +5673,80 @@ A delivery may pick the image tag (`?tag=` or a JSON `"tag"`) only when the webh
 **Decision.** `develop` is removed. `master` is the default and only long-lived branch: work happens on short branches cut from `master` and lands through squash-merged pull requests into `master`. CI runs on every pull request into `master` and every push to it. A tag on `master` runs the release pipeline. The branch ruleset now protects `master` only: pull request and green CI required, no force pushes or deletion, and only organization admins may merge, tag or publish releases.
 
 **Why.** With one maintainer, the `develop` → `master` → `develop` round trip added two pull requests and two CI runs per release without catching anything a pull request into `master` does not.
+
+## D-167 Any-address control plane
+
+**Context.** Forge needed one fixed console URL (`public_url`), asked for at
+install. Agents checked the server certificate's host name against
+`agent_hostnames`, so a node could only use the names baked in at install, and
+a server on several networks, behind NAT or renamed later needed config edits
+and re-enrollment. The browser `Origin` checks compared against `public_url`
+and the runtime public address only (D-120).
+
+**Decision.**
+- **No fixed address.** `public_url` is optional; installers no longer ask
+  for it. The console answers on every name and IP. A `RequestOrigin`
+  extractor takes the request's scheme and host from `Host`, or from the last
+  `X-Forwarded-Host`/`X-Forwarded-Proto` of a peer in `trusted_proxies`, and
+  validates it strictly (else `400`).
+- **Allowed hosts.** A runtime setting `server.allowed_hosts` (default `*`;
+  `*`, exact host or IP, `*.domain`) is enforced as middleware: other hosts
+  get `421` with no body. Edited in Settings → Server, the API
+  (`/server/allowed-hosts`) and `forge-server allowed-hosts`; audited.
+- **Same-origin checks.** WebSocket and `/mcp` `Origin` must equal the
+  request's own origin on an allowed host, or the pinned address. This
+  supersedes the fixed-origin rule of D-120.
+- **Links.** Request-time links (Add node commands, install scripts, device
+  and approval links, OpenAPI) use the request's address. The agent URL is
+  `https://<request host>:<agent port>`, so each node enrolls on the address
+  it reached. Background links (alerts, webhooks, mail host, OIDC, OAuth
+  issuer) use the pinned address (`server.public_address`, else
+  `public_url`), else the address a platform administrator last signed in on
+  (`server.last_admin_address`). OIDC refuses to start without a pinned
+  address.
+- **Passkeys** use the request's host and origin as relying party.
+- **Pinned server key.** The agent and analytics upload listeners present
+  Forge CA certificates for one long-lived control-plane key, sealed with the
+  envelope key in the settings table (`agent_tls.keys`) and renewed in place
+  with the same key. Agents accept the server only if the leaf's
+  SubjectPublicKeyInfo SHA-256 is in their pin set (at most 8; root-owned
+  `/var/lib/forge-agent-pins/pins.toml` on Linux), the certificate is valid
+  now and has ServerAuth. No host-name check. The enrollment token carries
+  `server_key_sha256`; heartbeat replies announce current and next keys,
+  signed with the command key and applied by the root helper.
+- **Rotation.** `[agent_tls] rotate_days` (365; 0 = manual) and `grace_days`
+  (30): the server switches to the next key only after the grace period and
+  once every online pinning agent acknowledged it, or at once with
+  `forge-server agent-key rotate --now`. The previous key is kept sealed for
+  one rotation. Manual recovery: `forge-server agent-key show|list|rotate`,
+  `forge-agent pins list|add|remove|fetch`. A mismatch names both
+  fingerprints and the commands to run.
+- **Analytics port.** Agents get the worker's port and dial it on the host of
+  their own `server_url`; the full `analytics_url` is still sent.
+
+**Why.** A fixed address is the most common install question to get wrong,
+and it breaks for multi-homed servers, NAT and later domains. Pinning a key
+instead of a name keeps the agent link as strict as before (stricter: another
+certificate from the same CA is refused) while making the address irrelevant.
+Request-derived links match what the operator sees; keeping them out of
+emails, webhooks and OIDC prevents Host-header link poisoning.
+
+**Security notes.** Forwarded headers count only from `trusted_proxies`, and
+`0.0.0.0/0` and `::/0` are refused there. Only the last forwarded value is
+used. `*.domain` matches at a dot boundary and needs two labels. HSTS is sent
+only on HTTPS responses. Key material never leaves the server unsealed; only
+fingerprints appear in output, the API and audit (`agent_key.create`,
+`agent_key.rotate`, `agent_key.rotate_request`, `server.allowed_hosts.*`).
+Pins are root-owned on Linux; only signed announcements and root
+`forge-agent pins` change them, and `pins fetch` needs confirmation or
+`--yes`. `/install.sh` is still plain HTTP behind a token: an existing risk;
+the docs recommend HTTPS for untrusted networks. Listening on `0.0.0.0` is
+narrowed by the cloud firewall, the host firewall and `[security.access]`.
+
+**Compatibility.** Installs with `public_url` keep it as the pinned address;
+allowed hosts default to `*`, so nothing is refused after an update. A
+`public_url` of `0.0.0.0` or with a path now stops the server at start.
+Existing agents keep CA plus host-name checks until they receive a pin over
+their existing link; the listener certificate keeps `agent_hostnames`.
+Older agents keep using `analytics_url`. Passkeys stay bound to the name they
+were registered on.

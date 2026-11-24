@@ -11,6 +11,42 @@ that can refuse settings you saved before, so you know what to check after
 you update. Forge runs migrations automatically on start, on SQLite and
 PostgreSQL alike.
 
+## Any address: no fixed console URL, agents pin the server key
+
+- **`public_url` is optional.** An existing `forge.toml` keeps it, and it
+  stays the pinned address for emails, alerts, SSO and AI connectors. The
+  console now also answers on every other name and IP of the server, and
+  links built in the console (Add node commands, approval and device links)
+  use the address you are on. A `public_url` of `0.0.0.0`, without a scheme,
+  or with a path stops the server at start: fix or remove it.
+- **Allowed hosts default to `*`.** Nothing is refused after the update.
+  Narrow the list in **Settings → Server** if Forge has a domain; see
+  [Allowed hosts](/docs/reference/configuration/#allowed-hosts).
+- **`trusted_proxies` of `0.0.0.0/0` or `::/0` stops the server at start.**
+  List your proxies instead. Trusted proxies now also set the host and scheme
+  through `X-Forwarded-Host` and `X-Forwarded-Proto`.
+- **Same-origin checks.** WebSocket and `/mcp` requests need a browser
+  `Origin` equal to the address the request came in on, or the pinned
+  address. A proxy that rewrites `Host` without sending `X-Forwarded-Host`
+  from a trusted address breaks live updates on names other than the pinned
+  one; see [Reverse proxy headers](/docs/reference/configuration/#reverse-proxy-headers).
+- **HSTS** is sent only on HTTPS responses, no longer whenever
+  `cookie_secure = true`.
+- **Control-plane key.** On first start the server creates a control-plane
+  key pair (audited as `agent_key.create`) and serves the agent and
+  analytics listeners with a certificate for it. Renewal keeps the key.
+- **Existing agents** keep checking the CA and the host name until they
+  update. An updated agent receives the key in its next heartbeat reply over
+  its existing link and pins it; no re-enrollment is needed. Agents that are
+  not updated keep working: their enrolled URL still matches the
+  certificate's names.
+- **Analytics uploads.** New agents dial the worker on the host of their own
+  `server_url`. Older agents keep using `analytics_url`, which the server
+  still sends.
+- **Passkeys** are bound to the name they were registered on, as before when
+  that name was `public_url`. On another name, sign in with a password and
+  code.
+
 ## Agents update to the version in the agent folder's manifest
 
 - **`agent_dist_dir` has a `MANIFEST.json`** with the version of the agent

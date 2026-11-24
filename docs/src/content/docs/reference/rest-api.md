@@ -1395,33 +1395,61 @@ every key that starts with `agents.` with `400`.
 
 ## Server settings
 
-Server-level settings, shown in the console under **Administration →
-Settings**. See [Public address](/docs/reference/configuration/#public-address).
+Server-level settings, shown in the console under **Settings → Server**. See
+[Public address](/docs/reference/configuration/#public-address) and
+[Allowed hosts](/docs/reference/configuration/#allowed-hosts).
 
 | Method | Path | Permission |
 | --- | --- | --- |
-| GET | `/server/settings` | `view` on the platform (a platform-scope role) — `{public_address, config}` |
-| PUT | `/server/public-address` | `system.update` on the platform, MFA-verified session — `{value}` sets the public address. Audited as `server.public_address.update` (refusals as `denied`) |
-| DELETE | `/server/public-address` | Same — clears it; links use `public_url`. Audited as `server.public_address.clear` |
+| GET | `/server/settings` | `view` on the platform (a platform-scope role) — `{public_address, allowed_hosts, config}` |
+| PUT | `/server/public-address` | `system.update` on the platform, MFA-verified session — `{value}` pins the public address. Audited as `server.public_address.update` (refusals as `denied`) |
+| DELETE | `/server/public-address` | Same — clears it; background links use `public_url`, else the last administrator address. Audited as `server.public_address.clear` |
+| PUT | `/server/allowed-hosts` | `system.update` on the platform, MFA-verified session — `{hosts: [string]}` replaces the allowed host patterns. Applies at once. Audited as `server.allowed_hosts.update` with `from` and `to` (refusals as `denied`) |
+| DELETE | `/server/allowed-hosts` | Same — back to `["*"]`, any host. Audited as `server.allowed_hosts.clear` |
 
-`PUT` and `DELETE` answer with the `public_address` object:
+`PUT` and `DELETE /server/public-address` answer with the `public_address`
+object:
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `effective` | string | The address links use now, without a trailing `/` |
-| `source` | `setting` or `config` | Where `effective` comes from |
+| `effective` | string | The address background links (alerts, OIDC) use now, without a trailing `/`; empty when none is known yet. Links in the console use the address you are on |
+| `source` | `setting`, `config`, `last_admin` or `none` | Where `effective` comes from: the runtime setting, `public_url`, the address an administrator last signed in on, or nothing yet |
 | `setting` | string or `null` | The runtime setting |
-| `configured` | string | `public_url` from `forge.toml` |
+| `configured` | string or `null` | `public_url` from `forge.toml` |
+| `last_admin` | string or `null` | The address a platform administrator last signed in on; recorded automatically, read-only |
 | `https` | boolean | Whether `effective` uses `https` |
-| `allowed_origins` | string[] | Browser origins the WebSocket endpoints and `/mcp` accept: the origins of `public_url` and of the setting |
+| `allowed_origins` | string[] | Browser origins the WebSocket endpoints and `/mcp` accept besides the request's own origin on an allowed host |
 
-`config` holds `public_url`, `node_public_url`, `agent_public_url`,
-`cookie_secure` and `trusted_proxies` from `forge.toml`, read-only.
+`PUT` and `DELETE /server/allowed-hosts` answer with the `allowed_hosts`
+object:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `hosts` | string[] | The patterns |
+| `any` | boolean | Whether `*` is in the list |
+
+`config` holds `public_url` (string or `null`), `node_public_url`,
+`agent_public_url`, `cookie_secure` and `trusted_proxies` from `forge.toml`,
+read-only.
 
 `value` must be an `http` or `https` origin, at most 255 characters, without a
-path, query, fragment, user name or password. Anything else is `400`. The
-generic `PUT /settings/{key}` and `DELETE /settings/{key}` refuse keys that
-start with `server.` with `400`.
+path, query, fragment, user name or password. Anything else is `400`.
+
+`hosts` holds 1 to 64 patterns: `*`, a host name, an IP (IPv6 in brackets),
+or `*.<domain>` where `<domain>` has at least two labels (`*.com` is
+refused). Duplicates are dropped. A pattern with a port, a path, a space, or
+a wildcard anywhere but the first label is `400` `hosts: <reason>`.
+
+The generic `PUT /settings/{key}` and `DELETE /settings/{key}` refuse keys
+that start with `server.` with `400`, and keys that start with `agent_tls.`
+with `400` `the agent key is managed with forge-server agent-key`. `GET
+/settings` does not list `agent_tls.` keys. There is no REST endpoint for the
+control-plane key; use [`forge-server agent-key`](/docs/reference/cli/forge-server/#forge-server-agent-key)
+on the server host.
+
+Every endpoint except `GET /api/health` answers `421 Misdirected Request`,
+with no body, when the request's host is not allowed, and `400` when the
+`Host` (or a trusted `X-Forwarded-Host`) is malformed.
 
 ```sh
 curl -sS -X PUT https://<forge-host>/api/v1/server/public-address \
@@ -1430,7 +1458,17 @@ curl -sS -X PUT https://<forge-host>/api/v1/server/public-address \
 ```
 
 ```json
-{"effective":"https://forge.example.com","source":"setting","setting":"https://forge.example.com","configured":"http://192.0.2.10:3880","https":true,"allowed_origins":["http://192.0.2.10:8080","https://forge.example.com"]}
+{"effective":"https://forge.example.com","source":"setting","setting":"https://forge.example.com","configured":null,"last_admin":"http://192.0.2.10:3880","https":true,"allowed_origins":["https://forge.example.com"]}
+```
+
+```sh
+curl -sS -X PUT https://<forge-host>/api/v1/server/allowed-hosts \
+  -H "Authorization: Bearer $FORGE_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"hosts":["forge.example.com","192.0.2.10","localhost"]}'
+```
+
+```json
+{"hosts":["forge.example.com","192.0.2.10","localhost"],"any":false}
 ```
 
 ## Analytics settings

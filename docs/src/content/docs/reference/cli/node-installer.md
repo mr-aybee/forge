@@ -67,13 +67,25 @@ The control plane bakes these values into the script:
 
 | Variable in the script | Value |
 | --- | --- |
-| `FORGE_URL` | `node_public_url` (or `public_url`), without a trailing `/`. Used for downloads and progress reports |
-| `AGENT_URL` | `agent_public_url`. Passed to `forge-agent enroll --server` |
+| `FORGE_URL` | `node_public_url` when set; otherwise the address the script was requested on (scheme, host and port), without a trailing `/`. Used for downloads and progress reports |
+| `AGENT_URL` | `https://<host the script was requested on>:<agent_listen port>`. When that host is the pinned address's host, `agent_public_url` instead. Passed to `forge-agent enroll --server` |
 | `SSH_USER_CA` | The public key of Forge's SSH user CA, for the browser terminal |
 | `TERMINAL_ACCOUNT` | `terminal_account`, or empty |
 | `TERMINAL_ACCOUNT_SUDO` | `1` when `terminal_account_sudo` is on and an account is given, otherwise `0` |
 | `AGENT_SHA`, `HELPER_SHA` | SHA-256 of `forge-agent-linux-<arch>` and `forge-agent-helper-linux-<arch>` in `agent_dist_dir`, per architecture. Empty when the file is missing |
 | `FORGE_ENROLL_TOKEN` | Assisted path only: the job's single-use token. The manual script requires the variable from the environment instead |
+
+So a node that fetches `/install.sh` from `http://192.0.2.10:3880` enrolls
+against `https://192.0.2.10:3843`, and a node that fetches it from
+`http://10.0.0.5:3880` enrolls against `https://10.0.0.5:3843`. Each node keeps
+the address it used. The agent checks the server's pinned key, not the name,
+so every address of the control plane works. Behind a
+[trusted proxy](/docs/reference/configuration/#reverse-proxy-headers), the host
+comes from `X-Forwarded-Host`.
+
+The script still requires a valid enrollment token before it renders
+anything. It is served over plain HTTP unless you put a TLS proxy in front;
+use HTTPS for nodes outside networks you trust.
 
 See [Configuration](/docs/reference/configuration/) for `node_public_url`,
 `agent_public_url` and `agent_dist_dir`.
