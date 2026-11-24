@@ -84,7 +84,7 @@ headers. Terminate TLS in front of it.
 
 Pull requests and pushes only check that the website and docs build
 (`ci.yml`). The image is built and pushed to
-`ghcr.io/orbyntech/forge-website` by the release workflow, after each
+`ghcr.io/mr-aybee/forge-website` by the release workflow, after each
 release, and by hand with **Actions → Website image → Run workflow**
 (`.github/workflows/website.yml`) for a fix between releases. A release dry
 run builds the image without pushing it.

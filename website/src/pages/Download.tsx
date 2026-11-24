@@ -41,13 +41,13 @@ tar xzf forge-${v}-x86_64-linux.tar.gz
 cd forge-${v}-x86_64-linux
 sudo ./install.sh --public-url http://forge.example.com:8080`;
     case "windows":
-      return `# PowerShell as Administrator
-Invoke-WebRequest ${base}/forge-${v}-x86_64-windows.zip -OutFile forge.zip
-Expand-Archive forge.zip -DestinationPath .
-cd forge-${v}-x86_64-windows
-.\\install.ps1 -PublicUrl http://forge.example.com:8080`;
+      return `# The forge CLI for Windows x86_64. The Windows control plane
+# and agent are not in releases yet; build them from source.
+$f = "forge-cli-x86_64-pc-windows-msvc.exe"
+Invoke-WebRequest ${base}/$f -OutFile forge.exe
+.\\forge.exe contexts add prod --server https://forge.example.com`;
     case "cli":
-      return `# Linux x86_64; see the CLI docs for Windows and macOS
+      return `# Linux x86_64; see the CLI docs for Windows
 curl -fLO ${base}/forge-cli-x86_64-unknown-linux-musl
 sudo install -m 0755 forge-cli-x86_64-unknown-linux-musl /usr/local/bin/forge
 forge contexts add prod --server https://forge.example.com
@@ -57,15 +57,14 @@ forge auth login`;
 
 const TABS: { id: Os; label: string; note: string }[] = [
   { id: "linux", label: "Linux", note: "x86_64 and arm64 with systemd: Debian, Ubuntu, RHEL, Rocky, Alma and more." },
-  { id: "windows", label: "Windows", note: "Windows Server 2019, 2022 and 2025, and Windows 10 and 11." },
-  { id: "cli", label: "forge CLI", note: "The command-line client for Linux, Windows and macOS." },
+  { id: "windows", label: "Windows", note: "Releases ship only the forge CLI for Windows x86_64. The Windows control plane and agent build from source and are not yet verified." },
+  { id: "cli", label: "forge CLI", note: "The command-line client for Linux and Windows. On macOS, build it from source." },
 ];
 
 const PACKAGES = [
   ["forge-<version>-x86_64-linux.tar.gz", "Control plane for Linux x86_64"],
   ["forge-<version>-aarch64-linux.tar.gz", "Control plane for Linux arm64"],
-  ["forge-<version>-x86_64-windows.zip", "Control plane for Windows x86_64"],
-  ["forge-cli-<target>", "forge CLI for Linux, Windows and macOS"],
+  ["forge-cli-<target>", "forge CLI for Linux and Windows"],
   ["SHA256SUMS, SHA256SUMS.sig", "Checksums and their signature"],
   ["LICENSE.txt", "Apache License 2.0"],
 ];

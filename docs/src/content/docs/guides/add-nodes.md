@@ -16,7 +16,7 @@ service runs under an unprivileged `forge-agent` user; on Windows it is the
 | You provide | Host, SSH login of a **sudo-capable user** (password or key) | Nothing: you run one command on the machine |
 | Root login needed | No | No: Linux uses `sudo`; Windows needs PowerShell as Administrator |
 | Cedar action | `node.onboard` (needs an MFA-verified session) | `server.enroll` |
-| Platforms | Linux | Linux (`install.sh`) and Windows (`install.ps1`) |
+| Platforms | Linux | Linux (`install.sh`); Windows (`install.ps1`) only with an agent you build from source |
 
 For how agents connect and why they dial out, see [Agents](/docs/concepts/agents/).
 
@@ -36,8 +36,10 @@ For how agents connect and why they dial out, see [Agents](/docs/concepts/agents
 - The control plane has agent builds to serve. A release package ships them
   in `dist/` next to the server. Otherwise put `forge-agent-linux-<arch>` and
   `forge-agent-helper-linux-<arch>` (`x86_64`, `aarch64`) with a `SHA256SUMS`
-  file in `agent_dist_dir` (default `<data_dir>/dist`). For Windows nodes,
-  add `forge-agent-windows-x86_64.exe`. Until they exist, **Add a node**
+  file in `agent_dist_dir` (default `<data_dir>/dist`). Releases ship Linux
+  agents only; for Windows nodes, add your own `forge-agent-windows-x86_64.exe`
+  build (see [Add a Windows node](#add-a-windows-node-with-the-installer)).
+  Until they exist, **Add a node**
   warns and onboarding fails with a clear error.
 
 ## Add a node with its SSH login (assisted)
@@ -218,6 +220,16 @@ The Windows installer, `install.ps1`, downloads the agent, checks its
 SHA-256, installs it as the `ForgeAgent` service and enrolls the machine. You
 run one PowerShell command on the machine. For every step it performs, see
 [Node installer: Windows](/docs/reference/cli/node-installer/#windows-installps1).
+
+:::note
+Releases do not include a Windows agent yet. Windows nodes work only with an
+agent you build from source, and such builds are not verified. Build it with
+`cargo build --release -p forge-agent --target x86_64-pc-windows-msvc` on a
+Windows machine, copy `target/x86_64-pc-windows-msvc/release/forge-agent.exe`
+into `agent_dist_dir` as `forge-agent-windows-x86_64.exe`, add it to
+`MANIFEST.json` with `python3 scripts/dev/dist_manifest.py <dir> <version>`,
+and restart the control plane.
+:::
 
 Before you begin, check the machine:
 
@@ -449,7 +461,7 @@ The control node cannot be removed.
 | Windows: `this installer needs 64-bit Windows on x86_64` | 32-bit Windows, ARM64 Windows, or the 32-bit **Windows PowerShell (x86)** | Use the 64-bit PowerShell on 64-bit x86_64 Windows. ARM64 is not supported |
 | Windows: `Windows 10 1809 or Windows Server 2019 or later is needed (this is build <n>)` | The Windows build is older than 17763 | Upgrade Windows; older versions are not supported |
 | Windows: `set $env:FORGE_ENROLL_TOKEN to the token shown in Orbyn Forge` | No token in the session and the machine is not enrolled | Run the command from the **Add node** page and paste the token at the prompt |
-| Windows: `this Forge server has no Windows agent build` | `forge-agent-windows-x86_64.exe` is missing from `agent_dist_dir` | Add the build and restart the control plane |
+| Windows: `this Forge server has no Windows agent build` | `forge-agent-windows-x86_64.exe` is missing from `agent_dist_dir`. Releases do not include it | Build it from source, add it and restart the control plane |
 | Windows: `refusing a plain http:// server; set $env:FORGE_ALLOW_HTTP=1 only for a test lab` | The control plane's public URL is `http://` | Give the control plane an `https://` URL. In a test lab only, run `$env:FORGE_ALLOW_HTTP = '1'` first (it must be exactly `1`), then remove it with `Remove-Item Env:FORGE_ALLOW_HTTP`; the script does not clear it |
 | Windows: `checksum mismatch for forge-agent.exe (expected …, got …)` | The download differs from the checksum baked into the script. The control plane hashes the builds when it starts, so a build replaced in `agent_dist_dir` while it runs causes this; so does a proxy that rewrites downloads | Restart the control plane after you replace a build, then run the command again; if it persists, check for a proxy |
 | Windows: `<path> is a link (reparse point); this installer did not create it. Inspect and remove <folder>, then run the installer again` | `C:\ProgramData\OrbynForge` existed before the install, and it or an item in it is a junction, symbolic link or mount point | Find out who created the folder, remove it, then run the command again |

@@ -22,7 +22,7 @@ export function License() {
       <PageHero
         eyebrow="License"
         title="Open source. For everyone."
-        lead="Orbyn Forge is open source under the Apache License 2.0. The source is on GitHub at orbyntech/forge."
+        lead="Orbyn Forge is open source under the Apache License 2.0. The source is on GitHub at mr-aybee/forge."
       />
       <Container className="grid gap-4 py-16 md:grid-cols-2">
         <div className="rounded-[var(--forge-radius)] border border-line bg-raised p-6">

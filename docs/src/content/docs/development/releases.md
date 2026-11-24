@@ -129,7 +129,7 @@ tag, delete it (`git push origin :refs/tags/<tag>`), fix, and tag again.
    the assets, then publishes it (pre-release for `-rc-NN`). Only this job
    has write access, through the workflow's `GITHUB_TOKEN`.
 6. **Website image**: builds `website/Dockerfile` and, for a published
-   release, pushes it to `ghcr.io/orbyntech/forge-website` (see
+   release, pushes it to `ghcr.io/mr-aybee/forge-website` (see
    [Website and docs site](/docs/development/website/)).
 
 The asset names are a public contract: `install.sh`, `install.ps1`,

@@ -21,7 +21,7 @@ a pull request into `develop`.
    ```sh
    git clone https://github.com/<your-user>/forge.git
    cd forge
-   git remote add upstream https://github.com/orbyntech/forge.git
+   git remote add upstream https://github.com/mr-aybee/forge.git
    ```
 
 3. Create a branch from the latest `upstream/develop`:
