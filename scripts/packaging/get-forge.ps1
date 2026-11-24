@@ -3,7 +3,7 @@
   Downloads an Orbyn Forge release for Windows, verifies it and runs its installer.
 
 .EXAMPLE
-  Invoke-WebRequest https://github.com/mr-aybee/forge/releases/latest/download/get-forge.ps1 -OutFile get-forge.ps1
+  Invoke-WebRequest https://github.com/orbyntech/forge/releases/latest/download/get-forge.ps1 -OutFile get-forge.ps1
   .\get-forge.ps1                                   # latest stable release
   .\get-forge.ps1 -Version v0.0.1-rc-01             # one release, also a pre-release
   .\get-forge.ps1 -File .\forge-0.0.1-x86_64-windows.zip
@@ -22,7 +22,7 @@
   current folder without installing. Run in PowerShell as Administrator.
 
   Environment (testing and mirrors): FORGE_RELEASES_URL (default
-  https://github.com/mr-aybee/forge/releases) and
+  https://github.com/orbyntech/forge/releases) and
   FORGE_RELEASE_PUBLIC_KEY (another base64url release key).
 #>
 param(
@@ -40,7 +40,7 @@ $ProgressPreference = 'SilentlyContinue'   # Invoke-WebRequest is slow with a pr
 # Must equal RELEASE_PUBLIC_KEY in src/protocol/forge-sdk/src/release.rs
 # (the release workflow checks this).
 $PinnedKey = "6yf7l7jBEw6u446vqWAgt7P7bqEuaY5tpbYnWPHBmbg"
-$Base = if ($env:FORGE_RELEASES_URL) { $env:FORGE_RELEASES_URL.TrimEnd('/') } else { "https://github.com/mr-aybee/forge/releases" }
+$Base = if ($env:FORGE_RELEASES_URL) { $env:FORGE_RELEASES_URL.TrimEnd('/') } else { "https://github.com/orbyntech/forge/releases" }
 $Key = if ($env:FORGE_RELEASE_PUBLIC_KEY) { $env:FORGE_RELEASE_PUBLIC_KEY } else { $PinnedKey }
 
 function Fail([string]$m) { Write-Host ""; Write-Host "  x $m" -ForegroundColor Red; Write-Host ""; exit 1 }

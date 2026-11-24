@@ -216,8 +216,8 @@ py scripts\setup_testing\feed_server.py        # leave running
 
 ```bash
 FEED=http://10.50.0.1:8000
-TAG=$(curl -fsS -H "Authorization: token anything" $FEED/repos/mr-aybee/forge/releases/latest | jq -r .tag_name)
-curl -fLO -H "Authorization: token anything" "$FEED/mr-aybee/forge/releases/download/$TAG/forge-${TAG#v}-x86_64-linux.tar.gz"
+TAG=$(curl -fsS -H "Authorization: token anything" $FEED/repos/orbyntech/forge/releases/latest | jq -r .tag_name)
+curl -fLO -H "Authorization: token anything" "$FEED/orbyntech/forge/releases/download/$TAG/forge-${TAG#v}-x86_64-linux.tar.gz"
 tar xzf "forge-${TAG#v}-x86_64-linux.tar.gz" && cd "forge-${TAG#v}-x86_64-linux"
 sudo ./install.sh --public-url http://10.50.0.10:8080
 ```
@@ -234,7 +234,7 @@ Then point the updater at the feed in `/etc/forge/forge.toml` and restart:
 ```toml
 [update]
 enabled = true
-feed_url = "http://10.50.0.1:8000/repos/mr-aybee/forge/releases/latest"
+feed_url = "http://10.50.0.1:8000/repos/orbyntech/forge/releases/latest"
 public_key = "<scripts/setup_testing/.keys/release.pub>"
 ```
 

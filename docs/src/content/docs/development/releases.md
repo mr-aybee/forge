@@ -50,7 +50,7 @@ macOS. The repository is public, so these minutes are free.
 
 ### Repository settings
 
-Maintainers keep these settings on `mr-aybee/forge`:
+Maintainers keep these settings on `orbyntech/forge`:
 
 | Setting | Value |
 | --- | --- |
@@ -151,7 +151,7 @@ it again; existing assets are replaced (`--clobber`).
 
 ### Where releases are published
 
-Source and releases live in the same public repository, `mr-aybee/forge`,
+Source and releases live in the same public repository, `orbyntech/forge`,
 under the Apache License 2.0 (the root `LICENSE`, shipped in every package
 as `LICENSE.txt`). Releases appear under **Releases** on GitHub.
 
@@ -227,7 +227,7 @@ On the lab server, point the updater at the feed and trust that key:
 
 ```toml
 [update]
-feed_url = "http://192.0.2.1:8000/repos/mr-aybee/forge/releases/latest"
+feed_url = "http://192.0.2.1:8000/repos/orbyntech/forge/releases/latest"
 public_key = "<scripts/setup_testing/.keys/release.pub>"
 ```
 

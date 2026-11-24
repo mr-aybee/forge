@@ -24,11 +24,11 @@ production layouts, see [Installation](/docs/getting-started/installation/).
 On the server, download the bootstrap script of the latest release:
 
 ```sh
-curl -fsSLO https://github.com/mr-aybee/forge/releases/latest/download/get-forge.sh
+curl -fsSLO https://github.com/orbyntech/forge/releases/latest/download/get-forge.sh
 ```
 
 For a release candidate, use its tag instead of `latest`:
-`https://github.com/mr-aybee/forge/releases/download/<tag>/get-forge.sh`.
+`https://github.com/orbyntech/forge/releases/download/<tag>/get-forge.sh`.
 
 ## 2. Run the installer
 

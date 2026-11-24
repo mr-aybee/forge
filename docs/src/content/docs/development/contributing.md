@@ -7,21 +7,21 @@ sidebar:
 
 This page shows you how to propose a change to Forge through a pull request,
 and which checks and conventions the change must pass. The source is public at
-[`mr-aybee/forge`](https://github.com/mr-aybee/forge) under the Apache
+[`orbyntech/forge`](https://github.com/orbyntech/forge) under the Apache
 License 2.0.
 
 ## Send a change
 
-You can't push to `mr-aybee/forge` directly. Work in your own fork and open
+You can't push to `orbyntech/forge` directly. Work in your own fork and open
 a pull request into `develop`.
 
-1. Fork `mr-aybee/forge` on GitHub (**Fork** on the repository page).
+1. Fork `orbyntech/forge` on GitHub (**Fork** on the repository page).
 2. Clone your fork and add the main repository as `upstream`:
 
    ```sh
    git clone https://github.com/<your-user>/forge.git
    cd forge
-   git remote add upstream https://github.com/mr-aybee/forge.git
+   git remote add upstream https://github.com/orbyntech/forge.git
    ```
 
 3. Create a branch from the latest `upstream/develop`:
@@ -51,7 +51,7 @@ a pull request into `develop`.
    ```
 
 7. On GitHub, open a pull request from your branch into
-   `mr-aybee/forge:develop`.
+   `orbyntech/forge:develop`.
 
 CI runs on the pull request. The first time you contribute, a maintainer
 must approve the workflow run before it starts. A maintainer reviews the

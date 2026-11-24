@@ -11,8 +11,8 @@ repository; the documentation stays here, next to the code it describes.
 
 | Part | Repository | Path |
 | --- | --- | --- |
-| Website (home, features, download, license pages) | `github.com/mr-aybee/forge-website` | the repository root |
-| Documentation (Astro Starlight) | `github.com/mr-aybee/forge` | `docs/` |
+| Website (home, features, download, license pages) | `github.com/orbyntech/forge-website` | the repository root |
+| Documentation (Astro Starlight) | `github.com/orbyntech/forge` | `docs/` |
 | Brand tokens (colours, fonts, radii) | both | `src/styles/tokens.css` there, `docs/src/styles/tokens.css` here |
 
 The docs keep their own copy of the brand tokens. When you change the
@@ -37,13 +37,13 @@ repository at a branch or tag (`FORGE_REF`, default `master`), builds
 `docs/`, and serves it at `/docs/` beside the website:
 
 ```sh
-git clone https://github.com/mr-aybee/forge-website.git
+git clone https://github.com/orbyntech/forge-website.git
 cd forge-website
 docker build --build-arg FORGE_REF=master -t forge-website .
 docker run --rm -p 8080:8080 forge-website     # http://localhost:8080 and /docs/
 ```
 
 The website repository's **Website image** workflow pushes
-`ghcr.io/mr-aybee/forge-website` on every push to its `master`, or by hand
+`ghcr.io/orbyntech/forge-website` on every push to its `master`, or by hand
 with a chosen Forge ref. A docs change here reaches the live site the next
 time that image is built.

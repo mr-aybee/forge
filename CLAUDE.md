@@ -3,7 +3,7 @@
 Guidance for AI coding agents and human contributors working in this repository.
 More specific rules live next to the code: [`src/ui/CLAUDE.md`](src/ui/CLAUDE.md)
 and [`docs/CLAUDE.md`](docs/CLAUDE.md). The website lives in its own repository,
-`github.com/mr-aybee/forge-website`.
+`github.com/orbyntech/forge-website`.
 
 ## Project
 
@@ -15,7 +15,7 @@ PowerDNS, guacd, databases) and never reimplements them.
   authorization, agents, durable jobs, audit, plugins and the console.
 - **Read first:** `ARCHITECTURE.md`, then `DECISIONS.md`. The product plan is
   `plans/inital_plan.md`.
-- **Repository:** `github.com/mr-aybee/forge` holds the source, releases and
+- **Repository:** `github.com/orbyntech/forge` holds the source, releases and
   issues. Contributors fork it and open PRs into `develop` (see `CONTRIBUTING.md`).
 
 ## Layout
@@ -170,7 +170,7 @@ unless asked.
 
 ## Workflow
 
-- Fork `mr-aybee/forge`, clone your fork, and branch from `upstream/develop`.
+- Fork `orbyntech/forge`, clone your fork, and branch from `upstream/develop`.
   Open a PR into `develop`. `feat/…` and `fix/…` PRs are squash-merged into
   `develop`; `develop` is merged into `master` with a merge commit, never
   squashed, and `master` is then merged back into `develop` the same way.

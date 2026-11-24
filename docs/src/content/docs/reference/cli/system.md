@@ -66,9 +66,9 @@ $ forge -o json system update
     "enabled": true,
     "latest": {
       "assets": {
-        "SHA256SUMS": "http://192.0.2.1:8000/mr-aybee/forge/releases/download/v0.1.1-dev.20261113.214755/SHA256SUMS",
-        "SHA256SUMS.sig": "http://192.0.2.1:8000/mr-aybee/forge/releases/download/v0.1.1-dev.20261113.214755/SHA256SUMS.sig",
-        "forge-server-x86_64-unknown-linux-musl": "http://192.0.2.1:8000/mr-aybee/forge/releases/download/v0.1.1-dev.20261113.214755/forge-server-x86_64-unknown-linux-musl",
+        "SHA256SUMS": "http://192.0.2.1:8000/orbyntech/forge/releases/download/v0.1.1-dev.20261113.214755/SHA256SUMS",
+        "SHA256SUMS.sig": "http://192.0.2.1:8000/orbyntech/forge/releases/download/v0.1.1-dev.20261113.214755/SHA256SUMS.sig",
+        "forge-server-x86_64-unknown-linux-musl": "http://192.0.2.1:8000/orbyntech/forge/releases/download/v0.1.1-dev.20261113.214755/forge-server-x86_64-unknown-linux-musl",
         …
       },
       "notes": "Download crash fix, compress formats, console consistency, forge update, typed schemas",

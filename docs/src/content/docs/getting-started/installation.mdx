@@ -88,9 +88,9 @@ from the release you want:
 
 ```sh
 # The latest stable release:
-curl -fsSLO https://github.com/mr-aybee/forge/releases/latest/download/get-forge.sh
+curl -fsSLO https://github.com/orbyntech/forge/releases/latest/download/get-forge.sh
 # Or one release, for example a release candidate:
-curl -fsSLO https://github.com/mr-aybee/forge/releases/download/<tag>/get-forge.sh
+curl -fsSLO https://github.com/orbyntech/forge/releases/download/<tag>/get-forge.sh
 ```
 
 Replace `<tag>` with the release tag, such as `v0.1.0-rc-03`. Pre-releases
@@ -103,7 +103,7 @@ without internet access:
 TAG=<tag>
 V=${TAG#v}
 ARCH=$(uname -m)   # x86_64 or aarch64
-BASE=https://github.com/mr-aybee/forge/releases/download/$TAG
+BASE=https://github.com/orbyntech/forge/releases/download/$TAG
 curl -fLO $BASE/forge-$V-$ARCH-linux.tar.gz -fLO $BASE/SHA256SUMS -fLO $BASE/SHA256SUMS.sig -fLO $BASE/get-forge.sh
 sh get-forge.sh --verify-only .
 ```
@@ -122,9 +122,9 @@ signature and the checksum. Download the script from a release:
 
 ```powershell
 # The latest stable release:
-Invoke-WebRequest https://github.com/mr-aybee/forge/releases/latest/download/get-forge.ps1 -OutFile get-forge.ps1
+Invoke-WebRequest https://github.com/orbyntech/forge/releases/latest/download/get-forge.ps1 -OutFile get-forge.ps1
 # Or one release:
-Invoke-WebRequest https://github.com/mr-aybee/forge/releases/download/<tag>/get-forge.ps1 -OutFile get-forge.ps1
+Invoke-WebRequest https://github.com/orbyntech/forge/releases/download/<tag>/get-forge.ps1 -OutFile get-forge.ps1
 ```
 
 Windows has no built-in Ed25519 verifier. `get-forge.ps1` uses
@@ -310,7 +310,7 @@ The key is `RELEASE_PUBLIC_KEY`, built into Forge; the self-updater and
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `No stable release found` | The release you want is a pre-release, which is never "latest" | Pass its tag: `--version v0.1.0-rc-03` (`-Version` on Windows) |
-| `SHA256SUMS does not carry a valid Orbyn Forge signature` | The files are not an Orbyn Forge release, or OpenSSL is older than 1.1.1 | Download from `github.com/mr-aybee/forge` again; check `openssl version` |
+| `SHA256SUMS does not carry a valid Orbyn Forge signature` | The files are not an Orbyn Forge release, or OpenSSL is older than 1.1.1 | Download from `github.com/orbyntech/forge` again; check `openssl version` |
 | `… does not match SHA256SUMS` | Damaged or incomplete download | Delete the file and download it again |
 | `This package is for aarch64; this machine is x86_64` | Wrong package | Download `forge-<version>-$(uname -m)-linux.tar.gz` |
 | `systemd is required` | The server runs without systemd, for example in a plain container | Install on a VM or host with systemd |
