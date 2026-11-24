@@ -45,7 +45,7 @@ sudo ./install.sh [--public-url URL] [--public-address URL] [--trusted-proxies L
                   [--install-agent [--cluster NAME] [--terminal-account NAME]]
                   [--db sqlite|postgres] [--db-url URL | --db-local] [--db-name NAME]
                   [--allow-shared-db]
-                  [--analytics duckdb|embedded|clickhouse|off]
+                  [--analytics duckdb|chdb|clickhouse|off]
                   [--analytics-url URL] [--analytics-name NAME]
                   [--yes | --non-interactive]
 sudo ./install.sh                # on a terminal: asks the questions below
@@ -138,7 +138,7 @@ An example session on a new host:
 | `--db-local` | flag | off | No | Installs the PostgreSQL server from the system packages (`apt-get` or `dnf`; on RHEL 8 it enables the `postgresql:15` module stream first). On RHEL-likes it also initialises the cluster and switches local TCP logins in `pg_hba.conf` from `ident` to `scram-sha-256`. It then creates a login role `forge` with `CREATEDB` and a generated password, and uses it. Implies `--db postgres` | `--db-local` |
 | `--db-name` | name (`A-Z`, `a-z`, `0-9`, `_`) | `forge_op` | No | Database name. Created when missing, reused when it exists; never dropped or recreated | `--db-name forge_op` |
 | `--allow-shared-db` | flag | off | No | Uses a database that already holds tables that are not Forge's | `--allow-shared-db` |
-| `--analytics` | `duckdb`, `embedded` (alias `chdb`), `clickhouse` or `off` | `duckdb` | No | Analytics database for node history. `embedded` needs the engine binary (`forge-server analytics install`); `duckdb` runs inside the analytics worker and needs nothing else | `--analytics clickhouse` |
+| `--analytics` | `duckdb`, `chdb` (also accepted as `embedded`), `clickhouse` or `off` | `duckdb` | No | Analytics database for node history. `chdb` needs the engine binary (`forge-server analytics install`); `duckdb` runs inside the analytics worker and needs nothing else | `--analytics clickhouse` |
 | `--analytics-url` | URL without password | none | With `--analytics clickhouse` | ClickHouse HTTP(S) address, e.g. `https://default@ch1:8443`. The password comes from `FORGE_ANALYTICS_PASSWORD` and is stored in `/etc/forge/analytics-password` | `--analytics-url https://default@ch1:8443` |
 | `--analytics-name` | name (`A-Z`, `a-z`, `0-9`, `_`) | `<db-name>_analytics` | No | Analytics database name | `--analytics-name forge_op_analytics` |
 | `--yes`, `--non-interactive` | flag | off | No | Never ask questions, even on a terminal. Use it in scripts that run under a terminal (for example `ssh -t`) | `--yes` |
@@ -225,7 +225,7 @@ what to download again. The signature of the package itself is checked by
 | **MFA** | With `--mfa`, runs `forge-server --config /etc/forge/forge.toml mfa on\|off`. Then reports the result of `mfa status` |
 | **Administrator** | Creates the first platform administrator when `/var/lib/forge/forge.db` does not exist and `forge.toml` has no `database_url` line (see [The first administrator](#the-first-administrator)) |
 | **Service** | Writes `/etc/systemd/system/forge-server.service` (every run), restores its SELinux label, then runs `systemctl daemon-reload`, `enable` and `restart`. `forge-server` starts and supervises `forge-analytics-worker` and `forge-plugin-runner` itself; they have no units of their own |
-| **Firewall** | Opens the ports in `forge.toml` permanently in firewalld when it is running, or in ufw when it is active: the port of `api_listen` (default `3880/tcp`), of `agent_listen` (`3843/tcp`) and of `[analytics] worker_agent_listen` (`3832/tcp`, the analytics worker's upload port). Otherwise changes nothing. With another firewall, see [Open the analytics upload port](#open-the-analytics-upload-port) |
+| **Firewall** | Opens the ports in `forge.toml` permanently in firewalld when it is running, in ufw when it is active, or else in plain iptables when `INPUT` ends in a `REJECT`/`DROP` rule or has a `DROP` policy (the rules go above it, for IPv4 and IPv6, and are saved with `netfilter-persistent`, `/etc/iptables/rules.v4` or `/etc/sysconfig/iptables`): the port of `api_listen` (default `3880/tcp`), of `agent_listen` (`3843/tcp`) and of `[analytics] worker_agent_listen` (`3832/tcp`, the analytics worker's upload port). Otherwise changes nothing. A re-run adds no duplicate rules. It never changes a cloud provider's firewall. With another firewall, see [Open the analytics upload port](#open-the-analytics-upload-port) |
 | **Health check** | Polls `/api/health` on the `api_listen` port (on `127.0.0.1` when it listens on all addresses) once a second, up to 60 attempts |
 | **Analytics worker** | Unless `[analytics] engine = "off"`: waits up to 30 s for the worker's upload port to accept connections. A worker that does not come up is a warning, not a failure: the console works without it |
 | **Agent** | Only with `--install-agent`: enrolls this server as a node (see [Agent on the server](#agent-on-the-server)) |
@@ -234,7 +234,7 @@ what to download again. The signature of the package itself is checked by
 
 With analytics on, nodes upload their spools to the analytics worker on
 `3832/tcp` ([Network ports](/docs/reference/network-ports/)). The
-installer opens it in firewalld or ufw. With another firewall, or a
+installer opens it in firewalld, ufw or plain iptables. With another firewall, or a
 network firewall between the nodes and the server, open it from the
 nodes' networks:
 
@@ -243,6 +243,8 @@ nodes' networks:
 sudo firewall-cmd --permanent --add-port=3832/tcp && sudo firewall-cmd --reload
 # ufw
 sudo ufw allow 3832/tcp
+# plain iptables: above the first REJECT/DROP rule (here number 5), then save
+sudo iptables -I INPUT 5 -p tcp -m state --state NEW --dport 3832 -j ACCEPT && sudo netfilter-persistent save
 ```
 
 ### Agent on the server
@@ -405,7 +407,8 @@ A new installation on a UTF-8 terminal, with no host firewall active:
   ✔ MFA                    required for guarded actions
   ✔ Administrator          admin (platform admin)
   ✔ Service                forge-server.service (enabled, restarts on failure; starts the analytics worker)
-  ✔ Firewall               no active firewalld or ufw; allow 3880/tcp (console), 3843/tcp (agents), 3832/tcp (analytics uploads) in yours
+  ✔ Firewall               no active firewalld, ufw or blocking iptables rules; allow 3880/tcp (console), 3843/tcp (agents), 3832/tcp (analytics uploads) in yours
+  ▲ Cloud firewall         also allow TCP 3880, 3843 and 3832 in your provider's firewall (security group, security list); the installer cannot change it
   ✔ Health check           responding after 2s
   ✔ Analytics worker       duckdb, uploads on port 3832
 
