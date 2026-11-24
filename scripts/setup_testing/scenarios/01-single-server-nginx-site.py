@@ -25,7 +25,7 @@ def main() -> int:
     lab.check("01", "nginx installed on lab-a", lab.install_package("nginx", "stable", ["lab-a"]))
     r = lab.node_sh("lab-a", "systemctl is-active nginx")
     lab.check("01", "nginx active", r.ok, r.message)
-    lab.check("01", "the Forge console still answers on :8080", lab.server_ok())
+    lab.check("01", "the Forge console still answers on :3880", lab.server_ok())
 
     lab.step("the website as a native service on 127.0.0.1:8081")
     lab.create_app(ENV, {

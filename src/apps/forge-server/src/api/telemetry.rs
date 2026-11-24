@@ -169,7 +169,7 @@ async fn peers(state: &AppState, caller: &Caller, node: &Server) -> ApiResult<Ve
     Ok(out)
 }
 
-/// `https://forge-cp:7443/…` → `forge-cp:7443`.
+/// `https://forge-cp:3843/…` → `forge-cp:3843`.
 fn agent_endpoint(url: &str) -> Option<String> {
     let rest = url.split_once("://").map_or(url, |(_, r)| r);
     let authority = rest.split('/').next()?;

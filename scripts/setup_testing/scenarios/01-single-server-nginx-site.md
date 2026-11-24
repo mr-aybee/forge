@@ -5,7 +5,7 @@ and Nginx all run on the same machine.
 
 ```text
 browser ──► lab-a :80 Nginx (Site "s01-web") ──► lab-a :8081 web (native service)
-            lab-a :8080 Forge server (same machine)
+            lab-a :3880 Forge server (same machine)
 ```
 
 | Cluster mapping | |
@@ -30,7 +30,7 @@ forge packages installed
 forge nodes exec lab-a -- systemctl is-active nginx       # active
 ```
 
-Check: the Forge server keeps `:8080`, and Nginx takes `:80`/`:443`.
+Check: the Forge server keeps `:3880`, and Nginx takes `:80`/`:443`.
 
 ## 3. The website as a native service 🟡 create · ✅ deploy
 
@@ -82,11 +82,11 @@ forge sites apply   s01-web
 
 ```powershell
 curl.exe -s -o NUL -w "%{http_code}`n" -H "Host: s01.lab.local" http://10.50.0.10/   # 200
-curl.exe -s -o NUL -w "%{http_code}`n" http://10.50.0.10:8080/                       # Forge console still up
+curl.exe -s -o NUL -w "%{http_code}`n" http://10.50.0.10:3880/                       # Forge console still up
 ```
 
 - [ ] Site returns 200
-- [ ] Forge console still reachable on :8080
+- [ ] Forge console still reachable on :3880
 - [ ] Site visible in the UI under **Ingress** (⚠ F-11: workspace-level page only)
 - [ ] `forge services show web` shows the instance on lab-a as `deployed`/`active`
 - [ ] Restart the Forge server (`forge nodes exec lab-a -- sudo systemctl restart forge-server`): the site keeps serving

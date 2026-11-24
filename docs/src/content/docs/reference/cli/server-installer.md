@@ -67,7 +67,7 @@ press Enter to take it.
 
 | # | Question | Default | Asked when | Same as |
 | --- | --- | --- | --- | --- |
-| 1 | Public URL users open | `http://<first IP of hostname -I>:8080` | No `forge.toml` yet | `--public-url` |
+| 1 | Public URL users open | `http://<first IP of hostname -I>:3880` | No `forge.toml` yet | `--public-url` |
 | 2 | Environment | `development` | Always | `--environment` |
 | 3 | Administrator user name | `admin` | No database yet | `--admin-username` |
 | 4 | Administrator password (hidden, typed twice; Enter generates one) | generate | No database yet | `FORGE_ADMIN_PASSWORD` |
@@ -95,7 +95,7 @@ An example session on a new host:
 
   Answer each question, or press Enter for the default in brackets.
 
-  1. Public URL users open [http://<server-ip>:8080]
+  1. Public URL users open [http://<server-ip>:3880]
   2. Environment (production, staging, development, test) [development]
   3. Administrator user name [admin]
   4. Administrator password (hidden; Enter generates one) [generate]
@@ -105,7 +105,7 @@ An example session on a new host:
   7. Terminal account on this server [forge-ops]
 
   REVIEW
-    Public URL    http://<server-ip>:8080
+    Public URL    http://<server-ip>:3880
     Environment   development
     Admin         admin
     Password      generated, shown once at the end
@@ -119,12 +119,12 @@ An example session on a new host:
 
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
-| `--public-url` | URL | `http://<fqdn>:8080`, where `<fqdn>` is `hostname -f` (or `hostname`) | No | URL users open. Written to `public_url`. An `https://` URL also sets `cookie_secure = true`. First install only: an existing `forge.toml` is kept | `--public-url https://<forge-host>` |
+| `--public-url` | URL | `http://<fqdn>:3880`, where `<fqdn>` is `hostname -f` (or `hostname`) | No | URL users open. Written to `public_url`. An `https://` URL also sets `cookie_secure = true`. First install only: an existing `forge.toml` is kept | `--public-url https://<forge-host>` |
 | `--admin-username` | string | `admin` | No | Sign-in name of the first platform administrator. First install only | `--admin-username <admin-name>` |
 | `--admin-email` | string | none | No | Email of the first administrator. You can add it later in the console. First install only | `--admin-email <admin-email>` |
 | `--public-address` | URL (origin) | none | No | Address people use when Forge is published on a domain through an ingress, for example `https://forge.example.com`. Stored as the runtime [public address](/docs/reference/configuration/#public-address) with `forge-server public-address set`, on a first install and on an upgrade; links in alerts use it, and `--public-url` stays the direct address. Refused (the installer stops) when it has a path, query or user name | `--public-address https://forge.example.com` |
 | `--trusted-proxies` | comma-separated IPs or CIDRs | none (`[]`) | No | Reverse proxies, such as the ingress edge nodes, whose `X-Forwarded-For` and `X-Forwarded-Proto` Forge trusts. Written to `[security] trusted_proxies`. First install only: edit `forge.toml` on an existing install | `--trusted-proxies 192.0.2.20,192.0.2.21` |
-| `--agent-host` | host name or IP | the host part of `--public-url` | No | Name or IP that nodes use to reach this server. Sets `agent_public_url = "https://<agent-host>:7443"` and is the first entry of `agent_hostnames`. First install only | `--agent-host <forge-ip>` |
+| `--agent-host` | host name or IP | the host part of `--public-url` | No | Name or IP that nodes use to reach this server. Sets `agent_public_url = "https://<agent-host>:3843"` and is the first entry of `agent_hostnames`. First install only | `--agent-host <forge-ip>` |
 | `--prefix` | directory | `/opt/forge` | No | Where the binaries and agent binaries go. Also where the installer looks for an existing version. Use the same value on every run | `--prefix /srv/forge` |
 | `--environment` | `production`, `staging`, `development` or `test` | not written, so the server uses `production` | No | Sets the top-level `environment` key in `forge.toml`. Applied on every run where you pass it, including upgrades | `--environment staging` |
 | `--mfa` | `required` or `off` (`on` is accepted as `required`) | `off` on a new install (MFA is each user's choice for their own sign-in); an upgrade keeps the current setting | No | `required` also makes guarded actions need MFA. Sets `[security] require_mfa` with the same editor as `forge-server mfa on\|off`. Applied on every run where you pass it | `--mfa off` |
@@ -161,7 +161,7 @@ The installer uses box-drawing and tick characters (`✔`, `▲`, `╭`) only wh
 
 ### Examples
 
-Install with the defaults (console on port 8080 of this host):
+Install with the defaults (console on port 3880 of this host):
 
 ```sh
 sudo ./install.sh
@@ -188,7 +188,7 @@ Install a development server without questions that also runs workloads,
 with MFA off:
 
 ```sh
-sudo ./install.sh --yes --public-url http://<server-ip>:8080 --environment development \
+sudo ./install.sh --yes --public-url http://<server-ip>:3880 --environment development \
   --mfa off --allow-elevated-tokens yes --install-agent --cluster <cluster-name>
 ```
 
@@ -225,7 +225,7 @@ what to download again. The signature of the package itself is checked by
 | **MFA** | With `--mfa`, runs `forge-server --config /etc/forge/forge.toml mfa on\|off`. Then reports the result of `mfa status` |
 | **Administrator** | Creates the first platform administrator when `/var/lib/forge/forge.db` does not exist and `forge.toml` has no `database_url` line (see [The first administrator](#the-first-administrator)) |
 | **Service** | Writes `/etc/systemd/system/forge-server.service` (every run), restores its SELinux label, then runs `systemctl daemon-reload`, `enable` and `restart`. `forge-server` starts and supervises `forge-analytics-worker` and `forge-plugin-runner` itself; they have no units of their own |
-| **Firewall** | Opens the ports in `forge.toml` permanently in firewalld when it is running, or in ufw when it is active: the port of `api_listen` (default `8080/tcp`), of `agent_listen` (`7443/tcp`) and of `[analytics] worker_agent_listen` (`55132/tcp`, the analytics worker's upload port). Otherwise changes nothing. With another firewall, see [Open the analytics upload port](#open-the-analytics-upload-port) |
+| **Firewall** | Opens the ports in `forge.toml` permanently in firewalld when it is running, or in ufw when it is active: the port of `api_listen` (default `3880/tcp`), of `agent_listen` (`3843/tcp`) and of `[analytics] worker_agent_listen` (`3832/tcp`, the analytics worker's upload port). Otherwise changes nothing. With another firewall, see [Open the analytics upload port](#open-the-analytics-upload-port) |
 | **Health check** | Polls `/api/health` on the `api_listen` port (on `127.0.0.1` when it listens on all addresses) once a second, up to 60 attempts |
 | **Analytics worker** | Unless `[analytics] engine = "off"`: waits up to 30 s for the worker's upload port to accept connections. A worker that does not come up is a warning, not a failure: the console works without it |
 | **Agent** | Only with `--install-agent`: enrolls this server as a node (see [Agent on the server](#agent-on-the-server)) |
@@ -233,16 +233,16 @@ what to download again. The signature of the package itself is checked by
 #### Open the analytics upload port
 
 With analytics on, nodes upload their spools to the analytics worker on
-`55132/tcp` ([Network ports](/docs/reference/network-ports/)). The
+`3832/tcp` ([Network ports](/docs/reference/network-ports/)). The
 installer opens it in firewalld or ufw. With another firewall, or a
 network firewall between the nodes and the server, open it from the
 nodes' networks:
 
 ```sh
 # firewalld
-sudo firewall-cmd --permanent --add-port=55132/tcp && sudo firewall-cmd --reload
+sudo firewall-cmd --permanent --add-port=3832/tcp && sudo firewall-cmd --reload
 # ufw
-sudo ufw allow 55132/tcp
+sudo ufw allow 3832/tcp
 ```
 
 ### Agent on the server
@@ -254,7 +254,7 @@ after the health check:
    <cluster> --hostname "$(hostname)" --ttl-minutes 15` as the `forge` user.
    It creates the cluster if it is missing and prints a one-time enrollment
    token that expires after 15 minutes.
-2. `curl -fsSL "http://127.0.0.1:8080/install.sh?terminal_account=<account>" | sh`
+2. `curl -fsSL "http://127.0.0.1:3880/install.sh?terminal_account=<account>" | sh`
    with the token in the `FORGE_ENROLL_TOKEN` environment variable. This is
    the same node installer that other nodes run.
 
@@ -319,11 +319,11 @@ FQDN is `<fqdn>`:
 ```toml
 # Orbyn Forge control plane (written by install.sh; see forge.toml.example).
 data_dir = "/var/lib/forge"
-api_listen = "0.0.0.0:8080"
+api_listen = "0.0.0.0:3880"
 public_url = "https://<forge-host>"
 cookie_secure = true
-agent_listen = "0.0.0.0:7443"
-agent_public_url = "https://<forge-host>:7443"
+agent_listen = "0.0.0.0:3843"
+agent_public_url = "https://<forge-host>:3843"
 agent_hostnames = ["<forge-host>", "<fqdn>", "localhost", "127.0.0.1"]
 agent_dist_dir = "/opt/forge/dist"
 
@@ -343,8 +343,8 @@ allow_elevated_tokens = false
 [Configuration](/docs/reference/configuration/) for every key.
 
 :::note
-`api_listen = "0.0.0.0:8080"` serves plain HTTP on every interface. In
-production, bind it to `127.0.0.1:8080` and put a TLS proxy in front. See
+`api_listen = "0.0.0.0:3880"` serves plain HTTP on every interface. In
+production, bind it to `127.0.0.1:3880` and put a TLS proxy in front. See
 [Run Forge in production](/docs/guides/production-setup/#1-put-a-tls-proxy-in-front-of-the-console).
 :::
 
@@ -405,16 +405,16 @@ A new installation on a UTF-8 terminal, with no host firewall active:
   ✔ MFA                    required for guarded actions
   ✔ Administrator          admin (platform admin)
   ✔ Service                forge-server.service (enabled, restarts on failure; starts the analytics worker)
-  ✔ Firewall               no active firewalld or ufw; allow 8080/tcp (console), 7443/tcp (agents), 55132/tcp (analytics uploads) in yours
+  ✔ Firewall               no active firewalld or ufw; allow 3880/tcp (console), 3843/tcp (agents), 3832/tcp (analytics uploads) in yours
   ✔ Health check           responding after 2s
-  ✔ Analytics worker       duckdb, uploads on port 55132
+  ✔ Analytics worker       duckdb, uploads on port 3832
 
   Orbyn Forge <version> is installed and running.
 
   ACCESS
-    Console       http://<fqdn>:8080
-    Agents        https://<fqdn>:7443  (nodes connect out to TCP 7443 and 55132)
-    Analytics     duckdb, uploads on port 55132
+    Console       http://<fqdn>:3880
+    Agents        https://<fqdn>:3843  (nodes connect out to TCP 3843 and 3832)
+    Analytics     duckdb, uploads on port 3832
 
   ADMINISTRATOR
     Username      admin
@@ -442,9 +442,9 @@ A new installation on a UTF-8 terminal, with no host firewall active:
     Uninstall     sudo sh /etc/forge/install.sh --uninstall
 
   NEXT STEPS
-    1. Open http://<fqdn>:8080 and sign in as admin.
+    1. Open http://<fqdn>:3880 and sign in as admin.
        The password is also in /var/lib/forge/initial-admin-password (sudo cat it).
-    2. Allow TCP 7443 and 55132 from your nodes to this server.
+    2. Allow TCP 3843 and 3832 from your nodes to this server.
     3. Add nodes: Overview > Add node (docs: /docs/guides/add-nodes/).
 
   ▲ Production             Put a TLS proxy (Caddy, Nginx) in front and use an https:// public URL.
@@ -468,15 +468,15 @@ active:
   ✔ MFA                    each user's choice (protects sign-in; forge-server mfa on also guards actions)
   ✔ Administrator          existing accounts kept
   ✔ Service                forge-server.service (enabled, restarts on failure; starts the analytics worker)
-  ✔ Firewall               opened 8080/tcp (console), 7443/tcp (agents), 55132/tcp (analytics uploads) (ufw)
+  ✔ Firewall               opened 3880/tcp (console), 3843/tcp (agents), 3832/tcp (analytics uploads) (ufw)
   ✔ Health check           responding after 1s
-  ✔ Analytics worker       duckdb, uploads on port 55132
+  ✔ Analytics worker       duckdb, uploads on port 3832
 
   Orbyn Forge upgraded to <version> and running.
 
   ACCESS
-    Console       http://<fqdn>:8080
-    Agents        https://<fqdn>:7443  (nodes connect out to TCP 7443 and 55132)
+    Console       http://<fqdn>:3880
+    Agents        https://<fqdn>:3843  (nodes connect out to TCP 3843 and 3832)
 
   SECURITY
     MFA           each user's choice (forge-server mfa on|off)
@@ -496,8 +496,8 @@ Other lines you can see:
 | `Administrator          <name> <<email>> (platform admin)` | `--admin-email` was given |
 | `Password      the value of FORGE_ADMIN_PASSWORD` | `FORGE_ADMIN_PASSWORD` was set (replaces the **Password** and **Saved to** rows) |
 | `Email         <email>` | `--admin-email` was given (in **ADMINISTRATOR**) |
-| `Firewall               opened 8080/tcp (console), 7443/tcp (agents), 55132/tcp (analytics uploads) (firewalld)` | firewalld is running (the ports are the ones in `forge.toml`) |
-| `▲ Analytics worker       not listening on 55132 yet; see journalctl …` | The worker's upload port did not open within 30 s. The install still succeeds |
+| `Firewall               opened 3880/tcp (console), 3843/tcp (agents), 3832/tcp (analytics uploads) (firewalld)` | firewalld is running (the ports are the ones in `forge.toml`) |
+| `▲ Analytics worker       not listening on 3832 yet; see journalctl …` | The worker's upload port did not open within 30 s. The install still succeeds |
 | `Analytics     off ([analytics] engine = "off")` | Analytics is off; there is no **Analytics worker** line |
 | `✔ Agent                  enrolled in cluster <cluster>` and `This server   enrolled in cluster <cluster> as <hostname> (terminal account <account>)` | `--install-agent` succeeded |
 | `▲ Agent                  not enrolled: <reason>; the server install is fine` | `--install-agent` failed. The **AGENT** section then shows **Retry by hand** commands |
@@ -529,7 +529,7 @@ in **Profile → Password**.
 | `1` | `Could not generate a password.` | Reading `/dev/urandom` failed | Set `FORGE_ADMIN_PASSWORD` |
 | `1` | `Could not set MFA in /etc/forge/forge.toml.` | `forge-server mfa` could not edit the file | Check the file with `forge-server --config /etc/forge/forge.toml mfa status` |
 | `1` | `Could not create the administrator. Nothing was kept; fix the problem and run the installer again.` | `forge-server init` failed; its output is printed above, indented | Fix the reported problem and run again |
-| `1` | `forge-server did not start. See: journalctl -u forge-server -n 50` | No answer from `/api/health` after 30 attempts | Read the journal; a common cause is another process on port 8080 or 7443 |
+| `1` | `forge-server did not start. See: journalctl -u forge-server -n 50` | No answer from `/api/health` after 30 attempts | Read the journal; a common cause is another process on port 3880 or 3843 |
 | non-zero | shell or command error | A command failed (`set -e`), or an option is missing its value | Read the message above it |
 
 Errors go to standard error after a `✖` (or `x`) mark.
@@ -605,7 +605,7 @@ Get-Help .\install.ps1
 
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
-| `-PublicUrl` | string (URL) | `http://<fqdn>:8080`, where `<fqdn>` is the DNS host name of `%COMPUTERNAME%` | No | URL users open. An `https://` URL also sets `cookie_secure = true`. First install only | `-PublicUrl https://<forge-host>` |
+| `-PublicUrl` | string (URL) | `http://<fqdn>:3880`, where `<fqdn>` is the DNS host name of `%COMPUTERNAME%` | No | URL users open. An `https://` URL also sets `cookie_secure = true`. First install only | `-PublicUrl https://<forge-host>` |
 | `-AdminUsername` | string | `admin` | No | Sign-in name of the first platform administrator. First install only | `-AdminUsername <admin-name>` |
 | `-AdminEmail` | string | none | No | Email of the first administrator. First install only | `-AdminEmail <admin-email>` |
 | `-DbUrl` | string | none (SQLite) | No | PostgreSQL server without database name and password. Password in `FORGE_DATABASE_PASSWORD`, stored in `db-password` next to `forge.toml` (SYSTEM and Administrators only). First install only | `-DbUrl postgres://forge@db1:5432` |
@@ -625,7 +625,7 @@ Before it changes anything, `install.ps1` checks that the package has
 `dist\SHA256SUMS` and `dist\MANIFEST.json`, and that every agent binary
 matches `dist\SHA256SUMS`. It opens the ports of `api_listen`,
 `agent_listen` and `[analytics] worker_agent_listen` from `forge.toml`
-(default `8080`, `7443` and `55132`).
+(default `3880`, `3843` and `3832`).
 
 `install.ps1` has no environment or MFA parameter. The `forge.toml` it writes
 has no `[security]` section, so MFA is each user's choice (the default). To
@@ -676,8 +676,8 @@ Install to another drive:
 | **Configuration** | Writes `<DataRoot>\forge.toml` if it does not exist. An existing file is kept |
 | **Administrator** | Creates the first platform administrator when `<DataRoot>\data\forge.db` does not exist and `forge.toml` has no `database_url` line. Same rules as on Linux; the password file is `<DataRoot>\data\initial-admin-password` |
 | **Startup task** | Registers (or replaces) the scheduled task **Orbyn Forge** and starts it |
-| **Firewall** | Creates the inbound Windows Firewall rules **Orbyn Forge &lt;port&gt;** (TCP, allow) for the ports of `api_listen`, `agent_listen` and `[analytics] worker_agent_listen` in `forge.toml` (default **Orbyn Forge 8080**, **7443** and **55132**) unless rules with those names exist |
-| **Health check** | Requests `http://127.0.0.1:8080/api/health` (2-second timeout), up to 30 attempts one second apart |
+| **Firewall** | Creates the inbound Windows Firewall rules **Orbyn Forge &lt;port&gt;** (TCP, allow) for the ports of `api_listen`, `agent_listen` and `[analytics] worker_agent_listen` in `forge.toml` (default **Orbyn Forge 3880**, **3843** and **3832**) unless rules with those names exist |
+| **Health check** | Requests `http://127.0.0.1:3880/api/health` (2-second timeout), up to 30 attempts one second apart |
 
 ### Files and services it creates
 
@@ -689,18 +689,18 @@ Install to another drive:
 | `C:\ProgramData\Orbyn Forge\data\` | SYSTEM, Administrators | Database, keys, internal CA, backups |
 | `C:\ProgramData\Orbyn Forge\data\initial-admin-password` | SYSTEM, Administrators | Generated administrator login. Forge deletes it when the administrator changes the password |
 | Scheduled task **Orbyn Forge** | | Runs `forge-server.exe --config "<DataRoot>\forge.toml" serve` in `<InstallDir>` as `SYSTEM` with highest privileges, at startup. No time limit; restarts every minute after a failure, up to 999 times; starts when available; runs on battery |
-| Firewall rules **Orbyn Forge 8080**, **Orbyn Forge 7443** | | Inbound TCP allow, all profiles |
+| Firewall rules **Orbyn Forge 3880**, **Orbyn Forge 3843** | | Inbound TCP allow, all profiles |
 
 The `forge.toml` it writes on a first install:
 
 ```toml
 # Orbyn Forge control plane (written by install.ps1; see forge.toml.example).
 data_dir = "C:/ProgramData/Orbyn Forge/data"
-api_listen = "0.0.0.0:8080"
-public_url = "http://<fqdn>:8080"
+api_listen = "0.0.0.0:3880"
+public_url = "http://<fqdn>:3880"
 cookie_secure = false
-agent_listen = "0.0.0.0:7443"
-agent_public_url = "https://<fqdn>:7443"
+agent_listen = "0.0.0.0:3843"
+agent_public_url = "https://<fqdn>:3843"
 agent_hostnames = ["<fqdn>", "<fqdn>", "localhost", "127.0.0.1"]
 agent_dist_dir = "C:/Program Files/Orbyn Forge/dist"
 
@@ -726,15 +726,15 @@ A new installation:
   ✔ Configuration          C:\ProgramData\Orbyn Forge\forge.toml (new)
   ✔ Administrator          admin (platform admin)
   ✔ Startup task           'Orbyn Forge' (SYSTEM, at boot, restarts on failure)
-  ✔ Firewall               inbound TCP 8080 and 7443 allowed
+  ✔ Firewall               inbound TCP 3880 and 3843 allowed
   ✔ Health check           responding after 1s
 
   Orbyn Forge <version> is installed and running.
 
   ACCESS
-    Console       http://<fqdn>:8080
-    Agents        https://<fqdn>:7443  (nodes connect out to TCP 7443 and 55132)
-    Analytics     duckdb, uploads on port 55132
+    Console       http://<fqdn>:3880
+    Agents        https://<fqdn>:3843  (nodes connect out to TCP 3843 and 3832)
+    Analytics     duckdb, uploads on port 3832
 
   ADMINISTRATOR
     Username      admin

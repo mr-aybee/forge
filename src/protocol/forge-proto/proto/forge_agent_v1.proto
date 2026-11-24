@@ -110,7 +110,7 @@ message HeartbeatResponse {
 
 // D-142: spool, local log listener and upload target. 0 keeps a default.
 message AnalyticsAgentConfig {
-  string url = 1;                 // https://host:55132 of the analytics worker
+  string url = 1;                 // https://host:3832 of the analytics worker
   SpoolTuning spool = 2;
   repeated IngestKey keys = 3;    // keys of services placed on this node, at most 4096
   ListenerTuning listener = 4;

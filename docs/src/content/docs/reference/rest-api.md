@@ -1430,7 +1430,7 @@ curl -sS -X PUT https://<forge-host>/api/v1/server/public-address \
 ```
 
 ```json
-{"effective":"https://forge.example.com","source":"setting","setting":"https://forge.example.com","configured":"http://192.0.2.10:8080","https":true,"allowed_origins":["http://192.0.2.10:8080","https://forge.example.com"]}
+{"effective":"https://forge.example.com","source":"setting","setting":"https://forge.example.com","configured":"http://192.0.2.10:3880","https":true,"allowed_origins":["http://192.0.2.10:8080","https://forge.example.com"]}
 ```
 
 ## Analytics settings

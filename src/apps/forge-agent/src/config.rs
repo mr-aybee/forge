@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentConfig {
-    /// Control plane agent endpoint, e.g. `https://forge.example.com:7443`.
+    /// Control plane agent endpoint, e.g. `https://forge.example.com:3843`.
     pub server_url: String,
     /// Commands this agent will execute. Anything else is refused locally,
     /// even if correctly signed.

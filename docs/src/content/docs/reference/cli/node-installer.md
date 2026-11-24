@@ -94,20 +94,20 @@ Run the command the console shows, then paste the token at the
 `Enrollment token:` prompt:
 
 ```sh
-printf 'Enrollment token: '; stty -echo; read -r FORGE_ENROLL_TOKEN; stty echo; echo; export FORGE_ENROLL_TOKEN; curl -fsSL 'http://<forge-host>:8080/install.sh' | sudo --preserve-env=FORGE_ENROLL_TOKEN sh; unset FORGE_ENROLL_TOKEN
+printf 'Enrollment token: '; stty -echo; read -r FORGE_ENROLL_TOKEN; stty echo; echo; export FORGE_ENROLL_TOKEN; curl -fsSL 'http://<forge-host>:3880/install.sh' | sudo --preserve-env=FORGE_ENROLL_TOKEN sh; unset FORGE_ENROLL_TOKEN
 ```
 
 Enroll under a chosen name (same prompt):
 
 ```sh
-printf 'Enrollment token: '; stty -echo; read -r FORGE_ENROLL_TOKEN; stty echo; echo; export FORGE_ENROLL_TOKEN; curl -fsSL 'http://<forge-host>:8080/install.sh?hostname=<node-name>' | sudo --preserve-env=FORGE_ENROLL_TOKEN sh; unset FORGE_ENROLL_TOKEN
+printf 'Enrollment token: '; stty -echo; read -r FORGE_ENROLL_TOKEN; stty echo; echo; export FORGE_ENROLL_TOKEN; curl -fsSL 'http://<forge-host>:3880/install.sh?hostname=<node-name>' | sudo --preserve-env=FORGE_ENROLL_TOKEN sh; unset FORGE_ENROLL_TOKEN
 ```
 
 Create the terminal account `forge-ops` with passwordless `sudo` (same
 prompt):
 
 ```sh
-printf 'Enrollment token: '; stty -echo; read -r FORGE_ENROLL_TOKEN; stty echo; echo; export FORGE_ENROLL_TOKEN; curl -fsSL 'http://<forge-host>:8080/install.sh?terminal_account=forge-ops&terminal_account_sudo=1' | sudo --preserve-env=FORGE_ENROLL_TOKEN sh; unset FORGE_ENROLL_TOKEN
+printf 'Enrollment token: '; stty -echo; read -r FORGE_ENROLL_TOKEN; stty echo; echo; export FORGE_ENROLL_TOKEN; curl -fsSL 'http://<forge-host>:3880/install.sh?terminal_account=forge-ops&terminal_account_sudo=1' | sudo --preserve-env=FORGE_ENROLL_TOKEN sh; unset FORGE_ENROLL_TOKEN
 ```
 
 `sudo --preserve-env=<name>` needs `sudo` 1.8.21 or later (Debian 10,
@@ -116,7 +116,7 @@ Ubuntu 18.04, RHEL 8 and newer). As `root`, pipe into `sh` without `sudo`.
 Read the script before you run it:
 
 ```sh
-curl -fsSL http://<forge-host>:8080/install.sh -o forge-install.sh
+curl -fsSL http://<forge-host>:3880/install.sh -o forge-install.sh
 less forge-install.sh
 sudo -s
 read -rs FORGE_ENROLL_TOKEN && export FORGE_ENROLL_TOKEN   # paste the token, then press Enter
@@ -129,7 +129,7 @@ On a machine without `curl`, fetch the script with `wget`. The install works,
 but the console shows no progress, because progress reports need `curl`:
 
 ```sh
-printf 'Enrollment token: '; stty -echo; read -r FORGE_ENROLL_TOKEN; stty echo; echo; export FORGE_ENROLL_TOKEN; wget -qO- 'http://<forge-host>:8080/install.sh' | sudo --preserve-env=FORGE_ENROLL_TOKEN sh; unset FORGE_ENROLL_TOKEN
+printf 'Enrollment token: '; stty -echo; read -r FORGE_ENROLL_TOKEN; stty echo; echo; export FORGE_ENROLL_TOKEN; wget -qO- 'http://<forge-host>:3880/install.sh' | sudo --preserve-env=FORGE_ENROLL_TOKEN sh; unset FORGE_ENROLL_TOKEN
 ```
 
 ## Steps
@@ -325,14 +325,14 @@ forge-install: installing forge-agent on <node-name>
 $ id -u  # must be root
 $ uname -s -m
 forge-install: architecture x86_64
-$ curl -fsSL http://<forge-host>:8080/agent/download/linux/x86_64/forge-agent
+$ curl -fsSL http://<forge-host>:3880/agent/download/linux/x86_64/forge-agent
 $ sha256sum -c  # verify forge-agent
 $ install -m 0755 forge-agent /usr/local/bin/forge-agent
-$ curl -fsSL http://<forge-host>:8080/agent/download/linux/x86_64/forge-agent-helper
+$ curl -fsSL http://<forge-host>:3880/agent/download/linux/x86_64/forge-agent-helper
 $ sha256sum -c  # forge-agent-helper
 $ install -m 0755 forge-agent-helper /usr/local/bin/forge-agent-helper
 $ useradd --system forge-agent
-$ forge-agent enroll --server https://<forge-host>:7443
+$ forge-agent enroll --server https://<forge-host>:3843
 <timestamp>  INFO forge_agent::enroll: enrolled server_id=<server-id>
 enrolled as server <server-id>
 $ forge-agent-helper pin
@@ -353,7 +353,7 @@ between `useradd` and `pin` read:
 $ useradd --system forge-agent
 $ forge-agent-helper terminal-account forge-ops --sudo
 terminal account forge-ops: created, passwordless sudo
-$ forge-agent enroll --server https://<forge-host>:7443
+$ forge-agent enroll --server https://<forge-host>:3843
 <timestamp>  INFO forge_agent::enroll: enrolled server_id=<server-id>
 enrolled as server <server-id>
 $ forge-agent-helper pin
@@ -366,7 +366,7 @@ name exists, the install goes on:
 $ forge-agent-helper terminal-account forge-ops
 forge-agent-helper terminal-account: `forge-ops` is already a group on this node; choose another name
 forge-install: terminal account forge-ops not created; the install continues
-$ forge-agent enroll --server https://<forge-host>:7443
+$ forge-agent enroll --server https://<forge-host>:3843
 ```
 
 A re-run on an enrolled node, after an update that adds a command name:
@@ -376,10 +376,10 @@ forge-install: installing forge-agent on <node-name>
 $ id -u  # must be root
 $ uname -s -m
 forge-install: architecture x86_64
-$ curl -fsSL http://<forge-host>:8080/agent/download/linux/x86_64/forge-agent
+$ curl -fsSL http://<forge-host>:3880/agent/download/linux/x86_64/forge-agent
 $ sha256sum -c  # verify forge-agent
 $ install -m 0755 forge-agent /usr/local/bin/forge-agent
-$ curl -fsSL http://<forge-host>:8080/agent/download/linux/x86_64/forge-agent-helper
+$ curl -fsSL http://<forge-host>:3880/agent/download/linux/x86_64/forge-agent-helper
 $ sha256sum -c  # forge-agent-helper
 $ install -m 0755 forge-agent-helper /usr/local/bin/forge-agent-helper
 forge-install: already enrolled; updating the agent in place
@@ -411,7 +411,7 @@ Errors print `forge-install: error: <message>` to standard error.
 | `1` | `need curl or wget` | Neither tool is installed | Install `curl` |
 | `1` | `download failed: <url>` | The node cannot reach `<forge-url>`, or the build is missing | Check that the node reaches `node_public_url` |
 | `1` | `checksum mismatch for <file>` | The download does not match the checksum in the script | Fetch the script again; if it persists, check for a proxy that rewrites downloads |
-| `1` | `Error: <reason>` (from `forge-agent`) | Enrollment failed, for example a malformed, used or expired token, or the node cannot reach `<agent-url>` on TCP 7443 | Create a new token; open TCP 7443 from the node to the control plane |
+| `1` | `Error: <reason>` (from `forge-agent`) | Enrollment failed, for example a malformed, used or expired token, or the node cannot reach `<agent-url>` on TCP 3843 | Create a new token; open TCP 3843 from the node to the control plane |
 | `1` | `forge-agent-helper pin: <reason>` | The helper could not pin the enrollment | See the caution in [Re-running and upgrading in place](#re-running-and-upgrading-in-place) |
 | non-zero | output of the failing command | Another command failed (`set -e`), for example `useradd` or `systemctl restart` | Read the `$` line above the error |
 
@@ -671,7 +671,7 @@ $ download https://<forge-host>/agent/download/windows/x86_64/forge-agent
 forge-install: checksum verified
 $ install C:\Program Files\OrbynForge\forge-agent.exe
 $ icacls C:\ProgramData\OrbynForge /setowner Administrators; Set-Acl: no inheritance, SYSTEM and Administrators full control only
-$ forge-agent.exe enroll --server https://<forge-host>:7443  # token from $env:FORGE_ENROLL_TOKEN
+$ forge-agent.exe enroll --server https://<forge-host>:3843  # token from $env:FORGE_ENROLL_TOKEN
 <timestamp>  INFO forge_agent::enroll: enrolled server_id=<server-id>
 enrolled as server <server-id>
 $ forge-agent.exe service install  # ForgeAgent, automatic start, LocalSystem
@@ -715,7 +715,7 @@ exits with code `1`.
 | `<path> is owned by <SID>, not SYSTEM or Administrators; this installer did not create it. Inspect and remove <folder>, then run the installer again` | `C:\ProgramData\OrbynForge` existed but was not locked, and it, or an item in it, belongs to another account. `<SID>` is that account | Look up the account (`([Security.Principal.SecurityIdentifier]'<SID>').Translate([Security.Principal.NTAccount])`), find out why it created the folder, remove `<folder>`, then run the installer again |
 | Either message above, ending in `created while the installer ran. Inspect and remove <folder>, then run the installer again` | A link or another account's item appeared in the folder while the installer locked it | Treat the machine as compromised until you know which program created it; then remove `<folder>` and run the installer again |
 | `could not take ownership of <folder>` or `could not restrict access to <folder>` | `icacls /setowner` failed on `C:\ProgramData\OrbynForge`, or the folder was not locked after `Set-Acl` | Close programs that use the folder, then run again |
-| `enrollment failed (is the token still valid?)` | The token is malformed, used or expired, or the machine cannot reach `<agent-url>` on TCP 7443. The agent's reason is printed above the error; `Error: could not restrict access to <dir> (icacls …)` means it could not lock the data folder | Create a new token; open TCP 7443 from the machine to the control plane. For the `icacls` error, see [`forge-agent enroll`](/docs/reference/cli/forge-agent/#notes) |
+| `enrollment failed (is the token still valid?)` | The token is malformed, used or expired, or the machine cannot reach `<agent-url>` on TCP 3843. The agent's reason is printed above the error; `Error: could not restrict access to <dir> (icacls …)` means it could not lock the data folder | Create a new token; open TCP 3843 from the machine to the control plane. For the `icacls` error, see [`forge-agent enroll`](/docs/reference/cli/forge-agent/#notes) |
 | `could not install or start the ForgeAgent service` | The Service Control Manager refused, the agent could not lock the data folder (`Error: could not restrict access to <dir> (icacls …)` above the error), or the agent stopped at start-up | Read the output above the error and `C:\ProgramData\OrbynForge\agent\logs\forge-agent.log` |
 | `the ForgeAgent service did not stop` | The service was still running 15 seconds after the installer ended its process, for example because another program holds it | Run `sc.exe queryex ForgeAgent` to see its state and process id, end that process, and run the installer again |
 | `could not remove the ForgeAgent service` | `service uninstall` failed while uninstalling | Read the output above the error, then run the installer again |

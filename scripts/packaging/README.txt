@@ -14,11 +14,11 @@ Everything needed to run the Forge control plane is in this folder:
 Linux (systemd), as root:
 
   sudo ./install.sh                       # asks a few questions
-  sudo ./install.sh --yes --public-url http://forge.example.com:8080
+  sudo ./install.sh --yes --public-url http://forge.example.com:3880
 
 Windows (PowerShell as Administrator):
 
-  .\install.ps1 -PublicUrl http://forge.example.com:8080
+  .\install.ps1 -PublicUrl http://forge.example.com:3880
 
 The installer checks this folder against dist/SHA256SUMS before it changes
 anything. To check the download itself, verify SHA256SUMS.sig from the
@@ -26,7 +26,7 @@ release (get-forge.sh --verify-only does this).
 
 The installer creates the administrator "admin" with a generated password,
 shows it once and saves it (root/Administrators only) until you change it.
-Then open the public URL and sign in. Nodes need TCP 7443 and 55132 to this
+Then open the public URL and sign in. Nodes need TCP 3843 and 3832 to this
 server. Updates: the console shows "Update available" at the top right.
 
 Uninstall: sudo sh /etc/forge/install.sh --uninstall   (Windows: .\install.ps1 -Uninstall)

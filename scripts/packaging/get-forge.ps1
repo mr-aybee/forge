@@ -7,7 +7,7 @@
   .\get-forge.ps1                                   # latest stable release
   .\get-forge.ps1 -Version v0.0.1-rc-01             # one release, also a pre-release
   .\get-forge.ps1 -File .\forge-0.0.1-x86_64-windows.zip
-  .\get-forge.ps1 -PublicUrl http://forge.example.com:8080   # other options go to install.ps1
+  .\get-forge.ps1 -PublicUrl http://forge.example.com:3880   # other options go to install.ps1
 
 .DESCRIPTION
   Nothing is installed unless SHA256SUMS carries a valid Ed25519 signature

@@ -26,30 +26,30 @@ flow:
   direction: column
   steps:
     - { label: Internet, tone: muted, edge: "443" }
-    - { label: Caddy, note: "public TLS, HTTP/2", edge: "`127.0.0.1:8080`" }
-    - { label: forge-server, note: "+ SQLite · agents dial in on `:7443` and `:55132` (mTLS)", tone: accent }
+    - { label: Caddy, note: "public TLS, HTTP/2", edge: "`127.0.0.1:3880`" }
+    - { label: forge-server, note: "+ SQLite · agents dial in on `:3843` and `:3832` (mTLS)", tone: accent }
 ```
 
 1. Set these keys in `/etc/forge/forge.toml`
    (`C:\ProgramData\Orbyn Forge\forge.toml` on Windows):
 
    ```toml
-   api_listen = "127.0.0.1:8080"
+   api_listen = "127.0.0.1:3880"
    public_url = "https://forge.example.com"
    cookie_secure = true
    ```
 
-2. Point the proxy at `127.0.0.1:8080`. With Caddy:
+2. Point the proxy at `127.0.0.1:3880`. With Caddy:
 
    ```text
    forge.example.com {
-     reverse_proxy 127.0.0.1:8080
+     reverse_proxy 127.0.0.1:3880
    }
    ```
 
 3. Restart Forge: `sudo systemctl restart forge-server`.
 
-`agent_listen` (`7443`) and the analytics upload port (`55132`) stay as they
+`agent_listen` (`3843`) and the analytics upload port (`3832`) stay as they
 are: they use Forge's internal CA and need no public certificate. Add every
 name nodes use to reach the server to `agent_hostnames`. To publish Forge
 through a cluster ingress edge instead, see

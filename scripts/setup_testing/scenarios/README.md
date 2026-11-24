@@ -14,7 +14,7 @@ Three Debian VMs on Hyper-V on the Windows PC. They're built and reset by
    │ vEthernet (ForgeLab) 10.50.0.1/24
    │ NAT "ForgeLabNAT" 10.50.0.0/24 ──► host uplink ──► internet (apt, Docker Hub)
    │
-   ├── lab-a  10.50.0.10  Forge server :8080 + agent (worker / edge)
+   ├── lab-a  10.50.0.10  Forge server :3880 + agent (worker / edge)
    ├── lab-b  10.50.0.11  agent (worker, Docker host in the scenarios)
    └── lab-c  10.50.0.12  agent (worker, native runtimes in the scenarios)
 ```
@@ -42,7 +42,7 @@ Three Debian VMs on Hyper-V on the Windows PC. They're built and reset by
 | NAT | `ForgeLabNAT` for `10.50.0.0/24`, so the VMs reach the internet through the host |
 | Gateway on the VMs | `10.50.0.1` |
 | Release feed | `http://10.50.0.1:8000` (`../feed_server.py`), allowed by the firewall rule **Forge local feed** (TCP 8000) |
-| Forge console / API | `http://10.50.0.10:8080` (plain HTTP, so the CLI needs `FORGE_ALLOW_HTTP=1`) |
+| Forge console / API | `http://10.50.0.10:3880` (plain HTTP, so the CLI needs `FORGE_ALLOW_HTTP=1`) |
 | Ping VM → host | Blocked by the Windows firewall (no ICMP rule). Expected; test with `curl http://10.50.0.1:8000/` instead |
 | Site host names | No lab DNS. Use `curl -H "Host: <name>"` or a line in `C:\Windows\System32\drivers\etc\hosts`, such as `10.50.0.10  s03.lab.local` |
 

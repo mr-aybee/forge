@@ -40,10 +40,15 @@ Network:
 
 | Port | Direction | Used for |
 | --- | --- | --- |
-| `8080/tcp` | Users and nodes to the server | Console, API, node installer and agent downloads |
-| `7443/tcp` | Nodes to the server | Agent link (mutual TLS) |
-| `55132/tcp` | Nodes to the server | Analytics uploads from agents (mutual TLS) |
+| `3880/tcp` | Users and nodes to the server | Console, API, node installer and agent downloads |
+| `3843/tcp` | Nodes to the server | Agent link (mutual TLS) |
+| `3832/tcp` | Nodes to the server | Analytics uploads from agents (mutual TLS) |
 | `443/tcp` out | Server to `github.com` | Downloading releases and updates. Optional |
+
+:::note
+Updating an older install keeps the console and agent ports in its
+`forge.toml` (`8080` and `7443`) and the analytics upload port `55132`; only
+new installs get the new ports.
 
 The installer opens these ports in firewalld or ufw on Linux and in Windows
 Firewall. Open them in any network firewall yourself. See
@@ -173,7 +178,7 @@ sudo ./install.sh
 In **PowerShell as Administrator**:
 
 ```powershell
-.\get-forge.ps1 -File .\forge-<version>-x86_64-windows.zip -PublicUrl http://forge.example.com:8080
+.\get-forge.ps1 -File .\forge-<version>-x86_64-windows.zip -PublicUrl http://forge.example.com:3880
 ```
 
 Parameters that `get-forge.ps1` does not know go to `install.ps1`. From an
@@ -182,7 +187,7 @@ unpacked package, after you verified it:
 ```powershell
 Expand-Archive forge-<version>-x86_64-windows.zip -DestinationPath .
 cd forge-<version>-x86_64-windows
-.\install.ps1 -PublicUrl http://forge.example.com:8080
+.\install.ps1 -PublicUrl http://forge.example.com:3880
 ```
 
 </TabItem>
@@ -209,9 +214,9 @@ is, and what to do next:
   Orbyn Forge 0.1.0 is installed and running.
 
   ACCESS
-    Console       http://192.0.2.10:8080
-    Agents        https://192.0.2.10:7443  (nodes connect out to TCP 7443 and 55132)
-    Analytics     duckdb, uploads on port 55132
+    Console       http://192.0.2.10:3880
+    Agents        https://192.0.2.10:3843  (nodes connect out to TCP 3843 and 3832)
+    Analytics     duckdb, uploads on port 3832
 
   ADMINISTRATOR
     Username      admin
@@ -219,8 +224,8 @@ is, and what to do next:
     Saved to      /var/lib/forge/initial-admin-password (root only, deleted when you change it)
   ...
   NEXT STEPS
-    1. Open http://192.0.2.10:8080 and sign in as admin.
-    2. Allow TCP 7443 and 55132 from your nodes to this server.
+    1. Open http://192.0.2.10:3880 and sign in as admin.
+    2. Allow TCP 3843 and 3832 from your nodes to this server.
     3. Add nodes: Overview > Add node.
 ```
 
@@ -256,7 +261,7 @@ characters) before you run the installer. Nothing is saved to disk then.
 
 ### 5. Let your nodes reach the server
 
-Allow TCP `7443` and `55132` from your nodes to the server in every network
+Allow TCP `3843` and `3832` from your nodes to the server in every network
 firewall between them. The installer has already opened them in the host
 firewall.
 
@@ -267,7 +272,7 @@ firewall.
 
 ```sh
 systemctl is-active forge-server                 # active
-curl -fsS http://127.0.0.1:8080/api/version; echo
+curl -fsS http://127.0.0.1:3880/api/version; echo
 pgrep -a forge-analytics                         # the analytics worker, unless analytics is off
 grep '"version"' /opt/forge/dist/MANIFEST.json   # the agent version nodes get
 ```
@@ -277,7 +282,7 @@ grep '"version"' /opt/forge/dist/MANIFEST.json   # the agent version nodes get
 
 ```powershell
 Get-ScheduledTask -TaskName "Orbyn Forge" | Get-ScheduledTaskInfo
-Invoke-RestMethod http://127.0.0.1:8080/api/version
+Invoke-RestMethod http://127.0.0.1:3880/api/version
 Get-Process forge-server, forge-analytics-worker
 ```
 
@@ -315,8 +320,8 @@ The key is `RELEASE_PUBLIC_KEY`, built into Forge; the self-updater and
 | `This package is for aarch64; this machine is x86_64` | Wrong package | Download `forge-<version>-$(uname -m)-linux.tar.gz` |
 | `systemd is required` | The server runs without systemd, for example in a plain container | Install on a VM or host with systemd |
 | `forge-server did not start` | Configuration error or a port in use | `journalctl -u forge-server -n 50`; on Windows run `forge-server.exe --config … serve` by hand |
-| Summary shows **Analytics worker not listening** | The worker failed to start or port `55132` is in use | `journalctl -u forge-server -n 50`. The console works without it; history and logs wait in the nodes' spools |
-| Nodes are online but show no history or logs | `55132/tcp` is blocked between the nodes and the server | Open it; the nodes upload their backlog |
+| Summary shows **Analytics worker not listening** | The worker failed to start or port `3832` is in use | `journalctl -u forge-server -n 50`. The console works without it; history and logs wait in the nodes' spools |
+| Nodes are online but show no history or logs | `3832/tcp` is blocked between the nodes and the server | Open it; the nodes upload their backlog |
 | `openssl.exe is needed` (Windows) | No OpenSSL on the machine | Install Git for Windows, or pass `-SkipSignatureCheck` |
 
 ## Uninstall

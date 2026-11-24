@@ -17,7 +17,7 @@ production layouts, see [Installation](/docs/getting-started/installation/).
 - A user that can run `sudo`.
 - `curl`, `tar` and `gzip`. Minimal RHEL, Rocky and Alma images can lack
   `tar` and `gzip`: install them with `sudo dnf install -y tar gzip`.
-- From your computer you can reach the server on TCP port 8080.
+- From your computer you can reach the server on TCP port 3880.
 
 ## 1. Download Forge
 
@@ -43,7 +43,7 @@ says otherwise:
 
 | Question | Answer for this walkthrough |
 | --- | --- |
-| Public URL users open | **Enter**. The default is `http://<server-ip>:8080`. |
+| Public URL users open | **Enter**. The default is `http://<server-ip>:3880`. |
 | Environment | **Enter** (`development`). |
 | Operational database | **Enter** (`sqlite`, built in). |
 | Analytics database for node history | **Enter** (`duckdb`). |
@@ -64,9 +64,9 @@ The installer reports each step as it goes, then prints a summary like this:
   Orbyn Forge 1.4.0 is installed and running.
 
   ACCESS
-    Console       http://192.0.2.10:8080
-    Agents        https://192.0.2.10:7443  (nodes connect out to TCP 7443 and 55132)
-    Analytics     duckdb, uploads on port 55132
+    Console       http://192.0.2.10:3880
+    Agents        https://192.0.2.10:3843  (nodes connect out to TCP 3843 and 3832)
+    Analytics     duckdb, uploads on port 3832
 
   ADMINISTRATOR
     Username      admin
@@ -111,8 +111,8 @@ inbound port.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| The console does not open | Port 8080 is blocked between you and the server | Open TCP 8080 in your cloud firewall or security group. The installer only opens the host firewall. |
-| The node shows **offline** | The agent cannot reach TCP 7443 | Run `systemctl status forge-agent` on the node. Check that port 7443 is open. |
+| The console does not open | Port 3880 is blocked between you and the server | Open TCP 3880 in your cloud firewall or security group. The installer only opens the host firewall. |
+| The node shows **offline** | The agent cannot reach TCP 3843 | Run `systemctl status forge-agent` on the node. Check that port 3843 is open. |
 | The summary says the agent was not enrolled | The node installer failed | The summary prints the commands to retry by hand. The server install is fine. |
 | `install.sh` did not ask any questions | You passed options, `--yes`, or ran it without a terminal | Run `sudo sh get-forge.sh` with no options in an interactive shell. |
 

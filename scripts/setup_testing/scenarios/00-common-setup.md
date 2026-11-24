@@ -13,7 +13,7 @@ Run this once per PowerShell window before any scenario.
 ```powershell
 $env:Path = "<repo-root>\target\release;$env:Path"
 $env:FORGE_ALLOW_HTTP = "1"                      # lab only: plain http
-forge contexts add lab --server http://10.50.0.10:8080   # once; "exists" is fine
+forge contexts add lab --server http://10.50.0.10:3880   # once; "exists" is fine
 forge contexts use lab
 forge auth login                                 # admin password: ..\.lab\forge-admin.env
 forge auth whoami

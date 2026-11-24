@@ -28,8 +28,8 @@ For how agents connect and why they dial out, see [Agents](/docs/concepts/agents
   MFA ([Multi-factor authentication](/docs/guides/mfa/)). Manual onboarding uses
   `server.enroll`, which does not.
 - The machine reaches the control plane's public URL (to download the
-  installer and agent), its agent port, TCP `7443` by default, and, when
-  analytics is on, the analytics worker's upload port, TCP `55132` by
+  installer and agent), its agent port, TCP `3843` by default, and, when
+  analytics is on, the analytics worker's upload port, TCP `3832` by
   default. See [Network ports](/docs/reference/network-ports/).
 - For assisted onboarding: the control plane reaches the machine's SSH port,
   and the machine runs Linux with a user that can run `sudo`.
@@ -456,7 +456,7 @@ The control node cannot be removed.
 | **MFA required** on the **Assisted (SSH login)** tab | Your session is not MFA-verified | Enrol MFA, sign out and sign in with your code, or use the manual installer |
 | `forge-install: terminal account <name> not created; the install continues` | The name is a system user or an existing group on the machine, `sudo` is missing while **Allow sudo** is on, or the helper build is missing | Read the `forge-agent-helper terminal-account:` line above it. After the install, create the account as in [Create a terminal account on a node](/docs/guides/terminal/#create-a-terminal-account-on-a-node) |
 | `400` `terminal account <name> is not allowed` | The name breaks the naming rules or is a system name | Use 1–32 of `a-z`, `0-9`, `_`, `-`, starting with a letter or `_` |
-| Node installs but never comes **online** | TCP `7443` is blocked between node and control plane | Open the agent port; add the name nodes use to `agent_hostnames` |
+| Node installs but never comes **online** | TCP `3843` is blocked between node and control plane | Open the agent port; add the name nodes use to `agent_hostnames` |
 | Windows: `forge-install: error: run PowerShell as Administrator` | PowerShell is not elevated | Start PowerShell with **Run as administrator** and run the command again |
 | Windows: `this installer needs 64-bit Windows on x86_64` | 32-bit Windows, ARM64 Windows, or the 32-bit **Windows PowerShell (x86)** | Use the 64-bit PowerShell on 64-bit x86_64 Windows. ARM64 is not supported |
 | Windows: `Windows 10 1809 or Windows Server 2019 or later is needed (this is build <n>)` | The Windows build is older than 17763 | Upgrade Windows; older versions are not supported |
@@ -469,7 +469,7 @@ The control node cannot be removed.
 | Windows: either message above, ending in `created while the installer ran. …` | A link or another account's item appeared in the data folder while the installer locked it | Find the program that created it before you trust the machine; then remove the folder and run the command again |
 | Windows: `could not take ownership of <folder>` or `could not restrict access to <folder>` | `icacls /setowner` failed on `C:\ProgramData\OrbynForge`, or the folder was still not locked after `Set-Acl`, for example because a program holds it open | Close programs that use the folder, then run the command again |
 | Windows: `Error: could not restrict access to <dir> (icacls …): …; run as Administrator` above `enrollment failed` or `could not install or start the ForgeAgent service` | The agent could not lock its data folder | Run PowerShell as Administrator; see [Windows data folder](/docs/reference/cli/forge-agent/#windows-data-folder) |
-| Windows: `enrollment failed (is the token still valid?)` | The token is used, expired or mistyped, or the machine cannot reach the agent port | Generate a new token and run again; check that TCP `7443` to the control plane is open. The output line above the error has the agent's reason |
+| Windows: `enrollment failed (is the token still valid?)` | The token is used, expired or mistyped, or the machine cannot reach the agent port | Generate a new token and run again; check that TCP `3843` to the control plane is open. The output line above the error has the agent's reason |
 | Windows: `could not install or start the ForgeAgent service`, or `Get-Service ForgeAgent` shows `Stopped` | The agent stops at start-up, for example because it cannot load its state | Read `C:\ProgramData\OrbynForge\agent\logs\forge-agent.log`; fix the cause, then run `Start-Service ForgeAgent` or the installer again |
 
 ## Next steps

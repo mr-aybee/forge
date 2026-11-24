@@ -3,7 +3,7 @@
 WSL in mirrored mode shares Windows' localhost but has no route to the
 Hyper-V lab network (10.50.0.0/24). Run this on Windows (no admin needed):
 
-    python labkit/forward.py 18080=10.50.0.10:8080 18081=10.50.0.10:80
+    python labkit/forward.py 18080=10.50.0.10:3880 18081=10.50.0.10:80
 
 then in WSL use `--server http://127.0.0.1:18080 --edge 127.0.0.1:18081`.
 The listeners bind 127.0.0.1 only. Ctrl+C stops it.
@@ -50,7 +50,7 @@ def serve(local_port: int, host: str, port: int) -> None:
 
 
 def main() -> None:
-    rules = sys.argv[1:] or ["18080=10.50.0.10:8080", "18081=10.50.0.10:80"]
+    rules = sys.argv[1:] or ["18080=10.50.0.10:3880", "18081=10.50.0.10:80"]
     for r in rules:
         local, remote = r.split("=", 1)
         host, port = remote.rsplit(":", 1)

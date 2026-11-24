@@ -60,7 +60,7 @@ struct Args {
     #[arg(long)]
     target: Option<String>,
     /// Soak mode: the server's agent endpoint.
-    #[arg(long, default_value = "https://127.0.0.1:7443")]
+    #[arg(long, default_value = "https://127.0.0.1:3843")]
     target_agent_url: String,
     /// Soak mode: user to sign in as (MFA off).
     #[arg(long, default_value = "admin")]

@@ -105,10 +105,10 @@ def config(port: int) -> str:
     runner = "plugin_runner = \"/opt/forge/bin/forge-plugin-runner\"\n" if (LAB / "bin/forge-plugin-runner").exists() else ""
     return f"""data_dir = "/var/lib/forge"
 api_listen = "0.0.0.0:8090"
-agent_listen = "0.0.0.0:7443"
+agent_listen = "0.0.0.0:3843"
 public_url = "http://localhost:{port}"
 node_public_url = "http://{CP}:8090"
-agent_public_url = "https://{CP}:7443"
+agent_public_url = "https://{CP}:3843"
 agent_hostnames = ["{CP}", "localhost", "127.0.0.1"]
 cookie_secure = false
 ui_dir = "/opt/forge/ui"

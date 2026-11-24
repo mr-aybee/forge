@@ -14,7 +14,7 @@ need no inbound ports.
 | Process | Responsibility | Trust |
 | --- | --- | --- |
 | `forge-server` | REST API, WebSocket events, identity, authorization, registry, jobs, audit, agent hub, plugin host | Highest: holds fleet state |
-| `forge-analytics-worker` | All analytics: spool uploads from agents, log and telemetry ingest, node and container history, log searches, retention, and the embedded engine. A child of `forge-server`, which restarts it when it exits, hangs or passes its memory limit. See [Analytics](/docs/concepts/analytics/#the-analytics-worker-process) | Trusted; reached by `forge-server` over a private socket with a per-start secret, and by agents over mTLS on port `55132` |
+| `forge-analytics-worker` | All analytics: spool uploads from agents, log and telemetry ingest, node and container history, log searches, retention, and the embedded engine. A child of `forge-server`, which restarts it when it exits, hangs or passes its memory limit. See [Analytics](/docs/concepts/analytics/#the-analytics-worker-process) | Trusted; reached by `forge-server` over a private socket with a per-start secret, and by agents over mTLS on port `3832` |
 | `forge-plugin-runner` | Executes one WebAssembly component under budgets; exists only while a plugin runs | Untrusted code |
 | `forge-agent` | Dials the control plane, verifies signed commands, reports facts. Keeps the node's analytics spool, runs the local log listener on port `5341` and uploads the spool to the analytics worker | Trusted for its own server only |
 | `forge-agent-helper` | Performs the few privileged operations from a fixed allowlist | Root/SYSTEM, minimal surface |
@@ -37,7 +37,7 @@ flow:
     - title: Analytics
       steps:
         - { label: apps on the node, edge: "X-Seq-ApiKey, :5341 (loopback, Docker bridge)" }
-        - { label: agent spool, edge: "outbound-only HTTP/2, mTLS :55132" }
+        - { label: agent spool, edge: "outbound-only HTTP/2, mTLS :3832" }
         - { label: analytics worker, tone: accent }
     - title: Plugins
       steps:

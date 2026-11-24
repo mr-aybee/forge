@@ -94,7 +94,7 @@ FEED=http://10.50.0.1:8000
 TAG=$(curl -fsS -H "Authorization: token anything" $FEED/repos/orbyntech/forge/releases/latest | jq -r .tag_name)
 curl -fLO -H "Authorization: token anything" "$FEED/orbyntech/forge/releases/download/$TAG/forge-${TAG#v}-x86_64-linux.tar.gz"
 tar xzf forge-*-x86_64-linux.tar.gz && cd forge-*-x86_64-linux
-sudo ./install.sh --public-url http://10.50.0.10:8080
+sudo ./install.sh --public-url http://10.50.0.10:3880
 ```
 
 Then point the updater at the feed and trust the dev key, in

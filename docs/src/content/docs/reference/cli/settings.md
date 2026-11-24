@@ -76,7 +76,7 @@ $ forge -o json settings list
       "users_with_mfa": 0
     },
     "instance": {
-      "agent_public_url": "https://192.0.2.10:7443",
+      "agent_public_url": "https://192.0.2.10:3843",
       "cookie_secure": false,
       "data_dir": "/var/lib/forge",
       "node_public_url": "https://forge.example.com",
@@ -240,15 +240,15 @@ $ forge -o json settings server
 {
   "result": {
     "config": {
-      "agent_public_url": "https://192.0.2.10:7443",
+      "agent_public_url": "https://192.0.2.10:3843",
       "cookie_secure": false,
-      "node_public_url": "http://192.0.2.10:8080",
-      "public_url": "http://192.0.2.10:8080",
+      "node_public_url": "http://192.0.2.10:3880",
+      "public_url": "http://192.0.2.10:3880",
       "trusted_proxies": ["192.0.2.20"]
     },
     "public_address": {
-      "allowed_origins": ["http://192.0.2.10:8080", "https://forge.example.com"],
-      "configured": "http://192.0.2.10:8080",
+      "allowed_origins": ["http://192.0.2.10:3880", "https://forge.example.com"],
+      "configured": "http://192.0.2.10:3880",
       "effective": "https://forge.example.com",
       "https": true,
       "setting": "https://forge.example.com",
@@ -297,7 +297,7 @@ forge settings public-address get
 ```text
 $ forge settings public-address get
 EFFECTIVE                  SOURCE   SETTING                    CONFIGURED
-https://forge.example.com  setting  https://forge.example.com  http://192.0.2.10:8080
+https://forge.example.com  setting  https://forge.example.com  http://192.0.2.10:3880
 ```
 
 Not captured on a live system.

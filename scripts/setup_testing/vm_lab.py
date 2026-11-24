@@ -122,7 +122,7 @@ class Lab:
         self.checkpoint = e.get("FORGE_LAB_CHECKPOINT", "clean")
         self.feed = e.get("FORGE_LAB_FEED", "http://10.50.0.1:8000").rstrip("/")
         self.hosts = dict([self.server, *self.nodes])
-        self.console = f"http://{self.server[1]}:8080"
+        self.console = f"http://{self.server[1]}:3880"
 
     # -------------------------------------------------------------- ssh
     def _ssh_env(self) -> dict[str, str]:
@@ -401,7 +401,7 @@ def cmd_install_server(args: argparse.Environment) -> None:
     # exists; otherwise the installer generates one and it is saved below.
     fixed = load_env(ADMIN_FILE) if ADMIN_FILE.is_file() else {}
     fixed_pw = fixed.get("FORGE_ADMIN_PASSWORD", "")
-    install = (f"cd /tmp/forge-pkg/{pkg} && NO_COLOR=1 ./install.sh --public-url http://{ip}:8080 "
+    install = (f"cd /tmp/forge-pkg/{pkg} && NO_COLOR=1 ./install.sh --public-url http://{ip}:3880 "
                "--environment development --dev-skip-mfa")  # lab: MFA checks off; production refuses this
     if fixed_pw:
         user = fixed.get("FORGE_ADMIN_USER", "admin")

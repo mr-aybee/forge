@@ -36,7 +36,7 @@ On Windows the usage line says `fleet-sim.exe`.
 | `--no-names` | flag | off | No | Writes `[names] enabled = false` into the server config, so the fleet-wide local-names sync does not run. Use it to measure that feature's cost | `--no-names` |
 | `--out <OUT>` | path | none | No | Also write the results as pretty-printed JSON to this file | `--out bench.json` |
 | `--target <TARGET>` | URL | none | No | Soak mode: the API base URL of a `forge-server` that is already running. See [Soak mode](#soak-mode) | `--target http://127.0.0.1:56130` |
-| `--target-agent-url <TARGET_AGENT_URL>` | URL | `https://127.0.0.1:7443` | No | Soak mode: that server's agent endpoint | `--target-agent-url https://127.0.0.1:56131` |
+| `--target-agent-url <TARGET_AGENT_URL>` | URL | `https://127.0.0.1:3843` | No | Soak mode: that server's agent endpoint | `--target-agent-url https://127.0.0.1:56131` |
 | `--login <LOGIN>` | string | `admin` | No | Soak mode: the user that creates enrollment tokens. MFA must be off for it | `--login admin` |
 | `--password-file <PASSWORD_FILE>` | path | none | In soak mode | Soak mode: file holding that user's password | `--password-file admin-password.txt` |
 | `--state-dir <STATE_DIR>` | path | `fleet-sim-nodes` | No | Soak mode: where node identities are kept. Nodes found there are reused, so a later, larger run enrolls only the new ones | `--state-dir /tmp/nodes` |

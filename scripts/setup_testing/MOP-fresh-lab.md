@@ -10,7 +10,7 @@ behind these steps, see [README.md](README.md) and `vm_lab.py`.
 | Host              | Role                             | Address                                  |
 | ----------------- | -------------------------------- | ---------------------------------------- |
 | Windows (this PC) | Builds releases, serves the feed | `10.50.0.1`                         |
-| lab-a             | Forge server                     | `10.50.0.10` (console on `:8080`) |
+| lab-a             | Forge server                     | `10.50.0.10` (console on `:3880`) |
 | lab-b             | Node                             | `10.50.0.11`                        |
 | lab-c             | Node, with Docker                | `10.50.0.12`                        |
 
@@ -113,13 +113,13 @@ newest on the feed.)
 What it does:
 
 - downloads the release on lab-a from your feed and runs `install.sh` with
-  `--public-url http://10.50.0.10:8080` and MFA off (lab setting);
+  `--public-url http://10.50.0.10:3880` and MFA off (lab setting);
 - reuses the fixed admin login from `.lab/forge-admin.env` (if the file is
   missing, the installer generates one and the script saves it there);
 - points the server's updater at your feed and trusts the dev key, so
   **Update now** works from the console later.
 
-**Expect:** `server <version> answering at http://10.50.0.10:8080`.
+**Expect:** `server <version> answering at http://10.50.0.10:3880`.
 
 ### 4b. Same install by hand (what users run)
 
@@ -147,7 +147,7 @@ the home lab the feed on `10.50.0.1:8000` stands in for GitHub.
    ```bash
    sudo ./install.sh
    ```
-   Lab answers: public URL `http://10.50.0.10:8080`, environment
+   Lab answers: public URL `http://10.50.0.10:3880`, environment
    `development`, admin user `admin`, the fixed admin password from
    `.lab/forge-admin.env` (typed hidden, twice), MFA `n`, elevated API tokens
    `y`, install the agent here `y` (cluster `default`, terminal account
@@ -161,7 +161,7 @@ the home lab the feed on `10.50.0.1:8000` stands in for GitHub.
    printf 'Admin password: '; stty -echo; read -r FORGE_ADMIN_PASSWORD; stty echo; echo
    export FORGE_ADMIN_PASSWORD
    sudo --preserve-env=FORGE_ADMIN_PASSWORD ./install.sh --yes \
-     --public-url http://10.50.0.10:8080 \
+     --public-url http://10.50.0.10:3880 \
      --admin-username admin \
      --environment development --mfa off --allow-elevated-tokens yes \
      --install-agent --cluster default --terminal-account forge-ops
@@ -188,13 +188,13 @@ the home lab the feed on `10.50.0.1:8000` stands in for GitHub.
 5. Check it:
    ```bash
    systemctl is-active forge-server
-   curl -fsS http://127.0.0.1:8080/api/version
+   curl -fsS http://127.0.0.1:3880/api/version
    ```
    **Expect:** `active`, and the version you downloaded.
 
 ## 5. Verify the server
 
-1. Open **http://10.50.0.10:8080** in your browser and sign in with the
+1. Open **http://10.50.0.10:3880** in your browser and sign in with the
    login from `.lab/forge-admin.env`.
 2. Check the file permissions on lab-a are owner-only:
    ```powershell
@@ -226,13 +226,13 @@ the home lab the feed on `10.50.0.1:8000` stands in for GitHub.
 ### 6b. Install the agent by hand (what users run)
 
 The **Add node** page shows this command with your server's address filled
-in. On the node, it looks like this (lab server `10.50.0.10:8080`, default
+in. On the node, it looks like this (lab server `10.50.0.10:3880`, default
 terminal account `forge-ops`):
 
 ```bash
 printf 'Enrollment token: '; stty -echo; read -r FORGE_ENROLL_TOKEN; stty echo; echo
 export FORGE_ENROLL_TOKEN
-curl -fsSL 'http://10.50.0.10:8080/install.sh?terminal_account=forge-ops' \
+curl -fsSL 'http://10.50.0.10:3880/install.sh?terminal_account=forge-ops' \
   | sudo --preserve-env=FORGE_ENROLL_TOKEN sh
 unset FORGE_ENROLL_TOKEN
 ```
@@ -291,7 +291,7 @@ holds the admin login).
 | `install-server` says the feed is not reachable from Windows | `feed_server.py` not running                                                  | Start it (step 2)                                                                           |
 | `install-server` says `no dev release key`                 | Never published on this PC                                                      | Run step 1 once                                                                             |
 | `reset` fails with an access error                           | Not an Administrator PowerShell                                                 | Re-run it as Administrator                                                                  |
-| A node never comes online                                      | Wrong cluster, expired token, or no route to `10.50.0.10:8080` / `:7443` | Create a new enrollment command; check `curl -k https://10.50.0.10:7443` from the node |
+| A node never comes online                                      | Wrong cluster, expired token, or no route to `10.50.0.10:3880` / `:3843` | Create a new enrollment command; check `curl -k https://10.50.0.10:3843` from the node |
 | Console asks for MFA codes                                     | The server was installed without the lab MFA setting                            | Re-run step 4 with the script (it sets MFA off), or `sudo forge-server mfa off` on lab-a  |
 
 ## Start over

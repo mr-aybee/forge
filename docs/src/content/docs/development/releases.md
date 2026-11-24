@@ -195,7 +195,7 @@ container it checks that a tampered package is refused before anything is
 installed, installs with `get-forge.sh --version`, re-installs from a local
 package with `--file`, upgrades to "latest", and uninstalls with and
 without `--purge`. After the install it checks the console, the API, the
-node installer and agent downloads, the analytics worker on `55132` with
+node installer and agent downloads, the analytics worker on `3832` with
 DuckDB, the agent folder's `MANIFEST.json` and file permissions. Set
 `DB=1` to install with `--db-local` as well, the path that differs most
 between Debian and RHEL-likes. `DOCKER="sudo docker"` runs Docker through

@@ -99,7 +99,7 @@ pub const MAX_UPLOADS: u32 = 32;
 /// over on stdin as an [`AgentTls`] line after the secret, never in this file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentListener {
-    /// Address to bind, e.g. `0.0.0.0:55132`.
+    /// Address to bind, e.g. `0.0.0.0:3832`.
     pub listen: std::net::SocketAddr,
     /// The Forge CA that signed the agents' certificates (public).
     pub ca_pem: String,
