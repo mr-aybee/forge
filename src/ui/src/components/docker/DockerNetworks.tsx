@@ -3,9 +3,10 @@ import { useMemo, useState } from "react";
 
 import { type ContainerSummary, useContainerQuery } from "../../api/hooks";
 import { type DockerNetwork, type NetworkDriver, useDockerNetworks } from "../../api/dockerResources";
-import { Badge, Button, Confirm, CopyIcon, Empty, ErrorNote, Field, Input, Modal, RowMenu, type RowAction, Select, Skeleton, Switch, Table, Td, TextArea, useRowMenu } from "../ui";
+import { Badge, Button, Confirm, CopyIcon, Empty, ErrorNote, Field, Input, Modal, RowMenu, type RowAction, Select, Skeleton, Switch, Table, Td, useRowMenu } from "../ui";
 import { parseLabels } from "./DockerVolumes";
 import { Check, DockerProblem, type DockerRunner, InspectDrawer, Spin, Toolbar } from "./shared";
+import { CodeField } from "../CodeField";
 
 const LOCKED = "Docker's or Forge's own network: it cannot be removed or rewired here";
 
@@ -268,7 +269,7 @@ function CreateNetwork({ runner, onClose }: { runner: DockerRunner; onClose: () 
           />
         </div>
         <Field label="Labels" hint={parsed.error ? <span className="text-bad">{parsed.error}</span> : "One key=value per line; optional."}>
-          <TextArea rows={2} value={f.labels} onChange={(e) => setF({ ...f, labels: e.target.value })} placeholder="team=payments" />
+          <CodeField lang="properties" minLines={2} value={f.labels} onChange={(labels) => setF({ ...f, labels })} placeholder="team=payments" />
         </Field>
         <div className="flex justify-end gap-2">
           <Button type="button" onClick={onClose}>

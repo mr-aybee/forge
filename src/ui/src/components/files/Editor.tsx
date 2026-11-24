@@ -3,10 +3,11 @@
 // console's main bundle stays small; everything is bundled locally for
 // air-gapped installs.
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { StreamLanguage, type StreamParser, bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, indentOnInput, syntaxHighlighting } from "@codemirror/language";
+import { HighlightStyle, StreamLanguage, type StreamParser, bracketMatching, foldGutter, foldKeymap, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { MergeView } from "@codemirror/merge";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
+import { tags as t } from "@lezer/highlight";
 import {
   EditorView,
   crosshairCursor,
@@ -15,6 +16,7 @@ import {
   highlightActiveLineGutter,
   keymap,
   lineNumbers,
+  placeholder,
   rectangularSelection,
 } from "@codemirror/view";
 import { useEffect, useRef } from "react";
@@ -115,13 +117,42 @@ export async function loadLanguage(l: Language): Promise<Extension> {
 }
 
 const theme = EditorView.theme({
-  "&": { height: "100%", fontSize: "12.5px", backgroundColor: "var(--color-panel)", color: "var(--color-fg)" },
-  ".cm-scroller": { fontFamily: "var(--font-mono, ui-monospace, monospace)" },
-  ".cm-gutters": { backgroundColor: "var(--color-panel-2)", color: "var(--color-faint)", border: "none" },
-  ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "color-mix(in oklab, var(--color-accent) 7%, transparent)" },
-  "&.cm-focused .cm-cursor": { borderLeftColor: "var(--color-accent)" },
-  ".cm-panels": { backgroundColor: "var(--color-panel-2)", color: "var(--color-fg)" },
+  "&": { height: "100%", fontSize: "13px", backgroundColor: "var(--code-bg)", color: "var(--code-fg)" },
+  ".cm-scroller": { fontFamily: "var(--font-mono, ui-monospace, monospace)", lineHeight: "19px" },
+  ".cm-content": { caretColor: "var(--code-fg)" },
+  ".cm-gutters": { backgroundColor: "var(--code-bg)", color: "var(--code-gutter)", border: "none" },
+  ".cm-lineNumbers .cm-gutterElement": { padding: "0 12px 0 16px", minWidth: "40px" },
+  ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--code-gutter-active)" },
+  ".cm-activeLine": { backgroundColor: "var(--code-line)" },
+  ".cm-foldGutter .cm-gutterElement": { color: "var(--code-gutter)", padding: "0 4px" },
+  "&.cm-focused .cm-cursor": { borderLeftColor: "var(--code-fg)", borderLeftWidth: "2px" },
+  "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground": { backgroundColor: "var(--code-sel) !important" },
+  ".cm-matchingBracket": { backgroundColor: "transparent", outline: "1px solid var(--code-gutter)" },
+  ".cm-selectionMatch": { backgroundColor: "color-mix(in srgb, var(--code-sel) 55%, transparent)" },
+  ".cm-foldPlaceholder": { backgroundColor: "var(--code-line)", border: "none", color: "var(--code-meta)" },
+  ".cm-panels": { position: "relative" },
 });
+
+/** VS Code Light+ / Dark+ token colours; the values follow the theme (styles.css). */
+const vscode = HighlightStyle.define([
+  { tag: [t.comment, t.lineComment, t.blockComment, t.docComment], color: "var(--code-comment)" },
+  { tag: [t.keyword, t.bool, t.null, t.atom, t.self, t.definitionKeyword, t.modifier], color: "var(--code-keyword)" },
+  { tag: [t.controlKeyword, t.moduleKeyword, t.operatorKeyword], color: "var(--code-control)" },
+  { tag: [t.string, t.special(t.string), t.character, t.regexp, t.inserted], color: "var(--code-string)" },
+  { tag: [t.number, t.integer, t.float, t.unit], color: "var(--code-number)" },
+  { tag: [t.propertyName, t.attributeName, t.definition(t.propertyName)], color: "var(--code-key)" },
+  { tag: [t.labelName, t.special(t.variableName), t.macroName], color: "var(--code-prop)" },
+  { tag: [t.typeName, t.className, t.namespace, t.tagName], color: "var(--code-type)" },
+  { tag: [t.function(t.variableName), t.function(t.propertyName)], color: "var(--code-func)" },
+  { tag: [t.variableName, t.definition(t.variableName)], color: "var(--code-var)" },
+  { tag: [t.meta, t.processingInstruction, t.documentMeta, t.annotation], color: "var(--code-meta)" },
+  { tag: [t.heading], color: "var(--code-keyword)", fontWeight: "600" },
+  { tag: t.strong, fontWeight: "600" },
+  { tag: t.emphasis, fontStyle: "italic" },
+  { tag: t.link, textDecoration: "underline" },
+  { tag: [t.deleted, t.invalid], color: "#f14c4c" },
+]);
+const highlight = syntaxHighlighting(vscode, { fallback: true });
 
 function base(readOnly: boolean): Extension[] {
   return [
@@ -138,7 +169,7 @@ function base(readOnly: boolean): Extension[] {
     highlightActiveLine(),
     highlightSelectionMatches(),
     search({ top: true }),
-    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+    highlight,
     keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, ...foldKeymap, indentWithTab]),
     EditorState.readOnly.of(readOnly),
     EditorView.editable.of(!readOnly),
@@ -218,6 +249,106 @@ export function CodeEditor({
   return <div ref={host} className="h-full min-h-0 overflow-hidden" />;
 }
 
+/** Options of a form field edited as code (see `CodeField`). */
+export interface CodeFieldProps {
+  value: string;
+  onChange: (v: string) => void;
+  lang: Language;
+  id?: string;
+  "aria-label"?: string;
+  placeholder?: string;
+  onBlur?: () => void;
+  invalid?: boolean;
+  readOnly?: boolean;
+  /** Visible lines: it grows from `minLines` up to `maxLines`, then scrolls. */
+  minLines?: number;
+  maxLines?: number;
+  /** Line numbers and folding; on by default from six minimum lines. */
+  gutter?: boolean;
+}
+
+const LINE = 19;
+const fieldTheme = (min: number, max: number) =>
+  EditorView.theme({
+    "&": { height: "auto" },
+    "&.cm-focused": { outline: "none" },
+    ".cm-scroller": { minHeight: `${min * LINE + 8}px`, maxHeight: `${max * LINE + 8}px` },
+    ".cm-content": { padding: "4px 0" },
+    ".cm-line": { paddingLeft: "8px" },
+    ".cm-placeholder": { color: "var(--color-faint)" },
+  });
+
+/**
+ * A controlled code input for forms, styled like the file editor: syntax
+ * highlighting, find (Ctrl+F), grows with its content, and follows `value`
+ * when it changes from outside (the form, an import, discard).
+ */
+export function CodeField({ value, onChange, lang, id, placeholder: hint, onBlur, invalid = false, readOnly = false, minLines = 3, maxLines = 30, gutter, "aria-label": label }: CodeFieldProps) {
+  const host = useRef<HTMLDivElement>(null);
+  const view = useRef<EditorView | null>(null);
+  const langC = useRef(new Compartment());
+  const cb = useRef({ onChange, onBlur });
+  cb.current = { onChange, onBlur };
+  const numbers = gutter ?? minLines >= 6;
+
+  useEffect(() => {
+    if (!host.current) return;
+    const v = new EditorView({
+      parent: host.current,
+      state: EditorState.create({
+        doc: value,
+        extensions: [
+          numbers ? [lineNumbers(), highlightActiveLineGutter(), foldGutter()] : [],
+          history(),
+          drawSelection(),
+          indentOnInput(),
+          bracketMatching(),
+          highlightActiveLine(),
+          highlightSelectionMatches(),
+          search({ top: true }),
+          highlight,
+          keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, ...foldKeymap, indentWithTab]),
+          EditorState.readOnly.of(readOnly),
+          EditorView.editable.of(!readOnly),
+          theme,
+          fieldTheme(minLines, maxLines),
+          hint ? placeholder(hint) : [],
+          EditorView.contentAttributes.of({ ...(id ? { id } : {}), ...(label ? { "aria-label": label } : {}), ...(invalid ? { "aria-invalid": "true" } : {}), spellcheck: "false" }),
+          langC.current.of([]),
+          EditorView.updateListener.of((u) => {
+            if (u.docChanged) cb.current.onChange(u.state.doc.toString());
+            if (u.focusChanged && !u.view.hasFocus) cb.current.onBlur?.();
+          }),
+        ],
+      }),
+    });
+    view.current = v;
+    return () => {
+      v.destroy();
+      view.current = null;
+    };
+    // Rebuilt only for options that shape the editor; `value` syncs below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readOnly, numbers, minLines, maxLines, hint, id, invalid, label]);
+
+  // Outside changes replace the document; the user's own edits already match it.
+  useEffect(() => {
+    const v = view.current;
+    if (v && v.state.doc.toString() !== value) v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: value } });
+  }, [value]);
+
+  useLanguage(view, langC.current, lang, `${readOnly}:${numbers}:${minLines}:${maxLines}:${hint}:${id}:${invalid}:${label}`);
+
+  return (
+    <div
+      ref={host}
+      className={`overflow-hidden rounded-md border transition-[border-color,box-shadow] focus-within:border-accent focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-accent)_18%,transparent)] ${invalid ? "border-bad" : "border-line"}`}
+    />
+  );
+}
+
+export default CodeEditor;
+
 /**
  * Side-by-side comparison: the file as it is now on the node (left,
  * read-only) and your edit (right, editable); `onChange` tracks the merge.
@@ -252,4 +383,3 @@ export function MergeEditor({ current, mine, lang, onChange }: { current: string
   return <div ref={host} className="h-full min-h-0 overflow-auto" />;
 }
 
-export default CodeEditor;

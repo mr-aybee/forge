@@ -2,8 +2,9 @@ import { Database, Eraser, Plus, Search, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { type DockerVolume, useDockerVolumes } from "../../api/dockerResources";
-import { Badge, Button, Confirm, CopyIcon, Empty, Field, Input, Modal, RowMenu, type RowAction, Skeleton, Switch, Table, Td, TextArea, ago, time, useRowMenu } from "../ui";
+import { Badge, Button, Confirm, CopyIcon, Empty, Field, Input, Modal, RowMenu, type RowAction, Skeleton, Switch, Table, Td, ago, time, useRowMenu } from "../ui";
 import { Check, DockerProblem, type DockerRunner, InspectDrawer, Spin, Toolbar } from "./shared";
+import { CodeField } from "../CodeField";
 
 /** `key=value` lines as labels; the first bad line as an error. */
 export function parseLabels(text: string): { labels: Record<string, string>; error?: string } {
@@ -200,7 +201,7 @@ function CreateVolume({ runner, onClose }: { runner: DockerRunner; onClose: () =
           <Input autoFocus required pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" className="font-mono" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="app-data" />
         </Field>
         <Field label="Labels" hint={parsed.error ? <span className="text-bad">{parsed.error}</span> : "One key=value per line; optional."}>
-          <TextArea rows={3} value={form.labels} onChange={(e) => setForm({ ...form, labels: e.target.value })} placeholder="team=payments" />
+          <CodeField lang="properties" value={form.labels} onChange={(labels) => setForm({ ...form, labels })} placeholder="team=payments" />
         </Field>
         <div className="flex justify-end gap-2">
           <Button type="button" onClick={onClose}>

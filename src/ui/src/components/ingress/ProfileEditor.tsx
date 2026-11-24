@@ -6,8 +6,9 @@ import { api, post } from "../../api/client";
 import { useInstallations, useInstallPackage, useServers } from "../../api/hooks";
 import { nodeName } from "../../api/types";
 import { errorText, useToast } from "../../app/toast";
-import { Badge, Button, Input, Select, TextArea, UnsavedBar } from "../ui";
+import { Badge, Button, Input, Select, UnsavedBar } from "../ui";
 import { type ClusterProfile, defaultNginx, type IngressMode, type IngressSpec, MODES, type Member, type NginxSettings, type ProfileResponse } from "./types";
+import { CodeField } from "../CodeField";
 
 /** A collapsible section: one line of title + summary, the body underneath. */
 function Section({ title, summary, open, children }: { title: string; summary?: ReactNode; open?: boolean; children: ReactNode }) {
@@ -345,7 +346,7 @@ export function ProfileEditor({ clusterId, data }: { clusterId: string; data: Pr
               </Row>
               <div className="space-y-1">
                 <span className="text-[13px]">Custom http {"{}"} directives</span>
-                <TextArea rows={4} spellCheck={false} className="font-mono text-xs" value={ingress.nginx.custom} onChange={(e) => setNginx({ custom: e.target.value })} placeholder="proxy_buffers 16 16k;" />
+                <CodeField lang="nginx" minLines={4} value={ingress.nginx.custom} onChange={(custom) => setNginx({ custom })} placeholder="proxy_buffers 16 16k;" />
                 <p className="text-[11px] text-faint">Checked with nginx -t on every edge; the previous config comes back if the check fails.</p>
               </div>
             </div>

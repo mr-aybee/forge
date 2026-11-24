@@ -8,6 +8,7 @@ import { errorText, useToast } from "../../app/toast";
 import { Button, Field, Input, Modal, Mono, Select, TextArea } from "../ui";
 import { TargetEditor } from "./TargetEditor";
 import { BALANCE_LABELS, type Balance, type Certificate, covers, type DnsCfg, type Member, type ProfileResponse, type Site, type SiteSpec, type Target } from "./types";
+import { CodeField } from "../CodeField";
 
 const blank = (): SiteSpec => ({
   name: "",
@@ -283,12 +284,12 @@ export function EndpointDialog({
             form doesn't cover (extra locations, headers, caching, basic auth…). Forge never overwrites it, checks it with <Mono>nginx -t</Mono> and restores the previous
             version if the test fails. Every change is recorded in the audit log.
           </p>
-          <TextArea
-            rows={14}
-            spellCheck={false}
-            className="font-mono text-xs leading-relaxed"
+          <CodeField
+            lang="nginx"
+            minLines={14}
+            maxLines={40}
             value={spec.custom}
-            onChange={(e) => set({ custom: e.target.value })}
+            onChange={(custom) => set({ custom })}
             placeholder={"location /static/ {\n    alias /srv/forge/apps/staging/web/static/;\n    expires 7d;\n}\nadd_header X-Frame-Options SAMEORIGIN;"}
           />
         </div>
