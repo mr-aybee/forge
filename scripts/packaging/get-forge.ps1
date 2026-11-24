@@ -39,7 +39,7 @@ $ProgressPreference = 'SilentlyContinue'   # Invoke-WebRequest is slow with a pr
 
 # Must equal RELEASE_PUBLIC_KEY in src/protocol/forge-sdk/src/release.rs
 # (the release workflow checks this).
-$PinnedKey = "bFMJk9wv3XFOhOtPya-idWiatNVVVcktN62sOnQr29U"
+$PinnedKey = "6yf7l7jBEw6u446vqWAgt7P7bqEuaY5tpbYnWPHBmbg"
 $Base = if ($env:FORGE_RELEASES_URL) { $env:FORGE_RELEASES_URL.TrimEnd('/') } else { "https://github.com/mr-aybee/forge/releases" }
 $Key = if ($env:FORGE_RELEASE_PUBLIC_KEY) { $env:FORGE_RELEASE_PUBLIC_KEY } else { $PinnedKey }
 

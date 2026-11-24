@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use base64::Engine;
 
 /// Public key of the Orbyn Forge release signing key (Ed25519, base64url).
-pub const RELEASE_PUBLIC_KEY: &str = "bFMJk9wv3XFOhOtPya-idWiatNVVVcktN62sOnQr29U";
+pub const RELEASE_PUBLIC_KEY: &str = "6yf7l7jBEw6u446vqWAgt7P7bqEuaY5tpbYnWPHBmbg";
 
 /// Where releases are published (GitHub "latest release" document).
 pub const DEFAULT_FEED: &str = "https://api.github.com/repos/mr-aybee/forge/releases/latest";

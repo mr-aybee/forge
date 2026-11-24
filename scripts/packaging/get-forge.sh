@@ -32,7 +32,7 @@ set -eu
 
 # Must equal RELEASE_PUBLIC_KEY in src/protocol/forge-sdk/src/release.rs
 # (the release workflow checks this).
-PINNED_KEY="bFMJk9wv3XFOhOtPya-idWiatNVVVcktN62sOnQr29U"
+PINNED_KEY="6yf7l7jBEw6u446vqWAgt7P7bqEuaY5tpbYnWPHBmbg"
 BASE="${FORGE_RELEASES_URL:-https://github.com/mr-aybee/forge/releases}"
 KEY="${FORGE_RELEASE_PUBLIC_KEY:-$PINNED_KEY}"
 

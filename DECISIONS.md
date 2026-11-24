@@ -5649,3 +5649,9 @@ A delivery may pick the image tag (`?tag=` or a JSON `"tag"`) only when the webh
 - **Specific limits:** agent enrollment is limited to 20 attempts per minute per address. Agent downloads are streamed, with at most 16 at once.
 
 **Why.** Before this change, only sign-in and a few endpoints had limits, and the control plane could not be closed to unknown networks without a firewall in front. The lists use the same client-address logic as the sign-in throttle, so a reverse proxy is handled the same way everywhere.
+
+## D-162 New release signing key for the public repository
+
+**Decision.** The first public release candidate, `v0.0.1-rc-01`, is signed with a new Ed25519 release key. Its public half, `6yf7l7jBEw6u446vqWAgt7P7bqEuaY5tpbYnWPHBmbg`, replaces the earlier key in `RELEASE_PUBLIC_KEY`, `get-forge.sh`, `get-forge.ps1`, the installation guide and `.gitleaks.toml`. The private half is the `FORGE_RELEASE_KEY` Actions secret of `mr-aybee/forge`. It was generated on the maintainer's machine with `forge-server release keygen` and never left it except into that secret.
+
+**Why.** The public repository had never published a release, so no install trusted the old key. The key could therefore be swapped directly, without the rotation release a key change otherwise needs (see development/releases in the docs). The version also restarts at 0.0.1 for the public line; the earlier `v0.1.0-rc-*` tags from the private repository were dropped.
