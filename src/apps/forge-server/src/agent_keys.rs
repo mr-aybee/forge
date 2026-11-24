@@ -40,6 +40,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::AgentTlsSettings;
 
+/// Prefix of this module's settings rows: internal, never listed or
+/// edited through the generic settings API.
+pub const SETTING_PREFIX: &str = "agent_tls.";
 /// Settings key of the key state.
 pub const SETTING_KEYS: &str = "agent_tls.keys";
 /// Settings key of the agents' acknowledgements.

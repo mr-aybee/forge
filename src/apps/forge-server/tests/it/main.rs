@@ -17,6 +17,7 @@ mod account;
 mod agent_binary_smoke;
 mod agent_cert_renewal;
 mod agent_link;
+mod agent_pinning;
 mod agent_rollout;
 mod alert_templates;
 mod alerts;
