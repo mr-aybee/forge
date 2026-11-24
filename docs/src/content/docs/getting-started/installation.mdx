@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: Download a signed Forge release, verify it and install the control plane on Linux or Windows, then sign in.
+description: Download a signed Forge release, verify it and install the control plane on Linux, then sign in.
 sidebar:
   order: 3
 ---
@@ -8,7 +8,7 @@ sidebar:
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 This guide installs the Forge control plane from a release on GitHub, on a
-Linux or Windows server, and ends with you signed in to the console. For a
+Linux server, and ends with you signed in to the console. For a
 ten-minute walkthrough that also adds your first node, follow the
 [Quickstart](/docs/getting-started/quickstart/).
 
@@ -17,9 +17,17 @@ with the web console built in, the analytics worker and plugin runner it
 starts, the agent binaries your nodes download, and the installer. You
 install nothing else: no Node.js, database server or web server.
 
+:::note
+Releases publish the control plane for Linux (`x86_64`, `aarch64`) only. The
+Windows control plane is not in releases yet: the Windows tabs below apply
+only to a package you build from source with `scripts/packaging/package.sh`,
+and that build is not verified. On Windows, releases publish only the
+[`forge` CLI](/docs/reference/cli/#forge).
+:::
+
 ## Before you begin
 
-| | Linux | Windows |
+| | Linux | Windows (source build only) |
 | --- | --- | --- |
 | Operating system | Debian 12+, Ubuntu 22.04+, RHEL, Rocky or Alma 8+, with systemd | Windows Server 2019, 2022 or 2025, Windows 10 or 11 |
 | Architecture | `x86_64` or `aarch64` (arm64) | `x86_64` |
@@ -80,9 +88,9 @@ from the release you want:
 
 ```sh
 # The latest stable release:
-curl -fsSLO https://github.com/mr-aybee/forge/releases/latest/download/get-forge.sh
+curl -fsSLO https://github.com/orbyntech/forge/releases/latest/download/get-forge.sh
 # Or one release, for example a release candidate:
-curl -fsSLO https://github.com/mr-aybee/forge/releases/download/<tag>/get-forge.sh
+curl -fsSLO https://github.com/orbyntech/forge/releases/download/<tag>/get-forge.sh
 ```
 
 Replace `<tag>` with the release tag, such as `v0.1.0-rc-03`. Pre-releases
@@ -95,7 +103,7 @@ without internet access:
 TAG=<tag>
 V=${TAG#v}
 ARCH=$(uname -m)   # x86_64 or aarch64
-BASE=https://github.com/mr-aybee/forge/releases/download/$TAG
+BASE=https://github.com/orbyntech/forge/releases/download/$TAG
 curl -fLO $BASE/forge-$V-$ARCH-linux.tar.gz -fLO $BASE/SHA256SUMS -fLO $BASE/SHA256SUMS.sig -fLO $BASE/get-forge.sh
 sh get-forge.sh --verify-only .
 ```
@@ -107,22 +115,25 @@ and installs nothing. To check the signature with OpenSSL by hand, see
 </TabItem>
 <TabItem label="Windows">
 
-`get-forge.ps1` downloads the Windows package, checks the signature and the
-checksum, and runs the installer only when both match:
+Releases have no Windows package yet, so `get-forge.ps1` stops with
+`The release has no Windows package.` when it downloads from a release. With
+`-File`, it installs a Windows package you built yourself, after it checks the
+signature and the checksum. Download the script from a release:
 
 ```powershell
 # The latest stable release:
-Invoke-WebRequest https://github.com/mr-aybee/forge/releases/latest/download/get-forge.ps1 -OutFile get-forge.ps1
+Invoke-WebRequest https://github.com/orbyntech/forge/releases/latest/download/get-forge.ps1 -OutFile get-forge.ps1
 # Or one release:
-Invoke-WebRequest https://github.com/mr-aybee/forge/releases/download/<tag>/get-forge.ps1 -OutFile get-forge.ps1
+Invoke-WebRequest https://github.com/orbyntech/forge/releases/download/<tag>/get-forge.ps1 -OutFile get-forge.ps1
 ```
 
 Windows has no built-in Ed25519 verifier. `get-forge.ps1` uses
 `openssl.exe` from `PATH` or from Git for Windows, and stops if it finds
 neither. `-SkipSignatureCheck` installs after the checksum check alone.
 
-A release without a `forge-<version>-x86_64-windows.zip` has no Windows
-package.
+`-File` needs `SHA256SUMS` and `SHA256SUMS.sig` next to the package, signed
+by the key the script trusts (`FORGE_RELEASE_PUBLIC_KEY` for your own key), or
+`-SkipSignatureCheck`.
 
 </TabItem>
 </Tabs>
@@ -162,7 +173,7 @@ sudo ./install.sh
 In **PowerShell as Administrator**:
 
 ```powershell
-.\get-forge.ps1 -Version <tag> -PublicUrl http://forge.example.com:8080
+.\get-forge.ps1 -File .\forge-<version>-x86_64-windows.zip -PublicUrl http://forge.example.com:8080
 ```
 
 Parameters that `get-forge.ps1` does not know go to `install.ps1`. From an
@@ -299,7 +310,7 @@ The key is `RELEASE_PUBLIC_KEY`, built into Forge; the self-updater and
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `No stable release found` | The release you want is a pre-release, which is never "latest" | Pass its tag: `--version v0.1.0-rc-03` (`-Version` on Windows) |
-| `SHA256SUMS does not carry a valid Orbyn Forge signature` | The files are not an Orbyn Forge release, or OpenSSL is older than 1.1.1 | Download from `github.com/mr-aybee/forge` again; check `openssl version` |
+| `SHA256SUMS does not carry a valid Orbyn Forge signature` | The files are not an Orbyn Forge release, or OpenSSL is older than 1.1.1 | Download from `github.com/orbyntech/forge` again; check `openssl version` |
 | `… does not match SHA256SUMS` | Damaged or incomplete download | Delete the file and download it again |
 | `This package is for aarch64; this machine is x86_64` | Wrong package | Download `forge-<version>-$(uname -m)-linux.tar.gz` |
 | `systemd is required` | The server runs without systemd, for example in a plain container | Install on a VM or host with systemd |

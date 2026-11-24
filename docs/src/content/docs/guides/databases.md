@@ -53,7 +53,7 @@ For the background, see [Analytics](/docs/concepts/analytics/). For every key, s
    sudo -E ./install.sh --db-url postgres://forge@<db-host>:5432 --db-name forge_op
    ```
 
-   On Windows:
+   On a Windows control plane you built from source:
 
    ```powershell
    $env:FORGE_DATABASE_PASSWORD = '<password>'

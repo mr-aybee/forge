@@ -6,7 +6,7 @@
 
 **One secure control center for your Windows and Linux machines.**
 
-[![CI](https://github.com/mr-aybee/forge/actions/workflows/ci.yml/badge.svg)](https://github.com/mr-aybee/forge/actions/workflows/ci.yml)
+[![CI](https://github.com/orbyntech/forge/actions/workflows/ci.yml/badge.svg)](https://github.com/orbyntech/forge/actions/workflows/ci.yml)
 ![Rust 1.89+](https://img.shields.io/badge/rust-1.89%2B-0f4060?logo=rust)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-17647e)](LICENSE)
 ![Platforms](https://img.shields.io/badge/nodes-Windows%20%7C%20Linux-0a2444)
@@ -70,7 +70,7 @@ stopped. Agents dial out over mutual TLS, so nodes need no inbound ports.
 | 🌐 | **Sites & DNS** | Route domains through Nginx edge nodes (TLS, standby upstreams, rate limits, custom blocks with automatic rollback) and publish records on PowerDNS. |
 | 🛡️ | **Access control** | Roles on everything or per cluster, project, environment or service, enforced by [Cedar](https://www.cedarpolicy.com) at every layer. Sensitive actions require MFA, which is on by default and is each server's operator's choice. API keys for scripts and CI. |
 | 🔑 | **Sign-in** | Local accounts with TOTP or passkeys, single sign-on (OIDC), and OAuth + PKCE for desktop and mobile apps. A self-hosted proof-of-work login challenge and per-account and per-address limits slow password guessing, codes work once, and refresh tokens expire. See [Security](docs/src/content/docs/security/index.md). |
-| ⌨️ | **`forge` CLI** | Manage nodes, agents, jobs, projects, services, stacks, files and the audit log from a terminal or a pipeline, or call any API route with `forge api`. Named contexts, browser or device-code sign-in for SSH sessions, MFA step-up when an action needs it, JSON output and stable exit codes. Ships with every release for Linux, Windows and macOS. |
+| ⌨️ | **`forge` CLI** | Manage nodes, agents, jobs, projects, services, stacks, files and the audit log from a terminal or a pipeline, or call any API route with `forge api`. Named contexts, browser or device-code sign-in for SSH sessions, MFA step-up when an action needs it, JSON output and stable exit codes. Ships with every release for Linux and Windows. |
 | 🤖 | **AI agents (MCP)** | Connect Claude, ChatGPT, Gemini CLI, Codex and Cursor to Forge's built-in MCP endpoint. Approve each agent in the console as read-only or auto; it acts with your permissions, destructive and MFA-protected actions stay with a person, and every change is audited with the agent's name. Off by default. |
 | 📜 | **Durable jobs & audit** | Every operation is a job that survives restarts; every action lands in a hash-chained, signed audit log. |
 | 🚨 | **Alerts & notifications** | Rules open an alarm when a node goes offline, when CPU, memory or disk stay high, or when a health check fails. Missing data never counts as recovery. Acknowledge alarms, and send them to a signed webhook, a Slack-compatible chat or email over SMTP with retries, reminders and a delivery history. Silence alarms or schedule maintenance windows without losing alarm history. |
@@ -101,7 +101,7 @@ trust boundaries and the data model.
 On a Linux server with systemd (x86_64 or arm64):
 
 ```sh
-curl -fsSLO https://github.com/mr-aybee/forge/releases/latest/download/get-forge.sh
+curl -fsSLO https://github.com/orbyntech/forge/releases/latest/download/get-forge.sh
 sudo sh get-forge.sh
 ```
 
@@ -116,17 +116,11 @@ prints the console address and the administrator password. Full walkthrough:
 <details>
 <summary><b>Install on Windows</b></summary>
 
-Download `forge-<version>-x86_64-windows.zip` from
-[Releases](https://github.com/mr-aybee/forge/releases), then in
-**PowerShell as Administrator**:
-
-```powershell
-Expand-Archive forge-<version>-x86_64-windows.zip -DestinationPath .
-cd forge-<version>-x86_64-windows
-.\install.ps1 -PublicUrl http://<server-ip>:8080
-```
-
-See [Installation](https://forge.orbyntech.com/docs/getting-started/installation/).
+Releases do not include the Windows control plane or the Windows agent yet.
+The Windows code is in the source, so you can build them yourself, but those
+builds are not verified. On Windows, releases publish only the `forge` CLI
+(`forge-cli-x86_64-pc-windows-msvc.exe`); see
+[Install on Windows](https://forge.orbyntech.com/docs/reference/cli/#install-on-windows).
 
 </details>
 
@@ -200,7 +194,6 @@ login for the test nodes `node-1`, `node-2` and `node-3`. Stop with
 | `src/apps` | `forge-server`, `forge-analytics-worker`, `forge-agent`, `forge-plugin-runner`, `forge` CLI |
 | `src/ui` | Web console (React + TypeScript) |
 | `src/tools`, `src/plugins` | Fleet benchmark, sample plugin |
-| `website/` | forge.orbyntech.com (React + TypeScript) and its container image |
 | `docs/` | Documentation site, served at `/docs/`: `cd docs; npm ci; npm run dev` |
 | `scripts/` | Dev config, the WSL lab, release packaging and the license |
 | `branding/` | Logo files |
@@ -224,7 +217,7 @@ login for the test nodes `node-1`, `node-2` and `node-3`. Stop with
 Contributions arrive as pull requests from forks:
 
 ```sh
-git clone https://github.com/<your-user>/forge.git   # your fork of mr-aybee/forge
+git clone https://github.com/<your-user>/forge.git   # your fork of orbyntech/forge
 cd forge
 git remote add upstream https://github.com/orbyntech/forge.git
 git switch -c <topic> upstream/develop

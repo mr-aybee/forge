@@ -801,6 +801,28 @@ async fn check(d: &Descriptor, ambiguous: bool) -> Attempt {
     }
 }
 
+/// Whether the node's service manager (systemd, or the Windows Service
+/// Control Manager) runs native services; without one, Forge's own
+/// supervisor does (Linux containers only).
+#[cfg(unix)]
+fn service_manager_present() -> bool {
+    crate::apps::has_systemd()
+}
+#[cfg(not(unix))]
+fn service_manager_present() -> bool {
+    true
+}
+
+/// The PID Forge's supervisor recorded for `copy` (Linux only).
+#[cfg(unix)]
+fn supervised_pid_of(copy: &str) -> Option<u32> {
+    crate::apps::supervised_pid_of(copy)
+}
+#[cfg(not(unix))]
+fn supervised_pid_of(_copy: &str) -> Option<u32> {
+    None
+}
+
 async fn check_service(d: &Descriptor, ambiguous: bool) -> Attempt {
     let fail = |reason: &str, detail: String, generation: String| Attempt {
         ok: false,
@@ -808,7 +830,7 @@ async fn check_service(d: &Descriptor, ambiguous: bool) -> Attempt {
         detail,
         generation,
     };
-    let (active, generation) = if crate::apps::has_systemd() {
+    let (active, generation) = if service_manager_present() {
         match crate::service::unit_active_state(&d.unit()).await {
             Ok(Some(s)) => s,
             Ok(None) => return fail("app_failure", "the systemd unit doesn't exist".into(), String::new()),
@@ -818,7 +840,7 @@ async fn check_service(d: &Descriptor, ambiguous: bool) -> Attempt {
         // No systemd (containers): Forge's supervisor runs the copy and
         // records its PID; the process id stands in for the unit generation.
         let copy = if d.slot.is_empty() { d.key() } else { format!("{}--{}", d.key(), d.slot) };
-        match crate::apps::supervised_pid_of(&copy) {
+        match supervised_pid_of(&copy) {
             Some(pid) => ("active".to_owned(), pid.to_string()),
             None => return fail("app_failure", "the supervised process is not running".into(), String::new()),
         }

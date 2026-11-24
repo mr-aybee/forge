@@ -6,7 +6,7 @@
 
 Report it privately through GitHub:
 **Security** → **Report a vulnerability** on
-[`mr-aybee/forge`](https://github.com/mr-aybee/forge/security/advisories/new).
+[`orbyntech/forge`](https://github.com/orbyntech/forge/security/advisories/new).
 
 Include:
 - the affected version or commit;

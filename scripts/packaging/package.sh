@@ -10,7 +10,8 @@
 #   * one self-contained package per server platform:
 #       forge-<version>-x86_64-linux.tar.gz
 #       forge-<version>-aarch64-linux.tar.gz
-#       forge-<version>-x86_64-windows.zip
+#       forge-<version>-x86_64-windows.zip (only when a Windows server build is
+#       present; releases currently ship Windows as the forge CLI only)
 #     each with the server, the plugin runner, the analytics worker, every agent binary for the
 #     nodes (dist/), the installer and an example configuration.
 set -euo pipefail

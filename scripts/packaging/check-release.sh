@@ -59,7 +59,8 @@ if [ -f "$A/forge-server-$t.exe" ]; then
     grep -qx "forge-$VERSION-x86_64-windows/$f" <<<"$listing" || err "the Windows zip has no $f"
   done
 else
-  echo "::warning::no Windows assets in this release"
+  # Windows ships the forge CLI only.
+  have "forge-cli-$t.exe"
 fi
 
 # Every forge-agent-* asset is copied into agent folders by the updater:

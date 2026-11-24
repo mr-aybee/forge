@@ -22,7 +22,7 @@ export default defineConfig({
       customCss: ["./src/styles/forge.css", "./src/styles/diagrams.css"],
       components: { SiteTitle: "./src/components/SiteTitle.astro", SocialIcons: "./src/components/SiteNav.astro" },
       social: [
-        { icon: "github", label: "Releases on GitHub", href: "https://github.com/mr-aybee/forge" },
+        { icon: "github", label: "Releases on GitHub", href: "https://github.com/orbyntech/forge" },
       ],
       description: "One secure workspace to access, deploy and operate applications across Windows and Linux.",
       lastUpdated: false,

@@ -5536,9 +5536,9 @@ decision.
 `LICENSE` is the single copy: packages ship it as `LICENSE.txt` and the
 website's license page renders it. The Orbyn Forge Free Use License is retired.
 Source, releases, install scripts and issues all live in the public
-`mr-aybee/forge` repository. The release workflow publishes there with
+`orbyntech/forge` repository. The release workflow publishes there with
 `GITHUB_TOKEN`, and the updater's default feed is
-`https://api.github.com/repos/mr-aybee/forge/releases/latest`. CI and release
+`https://api.github.com/repos/orbyntech/forge/releases/latest`. CI and release
 builds run on GitHub-hosted runners only. Windows packages and the macOS CLI
 are always built. Contributions arrive as pull requests from forks into
 `develop`. The public repository starts from a fresh history.
@@ -5652,6 +5652,18 @@ A delivery may pick the image tag (`?tag=` or a JSON `"tag"`) only when the webh
 
 ## D-162 New release signing key for the public repository
 
-**Decision.** The first public release candidate, `v0.0.1-rc-01`, is signed with a new Ed25519 release key. Its public half, `6yf7l7jBEw6u446vqWAgt7P7bqEuaY5tpbYnWPHBmbg`, replaces the earlier key in `RELEASE_PUBLIC_KEY`, `get-forge.sh`, `get-forge.ps1`, the installation guide and `.gitleaks.toml`. The private half is the `FORGE_RELEASE_KEY` Actions secret of `mr-aybee/forge`. It was generated on the maintainer's machine with `forge-server release keygen` and never left it except into that secret.
+**Decision.** The first public release candidate, `v0.0.1-rc-01`, is signed with a new Ed25519 release key. Its public half, `6yf7l7jBEw6u446vqWAgt7P7bqEuaY5tpbYnWPHBmbg`, replaces the earlier key in `RELEASE_PUBLIC_KEY`, `get-forge.sh`, `get-forge.ps1`, the installation guide and `.gitleaks.toml`. The private half is the `FORGE_RELEASE_KEY` Actions secret of `orbyntech/forge`. It was generated on the maintainer's machine with `forge-server release keygen` and never left it except into that secret.
 
 **Why.** The public repository had never published a release, so no install trusted the old key. The key could therefore be swapped directly, without the rotation release a key change otherwise needs (see development/releases in the docs). The version also restarts at 0.0.1 for the public line; the earlier `v0.1.0-rc-*` tags from the private repository were dropped.
+
+## D-163 The website moves to its own repository
+
+**Decision.** The website (`website/`) moves to `github.com/orbyntech/forge-website` and is hosted separately. The documentation stays in this repository (`docs/`). The website image clones this repository at a chosen ref, builds `docs/` and serves it at `/docs/`, so `forge.orbyntech.com/docs/` links keep working. The docs keep their own copy of the brand tokens (`docs/src/styles/tokens.css`). This repository's CI no longer builds the website, and releases no longer push its image.
+
+**Why.** The website changes on a different rhythm from Forge and needs no Rust CI, release signing or code review by Forge maintainers. Keeping the docs here keeps them next to the code they describe, where a change and its docs land in one pull request.
+
+## D-164 The repositories belong to the orbyntech organization
+
+**Decision.** `forge` and `forge-website` were transferred from the maintainer's personal account to the `orbyntech` GitHub organization: `github.com/orbyntech/forge` and `github.com/orbyntech/forge-website`. The release feed compiled into Forge (`DEFAULT_FEED`), the install scripts, the docs and the website image (`ghcr.io/orbyntech/forge-website`) use the organization's URLs. The rulesets, the `FORGE_RELEASE_KEY` secret and the release key (D-162) moved with the repository unchanged.
+
+**Why.** The project is published by Orbyn Technologies, so its source, releases and issues belong to the organization. GitHub's transfer keeps history, pull requests and redirects from the old URLs, and no release had been published yet, so no install points at the old feed.

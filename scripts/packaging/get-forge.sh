@@ -1,7 +1,7 @@
 #!/bin/sh
 # Downloads an Orbyn Forge release, verifies it and runs its installer.
 #
-#   curl -fsSLO https://github.com/mr-aybee/forge/releases/latest/download/get-forge.sh
+#   curl -fsSLO https://github.com/orbyntech/forge/releases/latest/download/get-forge.sh
 #   sudo sh get-forge.sh                          # latest stable release, interactive
 #   sudo sh get-forge.sh --version v0.0.1-rc-01   # one release, also a pre-release
 #   sudo sh get-forge.sh --file ./forge-0.0.1-x86_64-linux.tar.gz   # a downloaded package
@@ -23,7 +23,7 @@
 # which is installed with apt-get, dnf, yum or zypper when it is missing.
 #
 # Environment (testing and mirrors):
-#   FORGE_RELEASES_URL         default https://github.com/mr-aybee/forge/releases
+#   FORGE_RELEASES_URL         default https://github.com/orbyntech/forge/releases
 #                              (a mirror with the same download/<tag>/<file> and
 #                              latest/download/<file> layout; file:// works)
 #   FORGE_RELEASE_PUBLIC_KEY   trust another release key (base64url), e.g. a
@@ -33,7 +33,7 @@ set -eu
 # Must equal RELEASE_PUBLIC_KEY in src/protocol/forge-sdk/src/release.rs
 # (the release workflow checks this).
 PINNED_KEY="6yf7l7jBEw6u446vqWAgt7P7bqEuaY5tpbYnWPHBmbg"
-BASE="${FORGE_RELEASES_URL:-https://github.com/mr-aybee/forge/releases}"
+BASE="${FORGE_RELEASES_URL:-https://github.com/orbyntech/forge/releases}"
 KEY="${FORGE_RELEASE_PUBLIC_KEY:-$PINNED_KEY}"
 
 VERSION=latest

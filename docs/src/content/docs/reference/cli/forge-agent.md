@@ -176,6 +176,7 @@ of the PowerShell history.
 [`service install`](#forge-agent-service-install) refuses a
 `forge-agent.exe` outside `%ProgramFiles%`. To run the enrolled agent as a
 service, keep the binary in `C:\Program Files\OrbynForge` before you enroll.
+Releases do not include the Windows agent yet; build it from source.
 `install.ps1` is the supported way to set up a Windows node: it downloads
 the binary there, checks it, locks the data folder and enrolls (see the
 [node installer](/docs/reference/cli/node-installer/#windows-installps1)).

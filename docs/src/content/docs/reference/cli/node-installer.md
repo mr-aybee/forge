@@ -423,7 +423,16 @@ On any exit other than `0`, the script reports `installer failed (exit
 `install.ps1` installs `forge-agent.exe` on a Windows machine, enrolls the
 machine with a one-time token and runs the agent as the `ForgeAgent` Windows
 service. There is no helper on Windows: the service runs as LocalSystem and
-does privileged work in its own process. For the task, see
+does privileged work in its own process.
+
+:::note
+Releases do not include the Windows agent (`forge-agent-windows-x86_64.exe`)
+yet, so a control plane installed from a release answers `install.ps1` with
+`this Forge server has no Windows agent build`. To enroll a Windows node, build
+`forge-agent.exe` from source for `x86_64-pc-windows-msvc`, copy it into
+`agent_dist_dir` as `forge-agent-windows-x86_64.exe` and restart the control
+plane. Such builds are not verified.
+::: For the task, see
 [Add a Windows node with the installer](/docs/guides/add-nodes/#add-a-windows-node-with-the-installer).
 
 **Requires:** Windows 10 version 1809, Windows Server 2019 or later (build
@@ -699,7 +708,7 @@ exits with code `1`.
 | `this installer needs 64-bit Windows on x86_64` | 32-bit Windows, ARM64 Windows, or the 32-bit **Windows PowerShell (x86)** | Use the 64-bit PowerShell on 64-bit x86_64 Windows |
 | `Windows 10 1809 or Windows Server 2019 or later is needed (this is build <n>)` | Build older than 17763 | Upgrade Windows |
 | `set $env:FORGE_ENROLL_TOKEN to the token shown in Orbyn Forge` | No token and the machine is not enrolled | Run the command from **Add node**, or set the variable as in the [synopsis](#windows-synopsis) |
-| `this Forge server has no Windows agent build` | `forge-agent-windows-x86_64.exe` is not in `agent_dist_dir` | Put the build there and restart the control plane |
+| `this Forge server has no Windows agent build` | `forge-agent-windows-x86_64.exe` is not in `agent_dist_dir`. Releases do not include it | Build it from source, put it there and restart the control plane |
 | `refusing a plain http:// server; set $env:FORGE_ALLOW_HTTP=1 only for a test lab` | `$ForgeUrl` is `http://` | Give the control plane an `https://` URL; in a test lab only, set `FORGE_ALLOW_HTTP` to `1` |
 | `checksum mismatch for forge-agent.exe (expected <sha>, got <sha>)` | The build in `agent_dist_dir` was replaced after the control plane started, or a proxy rewrote the download | Restart the control plane after replacing builds; otherwise check for a proxy |
 | `<path> is a link (reparse point); this installer did not create it. Inspect and remove <folder>, then run the installer again` | `C:\ProgramData\OrbynForge` existed but was not locked, and it, or an item in it, is a junction, symbolic link or mount point. `<path>` is that item | Find out who created the folder. Remove `<folder>` (`Remove-Item` deletes a link, not its target), then run the installer again |
