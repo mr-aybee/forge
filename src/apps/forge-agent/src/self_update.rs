@@ -1295,10 +1295,10 @@ mod tests {
     #[test]
     fn an_older_version_needs_allow_downgrade() {
         let (_a, _r, l, mut host, u) = node();
-        let old = UpdateSpec { version: "0.0.1".into(), ..u };
+        let old = UpdateSpec { version: "0.0.0".into(), ..u };
         host.versions = [
-            ("forge-agent", "forge-agent 0.0.1".to_owned()),
-            ("forge-agent-helper", "forge-agent-helper 0.0.1".to_owned()),
+            ("forge-agent", "forge-agent 0.0.0".to_owned()),
+            ("forge-agent-helper", "forge-agent-helper 0.0.0".to_owned()),
         ]
         .into();
         let e = apply_in(&old, &l, &host).err();
