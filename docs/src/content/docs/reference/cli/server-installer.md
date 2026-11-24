@@ -225,7 +225,7 @@ what to download again. The signature of the package itself is checked by
 | **MFA** | With `--mfa`, runs `forge-server --config /etc/forge/forge.toml mfa on\|off`. Then reports the result of `mfa status` |
 | **Administrator** | Creates the first platform administrator when `/var/lib/forge/forge.db` does not exist and `forge.toml` has no `database_url` line (see [The first administrator](#the-first-administrator)) |
 | **Service** | Writes `/etc/systemd/system/forge-server.service` (every run), restores its SELinux label, then runs `systemctl daemon-reload`, `enable` and `restart`. `forge-server` starts and supervises `forge-analytics-worker` and `forge-plugin-runner` itself; they have no units of their own |
-| **Firewall** | Opens the ports in `forge.toml` permanently in firewalld when it is running, or in ufw when it is active: the port of `api_listen` (default `8080/tcp`), of `agent_listen` (`7443/tcp`) and of `[analytics] worker_agent_listen` (`55132/tcp`, the analytics worker's upload port). Otherwise changes nothing. With another firewall, see [Open the analytics upload port](#open-the-analytics-upload-port) |
+| **Firewall** | Opens the ports in `forge.toml` permanently in firewalld when it is running, in ufw when it is active, or else in plain iptables when `INPUT` ends in a `REJECT`/`DROP` rule or has a `DROP` policy (the rules go above it, for IPv4 and IPv6, and are saved with `netfilter-persistent`, `/etc/iptables/rules.v4` or `/etc/sysconfig/iptables`): the port of `api_listen` (default `8080/tcp`), of `agent_listen` (`7443/tcp`) and of `[analytics] worker_agent_listen` (`55132/tcp`, the analytics worker's upload port). Otherwise changes nothing. A re-run adds no duplicate rules. It never changes a cloud provider's firewall. With another firewall, see [Open the analytics upload port](#open-the-analytics-upload-port) |
 | **Health check** | Polls `/api/health` on the `api_listen` port (on `127.0.0.1` when it listens on all addresses) once a second, up to 60 attempts |
 | **Analytics worker** | Unless `[analytics] engine = "off"`: waits up to 30 s for the worker's upload port to accept connections. A worker that does not come up is a warning, not a failure: the console works without it |
 | **Agent** | Only with `--install-agent`: enrolls this server as a node (see [Agent on the server](#agent-on-the-server)) |
@@ -234,7 +234,7 @@ what to download again. The signature of the package itself is checked by
 
 With analytics on, nodes upload their spools to the analytics worker on
 `55132/tcp` ([Network ports](/docs/reference/network-ports/)). The
-installer opens it in firewalld or ufw. With another firewall, or a
+installer opens it in firewalld, ufw or plain iptables. With another firewall, or a
 network firewall between the nodes and the server, open it from the
 nodes' networks:
 
@@ -243,6 +243,8 @@ nodes' networks:
 sudo firewall-cmd --permanent --add-port=55132/tcp && sudo firewall-cmd --reload
 # ufw
 sudo ufw allow 55132/tcp
+# plain iptables: above the first REJECT/DROP rule (here number 5), then save
+sudo iptables -I INPUT 5 -p tcp -m state --state NEW --dport 55132 -j ACCEPT && sudo netfilter-persistent save
 ```
 
 ### Agent on the server
@@ -405,7 +407,8 @@ A new installation on a UTF-8 terminal, with no host firewall active:
   ✔ MFA                    required for guarded actions
   ✔ Administrator          admin (platform admin)
   ✔ Service                forge-server.service (enabled, restarts on failure; starts the analytics worker)
-  ✔ Firewall               no active firewalld or ufw; allow 8080/tcp (console), 7443/tcp (agents), 55132/tcp (analytics uploads) in yours
+  ✔ Firewall               no active firewalld, ufw or blocking iptables rules; allow 8080/tcp (console), 7443/tcp (agents), 55132/tcp (analytics uploads) in yours
+  ▲ Cloud firewall         also allow TCP 8080, 7443 and 55132 in your provider's firewall (security group, security list); the installer cannot change it
   ✔ Health check           responding after 2s
   ✔ Analytics worker       duckdb, uploads on port 55132
 

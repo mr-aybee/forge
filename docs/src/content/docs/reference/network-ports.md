@@ -76,9 +76,10 @@ What the installers open: see
 [Server installer](/docs/reference/cli/server-installer/#what-it-does).
 The installers open the ports of `api_listen`, `agent_listen` and
 `[analytics] worker_agent_listen` from `forge.toml` (by default `8080/tcp`,
-`7443/tcp` and `55132/tcp`) in the host firewall: firewalld or ufw on Linux,
-Windows Firewall on Windows. Open them in any network firewall between the nodes and the
-server yourself.
+`7443/tcp` and `55132/tcp`) in the host firewall: firewalld, ufw or plain
+iptables rules on Linux, Windows Firewall on Windows. Open them in any network
+or cloud firewall between the nodes and the server yourself (security group,
+security list).
 
 ## Related
 

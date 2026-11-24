@@ -738,6 +738,46 @@ case "$API_HOST" in ""|0.0.0.0|::) LOCAL_API="http://127.0.0.1:$API_PORT" ;; *:*
 PORTS="$API_PORT $AGENT_PORT $WORKER_PORT"
 PORTS_TEXT="$API_PORT/tcp (console), $AGENT_PORT/tcp (agents), $WORKER_PORT/tcp (analytics uploads)"
 
+# Plain iptables (for example Oracle Cloud images: SSH allowed, then a final
+# REJECT): insert an ACCEPT per port above the first REJECT or DROP rule, for
+# IPv4 and IPv6, and save the rules so they survive a reboot. Returns 1 when
+# iptables is missing or blocks nothing (nothing to open). Ports that are
+# already accepted are left alone, so a re-run adds no duplicates.
+IPT_SAVED="no"
+open_iptables_ports() {
+  command -v iptables >/dev/null 2>&1 || return 1
+  found=false
+  for ipt in iptables ip6tables; do
+    command -v "$ipt" >/dev/null 2>&1 || continue
+    "$ipt" -S INPUT >/dev/null 2>&1 || continue
+    pos="$("$ipt" -L INPUT -n --line-numbers 2>/dev/null | awk '$2=="REJECT"||$2=="DROP"{print $1; exit}')"
+    policy_drop=false
+    "$ipt" -S INPUT 2>/dev/null | grep -q '^-P INPUT DROP' && policy_drop=true
+    [ -n "$pos" ] || [ "$policy_drop" = true ] || continue
+    found=true
+    for p in $PORTS; do
+      "$ipt" -C INPUT -p tcp -m state --state NEW --dport "$p" -j ACCEPT 2>/dev/null && continue
+      # A rule that cannot be added must not fail the install: the server is
+      # already set up, and the summary tells the user to open the port.
+      if [ -n "$pos" ]; then
+        "$ipt" -I INPUT "$pos" -p tcp -m state --state NEW --dport "$p" -j ACCEPT || return 1
+      else
+        "$ipt" -A INPUT -p tcp -m state --state NEW --dport "$p" -j ACCEPT || return 1
+      fi
+    done
+  done
+  [ "$found" = true ] || return 1
+  if command -v netfilter-persistent >/dev/null 2>&1; then
+    netfilter-persistent save >/dev/null 2>&1 && IPT_SAVED="netfilter-persistent"
+  elif [ -d /etc/iptables ]; then
+    iptables-save > /etc/iptables/rules.v4 2>/dev/null && IPT_SAVED="/etc/iptables/rules.v4"
+    command -v ip6tables-save >/dev/null 2>&1 && ip6tables-save > /etc/iptables/rules.v6 2>/dev/null
+  elif [ -f /etc/sysconfig/iptables ] && command -v iptables-save >/dev/null 2>&1; then
+    iptables-save > /etc/sysconfig/iptables 2>/dev/null && IPT_SAVED="/etc/sysconfig/iptables"
+  fi
+  return 0
+}
+
 if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
   for p in $PORTS; do firewall-cmd -q --permanent --add-port="$p/tcp"; done
   firewall-cmd -q --reload
@@ -745,9 +785,12 @@ if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>
 elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
   for p in $PORTS; do ufw allow "$p/tcp" >/dev/null; done
   step "Firewall" "opened $PORTS_TEXT (ufw)"
+elif open_iptables_ports; then
+  step "Firewall" "opened $PORTS_TEXT (iptables, saved: $IPT_SAVED)"
 else
-  step "Firewall" "no active firewalld or ufw; allow $PORTS_TEXT in yours"
+  step "Firewall" "no active firewalld, ufw or blocking iptables rules; allow $PORTS_TEXT in yours"
 fi
+note "Cloud firewall" "also allow TCP $API_PORT, $AGENT_PORT and $WORKER_PORT in your provider's firewall (security group, security list); the installer cannot change it"
 
 i=0
 until curl -fsS -o /dev/null "$LOCAL_API/api/health" 2>/dev/null; do
