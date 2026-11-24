@@ -165,7 +165,11 @@ pub fn build(cx: Context<'_>) -> Payload {
             server_id: a.server,
         }),
         observation: a.map(|a| ObservationView { subject: a.subject.clone(), value: a.fired_value.clone() }),
-        links: a.map(|a| Links { alarm: format!("{}/alerts?alarm={}", cx.public_url.trim_end_matches('/'), a.id) }),
+        // No console address known yet (nothing pinned, no administrator
+        // signed in, D-167): no link rather than a relative one.
+        links: a
+            .filter(|_| !cx.public_url.trim().is_empty())
+            .map(|a| Links { alarm: format!("{}/alerts?alarm={}", cx.public_url.trim_end_matches('/'), a.id) }),
         message: a.is_none().then(|| "Test notification from Orbyn Forge. No alarm fired.".to_owned()),
         after_silence: match d.silence_id {
             Some(silence_id) if d.after_silence => Some(AfterSilence { silence_id }),
