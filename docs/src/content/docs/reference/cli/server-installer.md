@@ -45,7 +45,7 @@ sudo ./install.sh [--public-url URL] [--public-address URL] [--trusted-proxies L
                   [--install-agent [--cluster NAME] [--terminal-account NAME]]
                   [--db sqlite|postgres] [--db-url URL | --db-local] [--db-name NAME]
                   [--allow-shared-db]
-                  [--analytics duckdb|embedded|clickhouse|off]
+                  [--analytics duckdb|chdb|clickhouse|off]
                   [--analytics-url URL] [--analytics-name NAME]
                   [--yes | --non-interactive]
 sudo ./install.sh                # on a terminal: asks the questions below
@@ -138,7 +138,7 @@ An example session on a new host:
 | `--db-local` | flag | off | No | Installs the PostgreSQL server from the system packages (`apt-get` or `dnf`; on RHEL 8 it enables the `postgresql:15` module stream first). On RHEL-likes it also initialises the cluster and switches local TCP logins in `pg_hba.conf` from `ident` to `scram-sha-256`. It then creates a login role `forge` with `CREATEDB` and a generated password, and uses it. Implies `--db postgres` | `--db-local` |
 | `--db-name` | name (`A-Z`, `a-z`, `0-9`, `_`) | `forge_op` | No | Database name. Created when missing, reused when it exists; never dropped or recreated | `--db-name forge_op` |
 | `--allow-shared-db` | flag | off | No | Uses a database that already holds tables that are not Forge's | `--allow-shared-db` |
-| `--analytics` | `duckdb`, `embedded` (alias `chdb`), `clickhouse` or `off` | `duckdb` | No | Analytics database for node history. `embedded` needs the engine binary (`forge-server analytics install`); `duckdb` runs inside the analytics worker and needs nothing else | `--analytics clickhouse` |
+| `--analytics` | `duckdb`, `chdb` (also accepted as `embedded`), `clickhouse` or `off` | `duckdb` | No | Analytics database for node history. `chdb` needs the engine binary (`forge-server analytics install`); `duckdb` runs inside the analytics worker and needs nothing else | `--analytics clickhouse` |
 | `--analytics-url` | URL without password | none | With `--analytics clickhouse` | ClickHouse HTTP(S) address, e.g. `https://default@ch1:8443`. The password comes from `FORGE_ANALYTICS_PASSWORD` and is stored in `/etc/forge/analytics-password` | `--analytics-url https://default@ch1:8443` |
 | `--analytics-name` | name (`A-Z`, `a-z`, `0-9`, `_`) | `<db-name>_analytics` | No | Analytics database name | `--analytics-name forge_op_analytics` |
 | `--yes`, `--non-interactive` | flag | off | No | Never ask questions, even on a terminal. Use it in scripts that run under a terminal (for example `ssh -t`) | `--yes` |
