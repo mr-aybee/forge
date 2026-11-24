@@ -42,7 +42,7 @@
 #   --db-name NAME          database name (default forge_op; created when
 #                           missing, reused when it exists)
 #   --allow-shared-db       use a database that also holds other tables
-#   --analytics duckdb|embedded|clickhouse|off   (default duckdb)
+#   --analytics duckdb|chdb|clickhouse|off   (default duckdb; embedded = chdb)
 #                           analytics database for node history and logs;
 #                           new configuration only
 #   --analytics-url URL     ClickHouse server for --analytics clickhouse
@@ -281,7 +281,8 @@ fi
 FRESH_CONF=false
 [ -f "$CONF_DIR/forge.toml" ] || FRESH_CONF=true
 case "$DB_KIND" in ""|sqlite|postgres) ;; *) die "--db must be sqlite or postgres." ;; esac
-case "$ANALYTICS" in ""|off|embedded|chdb|clickhouse|duckdb) ;; *) die "--analytics must be off, embedded, clickhouse or duckdb." ;; esac
+[ "$ANALYTICS" = embedded ] && ANALYTICS=chdb   # the older name for chdb
+case "$ANALYTICS" in ""|off|chdb|clickhouse|duckdb) ;; *) die "--analytics must be duckdb, chdb, clickhouse or off." ;; esac
 case "$DB_URL $ANALYTICS_URL" in *://*:*@*) die "Put database passwords in FORGE_DATABASE_PASSWORD or FORGE_ANALYTICS_PASSWORD, not in the URL." ;; esac
 for n in "$DB_NAME" "$ANALYTICS_NAME"; do
   case "$n" in *[!A-Za-z0-9_]*) die "Database names use only letters, digits and _." ;; esac
@@ -364,9 +365,10 @@ if [ "$INTERACTIVE" = true ]; then
     fi
     d=duckdb
     while :; do
-      ask ANALYTICS "Analytics database for node history (duckdb, embedded, clickhouse, off)" "$d"
-      case "$ANALYTICS" in off|embedded|chdb|clickhouse|duckdb) break ;; esac
-      QN=$((QN - 1)); printf '     %sChoose duckdb, embedded, clickhouse or off.%s\n' "$Y" "$N"
+      ask ANALYTICS "Analytics database for node history (duckdb, chdb, clickhouse, off)" "$d"
+      [ "$ANALYTICS" = embedded ] && ANALYTICS=chdb
+      case "$ANALYTICS" in off|chdb|clickhouse|duckdb) break ;; esac
+      QN=$((QN - 1)); printf '     %sChoose duckdb, chdb, clickhouse or off.%s\n' "$Y" "$N"
     done
     if [ "$ANALYTICS" = clickhouse ]; then
       ask ANALYTICS_URL "ClickHouse server (no password)" "https://default@clickhouse.example.com:8443"

@@ -58,12 +58,12 @@ installer asks for it; you can change it later in
 | Engine | Use it for | Measured cost |
 | --- | --- | --- |
 | `duckdb` (default on Linux) | Small and medium installs, up to about 100 nodes with moderate logging | Idle: about 0 % of a core and 44 MB. Stored 100 nodes × 10 log lines/s (about 9,000 lines/s) with every line kept |
-| `embedded` (chDB, Linux only) | Heavy log search on one server | Idle: 13 to 16 % of a core and about 600 MB. Searches stay under 1 s at 9,000 lines/s |
+| `chdb` (embedded ClickHouse, Linux only) | Heavy log search on one server | Idle: 13 to 16 % of a core and about 600 MB. Searches stay under 1 s at 9,000 lines/s |
 | `clickhouse` | Heavy load and large fleets; a ClickHouse server you run | On the ClickHouse server, not on Forge |
 | `off` | No history or logs | None |
 
 DuckDB slows down at about 18,000 log lines/s while people search the logs.
-Above that, use `embedded` or `clickhouse`. The numbers and method are in
+Above that, use `chdb` or `clickhouse`. The numbers and method are in
 [Benchmarks](/docs/development/benchmarks/#analytics-duckdb-against-chdb).
 
 :::note
