@@ -10,7 +10,7 @@ first.
 
 ## What exists
 
-- **`ci.yml`** runs on push to `develop`/`master` and on pull requests:
+- **`ci.yml`** runs on push to `master` and on pull requests into `master`:
   - `rust`: fmt, clippy `-D warnings` and tests on Linux and Windows;
   - `postgres`: builds with the `postgres` feature against a service container;
   - `supply-chain`: `cargo deny` and `cargo audit`;

@@ -220,10 +220,10 @@ Contributions arrive as pull requests from forks:
 git clone https://github.com/<your-user>/forge.git   # your fork of orbyntech/forge
 cd forge
 git remote add upstream https://github.com/orbyntech/forge.git
-git switch -c <topic> upstream/develop
+git switch -c <topic> upstream/master
 ```
 
-Before you open a PR into `develop`, run:
+Before you open a PR into `master`, run:
 
 ```sh
 cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings

@@ -4,7 +4,7 @@ name: Release
 # workspace version in Cargo.toml):
 #   vX.Y.Z         stable release; the commit must be on master
 #   vX.Y.Z-rc-NN   GitHub pre-release (not "latest"); tag it on master too
-# The usual flow: develop green -> fast-forward master -> tag master.
+# The usual flow: master green -> tag master.
 #
 # Manual runs (Actions -> Release -> Run workflow) rebuild an existing tag.
 # They are dry runs unless "publish" is ticked: everything is built, packaged,
@@ -92,7 +92,7 @@ jobs:
             if [ "$prerelease" = false ] && [ "$EVENT$PUBLISH_INPUT" != workflow_dispatchfalse ]; then
               echo "::error::stable tag $TAG must point at a commit on master: merge to master first, then tag the master commit"; exit 1
             fi
-            echo "::warning::$TAG is not on master. Release candidates are normally tagged on master after develop is merged."
+            echo "::warning::$TAG is not on master. Releases are normally tagged on master."
           fi
           base="${version%%-*}"
           cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
