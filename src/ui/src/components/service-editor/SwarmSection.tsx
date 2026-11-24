@@ -193,9 +193,9 @@ function Field({ label, htmlFor, hint, error, children }: { label: string; htmlF
 }
 
 /** The heading row of a placement block, with its add action on the right. */
-function BlockHead({ title, hint, action }: { title: string; hint: string; action: ReactNode }) {
+function BlockHead({ title, hint, action, first }: { title: string; hint: string; action: ReactNode; first?: boolean }) {
   return (
-    <div className="flex min-w-0 items-center gap-2 px-3 pt-2.5 pb-1.5">
+    <div className={`card-head flex min-w-0 items-center gap-2 border-b border-line px-3 py-1.5 ${first ? "rounded-t-md" : ""}`}>
       <p className="text-xs font-medium text-fg">{title}</p>
       <p className="min-w-0 flex-1 truncate text-xs text-faint" title={hint}>
         {hint}
@@ -214,7 +214,7 @@ function Group({ title, summary, children }: { title: string; summary: string; c
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full min-w-0 items-center gap-2 rounded-md px-3 py-2 text-left hover:bg-panel-2 focus-visible:outline-2 focus-visible:outline-accent"
+        className={`card-head flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left focus-visible:outline-2 focus-visible:outline-accent ${open ? "rounded-t-md" : "rounded-md"}`}
       >
         <ChevronRight className={`size-3.5 shrink-0 text-muted transition-transform ${open ? "rotate-90" : ""}`} aria-hidden />
         <span className="text-[13px] font-medium">{title}</span>
@@ -237,8 +237,9 @@ function Constraints({ value, onChange }: { value: string[]; onChange: (v: strin
     onChange([...value, "node.role==worker"]);
   };
   return (
-    <div className="pb-2">
+    <div className={value.length ? "pb-2" : ""}>
       <BlockHead
+        first
         title="Run only on nodes where"
         hint={value.length ? "All rules must match." : "No rules: any active node."}
         action={
@@ -248,7 +249,7 @@ function Constraints({ value, onChange }: { value: string[]; onChange: (v: strin
         }
       />
       {value.length > 0 && (
-        <ul className="space-y-1.5 px-3">
+        <ul className="space-y-1.5 px-3 pt-2">
           {value.map((c, i) => {
             const r = parse(c);
             const k = KEYS.find((x) => x.id === r.key);
@@ -308,7 +309,7 @@ function Spread({ value, onChange }: { value: string[]; onChange: (v: string[]) 
   const name = (s: string) => s.replace(/^node\.labels\./, "");
   const full = value.length >= 4;
   return (
-    <div className="border-t border-line pb-2.5">
+    <div className={`border-t border-line ${value.length ? "pb-2.5" : ""}`}>
       <BlockHead
         title="Spread evenly over"
         hint={value.length ? "Node labels, in order of priority." : "Not spread: the swarm balances by load."}
@@ -329,7 +330,7 @@ function Spread({ value, onChange }: { value: string[]; onChange: (v: string[]) 
         }
       />
       {value.length > 0 && (
-        <ul className="flex flex-wrap gap-1.5 px-3">
+        <ul className="flex flex-wrap gap-1.5 px-3 pt-2">
           {value.map((s, i) => {
             const bad = !!s && !SPREAD_RE.test(s);
             return (
