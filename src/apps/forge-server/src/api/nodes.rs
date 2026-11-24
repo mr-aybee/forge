@@ -254,8 +254,13 @@ pub async fn install_script(
             terminal_account_sudo: sudo,
         },
     );
-    Ok(([(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")], body).into_response())
+    Ok(([(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")], SCRIPT_CACHE_HEADERS, body).into_response())
 }
+
+/// The installers embed the address they were fetched from: never cache
+/// them, and key any cache that ignores `no-store` on those headers.
+const SCRIPT_CACHE_HEADERS: [(header::HeaderName, &str); 2] =
+    [(header::CACHE_CONTROL, "no-store"), (header::VARY, "Host, X-Forwarded-Host, X-Forwarded-Proto")];
 
 /// Bytes read per chunk of an agent download.
 const DOWNLOAD_CHUNK: usize = 64 * 1024;
@@ -301,7 +306,7 @@ pub async fn download(
 pub async fn install_ps1(State(state): State<AppState>, origin: RequestOrigin) -> Response {
     let urls = NodeUrls::from_state(&state, &origin);
     let body = crate::install::render_ps1(&state.dist, &urls.forge_url, &urls.agent_url);
-    ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], body).into_response()
+    ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], SCRIPT_CACHE_HEADERS, body).into_response()
 }
 
 /// `GET /workspaces/{ws}/onboarding` — what the UI needs for the manual path.

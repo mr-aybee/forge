@@ -474,7 +474,9 @@ that use the [MCP endpoint](/docs/reference/mcp/). The discovery and
 registration paths sit at the root of the host, outside `/api/v1`. While
 `[mcp] enabled` is `false`, the protected resource metadata and
 `/oauth/register` answer `404` and no new consent can start; listing and
-revoking connections and clients still work. See
+revoking connections and clients still work. Without a pinned public
+address (runtime setting or `public_url`), discovery, registration,
+consent and `/mcp` answer `409` with code `no_public_address`. See
 [MCP connectors](/docs/concepts/mcp-connectors/) for the flow.
 
 | Method | Path | Permission |
@@ -1772,6 +1774,8 @@ while workers remain, or when no manager answers.
 | GET | `/install.sh?hostname=&terminal_account=&terminal_account_sudo=` | public — manual installer (no secrets). `terminal_account` names the terminal account the script creates; `terminal_account_sudo=1` or `true` gives it passwordless `sudo`. `400` when `terminal_account` breaks the [naming rules](#terminal-accounts). See [Node installer](/docs/reference/cli/node-installer/#the-endpoint) |
 | GET | `/install.ps1` | public — Windows node installer (no secrets, no query parameters). The script carries the control plane URL, the agent URL and the SHA-256 of the Windows agent; it reads the token from `$env:FORGE_ENROLL_TOKEN`. `text/plain; charset=utf-8`. See [Node installer: Windows](/docs/reference/cli/node-installer/#windows-installps1) |
 | GET | `/agent/download/{os}/{arch}/{binary}` | public — agent binaries, with an `x-checksum: sha256=<hex>` header. Linux: `os` `linux`, `arch` `x86_64` or `aarch64`, `binary` `forge-agent` or `forge-agent-helper`. Windows: only `/agent/download/windows/x86_64/forge-agent`, which serves `forge-agent-windows-x86_64.exe` (there is no helper on Windows). Releases do not include that file. `404` for anything else or a build missing from `agent_dist_dir` |
+
+The `/install.sh` and `/install.ps1` responses carry `Cache-Control: no-store` and `Vary: Host, X-Forwarded-Host, X-Forwarded-Proto`: each embeds the address it was fetched from.
 
 **Onboard body** (`POST /nodes/onboard`):
 
