@@ -81,6 +81,13 @@ enum PinsCmd {
         #[arg(long)]
         yes: bool,
     },
+    /// Moves an unreadable pin file aside (`pins.toml.bad-<time>`) after you
+    /// confirm, leaving no pins; then run `pins fetch`.
+    Reset {
+        /// Reset without asking (scripts).
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -301,6 +308,7 @@ async fn pins(paths: &StatePaths, cmd: PinsCmd) -> anyhow::Result<()> {
         PinsCmd::List => return print_pins(paths),
         PinsCmd::Add { sha256, label, force } => (sha256, label.unwrap_or_else(|| LABEL_MANUAL.into()), true, force),
         PinsCmd::Remove { sha256 } => (sha256, String::new(), false, false),
+        PinsCmd::Reset { yes } => return reset_pins(paths, yes, now),
         PinsCmd::Fetch { server, yes } => {
             require_root(paths)?;
             let url = match server {
@@ -318,14 +326,14 @@ async fn pins(paths: &StatePaths, cmd: PinsCmd) -> anyhow::Result<()> {
         }
     };
     require_root(paths)?;
-    let mut set = p::load(&path)?;
-    if add && set.is_revoked(&fp) {
-        eprintln!("warning: Forge revoked {fp}; a revoked key may be in an attacker's hands");
-    }
-    let changed = if add { set.add_checked(&fp, &label, now, force)? } else { set.remove(&fp)? };
-    if changed {
-        p::save(&path, &set)?;
-    }
+    // Under the pin file's lock: the root helper may apply an announcement
+    // at the same time.
+    let (changed, ()) = p::update(&path, |set| {
+        if add && set.is_revoked(&fp) {
+            eprintln!("warning: Forge revoked {fp}; a revoked key may be in an attacker's hands");
+        }
+        Ok((if add { set.add_checked(&fp, &label, now, force)? } else { set.remove(&fp)? }, ()))
+    })?;
     let verb = if add { "pinned" } else { "removed" };
     tracing::info!(key = %fp, changed, "control-plane key {verb} by hand");
     println!(
@@ -333,6 +341,31 @@ async fn pins(paths: &StatePaths, cmd: PinsCmd) -> anyhow::Result<()> {
         if changed { verb } else { "unchanged:" },
         if changed { "; the agent uses it from its next connection attempt" } else { "" }
     );
+    Ok(())
+}
+
+/// `forge-agent pins reset`: replaces an unreadable pin file.
+fn reset_pins(paths: &StatePaths, yes: bool, now: i64) -> anyhow::Result<()> {
+    let path = paths.pins();
+    require_root(paths)?;
+    match forge_agent::pins::load(&path) {
+        Ok(_) => {
+            println!("{} is readable; nothing to reset. Use 'forge-agent pins remove' to drop a key.", path.display());
+            return Ok(());
+        }
+        Err(e) => println!("{} cannot be used: {e}", path.display()),
+    }
+    println!("Resetting moves it aside and leaves no pinned keys until you run 'forge-agent pins fetch'.");
+    if !yes && !confirm("Reset the pin file? [y/N] ")? {
+        anyhow::bail!("not reset");
+    }
+    match forge_agent::pins::reset(&path, now)? {
+        Some(backup) => {
+            tracing::warn!(backup = %backup.display(), "unreadable pin file reset by hand");
+            println!("moved to {}; now run 'forge-agent pins fetch'", backup.display());
+        }
+        None => println!("nothing to reset"),
+    }
     Ok(())
 }
 

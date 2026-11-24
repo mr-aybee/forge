@@ -45,6 +45,8 @@ pub const RETIRED_KEPT: std::time::Duration = std::time::Duration::from_secs(30 
 pub const LABEL_MANUAL: &str = "manual";
 /// Most revoked fingerprints remembered.
 pub const MAX_REVOKED: usize = 32;
+/// The lock file writers of the pin file hold (next to it).
+pub const LOCK_FILE: &str = "pins.lock";
 /// Label of the key from the enrollment token.
 pub const LABEL_ENROLLMENT: &str = "enrollment";
 
@@ -365,6 +367,74 @@ pub fn save(path: &Path, set: &PinSet) -> Result<(), PinError> {
     crate::self_update::write_nofollow(path, set.to_toml()?.as_bytes()).map_err(|e| PinError::Io(shown, e))
 }
 
+/// The lock file next to the pin file at `path`.
+fn lock_path(path: &Path) -> PathBuf {
+    path.with_file_name(LOCK_FILE)
+}
+
+/// An exclusive lock on the pin file, held while it lives. Every writer
+/// that loads, changes and saves the set (the root helper, the agent where
+/// it owns the file, `forge-agent pins`) holds it, so none overwrites
+/// another's change.
+#[derive(Debug)]
+pub struct PinLock {
+    _file: std::fs::File,
+}
+
+/// Takes the pin file's lock, waiting for another writer. Blocking.
+pub fn lock(path: &Path) -> Result<PinLock, PinError> {
+    let lp = lock_path(path);
+    let shown = lp.display().to_string();
+    if let Some(dir) = lp.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| PinError::Io(dir.display().to_string(), e.to_string()))?;
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o644).custom_flags(i32::try_from(rustix::fs::OFlags::NOFOLLOW.bits()).unwrap_or(0));
+    }
+    let f = opts.open(&lp).map_err(|e| PinError::Io(shown.clone(), e.to_string()))?;
+    f.lock().map_err(|e| PinError::Io(shown, e.to_string()))?;
+    Ok(PinLock { _file: f })
+}
+
+/// Loads the set under [`lock`], lets `change` modify it, and saves it when
+/// `change` reports a change. Returns what `change` returned. Blocking.
+pub fn update<T>(
+    path: &Path,
+    change: impl FnOnce(&mut PinSet) -> Result<(bool, T), PinError>,
+) -> Result<(bool, T), PinError> {
+    let _lock = lock(path)?;
+    let mut set = load(path)?;
+    let (changed, out) = change(&mut set)?;
+    if changed {
+        save(path, &set)?;
+    }
+    Ok((changed, out))
+}
+
+/// `forge-agent pins reset`: moves an unreadable pin file aside to
+/// `pins.toml.bad-<now_ms>`, leaving no pins, under [`lock`]. Returns the
+/// backup, or `None` when the file is missing or readable (nothing to
+/// reset). Blocking.
+pub fn reset(path: &Path, now_ms: i64) -> Result<Option<PathBuf>, PinError> {
+    let _lock = lock(path)?;
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(PinError::Io(path.display().to_string(), e.to_string())),
+        Ok(_) => {}
+    }
+    if load(path).is_ok() {
+        return Ok(None);
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| FILE.to_owned());
+    let backup = path.with_file_name(format!("{name}.bad-{now_ms}"));
+    std::fs::rename(path, &backup).map_err(|e| PinError::Io(path.display().to_string(), e.to_string()))?;
+    Ok(Some(backup))
+}
+
 /// Checks a key announcement against Forge's command key and this node's
 /// id, then applies it to the pin file at `path`. Used by the root helper
 /// and, where the agent owns the file, by the agent itself. Blocking.
@@ -377,12 +447,7 @@ pub fn apply_signed(
 ) -> Result<bool, PinError> {
     let keys = forge_proto::verify_server_keys(command_public_key, signed, server_id, now)
         .map_err(|e| PinError::Announcement(e.to_string()))?;
-    let mut set = load(path)?;
-    let changed = set.apply_verified(&keys, now.0)?;
-    if changed {
-        save(path, &set)?;
-    }
-    Ok(changed)
+    Ok(update(path, |set| Ok((set.apply_verified(&keys, now.0)?, ())))?.0)
 }
 
 /// What to log when the pin file exists but cannot be used: the agent
@@ -390,7 +455,8 @@ pub fn apply_signed(
 #[must_use]
 pub fn unreadable_message(e: &PinError, path: &Path) -> String {
     format!(
-        "the pin file {} cannot be used ({e}); refusing to connect to the control plane. Check it with 'forge-agent pins list', fix or remove it, or pin the key again with 'forge-agent pins fetch'",
+        "the pin file {} cannot be used ({e}); refusing to connect to the control plane. Run 'forge-agent pins reset' then 'forge-agent pins fetch', or remove {}",
+        path.display(),
         path.display()
     )
 }
@@ -423,6 +489,54 @@ mod tests {
 
     fn key(n: u8, label: &str) -> ServerKey {
         ServerKey { sha256: fp(n), label: label.into() }
+    }
+
+    #[test]
+    fn concurrent_writers_lose_no_change_and_never_corrupt_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE);
+        let n = u8::try_from(MAX_PINS).unwrap();
+        std::thread::scope(|s| {
+            for i in 0..n {
+                let path = &path;
+                s.spawn(move || {
+                    for _ in 0..20 {
+                        update(path, |set| {
+                            set.add(&fp(i), "manual", 1)?;
+                            Ok((true, ()))
+                        })
+                        .unwrap();
+                        load(path).unwrap();
+                    }
+                });
+            }
+        });
+        let set = load(&path).unwrap();
+        assert_eq!(set.server_keys.len(), MAX_PINS, "every writer's key is kept");
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    #[test]
+    fn reset_moves_only_an_unreadable_file_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE);
+        assert!(reset(&path, 5).unwrap().is_none(), "missing: nothing to reset");
+        update(&path, |set| Ok((set.add(&fp(1), "manual", 1)?, ()))).unwrap();
+        assert!(reset(&path, 5).unwrap().is_none(), "readable: kept");
+        assert!(load(&path).unwrap().contains(&fp(1)));
+        std::fs::write(&path, "server_keys = 7").unwrap();
+        let e = load(&path).unwrap_err();
+        let m = unreadable_message(&e, &path);
+        assert!(m.contains("forge-agent pins reset") && m.contains("pins fetch"), "{m}");
+        let backup = reset(&path, 5).unwrap().unwrap();
+        assert_eq!(backup, dir.path().join("pins.toml.bad-5"));
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "server_keys = 7");
+        assert!(load(&path).unwrap().is_empty());
     }
 
     #[test]

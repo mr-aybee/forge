@@ -451,9 +451,13 @@ recover a node that missed a rotation, or to set up a node by hand.
 
 **Who runs it:** `list` runs as root or `forge-agent`. `add`, `remove` and
 `fetch` need root where root owns the file; otherwise they exit with
-`run this as root: the pinned keys belong to root`. The agent uses a change
-from its next connection attempt, without re-enrolling or restarting. Each
-change is logged in the agent log.
+`run this as root: the pinned keys belong to root`; so does `reset`. The
+agent uses a change from its next connection attempt, without re-enrolling or
+restarting. Each change is logged in the agent log. Every writer (these
+commands, the root helper and the agent) holds an exclusive lock on
+`pins.lock` next to the file while it reads, changes and saves the set, and
+writes through a uniquely named temporary file, so concurrent changes are
+never lost or torn.
 
 A set holds at most 8 keys. A key Forge stops announcing is marked retired
 and dropped 30 days later. Keys you add by hand are never retired by an
@@ -469,6 +473,7 @@ Commands:
   add     Pins a key: its SHA-256 from `forge-server agent-key show`
   remove  Removes a pinned key
   fetch   Connects to the control plane, shows the key it presents and pins it after you confirm (trust on first use)
+  reset   Moves an unreadable pin file aside (`pins.toml.bad-<time>`) after you confirm, leaving no pins; then run `pins fetch`
 ```
 
 ### forge-agent pins list
@@ -537,6 +542,30 @@ Answering anything but `y` exits with `not pinned` and changes nothing.
 Use `--yes` only on a network you trust, or after you checked the
 fingerprint another way. It pins whatever answers on the address.
 :::
+
+### forge-agent pins reset
+
+Recovers from a pin file the agent cannot read (corrupt, hand-edited, or not
+a regular file). The agent then refuses to connect and logs
+`the pin file <path> cannot be used (…); refusing to connect to the control plane. Run 'forge-agent pins reset' then 'forge-agent pins fetch', or remove <path>`.
+
+`reset` prints why the file cannot be used, asks `Reset the pin file? [y/N]`,
+and moves the file aside to `pins.toml.bad-<epoch-ms>` in the same folder, so
+you can inspect it later. The node then pins no keys: run
+`forge-agent pins fetch` (or `pins add`) at once. A readable file is left
+alone (`nothing to reset`); use `pins remove` to drop a key.
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `--yes` | flag | off | No | Reset without asking (scripts) | `--yes` |
+
+```text
+$ sudo /usr/local/bin/forge-agent --state-dir /var/lib/forge-agent pins reset
+/var/lib/forge-agent-pins/pins.toml cannot be used: /var/lib/forge-agent-pins/pins.toml is unreadable: <parse error>
+Resetting moves it aside and leaves no pinned keys until you run 'forge-agent pins fetch'.
+Reset the pin file? [y/N] y
+moved to /var/lib/forge-agent-pins/pins.toml.bad-<epoch-ms>; now run 'forge-agent pins fetch'
+```
 
 ### The key mismatch error
 
