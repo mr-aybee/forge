@@ -13,11 +13,15 @@ use serde_json::{Value, json};
 use tokio::net::TcpListener;
 
 async fn start_mcp(max_mode: &str) -> Harness {
+    start_mcp_pinned(max_mode, true).await
+}
+
+async fn start_mcp_pinned(max_mode: &str, pinned: bool) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let mut config = test_config(dir.path());
     let api = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let agent = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    config.public_url = Some(format!("http://{}", api.local_addr().unwrap()));
+    config.public_url = pinned.then(|| format!("http://{}", api.local_addr().unwrap()));
     config.mcp.enabled = true;
     config.mcp.max_mode = forge_core::model::AgentMode::parse(max_mode).unwrap();
     // The development toggle must never give an agent MFA.
@@ -655,4 +659,23 @@ async fn expired_requests_do_not_block_new_ones() {
     }
     assert!(store.get_approval("ap_stale").await.unwrap().is_none(), "old decided requests are dropped");
     assert_eq!(store.get_approval(&first).await.unwrap().unwrap().status, "pending", "open requests stay");
+}
+
+#[tokio::test]
+async fn connector_endpoints_need_a_pinned_address() {
+    let h = start_mcp_pinned("auto", false).await;
+    // An administrator signs in (records a last-admin address), which OAuth
+    // must still not use.
+    let _admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+    let anon = Client::anonymous(&h.base);
+    for path in ["/.well-known/oauth-authorization-server", "/.well-known/oauth-protected-resource/mcp"] {
+        let (s, v) = anon.get(path).await;
+        assert_eq!(s, StatusCode::CONFLICT, "{path}: {v}");
+        assert!(v.to_string().contains("no_public_address"), "{v}");
+    }
+    let (s, v) = register(&h, json!([REDIRECT])).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    let r = rpc(&h, None, json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" })).await;
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+    h.app.stop().await;
 }

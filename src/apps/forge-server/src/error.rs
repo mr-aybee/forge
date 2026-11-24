@@ -53,6 +53,8 @@ pub const ERR_ANALYTICS_UNAVAILABLE: &str = "analytics_unavailable";
 pub const ERR_INGEST_BUSY: &str = "ingest_busy";
 /// Error code: the analytics engine is short of disk.
 pub const ERR_INGEST_DISK_LOW: &str = "ingest_disk_low";
+/// Error code: a feature needs a pinned public address (D-167).
+pub const ERR_NO_PUBLIC_ADDRESS: &str = "no_public_address";
 /// Error code: every log search slot is in use.
 pub const ERR_SEARCH_BUSY: &str = "search_busy";
 

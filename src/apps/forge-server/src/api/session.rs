@@ -223,7 +223,30 @@ pub(crate) async fn record_admin_address(
     if !state.authz.is_allowed(&req).await {
         return;
     }
-    if let Err(e) = crate::public_address::record_last_admin(
+    // Only a name this machine or its configuration vouches for: the Host
+    // header is the client's, and this address feeds emails and webhooks.
+    let local = match tokio::task::spawn_blocking(crate::public_address::LocalNames::read).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not read this machine's addresses");
+            return;
+        }
+    };
+    let runtime = state.public_address.runtime();
+    let configured: Vec<&str> = state
+        .config
+        .agent_hostnames
+        .iter()
+        .map(String::as_str)
+        .chain(state.config.public_url.as_deref())
+        .chain(state.config.node_public_url.as_deref())
+        .chain(runtime.as_deref())
+        .collect();
+    if !crate::public_address::host_trusted(origin.host(), &local, &configured, &state.allowed_hosts) {
+        tracing::debug!(host = origin.host(), "not recording an administrator address on an unconfigured name");
+        return;
+    }
+    match crate::public_address::record_last_admin(
         &state.store,
         &state.public_address,
         &origin.origin(),
@@ -231,7 +254,20 @@ pub(crate) async fn record_admin_address(
     )
     .await
     {
-        tracing::warn!(error = %e, "could not record the administrator's console address");
+        Ok(Some(change)) => {
+            let ev = AuditEvent::new(
+                format!("user:{user}"),
+                crate::public_address::AUDIT_LAST_ADMIN_UPDATE,
+                EntityRef::platform(),
+                AuditOutcome::Success,
+            )
+            .with_details(json!({ "from": change.from, "to": change.to }));
+            if let Err(e) = state.audit.append(ev).await {
+                tracing::error!(error = %e, "audit write failed");
+            }
+        }
+        Ok(None) => {}
+        Err(e) => tracing::warn!(error = %e, "could not record the administrator's console address"),
     }
 }
 

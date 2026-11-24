@@ -116,14 +116,15 @@ approval links, the OpenAPI `servers` entry) use the address you are on.
 
 The public address is for links built without a request: alert emails,
 webhook and Slack payloads (`links.alarm`), the mail host name, the OIDC
-redirect, the OAuth issuer for AI connectors and the SFTP host default.
+redirect and the SFTP host default. The OAuth issuer for AI connectors
+uses the pinned address only.
 Forge takes the first of these that is set:
 
 | Source | Precedence | How to change it |
 | --- | --- | --- |
 | Runtime setting `server.public_address` | 1 (pinned) | Console **Settings → Server**, `forge settings public-address set <url>`, `forge-server public-address set <url>`, installer `--public-address <url>` |
 | `public_url` in `forge.toml` | 2 (pinned) | Edit the file and restart |
-| Last administrator address `server.last_admin_address` | 3 | Recorded automatically: the address a user with `system.update` on the platform last signed in on (password or passkey). Read-only |
+| Last administrator address `server.last_admin_address` | 3 | Recorded automatically: the address a user with `system.update` on the platform last signed in on (password or passkey), when that host is loopback, an address or the host name of the server, a configured name or a match in an explicit allowed-hosts list (not `*`). Audited as `server.last_admin_address.update`. Read-only |
 | none | | Alert links are left out until an administrator signs in |
 
 | Rule | Value |
@@ -341,8 +342,8 @@ registrations_per_hour = 30
 
 Pin the [public address](#public-address) to the HTTPS URL AI agents use: it
 is the OAuth issuer and the resource identifier. Without a pinned address
-Forge uses the last administrator address, which changes when an
-administrator signs in on another name.
+the discovery, registration, consent and `/mcp` endpoints answer
+`409 no_public_address`.
 
 ### Port tunnels
 

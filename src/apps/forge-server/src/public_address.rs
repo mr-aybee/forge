@@ -75,22 +75,102 @@ pub async fn load(settings: &dyn SettingsRepository, configured: &str) -> anyhow
     Ok(addr)
 }
 
+/// Audit action: the last administrator address changed (D-167).
+pub const AUDIT_LAST_ADMIN_UPDATE: &str = "server.last_admin_address.update";
+
+/// This machine's own names and addresses: what a request host must be
+/// (besides configured names) before it may become the last administrator
+/// address.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LocalNames {
+    /// Host names (lowercase).
+    pub hostnames: Vec<String>,
+    /// Interface addresses.
+    pub ips: Vec<std::net::IpAddr>,
+}
+
+impl LocalNames {
+    /// Reads the host name and interface addresses. Blocking (system
+    /// calls): run it in `spawn_blocking`.
+    #[must_use]
+    pub fn read() -> Self {
+        let hostnames = sysinfo::System::host_name()
+            .map(|h| h.trim().trim_end_matches('.').to_ascii_lowercase())
+            .filter(|h| !h.is_empty())
+            .into_iter()
+            .collect();
+        let nets = sysinfo::Networks::new_with_refreshed_list();
+        let ips = nets.values().flat_map(|d| d.ip_networks().iter().map(|n| n.addr)).collect();
+        Self { hostnames, ips }
+    }
+}
+
+/// The host (no scheme or port) of a URL or a bare name, lowercase.
+fn host_of(s: &str) -> Option<String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let host = match url::Url::parse(s) {
+        Ok(u) if u.host_str().is_some() => u.host_str().map(str::to_owned),
+        _ => Some(s.to_owned()),
+    }?;
+    forge_core::allowed_hosts::normalize_host(&host).ok()
+}
+
+/// Whether `host` (canonical form, as `RequestOrigin::host`) may be recorded
+/// as the last administrator address: loopback or an address of this
+/// machine, its host name, a configured name (`configured`: URLs or names),
+/// or a match in an explicit allowed-hosts list (not `*`). A `Host` header
+/// is client-controlled, and the recorded value feeds emails, webhooks and
+/// node downloads, so a name nobody configured is never trusted.
+#[must_use]
+pub fn host_trusted(
+    host: &str,
+    local: &LocalNames,
+    configured: &[&str],
+    allowed: &forge_core::allowed_hosts::AllowedHosts,
+) -> bool {
+    let Ok(host) = forge_core::allowed_hosts::normalize_host(host) else { return false };
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
+        if ip.is_loopback() || local.ips.contains(&ip) {
+            return true;
+        }
+    } else if host == "localhost" || local.hostnames.contains(&host) {
+        return true;
+    }
+    if configured.iter().filter_map(|c| host_of(c)).any(|c| c == host) {
+        return true;
+    }
+    !allowed.any() && allowed.allows(&host)
+}
+
+/// A change of the last administrator address, for the audit log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddressChange {
+    pub from: Option<String>,
+    pub to: String,
+}
+
 /// Records `origin` as the address an administrator last signed in on,
-/// for links built without a request (D-167). Writes only on a change.
-/// Store first, then memory.
+/// for links built without a request (D-167). The caller has checked the
+/// host with [`host_trusted`]. Writes only on a change, which it returns
+/// for the audit log. Store first, then memory.
 pub async fn record_last_admin(
     settings: &dyn SettingsRepository,
     addr: &PublicAddress,
     origin: &str,
     now: Timestamp,
-) -> DomainResult<()> {
+) -> DomainResult<Option<AddressChange>> {
     let v = validate(origin).map_err(|e| DomainError::Invalid(e.to_string()))?;
-    if addr.last_admin().as_deref() == Some(v.as_str()) {
-        return Ok(());
+    let from = addr.last_admin();
+    if from.as_deref() == Some(v.as_str()) {
+        return Ok(None);
     }
     settings.put_setting(LAST_ADMIN_KEY, &v, now).await?;
-    addr.set_last_admin(Some(v));
-    Ok(())
+    addr.set_last_admin(Some(v.clone()));
+    Ok(Some(AddressChange { from, to: v }))
 }
 
 /// Stores (or with `None` clears) the runtime setting and applies it.
@@ -186,6 +266,37 @@ mod tests {
         assert!(!origin_allowed(&a, "https://forge.example.com.evil.test"));
         assert!(!origin_allowed(&a, "null"));
         assert!(!origin_allowed(&a, ""));
+    }
+
+    #[test]
+    fn only_local_or_configured_hosts_are_trusted() {
+        use forge_core::allowed_hosts::{AllowedHosts, parse_list};
+        let local = LocalNames { hostnames: vec!["lab-a".into()], ips: vec!["192.0.2.5".parse().unwrap()] };
+        let any = AllowedHosts::default();
+        let configured = ["https://forge.example.com", "forge.internal", ""];
+        for h in ["127.0.0.1", "[::1]", "localhost", "192.0.2.5", "lab-a", "forge.example.com", "forge.internal"] {
+            assert!(host_trusted(h, &local, &configured, &any), "{h}");
+        }
+        for h in ["evil.test", "192.0.2.99", "lab-a.evil.test", "[2001:db8::1]"] {
+            assert!(!host_trusted(h, &local, &configured, &any), "{h} with allowed hosts *");
+        }
+        let narrow = AllowedHosts::default();
+        narrow.set(Some(parse_list(&["*.corp.example"]).unwrap()));
+        assert!(host_trusted("forge.corp.example", &local, &[], &narrow));
+        assert!(!host_trusted("evil.test", &local, &[], &narrow));
+    }
+
+    #[tokio::test]
+    async fn last_admin_change_is_reported_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = forge_store::Store::open_sqlite(&dir.path().join("forge.db")).await.unwrap();
+        let a = PublicAddress::new("");
+        let now = Timestamp(1);
+        let c = record_last_admin(&store, &a, "http://192.0.2.5:55130", now).await.unwrap().unwrap();
+        assert_eq!(c, AddressChange { from: None, to: "http://192.0.2.5:55130".into() });
+        assert!(record_last_admin(&store, &a, "http://192.0.2.5:55130", now).await.unwrap().is_none());
+        let c = record_last_admin(&store, &a, "http://lab-a:55130", now).await.unwrap().unwrap();
+        assert_eq!(c.from.as_deref(), Some("http://192.0.2.5:55130"));
     }
 
     #[test]

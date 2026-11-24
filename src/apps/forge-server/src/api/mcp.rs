@@ -567,8 +567,12 @@ impl McpLimits {
 // ------------------------------------------------------------ transport
 
 fn unauthorized(state: &AppState, error: Option<&str>) -> Response {
+    let header = match www_authenticate(state, error) {
+        Ok(h) => h,
+        Err(e) => return e.into_response(),
+    };
     let mut r = (StatusCode::UNAUTHORIZED, Json(json!({ "error": error.unwrap_or("invalid_token") }))).into_response();
-    if let Ok(v) = HeaderValue::from_str(&www_authenticate(state, error)) {
+    if let Ok(v) = HeaderValue::from_str(&header) {
         r.headers_mut().insert(header::WWW_AUTHENTICATE, v);
     }
     r
@@ -582,8 +586,11 @@ fn rpc_result(id: Value, result: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "result": result })
 }
 
-/// Browsers send `Origin`; it must be this Forge (DNS rebinding defence).
-/// Server-to-server connectors send none.
+/// Browsers send `Origin`; it must be the request's own origin on an
+/// allowed host, or the pinned address (same-origin, not DNS-rebinding
+/// protection: with allowed hosts `*` a rebound name is its own origin, so
+/// only the bearer token stops it; narrow `allowed_hosts` to block
+/// rebinding). Server-to-server connectors send none.
 fn origin_ok(state: &AppState, origin: &crate::request_origin::RequestOrigin, headers: &HeaderMap) -> bool {
     crate::request_origin::origin_header_ok(state, origin, headers)
 }
@@ -609,6 +616,10 @@ pub async fn post(
     if !origin_ok(&state, &origin, &headers) {
         return (StatusCode::FORBIDDEN, Json(json!({ "error": "origin not allowed" }))).into_response();
     }
+    let resource = match resource_url(&state) {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
+    };
     // Only a connector's token for this resource; never API keys, CLI or
     // browser sessions (RFC 8707 audience separation).
     let Some(token) = bearer(&headers).filter(|t| !t.starts_with("fk_")) else {
@@ -622,7 +633,7 @@ pub async fn post(
             return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "try again" }))).into_response();
         }
     };
-    let Some(mut connection) = session.connection.clone().filter(|c| c.resource == resource_url(&state)) else {
+    let Some(mut connection) = session.connection.clone().filter(|c| c.resource == resource) else {
         return unauthorized(&state, Some("invalid_token"));
     };
     // The server-wide cap applies to connections approved before it was lowered.

@@ -2634,6 +2634,7 @@ dependencies = [
  "serde-saphyr",
  "serde_json",
  "sqlx",
+ "sysinfo",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",

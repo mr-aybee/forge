@@ -171,3 +171,35 @@ async fn allowed_hosts_refuse_other_names_with_421_and_are_audited() {
     assert_eq!(s, StatusCode::OK);
     h.app.stop().await;
 }
+
+#[tokio::test]
+async fn last_admin_address_is_recorded_only_on_trusted_hosts_and_audited() {
+    let h = start().await;
+    let p = port(&h.base);
+    // Signing in on a name nobody configured records nothing.
+    let anon = Client::anonymous(&h.base);
+    let body = login_body(&h.base, ADMIN_EMAIL, PASSWORD).await;
+    let (s, b) = send_as(&anon, Method::POST, "/api/v1/auth/login", &format!("evil.test:{p}"), &[], Some(body)).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+    let (_, v) = admin.get("/api/v1/server/settings").await;
+    assert_eq!(v["public_address"]["last_admin"].as_str(), Some(h.base.as_str()), "{v}");
+    let (_, log) = admin.get("/api/v1/audit?action=server.last_admin_address.update").await;
+    let items = log.as_array().unwrap();
+    assert_eq!(items.len(), 1, "one change (loopback), never evil.test: {log}");
+    assert!(!log.to_string().contains("evil.test"), "{log}");
+    assert_eq!(items[0]["details"]["to"], h.base.as_str(), "{log}");
+    h.app.stop().await;
+}
+
+#[tokio::test]
+async fn install_scripts_are_never_cached() {
+    let h = start().await;
+    for path in ["/install.sh", "/install.ps1"] {
+        let r = reqwest::get(format!("{}{path}", h.base)).await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(r.headers()["cache-control"], "no-store", "{path}");
+        assert_eq!(r.headers()["vary"], "Host, X-Forwarded-Host, X-Forwarded-Proto", "{path}");
+    }
+    h.app.stop().await;
+}

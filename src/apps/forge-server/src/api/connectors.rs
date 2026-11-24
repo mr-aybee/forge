@@ -79,15 +79,22 @@ impl ConsentRequests {
     }
 }
 
-fn issuer(state: &AppState) -> String {
-    // A stable address: the pinned one, else the last administrator's.
-    state.public_address.get()
+/// The OAuth issuer: the pinned public address only (runtime setting or
+/// `public_url`). Never a request's host or the last administrator
+/// address: tokens are bound to it, so it must not follow a `Host` header.
+fn issuer(state: &AppState) -> ApiResult<String> {
+    state.public_address.pinned().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            crate::error::ERR_NO_PUBLIC_ADDRESS,
+            "MCP connectors need a pinned public address: set it under Settings > Server, or public_url in forge.toml",
+        )
+    })
 }
 
 /// The canonical resource identifier of `/mcp` (RFC 8707, RFC 9728).
-#[must_use]
-pub fn resource_url(state: &AppState) -> String {
-    format!("{}{MCP_PATH}", issuer(state))
+pub fn resource_url(state: &AppState) -> ApiResult<String> {
+    Ok(format!("{}{MCP_PATH}", issuer(state)?))
 }
 
 fn enabled(state: &AppState) -> ApiResult<()> {
@@ -99,8 +106,8 @@ fn enabled(state: &AppState) -> ApiResult<()> {
 }
 
 /// `GET /.well-known/oauth-authorization-server` (RFC 8414).
-pub async fn authorization_server_metadata(State(state): State<AppState>) -> Json<Value> {
-    let iss = issuer(&state);
+pub async fn authorization_server_metadata(State(state): State<AppState>) -> ApiResult<Json<Value>> {
+    let iss = issuer(&state)?;
     let mut m = json!({
         "issuer": iss,
         "authorization_endpoint": format!("{iss}/oauth/authorize"),
@@ -115,15 +122,15 @@ pub async fn authorization_server_metadata(State(state): State<AppState>) -> Jso
     if state.config.mcp.enabled {
         m["registration_endpoint"] = json!(format!("{iss}/oauth/register"));
     }
-    Json(m)
+    Ok(Json(m))
 }
 
 /// `GET /.well-known/oauth-protected-resource[/mcp]` (RFC 9728).
 pub async fn protected_resource_metadata(State(state): State<AppState>) -> ApiResult<Json<Value>> {
     enabled(&state)?;
     Ok(Json(json!({
-        "resource": resource_url(&state),
-        "authorization_servers": [issuer(&state)],
+        "resource": resource_url(&state)?,
+        "authorization_servers": [issuer(&state)?],
         "bearer_methods_supported": ["header"],
         "resource_name": "Orbyn Forge",
         "resource_documentation": "https://docs.orbyn.dev/concepts/mcp-connectors/",
@@ -131,12 +138,11 @@ pub async fn protected_resource_metadata(State(state): State<AppState>) -> ApiRe
 }
 
 /// The `WWW-Authenticate` value for a 401 at `/mcp` (RFC 9728 §5.1).
-#[must_use]
-pub fn www_authenticate(state: &AppState, error: Option<&str>) -> String {
-    let meta = format!("{}/.well-known/oauth-protected-resource{MCP_PATH}", issuer(state));
+pub fn www_authenticate(state: &AppState, error: Option<&str>) -> ApiResult<String> {
+    let meta = format!("{}/.well-known/oauth-protected-resource{MCP_PATH}", issuer(state)?);
     match error {
-        Some(e) => format!("Bearer resource_metadata=\"{meta}\", error=\"{e}\""),
-        None => format!("Bearer resource_metadata=\"{meta}\""),
+        Some(e) => Ok(format!("Bearer resource_metadata=\"{meta}\", error=\"{e}\"")),
+        None => Ok(format!("Bearer resource_metadata=\"{meta}\"")),
     }
 }
 
@@ -166,6 +172,7 @@ fn register_error(code: &str, description: &str) -> Response {
 /// approves a connection on the consent page.
 pub async fn register(State(state): State<AppState>, Json(req): Json<RegisterRequest>) -> ApiResult<Response> {
     enabled(&state)?;
+    issuer(&state)?;
     if req.token_endpoint_auth_method.as_deref().is_some_and(|m| m != "none") {
         return Ok(register_error("invalid_client_metadata", "only public clients (token_endpoint_auth_method none)"));
     }
@@ -229,7 +236,7 @@ pub async fn connector_authorize(
     login_next: String,
 ) -> ApiResult<Response> {
     enabled(state)?;
-    let resource = resource_url(state);
+    let resource = resource_url(state)?;
     if q.resource.as_deref().is_some_and(|r| r.trim_end_matches('/') != resource) {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
@@ -288,6 +295,7 @@ pub async fn consent_get(
     caller: Caller,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
+    issuer(&state)?;
     let p = state.consents.get(&id).ok_or_else(|| ApiError::not_found("sign-in request not found or expired"))?;
     consent_caller(&caller, &p)?;
     let client = state.identity.connector_client(&p.client_id).await?;
@@ -320,6 +328,7 @@ pub async fn consent_decide(
     Path(id): Path<String>,
     Json(d): Json<ConsentDecision>,
 ) -> ApiResult<Json<Value>> {
+    let iss = issuer(&state)?;
     let p = state.consents.get(&id).ok_or_else(|| ApiError::not_found("sign-in request not found or expired"))?;
     consent_caller(&caller, &p)?;
     let p = state.consents.take(&id).ok_or_else(|| ApiError::not_found("sign-in request not found or expired"))?;
@@ -330,7 +339,7 @@ pub async fn consent_decide(
         if let Some(s) = &p.state {
             target.query_pairs_mut().append_pair("state", s);
         }
-        target.query_pairs_mut().append_pair("iss", &issuer(&state));
+        target.query_pairs_mut().append_pair("iss", &iss);
         caller.audit_denied("connector.approve", &resource, None, &format!("{} was not approved", p.client_name)).await;
         return Ok(Json(json!({ "redirect": target.as_str() })));
     }
@@ -349,7 +358,7 @@ pub async fn consent_decide(
     if let Some(s) = &p.state {
         target.query_pairs_mut().append_pair("state", s);
     }
-    target.query_pairs_mut().append_pair("iss", &issuer(&state));
+    target.query_pairs_mut().append_pair("iss", &iss);
     caller
         .audit(
             "connector.approve",
