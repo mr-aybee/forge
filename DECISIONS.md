@@ -5673,3 +5673,14 @@ A delivery may pick the image tag (`?tag=` or a JSON `"tag"`) only when the webh
 **Decision.** `develop` is removed. `master` is the default and only long-lived branch: work happens on short branches cut from `master` and lands through squash-merged pull requests into `master`. CI runs on every pull request into `master` and every push to it. A tag on `master` runs the release pipeline. The branch ruleset now protects `master` only: pull request and green CI required, no force pushes or deletion, and only organization admins may merge, tag or publish releases.
 
 **Why.** With one maintainer, the `develop` → `master` → `develop` round trip added two pull requests and two CI runs per release without catching anything a pull request into `master` does not.
+
+## D-166 Faster release builds: thin LTO and a native ARM build
+
+**Decision.**
+- `[profile.release]` uses `lto = "thin"` and Cargo's default 16 codegen units instead of `lto = "fat"` with one codegen unit. `opt-level = 3`, `panic = "abort"` and stripped symbols stay.
+- The `aarch64-unknown-linux-musl` release build runs natively on GitHub's `ubuntu-24.04-arm` runner, inside an Alpine container (musl-native GCC and libstdc++ for DuckDB's bundled C++), instead of cross-compiling with `cross` on an x86 runner.
+- The `forge` CLI keeps its own cargo invocation: building it together with the server and agent would unify features and pull its keyring dependencies into those binaries.
+
+**Why.** A from-scratch release build took about 28 minutes on x86_64 and longer on aarch64. The build log showed about 6 minutes compiling all 828 crates, then about 17 minutes of single-threaded fat-LTO codegen. The Cargo book describes thin LTO as "similar to 'fat', but takes substantially less time to run while still achieving performance gains similar to 'fat'". Forge's runtime is bound by I/O and the database, not tight CPU loops. Tag builds cannot reuse caches: GitHub "cannot restore caches created for different tag names", so the build time itself had to come down. Cross-compiling DuckDB's bundled C++ is "best-effort" upstream; a native build avoids it.
+
+**Reverting.** Set `lto = "fat"` and `codegen-units = 1` in `[profile.release]`. For the ARM build, point the matrix entry back at `ubuntu-latest` with `cross`.
