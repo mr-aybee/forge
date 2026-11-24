@@ -282,7 +282,7 @@ shows the version you installed.
 Linux, with OpenSSL 1.1.1 or later:
 
 ```sh
-KEY=bFMJk9wv3XFOhOtPya-idWiatNVVVcktN62sOnQr29U   # the Orbyn Forge release key
+KEY=6yf7l7jBEw6u446vqWAgt7P7bqEuaY5tpbYnWPHBmbg   # the Orbyn Forge release key
 K=$(printf '%s' "$KEY" | tr -- '-_' '+/')=
 { printf '\060\052\060\005\006\003\053\145\160\003\041\000'; printf '%s' "$K" | base64 -d; } > forge-release.der
 base64 -d SHA256SUMS.sig > SHA256SUMS.sig.bin

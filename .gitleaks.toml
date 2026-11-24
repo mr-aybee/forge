@@ -13,7 +13,7 @@ paths = [
 ]
 regexes = [
   # The Ed25519 release public key, pinned on purpose.
-  '''bFMJk9wv3XFOhOtPya-idWiatNVVVcktN62sOnQr29U''',
+  '''6yf7l7jBEw6u446vqWAgt7P7bqEuaY5tpbYnWPHBmbg''',
   # Documentation placeholder access key.
   '''FAK3X9Q2M7T1ZB6W4KHD''',
   # Package recipes: the password comes from the package environment.
