@@ -4,7 +4,7 @@
 
 ## Checklist
 
-- [ ] Branched from `develop`; PR targets `develop`
+- [ ] Branched from `master`; PR targets `master`
 - [ ] `cargo fmt`, `cargo clippy -D warnings` and `cargo test --workspace` pass
 - [ ] UI and docs builds pass (if touched)
 - [ ] Docs updated (`docs/`, `README.md`, REST reference) for any behaviour change

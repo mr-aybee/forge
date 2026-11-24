@@ -3,14 +3,14 @@ updates:
   - package-ecosystem: cargo
     directory: /
     schedule: { interval: weekly }
-    target-branch: develop
+    target-branch: master
     open-pull-requests-limit: 5
   - package-ecosystem: npm
     directories: [/src/ui, /docs]
     schedule: { interval: weekly }
-    target-branch: develop
+    target-branch: master
     open-pull-requests-limit: 5
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: monthly }
-    target-branch: develop
+    target-branch: master

@@ -5667,3 +5667,9 @@ A delivery may pick the image tag (`?tag=` or a JSON `"tag"`) only when the webh
 **Decision.** `forge` and `forge-website` were transferred from the maintainer's personal account to the `orbyntech` GitHub organization: `github.com/orbyntech/forge` and `github.com/orbyntech/forge-website`. The release feed compiled into Forge (`DEFAULT_FEED`), the install scripts, the docs and the website image (`ghcr.io/orbyntech/forge-website`) use the organization's URLs. The rulesets, the `FORGE_RELEASE_KEY` secret and the release key (D-162) moved with the repository unchanged.
 
 **Why.** The project is published by Orbyn Technologies, so its source, releases and issues belong to the organization. GitHub's transfer keeps history, pull requests and redirects from the old URLs, and no release had been published yet, so no install points at the old feed.
+
+## D-165 One branch: master
+
+**Decision.** `develop` is removed. `master` is the default and only long-lived branch: work happens on short branches cut from `master` and lands through squash-merged pull requests into `master`. CI runs on every pull request into `master` and every push to it. A tag on `master` runs the release pipeline. The branch ruleset now protects `master` only: pull request and green CI required, no force pushes or deletion, and only organization admins may merge, tag or publish releases.
+
+**Why.** With one maintainer, the `develop` → `master` → `develop` round trip added two pull requests and two CI runs per release without catching anything a pull request into `master` does not.

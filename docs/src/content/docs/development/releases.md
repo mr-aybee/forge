@@ -12,8 +12,8 @@ a local tool you run by hand.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on every push to `develop` and `master` and on
-pull requests. It runs light jobs only. Jobs whose files did not change are
+`.github/workflows/ci.yml` runs on every push to `master` and on pull
+requests into `master`. It runs light jobs only. Jobs whose files did not change are
 skipped, except on **full** runs: pushes to `master`, pull requests into
 `master`, `[full-ci]` in the commit message, and manual runs with **full**
 ticked (unticked by default).
@@ -54,7 +54,7 @@ Maintainers keep these settings on `orbyntech/forge`:
 
 | Setting | Value |
 | --- | --- |
-| Branch protection on `develop` and `master` | Require a pull request, an approving review and green CI; no direct pushes |
+| Branch protection on `master` | Require a pull request and green CI; no direct or force pushes; only organization admins merge, create tags or publish releases |
 | **Actions** → fork pull request workflows | Require approval for first-time contributors |
 | **Security** → private vulnerability reporting | Enabled (see `SECURITY.md`) |
 | Actions secret `FORGE_RELEASE_KEY` | The release signing key (see [The release signing key](#the-release-signing-key)); the only secret the workflows use |
@@ -67,10 +67,9 @@ Each step needs a maintainer's go-ahead.
    version`). For release candidates the tag adds `-rc-NN` to it.
 2. Optional: write the highlights to
    `scripts/packaging/release-notes/<tag>.md`; they head the release notes.
-3. Merge everything into `develop` through pull requests and wait for CI to
-   pass.
-4. Bring `master` up to `develop` with a pull request from `develop` into
-   `master`. CI runs a full run on it.
+3. Merge everything into `master` through pull requests and wait for the
+   full CI run on `master` to pass.
+4. There is no separate release branch: the tag goes on a `master` commit.
 
 5. Run the release [dry run](#dry-run) on `master`, download its
    `release-assets` and run the installer test against those packages on

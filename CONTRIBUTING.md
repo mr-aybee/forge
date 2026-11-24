@@ -13,10 +13,10 @@ pull requests from forks. Nobody pushes to the main repository directly.
    cd forge
    git remote add upstream https://github.com/orbyntech/forge.git
    ```
-3. **Branch from `develop`**:
+3. **Branch from `master`**:
    ```sh
    git fetch upstream
-   git switch -c <topic> upstream/develop
+   git switch -c <topic> upstream/master
    ```
 4. **Make the change, with docs.** Read [`CLAUDE.md`](CLAUDE.md) for the
    architecture, security and code-quality rules. Reviews apply them.
@@ -29,17 +29,15 @@ pull requests from forks. Nobody pushes to the main repository directly.
    docker run --rm -v "$PWD":/repo zricethezav/gitleaks:v8.21.2 dir /repo --no-banner
    (cd src/ui && npm ci && npm run build)
    (cd docs && npm ci && npm run build)
-   (cd website && npm ci && npm run build)
    ```
-6. **Push to your fork** and open a pull request into `orbyntech/forge:develop`.
+6. **Push to your fork** and open a pull request into `orbyntech/forge:master`.
    Fill in the PR template.
 
 The first time you contribute, CI on your PR waits for a maintainer to approve it.
-Feature and fix branches (`feat/…`, `fix/…`) are squash-merged into `develop`.
-`develop` is merged into `master` with a merge commit (never squashed), so
-`master` keeps every `develop` commit. `master` is then merged back into
-`develop` with a merge commit, so `develop` holds everything in `master`.
-Releases are tagged on `master`.
+`master` is the only long-lived branch. Pull requests into it are
+squash-merged, and CI runs on every pull request and every push to `master`.
+Releases are tags on `master` (`vX.Y.Z`, or `vX.Y.Z-rc-NN` for a release
+candidate); pushing a tag runs the release pipeline.
 
 ## Guidelines
 

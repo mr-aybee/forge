@@ -13,7 +13,7 @@ License 2.0.
 ## Send a change
 
 You can't push to `orbyntech/forge` directly. Work in your own fork and open
-a pull request into `develop`.
+a pull request into `master`.
 
 1. Fork `orbyntech/forge` on GitHub (**Fork** on the repository page).
 2. Clone your fork and add the main repository as `upstream`:
@@ -24,11 +24,11 @@ a pull request into `develop`.
    git remote add upstream https://github.com/orbyntech/forge.git
    ```
 
-3. Create a branch from the latest `upstream/develop`:
+3. Create a branch from the latest `upstream/master`:
 
    ```sh
    git fetch upstream
-   git switch -c <branch-name> upstream/develop
+   git switch -c <branch-name> upstream/master
    ```
 
 4. Make your change, with its docs (see `CLAUDE.md`, **Documentation**).
@@ -41,7 +41,6 @@ a pull request into `develop`.
    cargo deny check
    (cd src/ui && npm ci && npm run build)
    (cd docs && npm ci && npm run build)
-   (cd website && npm ci && npm run build)
    ```
 
 6. Push the branch to your fork:
@@ -51,7 +50,7 @@ a pull request into `develop`.
    ```
 
 7. On GitHub, open a pull request from your branch into
-   `orbyntech/forge:develop`.
+   `orbyntech/forge:master`.
 
 CI runs on the pull request. The first time you contribute, a maintainer
 must approve the workflow run before it starts. A maintainer reviews the

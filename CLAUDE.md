@@ -16,7 +16,7 @@ PowerDNS, guacd, databases) and never reimplements them.
 - **Read first:** `ARCHITECTURE.md`, then `DECISIONS.md`. The product plan is
   `plans/inital_plan.md`.
 - **Repository:** `github.com/orbyntech/forge` holds the source, releases and
-  issues. Contributors fork it and open PRs into `develop` (see `CONTRIBUTING.md`).
+  issues. Contributors fork it and open PRs into `master` (see `CONTRIBUTING.md`).
 
 ## Layout
 
@@ -170,11 +170,11 @@ unless asked.
 
 ## Workflow
 
-- Fork `orbyntech/forge`, clone your fork, and branch from `upstream/develop`.
-  Open a PR into `develop`. `feat/…` and `fix/…` PRs are squash-merged into
-  `develop`; `develop` is merged into `master` with a merge commit, never
-  squashed, and `master` is then merged back into `develop` the same way.
-  Releases are tagged on `master`.
+- There is one long-lived branch, `master` (the default). Fork
+  `orbyntech/forge`, clone your fork, and branch from `upstream/master`
+  (`feat/…`, `fix/…`, `docs/…`, `chore/…`). Open a PR into `master`; it is
+  squash-merged. CI runs on every PR into `master` and every push to it.
+  Releases are tags on `master`; a tag runs the release pipeline.
 - Work in that one clone. Don't create git worktrees or sibling copies.
 - Make small commits with imperative subjects.
 - Keep `DECISIONS.md` current for significant choices.
