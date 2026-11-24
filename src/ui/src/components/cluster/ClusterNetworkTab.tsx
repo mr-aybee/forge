@@ -232,7 +232,7 @@ export function ClusterNetworkTab({ clusterId }: { clusterId: string }) {
         </div>
       )}
 
-      <Modal open={editing} onOpenChange={setEditing} title="Change network" description="Changing the subnet re-assigns every address that is not fixed." wide>
+      <Modal open={editing} onOpenChange={setEditing} title="Change network" description="Changing the subnet re-assigns every address that is not fixed." width={960}>
         <FabricForm value={spec} onChange={setSpec} clusterId={clusterId} clusterName={cluster?.name ?? ""} />
         <div className="mt-4 flex justify-end gap-2">
           <Button variant="ghost" onClick={() => setEditing(false)}>
