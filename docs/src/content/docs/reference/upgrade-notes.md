@@ -42,7 +42,20 @@ PostgreSQL alike.
   certificate's names.
 - **Analytics uploads.** New agents dial the worker on the host of their own
   `server_url`. Older agents keep using `analytics_url`, which the server
-  still sends.
+  still sends. The worker's upload listener now has its own key: right after
+  the update, uploads from pinning agents pause for a few seconds, until
+  their next heartbeat pins the worker key. Nothing is lost; the spool keeps
+  the data and sends it then.
+- **MCP connectors need a pinned address.** MCP OAuth no longer falls back to
+  the address an administrator last signed in on. An install without
+  `public_url` that used MCP connectors must set a public address, with
+  `forge-server public-address set <url>` or in **Settings → Server**, or
+  connectors stop authorizing.
+- **Loopback is never recorded** as the last administrator address. Signing
+  in on `localhost` or `127.0.0.1` still works.
+- **After restoring a database backup**, run `forge-server agent-key rotate`
+  so the key announcement moves past the one agents last applied; see
+  [agent-key rotate](/docs/reference/cli/forge-server/#forge-server-agent-key-rotate).
 - **Passkeys** are bound to the name they were registered on, as before when
   that name was `public_url`. On another name, sign in with a password and
   code.
