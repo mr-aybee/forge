@@ -5,10 +5,11 @@ import { useEffect, useState } from "react";
 
 import { api, post } from "../../api/client";
 import { useInstallations, useServers } from "../../api/hooks";
-import { type Cluster, nodeName } from "../../api/types";
+import { type Cluster, type ClusterMode, nodeName } from "../../api/types";
 import { errorText } from "../../app/toast";
 import { type ClusterProfile, defaultNginx, type IngressMode, MODES } from "../ingress/types";
 import { Badge, Button, Field, Input, Modal } from "../ui";
+import { ModePicker } from "../ClusterModePicker";
 
 const STEPS = ["Cluster", "Network", "Ingress", "Review"] as const;
 type Log = { label: string; state: "todo" | "run" | "ok" | "fail"; error?: string };
@@ -24,6 +25,7 @@ export function ClusterWizard({ open, onOpenChange, onDone }: { open: boolean; o
   const [step, setStep] = useState(0);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [clusterMode, setClusterMode] = useState<ClusterMode>("default");
   const [memberIds, setMemberIds] = useState<string[]>([]);
   const [withNetwork, setWithNetwork] = useState(true);
   const [fabric, setFabric] = useState<FabricSpec>(blankFabric());
@@ -37,6 +39,7 @@ export function ClusterWizard({ open, onOpenChange, onDone }: { open: boolean; o
     setStep(0);
     setName("");
     setDescription("");
+    setClusterMode("default");
     setMemberIds([]);
     setWithNetwork(true);
     setFabric(blankFabric());
@@ -105,7 +108,7 @@ export function ClusterWizard({ open, onOpenChange, onDone }: { open: boolean; o
     };
     let id = "";
     try {
-      const c = await post<Cluster>("/api/v1/clusters", { name: name.trim(), description });
+      const c = await post<Cluster>("/api/v1/clusters", { name: name.trim(), description, mode: clusterMode });
       id = c.id;
       mark(0, "ok");
     } catch (e) {
@@ -187,6 +190,9 @@ export function ClusterWizard({ open, onOpenChange, onDone }: { open: boolean; o
                   <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="EU web tier" />
                 </Field>
               </div>
+              <Field label="Mode" hint="Cannot be changed after the cluster is created.">
+                <ModePicker value={clusterMode} locked={false} onChange={setClusterMode} />
+              </Field>
               <Field label="Members" hint="The control node takes part in every cluster.">
                 <div className="max-h-56 divide-y divide-line overflow-y-auto rounded-lg border border-line">
                   {nodes.map((n) => {
@@ -272,6 +278,8 @@ export function ClusterWizard({ open, onOpenChange, onDone }: { open: boolean; o
               <dl className="grid grid-cols-[140px_1fr] gap-y-1.5">
                 <dt className="text-muted">Cluster</dt>
                 <dd className="font-medium">{name}</dd>
+                <dt className="text-muted">Mode</dt>
+                <dd>{clusterMode === "swarm" ? "Docker Swarm" : "Default"}</dd>
                 <dt className="text-muted">Members</dt>
                 <dd>{scope.map(nodeName).join(", ")}</dd>
                 <dt className="text-muted">Network</dt>

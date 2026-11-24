@@ -23,9 +23,11 @@ runs in a cluster. For the model behind it, see [Clusters](/docs/concepts/cluste
 2. Select **Set up a cluster** to create a cluster with members, a network
    and the Nginx ingress in one go, or **Empty cluster** for a cluster with
    only a name.
-3. Enter the **Name** and an optional **Description**. In **Set up a
-   cluster**, also pick the **Members**; the control node takes part in
-   every cluster.
+3. Enter the **Name** and an optional **Description**, and choose the
+   **Mode**: **Default** (Forge places services on nodes) or **Docker Swarm**
+   (the swarm places container services). The mode cannot be changed later.
+   In **Set up a cluster**, also pick the **Members**; the control node takes
+   part in every cluster.
 4. Select **Create cluster** (or run the wizard to the end).
 
 Select the cluster's name on **Home → Clusters** to open its page. It has
