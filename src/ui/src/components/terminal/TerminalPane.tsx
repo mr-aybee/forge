@@ -211,7 +211,7 @@ export const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalP
     ws.onclose = (e) => {
       if (socket.current !== ws) return;
       if (status.current.state === "connecting") {
-        const why = e.code === 1006 ? "refused by the server (is the console open at its configured public_url?)" : `closed (${e.code})`;
+        const why = e.code === 1006 ? "refused by the server (is this console's address in Settings > Server > Allowed hosts?)" : `closed (${e.code})`;
         t.writeln(`\r\n\x1b[31m✖ connection ${why}\x1b[0m`);
         report({ state: "error", message: why });
       } else if (status.current.state === "ready") {

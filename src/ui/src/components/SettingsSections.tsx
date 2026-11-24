@@ -1,18 +1,66 @@
-import { Bot, KeyRound, ListChecks, Loader2, Plus, ShieldAlert, Trash2 } from "lucide-react";
+import {
+  Bot,
+  KeyRound,
+  ListChecks,
+  Loader2,
+  Plus,
+  ShieldAlert,
+  Trash2,
+} from "lucide-react";
 import { useState } from "react";
 
-import { accessErrorText, apiKeyList as normKeys, serviceAccountTokensKey, useApiKeys, useCreateApiKey, useRevokeApiKey, type ApiKey } from "../api/accessControl";
+import {
+  accessErrorText,
+  apiKeyList as normKeys,
+  serviceAccountTokensKey,
+  useApiKeys,
+  useCreateApiKey,
+  useRevokeApiKey,
+  type ApiKey,
+} from "../api/accessControl";
 import { ApiError, api, get, post } from "../api/client";
 import { errorText, useToast } from "../app/toast";
 import { TokenAccess, type ScopeGrant } from "./access/TokenAccess";
-import { Badge, Button, Confirm, CopyButton, Empty, ErrorNote, Field, Modal, RowMenu, type RowAction, Input, Mono, Panel, Select, Skeleton, Table, Td, ago, time, useRowMenu } from "./ui";
+import {
+  Badge,
+  Button,
+  Confirm,
+  CopyButton,
+  Empty,
+  ErrorNote,
+  Field,
+  Modal,
+  RowMenu,
+  type RowAction,
+  Input,
+  Mono,
+  Panel,
+  Select,
+  Skeleton,
+  Table,
+  Td,
+  ago,
+  time,
+  useRowMenu,
+} from "./ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 interface SettingsDoc {
-  instance: { version: string; public_url: string; node_public_url: string; agent_public_url: string; cookie_secure: boolean; data_dir: string };
+  instance: {
+    version: string;
+    public_url: string | null;
+    node_public_url: string;
+    agent_public_url: string;
+    cookie_secure: boolean;
+    data_dir: string;
+  };
   auth: {
     local_passwords: boolean;
-    oidc: { issuer_url: string; client_id: string; auto_provision: boolean } | null;
+    oidc: {
+      issuer_url: string;
+      client_id: string;
+      auto_provision: boolean;
+    } | null;
     users: number;
     users_with_mfa: number;
     mfa_required_for: string[];
@@ -24,16 +72,39 @@ interface SettingsDoc {
   values: { key: string; value: string }[];
 }
 
-export const useSettings = () => useQuery({ queryKey: ["settings"], queryFn: () => get<SettingsDoc>("/api/v1/settings"), retry: false, staleTime: 30_000 });
+export const useSettings = () =>
+  useQuery({
+    queryKey: ["settings"],
+    queryFn: () => get<SettingsDoc>("/api/v1/settings"),
+    retry: false,
+    staleTime: 30_000,
+  });
 /** Workspace settings are for administrators: the server answers 403 to everyone else. */
 export function useIsWorkspaceAdmin(): boolean {
   const s = useSettings();
-  return !!s.data || (s.isError && !(s.error instanceof ApiError && s.error.status === 403));
+  return (
+    !!s.data ||
+    (s.isError && !(s.error instanceof ApiError && s.error.status === 403))
+  );
 }
 
 /** Loading or error state for a settings-backed panel, keeping the layout. */
-function SettingsState({ title, q }: { title: string; q: ReturnType<typeof useSettings> }) {
-  return <Panel title={title}>{q.isLoading ? <Skeleton rows={3} /> : <ErrorNote error={q.error ?? new Error("Settings are unavailable.")} />}</Panel>;
+function SettingsState({
+  title,
+  q,
+}: {
+  title: string;
+  q: ReturnType<typeof useSettings>;
+}) {
+  return (
+    <Panel title={title}>
+      {q.isLoading ? (
+        <Skeleton rows={3} />
+      ) : (
+        <ErrorNote error={q.error ?? new Error("Settings are unavailable.")} />
+      )}
+    </Panel>
+  );
 }
 
 function Row({ k, v }: { k: string; v: React.ReactNode }) {
@@ -50,13 +121,39 @@ export function InstancePanel() {
   const s = q.data;
   if (!s?.instance) return <SettingsState title="Instance" q={q} />;
   return (
-    <Panel title="Instance" description="From forge.toml (bootstrap values; change them there and restart).">
+    <Panel
+      title="Instance"
+      description="From forge.toml (bootstrap values; change them there and restart)."
+    >
       <dl className="divide-y divide-line px-4 py-2 text-[13px]">
         <Row k="Version" v={<Mono>{s.instance.version}</Mono>} />
-        <Row k="Console URL" v={<Mono>{s.instance.public_url}</Mono>} />
+        <Row
+          k="Console URL"
+          v={
+            s.instance.public_url ? (
+              <Mono>{s.instance.public_url}</Mono>
+            ) : (
+              <span className="text-muted">
+                not pinned: the address each request uses
+              </span>
+            )
+          }
+        />
         <Row k="URL for nodes" v={<Mono>{s.instance.node_public_url}</Mono>} />
-        <Row k="Agent endpoint" v={<Mono>{s.instance.agent_public_url}</Mono>} />
-        <Row k="Secure cookies" v={s.instance.cookie_secure ? <Badge tone="ok">on</Badge> : <Badge tone="warn">off (plain HTTP)</Badge>} />
+        <Row
+          k="Agent endpoint"
+          v={<Mono>{s.instance.agent_public_url}</Mono>}
+        />
+        <Row
+          k="Secure cookies"
+          v={
+            s.instance.cookie_secure ? (
+              <Badge tone="ok">on</Badge>
+            ) : (
+              <Badge tone="warn">off (plain HTTP)</Badge>
+            )
+          }
+        />
       </dl>
     </Panel>
   );
@@ -69,16 +166,32 @@ export function SignInPanel() {
   const users = s.auth.users ?? 0;
   const withMfa = s.auth.users_with_mfa ?? 0;
   const pct = users ? Math.round((100 * withMfa) / users) : 0;
-  const guarded = Array.isArray(s.auth.mfa_required_for) ? s.auth.mfa_required_for : [];
+  const guarded = Array.isArray(s.auth.mfa_required_for)
+    ? s.auth.mfa_required_for
+    : [];
   const req = s.auth.mfa_required;
   const elevated = s.auth.allow_elevated_tokens;
   return (
-    <Panel title="Sign-in & MFA policy" description="Local accounts with TOTP or passkeys, single sign-on (OIDC) and OAuth + PKCE for apps.">
+    <Panel
+      title="Sign-in & MFA policy"
+      description="Local accounts with TOTP or passkeys, single sign-on (OIDC) and OAuth + PKCE for apps."
+    >
       <dl className="divide-y divide-line px-4 py-2 text-[13px]">
         <Row k="Local passwords" v={<Badge tone="ok">enabled</Badge>} />
         <Row
           k="Single sign-on (OIDC)"
-          v={s.auth.oidc ? <span><Badge tone="ok">enabled</Badge> <Mono>{s.auth.oidc.issuer_url}</Mono></span> : <span className="text-faint">not configured — add [oidc] to forge.toml</span>}
+          v={
+            s.auth.oidc ? (
+              <span>
+                <Badge tone="ok">enabled</Badge>{" "}
+                <Mono>{s.auth.oidc.issuer_url}</Mono>
+              </span>
+            ) : (
+              <span className="text-faint">
+                not configured — add [oidc] to forge.toml
+              </span>
+            )
+          }
         />
         <Row
           k="MFA on this server"
@@ -88,7 +201,10 @@ export function SignInPanel() {
             ) : req ? (
               <Badge tone="ok">required for sensitive actions</Badge>
             ) : (
-              <span className="text-xs text-muted">each user's choice: protects their sign-in, not required for actions</span>
+              <span className="text-xs text-muted">
+                each user's choice: protects their sign-in, not required for
+                actions
+              </span>
             )
           }
         />
@@ -96,7 +212,10 @@ export function SignInPanel() {
         <Row
           k="Actions that need MFA"
           v={
-            <span className="block truncate text-xs text-muted" title={guarded.join(", ")}>
+            <span
+              className="block truncate text-xs text-muted"
+              title={guarded.join(", ")}
+            >
               {guarded.length ? guarded.join(", ") : "—"}
             </span>
           }
@@ -105,16 +224,20 @@ export function SignInPanel() {
           k="API keys and tokens"
           v={
             <span className="text-xs text-muted">
-              act as their owner; only <Badge tone="warn">elevated</Badge> ones run MFA-guarded actions
+              act as their owner; only <Badge tone="warn">elevated</Badge> ones
+              run MFA-guarded actions
               {elevated === false ? " (disabled on this server)" : ""}
             </span>
           }
         />
       </dl>
       <p className="border-t border-line px-4 py-2 text-xs text-muted">
-        Users turn on MFA for their own sign-in in <Mono>Profile → Password &amp; security</Mono>. To also require it for sensitive actions, run{" "}
-        <Mono>forge-server mfa on</Mono> on the control plane host, then restart. Elevated
-        tokens are allowed or refused by <Mono>[security] allow_elevated_tokens</Mono> in <Mono>forge.toml</Mono>.
+        Users turn on MFA for their own sign-in in{" "}
+        <Mono>Profile → Password &amp; security</Mono>. To also require it for
+        sensitive actions, run <Mono>forge-server mfa on</Mono> on the control
+        plane host, then restart. Elevated tokens are allowed or refused by{" "}
+        <Mono>[security] allow_elevated_tokens</Mono> in <Mono>forge.toml</Mono>
+        .
       </p>
     </Panel>
   );
@@ -127,12 +250,16 @@ export function BusinessSettingsPanel() {
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
   const put = useMutation({
-    mutationFn: (b: { key: string; value: string }) => api<void>("PUT", `/api/v1/settings/${encodeURIComponent(b.key)}`, { value: b.value }),
+    mutationFn: (b: { key: string; value: string }) =>
+      api<void>("PUT", `/api/v1/settings/${encodeURIComponent(b.key)}`, {
+        value: b.value,
+      }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["settings"] }),
     onError: (e) => toast(errorText(e), "error"),
   });
   const del = useMutation({
-    mutationFn: (k: string) => api<void>("DELETE", `/api/v1/settings/${encodeURIComponent(k)}`),
+    mutationFn: (k: string) =>
+      api<void>("DELETE", `/api/v1/settings/${encodeURIComponent(k)}`),
     onSuccess: (_, k) => {
       toast(`${k} deleted`);
       void qc.invalidateQueries({ queryKey: ["settings"] });
@@ -141,16 +268,35 @@ export function BusinessSettingsPanel() {
   });
   const rm = useRowMenu();
   const settingActions = (k: string): RowAction[] => [
-    { label: "Delete", icon: Trash2, danger: true, disabled: del.isPending, hint: del.isPending ? "Deleting…" : undefined, onSelect: () => del.mutate(k) },
+    {
+      label: "Delete",
+      icon: Trash2,
+      danger: true,
+      disabled: del.isPending,
+      hint: del.isPending ? "Deleting…" : undefined,
+      onSelect: () => del.mutate(k),
+    },
   ];
   return (
-    <Panel title="Business settings" description={<>Shared values, e.g. company.domain or support.email. Use them in service variables as <Mono>{"${forge.settings.company.domain}"}</Mono>.</>}>
+    <Panel
+      title="Business settings"
+      description={
+        <>
+          Shared values, e.g. company.domain or support.email. Use them in
+          service variables as <Mono>{"${forge.settings.company.domain}"}</Mono>
+          .
+        </>
+      }
+    >
       {s.isLoading && <Skeleton rows={2} />}
       {s.isError && <ErrorNote error={s.error} />}
       {(s.data?.values?.length ?? 0) > 0 && (
         <Table head={["Key", "Value", ""]}>
           {(s.data?.values ?? []).map((v) => (
-            <tr key={v.key} {...rm.rowProps(settingActions(v.key), `Actions for ${v.key}`)}>
+            <tr
+              key={v.key}
+              {...rm.rowProps(settingActions(v.key), `Actions for ${v.key}`)}
+            >
               <Td>
                 <Mono>{v.key}</Mono>
               </Td>
@@ -158,7 +304,10 @@ export function BusinessSettingsPanel() {
                 {v.value}
               </Td>
               <Td className="text-right">
-                <RowMenu actions={settingActions(v.key)} label={`Actions for ${v.key}`} />
+                <RowMenu
+                  actions={settingActions(v.key)}
+                  label={`Actions for ${v.key}`}
+                />
               </Td>
             </tr>
           ))}
@@ -169,41 +318,88 @@ export function BusinessSettingsPanel() {
         className="flex flex-wrap items-end gap-2 border-t border-line p-4"
         onSubmit={(e) => {
           e.preventDefault();
-          put.mutate({ key, value }, { onSuccess: () => { setKey(""); setValue(""); toast("Saved"); } });
+          put.mutate(
+            { key, value },
+            {
+              onSuccess: () => {
+                setKey("");
+                setValue("");
+                toast("Saved");
+              },
+            },
+          );
         }}
       >
         <Field label="Key">
-          <Input value={key} onChange={(e) => setKey(e.target.value.toLowerCase())} pattern="[a-z][a-z0-9_.\-]{0,63}" placeholder="company.domain" required />
+          <Input
+            value={key}
+            onChange={(e) => setKey(e.target.value.toLowerCase())}
+            pattern="[a-z][a-z0-9_.\-]{0,63}"
+            placeholder="company.domain"
+            required
+          />
         </Field>
         <div className="min-w-[200px] flex-1">
           <Field label="Value">
-            <Input value={value} onChange={(e) => setValue(e.target.value)} placeholder="acme.com" required />
+            <Input
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder="acme.com"
+              required
+            />
           </Field>
         </div>
         <Button disabled={put.isPending}>
-          {put.isPending ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />} Set
+          {put.isPending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Plus className="size-4" />
+          )}{" "}
+          Set
         </Button>
       </form>
     </Panel>
   );
 }
 
-
 /** The "Elevated" opt-in with its caution; shared by API keys and service-account tokens. */
-function ElevatedOption({ checked, onChange, disabledWhy }: { checked: boolean; onChange: (v: boolean) => void; disabledWhy?: string }) {
+function ElevatedOption({
+  checked,
+  onChange,
+  disabledWhy,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabledWhy?: string;
+}) {
   return (
     <div className="w-full space-y-1.5">
-      <label className={`inline-flex items-center gap-2 text-[13px] ${disabledWhy ? "cursor-not-allowed text-faint" : "cursor-pointer"}`} title={disabledWhy}>
-        <input type="checkbox" className="accent-accent" checked={checked && !disabledWhy} disabled={!!disabledWhy} onChange={(e) => onChange(e.target.checked)} />
-        Elevated: may run MFA-guarded actions (updates, exec, packages) without a prompt
+      <label
+        className={`inline-flex items-center gap-2 text-[13px] ${disabledWhy ? "cursor-not-allowed text-faint" : "cursor-pointer"}`}
+        title={disabledWhy}
+      >
+        <input
+          type="checkbox"
+          className="accent-accent"
+          checked={checked && !disabledWhy}
+          disabled={!!disabledWhy}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        Elevated: may run MFA-guarded actions (updates, exec, packages) without
+        a prompt
       </label>
       {disabledWhy && <p className="text-xs text-muted">{disabledWhy}</p>}
       {checked && !disabledWhy && (
-        <p role="note" className="flex items-start gap-1.5 rounded-md bg-warn-soft px-2.5 py-1.5 text-xs text-warn">
+        <p
+          role="note"
+          className="flex items-start gap-1.5 rounded-md bg-warn-soft px-2.5 py-1.5 text-xs text-warn"
+        >
           <ShieldAlert className="mt-px size-3.5 shrink-0" />
           <span>
-            Anyone holding this token can do everything an MFA-verified session of its owner can, with no second factor. Use it only for CI that needs it, give it an
-            expiry, and keep it in a secret store. Creating it asks you to verify with MFA.
+            Anyone holding this token can do everything an MFA-verified session
+            of its owner can, with no second factor. Use it only for CI that
+            needs it, give it an expiry, and keep it in a secret store. Creating
+            it asks you to verify with MFA.
           </span>
         </p>
       )}
@@ -215,9 +411,13 @@ function ElevatedOption({ checked, onChange, disabledWhy }: { checked: boolean; 
 function NewSecret({ secret, onDone }: { secret: string; onDone: () => void }) {
   return (
     <div className="m-4 rounded-lg border border-warn/40 bg-warn-soft p-3 text-[13px]">
-      <p className="font-medium">Copy your new token now. It is not shown again.</p>
+      <p className="font-medium">
+        Copy your new token now. It is not shown again.
+      </p>
       <div className="mt-2 flex items-center gap-2">
-        <code className="min-w-0 flex-1 rounded bg-panel p-2 font-mono text-xs break-all select-all">{secret}</code>
+        <code className="min-w-0 flex-1 rounded bg-panel p-2 font-mono text-xs break-all select-all">
+          {secret}
+        </code>
         <CopyButton text={secret} />
       </div>
       <Button className="mt-2" variant="ghost" onClick={onDone}>
@@ -227,9 +427,20 @@ function NewSecret({ secret, onDone }: { secret: string; onDone: () => void }) {
   );
 }
 
-const elevatedWhy = (allowed: boolean | undefined) => (allowed === false ? "Elevated tokens are disabled on this server ([security] allow_elevated_tokens = false)." : undefined);
+const elevatedWhy = (allowed: boolean | undefined) =>
+  allowed === false
+    ? "Elevated tokens are disabled on this server ([security] allow_elevated_tokens = false)."
+    : undefined;
 
-function KeyRows({ keys, actions, rm }: { keys: ApiKey[]; actions: (k: ApiKey) => RowAction[]; rm: ReturnType<typeof useRowMenu> }) {
+function KeyRows({
+  keys,
+  actions,
+  rm,
+}: {
+  keys: ApiKey[];
+  actions: (k: ApiKey) => RowAction[];
+  rm: ReturnType<typeof useRowMenu>;
+}) {
   return (
     <Table head={["Name", "Key", "Last used", "Expires", ""]}>
       {keys.map((k) => (
@@ -240,25 +451,47 @@ function KeyRows({ keys, actions, rm }: { keys: ApiKey[]; actions: (k: ApiKey) =
                 {k.name}
               </span>
               {k.elevated && (
-                <span title="Runs MFA-guarded actions without a prompt" className="shrink-0">
+                <span
+                  title="Runs MFA-guarded actions without a prompt"
+                  className="shrink-0"
+                >
                   <Badge tone="warn">elevated</Badge>
                 </span>
               )}
               {k.restrictions && (
-                <span title={restrictionTitle(k.restrictions)} className="shrink-0">
+                <span
+                  title={restrictionTitle(k.restrictions)}
+                  className="shrink-0"
+                >
                   <Badge tone="accent">Restricted</Badge>
                 </span>
               )}
             </span>
-            {k.restrictions && <span className="block font-mono text-[11px] font-normal text-faint tabular-nums">{restrictionSummary(k.restrictions)}</span>}
+            {k.restrictions && (
+              <span className="block font-mono text-[11px] font-normal text-faint tabular-nums">
+                {restrictionSummary(k.restrictions)}
+              </span>
+            )}
           </Td>
           <Td>
-            <span className="font-mono text-[11px]">{k.prefix ? `${k.prefix}_…` : "—"}</span>
+            <span className="font-mono text-[11px]">
+              {k.prefix ? `${k.prefix}_…` : "—"}
+            </span>
           </Td>
-          <Td className="text-xs text-muted" title={k.last_used_at ? time(k.last_used_at) : undefined}>
+          <Td
+            className="text-xs text-muted"
+            title={k.last_used_at ? time(k.last_used_at) : undefined}
+          >
             {k.last_used_at ? ago(k.last_used_at) : "never"}
           </Td>
-          <Td className={`text-xs ${k.expires_at ? "text-muted" : "text-warn"}`} title={k.expires_at ? time(k.expires_at) : "This key never expires. Prefer keys that expire."}>
+          <Td
+            className={`text-xs ${k.expires_at ? "text-muted" : "text-warn"}`}
+            title={
+              k.expires_at
+                ? time(k.expires_at)
+                : "This key never expires. Prefer keys that expire."
+            }
+          >
             {k.expires_at ? time(k.expires_at) : "never"}
           </Td>
           <Td className="text-right">
@@ -270,7 +503,13 @@ function KeyRows({ keys, actions, rm }: { keys: ApiKey[]; actions: (k: ApiKey) =
   );
 }
 
-function ExpirySelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function ExpirySelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
   return (
     <Field label="Expires">
       <Select value={value} onChange={(e) => onChange(e.target.value)}>
@@ -298,15 +537,24 @@ export function ApiKeysPanel() {
   const [shown, setShown] = useState<string>();
   const [revoking, setRevoking] = useState<ApiKey>();
   const rm = useRowMenu();
-  const keyActions = (k: ApiKey): RowAction[] => [{ label: "Revoke key", icon: Trash2, danger: true, onSelect: () => setRevoking(k) }];
+  const keyActions = (k: ApiKey): RowAction[] => [
+    {
+      label: "Revoke key",
+      icon: Trash2,
+      danger: true,
+      onSelect: () => setRevoking(k),
+    },
+  ];
   const list = keys.data ?? [];
   return (
     <Panel
       title="Personal API keys"
       description={
         <>
-          For scripts and CI: send <Mono>Authorization: Bearer fk_…</Mono>. A key acts as you, with all your access or only the scopes and actions you select. Only an
-          elevated key runs MFA-guarded actions; a normal key is refused with “step-up required”.
+          For scripts and CI: send <Mono>Authorization: Bearer fk_…</Mono>. A
+          key acts as you, with all your access or only the scopes and actions
+          you select. Only an elevated key runs MFA-guarded actions; a normal
+          key is refused with “step-up required”.
         </>
       }
       actions={
@@ -323,8 +571,13 @@ export function ApiKeysPanel() {
       ) : list.length > 0 ? (
         <KeyRows keys={list} actions={keyActions} rm={rm} />
       ) : (
-        <Empty icon={<KeyRound className="size-5" />} title="No API keys" action={<Button onClick={() => setCreating(true)}>New key</Button>}>
-          Create a key for a script; limit it to the scopes and actions the script needs.
+        <Empty
+          icon={<KeyRound className="size-5" />}
+          title="No API keys"
+          action={<Button onClick={() => setCreating(true)}>New key</Button>}
+        >
+          Create a key for a script; limit it to the scopes and actions the
+          script needs.
         </Empty>
       )}
       {creating && (
@@ -361,22 +614,45 @@ export function ApiKeysPanel() {
 
 /** New personal key: name, expiry, elevation and access (all mine, or only selected scopes and actions). */
 /** A new personal access token, or one for `account` (the same kind of key). */
-function NewKeyDialog({ account, onClose, onCreated }: { account?: { id: string; name: string }; onClose: () => void; onCreated: (secret: string | null) => void }) {
+function NewKeyDialog({
+  account,
+  onClose,
+  onCreated,
+}: {
+  account?: { id: string; name: string };
+  onClose: () => void;
+  onCreated: (secret: string | null) => void;
+}) {
   const toast = useToast();
   const create = useCreateApiKey(account?.id);
   const whose = account ? `${account.name}'s` : "my";
   const holder = account ? "the account holds" : "you hold";
   const allowed = useSettings().data?.auth?.allow_elevated_tokens;
-  const [f, setF] = useState<{ name: string; days: string; elevated: boolean; restricted: boolean; grants: ScopeGrant[] }>({ name: "", days: "90", elevated: false, restricted: false, grants: [] });
+  const [f, setF] = useState<{
+    name: string;
+    days: string;
+    elevated: boolean;
+    restricted: boolean;
+    grants: ScopeGrant[];
+  }>({ name: "", days: "90", elevated: false, restricted: false, grants: [] });
   const set = (p: Partial<typeof f>) => setF((x) => ({ ...x, ...p }));
-  const incomplete = f.restricted && (f.grants.length === 0 || f.grants.some((g) => g.actions.size === 0));
+  const incomplete =
+    f.restricted &&
+    (f.grants.length === 0 || f.grants.some((g) => g.actions.size === 0));
   const submit = () =>
     create.mutate(
       {
         name: f.name.trim(),
         expires_days: f.days ? Number(f.days) : null,
         elevated: f.elevated && allowed !== false,
-        ...(f.restricted ? { restrictions: f.grants.map((g) => ({ scope: g.scope, actions: [...g.actions].sort() })) } : {}),
+        ...(f.restricted
+          ? {
+              restrictions: f.grants.map((g) => ({
+                scope: g.scope,
+                actions: [...g.actions].sort(),
+              })),
+            }
+          : {}),
       },
       {
         onSuccess: (r) => {
@@ -403,13 +679,26 @@ function NewKeyDialog({ account, onClose, onCreated }: { account?: { id: string;
       >
         <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
           <Field label="Name">
-            <Input value={f.name} onChange={(e) => set({ name: e.target.value })} placeholder="GitHub Actions deploy" required maxLength={80} autoFocus />
+            <Input
+              value={f.name}
+              onChange={(e) => set({ name: e.target.value })}
+              placeholder="GitHub Actions deploy"
+              required
+              maxLength={80}
+              autoFocus
+            />
           </Field>
           <ExpirySelect value={f.days} onChange={(days) => set({ days })} />
         </div>
         <fieldset className="space-y-1.5">
-          <legend className="mb-1 text-xs font-medium text-muted">Access</legend>
-          <div className="inline-flex rounded-md border border-line p-0.5" role="radiogroup" aria-label="Access">
+          <legend className="mb-1 text-xs font-medium text-muted">
+            Access
+          </legend>
+          <div
+            className="inline-flex rounded-md border border-line p-0.5"
+            role="radiogroup"
+            aria-label="Access"
+          >
             {(
               [
                 [false, `All ${whose} access`],
@@ -435,16 +724,37 @@ function NewKeyDialog({ account, onClose, onCreated }: { account?: { id: string;
                 ? "The key can do everything the account can, now and after its access changes."
                 : "The key can do everything you can, now and after your roles change."}
           </p>
-          {f.restricted && <TokenAccess value={f.grants} onChange={(grants) => set({ grants })} />}
+          {f.restricted && (
+            <TokenAccess
+              value={f.grants}
+              onChange={(grants) => set({ grants })}
+            />
+          )}
         </fieldset>
-        <ElevatedOption checked={f.elevated} onChange={(elevated) => set({ elevated })} disabledWhy={elevatedWhy(allowed)} />
+        <ElevatedOption
+          checked={f.elevated}
+          onChange={(elevated) => set({ elevated })}
+          disabledWhy={elevatedWhy(allowed)}
+        />
         <div className="flex items-center justify-end gap-2">
-          {incomplete && <span className="mr-auto text-xs text-warn">Add at least one scope, with at least one action each.</span>}
+          {incomplete && (
+            <span className="mr-auto text-xs text-warn">
+              Add at least one scope, with at least one action each.
+            </span>
+          )}
           <Button type="button" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" disabled={create.isPending || !f.name.trim() || incomplete}>
-            {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />} Create key
+          <Button
+            variant="primary"
+            disabled={create.isPending || !f.name.trim() || incomplete}
+          >
+            {create.isPending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <KeyRound className="size-4" />
+            )}{" "}
+            Create key
           </Button>
         </div>
       </form>
@@ -470,7 +780,8 @@ function normAccounts(raw: unknown): ServiceAccount[] {
   return raw.flatMap((x) => {
     const r = x && typeof x === "object" ? (x as Record<string, unknown>) : {};
     if (typeof r.id !== "string" || !r.id) return [];
-    const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+    const n = (v: unknown) =>
+      typeof v === "number" && Number.isFinite(v) ? v : null;
     return [
       {
         id: r.id,
@@ -498,7 +809,8 @@ function useServiceAccounts() {
       get<unknown>("/api/v1/service-accounts")
         .then(normAccounts)
         .catch((e: unknown) => {
-          if (e instanceof ApiError && [403, 404, 405].includes(e.status)) return null;
+          if (e instanceof ApiError && [403, 404, 405].includes(e.status))
+            return null;
           throw e;
         }),
   });
@@ -513,7 +825,11 @@ export function ServiceAccountsPanel() {
   const [open, setOpen] = useState<ServiceAccount>();
   const rm = useRowMenu();
   const create = useMutation({
-    mutationFn: () => post<unknown>("/api/v1/service-accounts", { name: f.name.trim(), description: f.description.trim() }),
+    mutationFn: () =>
+      post<unknown>("/api/v1/service-accounts", {
+        name: f.name.trim(),
+        description: f.description.trim(),
+      }),
     onSuccess: () => {
       toast(`svc-${f.name.trim()} created`);
       setCreating(false);
@@ -524,7 +840,9 @@ export function ServiceAccountsPanel() {
   });
   if (q.data === null) return null;
   const list = q.data ?? [];
-  const actions = (a: ServiceAccount): RowAction[] => [{ label: "Tokens", icon: ListChecks, onSelect: () => setOpen(a) }];
+  const actions = (a: ServiceAccount): RowAction[] => [
+    { label: "Tokens", icon: ListChecks, onSelect: () => setOpen(a) },
+  ];
 
   return (
     <Panel
@@ -541,29 +859,58 @@ export function ServiceAccountsPanel() {
       ) : q.isError ? (
         <ErrorNote error={q.error} />
       ) : list.length === 0 ? (
-        <Empty icon={<Bot className="size-5" />} title="No service accounts" action={<Button onClick={() => setCreating(true)}>New service account</Button>}>
-          Create one for CI instead of using a personal key, so access survives when people leave.
+        <Empty
+          icon={<Bot className="size-5" />}
+          title="No service accounts"
+          action={
+            <Button onClick={() => setCreating(true)}>
+              New service account
+            </Button>
+          }
+        >
+          Create one for CI instead of using a personal key, so access survives
+          when people leave.
         </Empty>
       ) : (
         <Table head={["Name", "Owner", "Tokens", "Last used", ""]}>
           {list.map((a) => (
-            <tr key={a.id} {...rm.rowProps(actions(a), `Actions for ${a.name}`)}>
+            <tr
+              key={a.id}
+              {...rm.rowProps(actions(a), `Actions for ${a.name}`)}
+            >
               <Td className="max-w-[16rem]">
-                <button type="button" className="flex max-w-full min-w-0 items-center gap-1.5 text-left font-medium hover:text-accent" onClick={() => setOpen(a)}>
-                  <span className="truncate font-mono text-[12px]" title={a.description || a.name}>
+                <button
+                  type="button"
+                  className="flex max-w-full min-w-0 items-center gap-1.5 text-left font-medium hover:text-accent"
+                  onClick={() => setOpen(a)}
+                >
+                  <span
+                    className="truncate font-mono text-[12px]"
+                    title={a.description || a.name}
+                  >
                     {a.name}
                   </span>
                   {a.disabled && <Badge tone="muted">disabled</Badge>}
                 </button>
               </Td>
               <Td className="max-w-[10rem] text-xs">
-                <span className={`block truncate ${a.owner_inactive ? "text-warn" : "text-muted"}`} title={a.owner_inactive ? "The owner is gone or disabled: assign a new one" : (a.owner ?? undefined)}>
+                <span
+                  className={`block truncate ${a.owner_inactive ? "text-warn" : "text-muted"}`}
+                  title={
+                    a.owner_inactive
+                      ? "The owner is gone or disabled: assign a new one"
+                      : (a.owner ?? undefined)
+                  }
+                >
                   {a.owner ?? "—"}
                   {a.owner_inactive && " (inactive)"}
                 </span>
               </Td>
               <Td className="font-mono text-[11px] tabular-nums">{a.tokens}</Td>
-              <Td className="text-xs text-muted" title={a.last_used_at ? time(a.last_used_at) : undefined}>
+              <Td
+                className="text-xs text-muted"
+                title={a.last_used_at ? time(a.last_used_at) : undefined}
+              >
                 {a.last_used_at ? ago(a.last_used_at) : "never"}
               </Td>
               <Td className="text-right">
@@ -575,7 +922,12 @@ export function ServiceAccountsPanel() {
       )}
       {rm.menu}
 
-      <Modal open={creating} onOpenChange={(o) => !create.isPending && setCreating(o)} title="New service account" description="You become its accountable owner.">
+      <Modal
+        open={creating}
+        onOpenChange={(o) => !create.isPending && setCreating(o)}
+        title="New service account"
+        description="You become its accountable owner."
+      >
         <form
           className="space-y-3"
           onSubmit={(e) => {
@@ -583,24 +935,61 @@ export function ServiceAccountsPanel() {
             create.mutate();
           }}
         >
-          <Field label="Name" hint={<>3–40 of a-z, 0-9 and -. The account is called <Mono>svc-{f.name.trim() || "<name>"}</Mono>.</>}>
-            <Input autoFocus required pattern="[a-z0-9][a-z0-9\-]{1,38}[a-z0-9]" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value.toLowerCase() })} placeholder="github-deploy" />
+          <Field
+            label="Name"
+            hint={
+              <>
+                3–40 of a-z, 0-9 and -. The account is called{" "}
+                <Mono>svc-{f.name.trim() || "<name>"}</Mono>.
+              </>
+            }
+          >
+            <Input
+              autoFocus
+              required
+              pattern="[a-z0-9][a-z0-9\-]{1,38}[a-z0-9]"
+              value={f.name}
+              onChange={(e) =>
+                setF({ ...f, name: e.target.value.toLowerCase() })
+              }
+              placeholder="github-deploy"
+            />
           </Field>
           <Field label="Description">
-            <Input maxLength={500} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="Deploys from the main branch" />
+            <Input
+              maxLength={500}
+              value={f.description}
+              onChange={(e) => setF({ ...f, description: e.target.value })}
+              placeholder="Deploys from the main branch"
+            />
           </Field>
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => setCreating(false)} disabled={create.isPending}>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setCreating(false)}
+              disabled={create.isPending}
+            >
               Cancel
             </Button>
-            <Button variant="primary" disabled={create.isPending || !f.name.trim()}>
-              {create.isPending && <Loader2 className="size-4 animate-spin" />} Create
+            <Button
+              variant="primary"
+              disabled={create.isPending || !f.name.trim()}
+            >
+              {create.isPending && <Loader2 className="size-4 animate-spin" />}{" "}
+              Create
             </Button>
           </div>
         </form>
       </Modal>
 
-      <Modal open={!!open} onOpenChange={(o) => !o && setOpen(undefined)} title={open ? `Tokens of ${open.name}` : "Tokens"} description={open?.description || undefined} wide>
+      <Modal
+        open={!!open}
+        onOpenChange={(o) => !o && setOpen(undefined)}
+        title={open ? `Tokens of ${open.name}` : "Tokens"}
+        description={open?.description || undefined}
+        wide
+      >
         {open && <ServiceAccountTokens account={open} />}
       </Modal>
     </Panel>
@@ -612,7 +1001,10 @@ function ServiceAccountTokens({ account }: { account: ServiceAccount }) {
   const toast = useToast();
   const base = `/api/v1/service-accounts/${encodeURIComponent(account.id)}/tokens`;
   const key = serviceAccountTokensKey(account.id);
-  const tokens = useQuery({ queryKey: key, queryFn: () => get<unknown>(base).then(normKeys) });
+  const tokens = useQuery({
+    queryKey: key,
+    queryFn: () => get<unknown>(base).then(normKeys),
+  });
   const [issuing, setIssuing] = useState(false);
   const [shown, setShown] = useState<string>();
   const [revoking, setRevoking] = useState<ApiKey>();
@@ -621,7 +1013,8 @@ function ServiceAccountTokens({ account }: { account: ServiceAccount }) {
     void qc.invalidateQueries({ queryKey: SA_KEY });
   };
   const revoke = useMutation({
-    mutationFn: (id: string) => api<void>("DELETE", `${base}/${encodeURIComponent(id)}`),
+    mutationFn: (id: string) =>
+      api<void>("DELETE", `${base}/${encodeURIComponent(id)}`),
     onSuccess: () => {
       toast("Token revoked");
       setRevoking(undefined);
@@ -630,9 +1023,18 @@ function ServiceAccountTokens({ account }: { account: ServiceAccount }) {
     onError: (e) => toast(errorText(e), "error"),
   });
   const rm = useRowMenu();
-  const actions = (k: ApiKey): RowAction[] => [{ label: "Revoke token", icon: Trash2, danger: true, onSelect: () => setRevoking(k) }];
+  const actions = (k: ApiKey): RowAction[] => [
+    {
+      label: "Revoke token",
+      icon: Trash2,
+      danger: true,
+      onSelect: () => setRevoking(k),
+    },
+  ];
   const list = tokens.data ?? [];
-  const disabledWhy = account.disabled ? "The service account is disabled." : undefined;
+  const disabledWhy = account.disabled
+    ? "The service account is disabled."
+    : undefined;
 
   return (
     <div className="-mx-5 -mb-5 border-t border-line">
@@ -644,11 +1046,18 @@ function ServiceAccountTokens({ account }: { account: ServiceAccount }) {
       ) : list.length ? (
         <KeyRows keys={list} actions={actions} rm={rm} />
       ) : (
-        <p className="px-5 py-3 text-xs text-muted">No tokens. Issue one below.</p>
+        <p className="px-5 py-3 text-xs text-muted">
+          No tokens. Issue one below.
+        </p>
       )}
       {rm.menu}
       <div className="flex justify-end border-t border-line px-5 py-4">
-        <Button variant="primary" onClick={() => setIssuing(true)} disabled={!!disabledWhy} title={disabledWhy}>
+        <Button
+          variant="primary"
+          onClick={() => setIssuing(true)}
+          disabled={!!disabledWhy}
+          title={disabledWhy}
+        >
           <KeyRound className="size-4" /> Issue token
         </Button>
       </div>

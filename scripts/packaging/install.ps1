@@ -3,7 +3,14 @@
   Installs (or upgrades) the Orbyn Forge control plane on Windows from this package.
 
 .EXAMPLE
-  .\install.ps1 -PublicUrl http://forge.example.com:3880
+  .\install.ps1
+
+.EXAMPLE
+  .\install.ps1 -PublicUrl https://forge.example.com
+
+  The console answers on any name or IP of this machine (port 3880) and nodes
+  use the address they reach it on. -PublicUrl optionally pins the address
+  links use.
 
 .DESCRIPTION
   Binaries go to "C:\Program Files\Orbyn Forge", configuration and data to
@@ -114,8 +121,19 @@ $newVersion = (& "$here\forge-server.exe" --version).Split(' ')[1]
 $oldVersion = if (Test-Path "$InstallDir\forge-server.exe") { (& "$InstallDir\forge-server.exe" --version).Split(' ')[1] } else { "" }
 
 $hostName = [System.Net.Dns]::GetHostEntry($env:COMPUTERNAME).HostName
-if (-not $PublicUrl) { $PublicUrl = "http://${hostName}:3880" }
-if (-not $AgentHost) { $AgentHost = ([Uri]$PublicUrl).Host }
+# -PublicUrl is optional: without it nothing is pinned and the server uses the
+# address each request came in on (D-167).
+$PublicUrl = $PublicUrl.Trim().TrimEnd('/')
+if ($PublicUrl) {
+  if ($PublicUrl -notmatch '^https?://') { $PublicUrl = "http://$PublicUrl" }
+  $u = $null
+  if (-not [Uri]::TryCreate($PublicUrl, [UriKind]::Absolute, [ref]$u) -or -not $u.Host -or $u.Host -in @("0.0.0.0", "[::]", "::")) {
+    Fail "-PublicUrl $PublicUrl is not a URL people and nodes can open. Use http(s)://<name or IP>[:port] (not 0.0.0.0, which is a listen address)."
+  }
+  if (-not $AgentHost) { $AgentHost = $u.Host }
+}
+# cookie_secure only for a pinned https:// address; otherwise Secure follows
+# the request (HTTPS reported by a trusted proxy).
 $secure = if ($PublicUrl.StartsWith("https://")) { "true" } else { "false" }
 $data = Join-Path $DataRoot "data"
 $conf = Join-Path $DataRoot "forge.toml"
@@ -147,15 +165,18 @@ Step "Binaries" "server, plugin runner, analytics worker, $agents agent binaries
 if (-not (Test-Path $conf)) {
   $dataToml = $data.Replace('\', '/')
   $distToml = "$InstallDir\dist".Replace('\', '/')
+  $pinLines = ""; $agentNames = ""
+  if ($PublicUrl) {
+    $pinLines = "public_url = `"$PublicUrl`"`nagent_public_url = `"https://${AgentHost}:3843`"`n"
+    if ($AgentHost -ne $hostName) { $agentNames = "`"$AgentHost`", " }
+  }
   @"
 # Orbyn Forge control plane (written by install.ps1; see forge.toml.example).
 data_dir = "$dataToml"
 api_listen = "0.0.0.0:3880"
-public_url = "$PublicUrl"
-cookie_secure = $secure
+${pinLines}cookie_secure = $secure
 agent_listen = "0.0.0.0:3843"
-agent_public_url = "https://${AgentHost}:3843"
-agent_hostnames = ["$AgentHost", "$hostName", "localhost", "127.0.0.1"]
+agent_hostnames = [${agentNames}"$hostName", "localhost", "127.0.0.1"]
 agent_dist_dir = "$distToml"
 
 [update]
@@ -296,16 +317,37 @@ Step "Health check" "responding after ${i}s"
 # ------------------------------------------------------------------ summary
 # Report what the configuration says (a re-run keeps the existing file).
 $cfg = Get-Content $conf
-$PublicUrl = ($cfg | Select-String '^public_url = "(.*)"').Matches[0].Groups[1].Value
-$agentUrl = ($cfg | Select-String '^agent_public_url = "(.*)"').Matches[0].Groups[1].Value
+function ConfValue($key) {
+  $m = $cfg | Select-String "^$key = `"(.*)`"" | Select-Object -First 1
+  if ($m) { $m.Matches[0].Groups[1].Value } else { "" }
+}
+$PublicUrl = ConfValue "public_url"
+$agentUrl = ConfValue "agent_public_url"
+$secure = if ($PublicUrl.StartsWith("https://")) { "true" } else { "false" }
 
 Write-Host ""
 if ($oldVersion) { Write-Host "  Orbyn Forge upgraded to $newVersion and running." -ForegroundColor Green }
 else { Write-Host "  Orbyn Forge $newVersion is installed and running." -ForegroundColor Green }
 
 Section "ACCESS"
-Row "Console" $PublicUrl
-Row "Agents" $agentUrl "(nodes connect out to TCP $agentPort and $workerPort)"
+if ($PublicUrl) {
+  Row "Console" $PublicUrl "(pinned)"
+  $firstUrl = $PublicUrl
+} else {
+  $ips = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" } | ForEach-Object { $_.IPAddress })
+  foreach ($ip in $ips) { Row "Console" "http://${ip}:3880" }
+  Row "Console" "http://${hostName}:3880"
+  $firstUrl = if ($ips.Count) { "http://$($ips[0]):3880" } else { "http://${hostName}:3880" }
+  Write-Host "    $dot Any name or IP of this machine works; pin one later in Settings or with -PublicUrl." -ForegroundColor DarkGray
+}
+if ($agentUrl) { Row "Agents" $agentUrl "(nodes connect to TCP $agentPort and $workerPort)" }
+else { Row "Agents" "nodes connect to TCP $agentPort and $workerPort on the address they use" }
+
+Section "RESTRICT ACCESS"
+Write-Host "    $dot Every interface listens. Narrow who may connect, for example:" -ForegroundColor DarkGray
+Write-Host "      New-NetFirewallRule -DisplayName 'Forge agents' -Direction Inbound -Protocol TCP -LocalPort $agentPort -RemoteAddress <node subnet> -Action Allow"
+Write-Host "      [security.access] allow = [`"10.0.0.0/8`"] in $conf"
 
 if ($adminCreated) {
   Section "ADMINISTRATOR"
@@ -331,7 +373,7 @@ Row "Restart" "Stop-ScheduledTask '$task'; Start-ScheduledTask '$task'"
 Row "Uninstall" ".\install.ps1 -Uninstall" "(from the package folder; -Purge also deletes data)"
 
 Section "NEXT STEPS"
-Write-Host "    1. Open $PublicUrl and sign in$(if ($adminCreated) { " as $AdminUsername" })."
+Write-Host "    1. Open $firstUrl and sign in$(if ($adminCreated) { " as $AdminUsername" })."
 if ($generated) { Write-Host "       The password is also in $passwordFile." }
 Write-Host "    2. Allow TCP $agentPort and $workerPort from your nodes to this server."
 Write-Host "    3. Add nodes: Overview > Add node."
@@ -339,7 +381,7 @@ if ($secure -eq "false") {
   Write-Host ""
   Write-Host "  $([char]0x25B2) " -ForegroundColor Yellow -NoNewline
   Write-Host ("{0,-22} " -f "Production") -NoNewline
-  Write-Host "Put a TLS proxy (Caddy, Nginx, IIS) in front and use an https:// public URL."
+  Write-Host "Put a TLS proxy (Caddy, Nginx, IIS) in front and pin its https:// address."
 }
 Write-Host ""
 $pw = $null

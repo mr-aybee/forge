@@ -1,10 +1,15 @@
 #!/bin/sh
 # Installs (or upgrades) the Orbyn Forge control plane from this package.
 #
-#   sudo ./install.sh --public-url http://forge.example.com:3880
+#   sudo ./install.sh
+#
+# The console answers on any name or IP of this machine (port 3880); nodes use
+# the address they reach it on. Pin one address only when you need to.
 #
 # Options:
-#   --public-url URL        URL users open (default: http://<hostname>:3880)
+#   --public-url URL        optional: pin the address links use, for example
+#                           https://forge.example.com (default: none; the
+#                           address each request came in on)
 #   --public-address URL    address people use when Forge is published on a
 #                           domain through an ingress (https://forge.example.com,
 #                           origin only). Stored as the runtime setting; links in
@@ -17,7 +22,8 @@
 #                           default: admin)
 #   --admin-email EMAIL     optional email for that administrator; it can also
 #                           be added later in the console
-#   --agent-host NAME       name/IP nodes use to reach this server (default: from --public-url)
+#   --agent-host NAME       name nodes use when on the pinned address (default:
+#                           the host of --public-url; ignored without it)
 #   --prefix DIR            binaries (default /opt/forge)
 #   --environment ENV       production (default), staging, development or test
 #   --mfa required|off      whether guarded actions also need MFA (default on a
@@ -268,21 +274,15 @@ clean_public_url() {
   printf '%s' "$u" | grep -Eq '^https?://[^/:]+(:[0-9]{1,5})?(/.*)?$|^https?://\[[0-9a-fA-F:]+\](:[0-9]{1,5})?(/.*)?$' || return 0
   printf '%s' "$u"
 }
-# The suggested public URL: this machine's DNS name when it resolves, else
-# its first IP address.
-suggest_public_url() {
-  case "$HOST" in *.*) getent hosts "$HOST" >/dev/null 2>&1 && { printf 'http://%s:3880' "$HOST"; return; } ;; esac
-  ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  printf 'http://%s:3880' "${ip:-$HOST}"
-}
 
 if [ -n "$PUBLIC_URL" ]; then
   given="$PUBLIC_URL"
   PUBLIC_URL="$(clean_public_url "$given")"
   [ -n "$PUBLIC_URL" ] || die "--public-url $given is not a URL people and nodes can open. Use http(s)://<name or IP>[:port], for example http://forge.example.com:3880 (not 0.0.0.0, which is a listen address)."
 fi
-[ -n "$PUBLIC_URL" ] || PUBLIC_URL="$(suggest_public_url)"
-if [ -z "$AGENT_HOST" ]; then
+# No --public-url: nothing is pinned; links and node commands use the address
+# each request came in on (D-167).
+if [ -n "$PUBLIC_URL" ] && [ -z "$AGENT_HOST" ]; then
   AGENT_HOST="$(printf '%s' "$PUBLIC_URL" | sed -E 's#^[a-z]+://##; s#[:/].*$##')"
 fi
 SECURE=false
@@ -349,17 +349,6 @@ read_secret() { # read_secret "prompt" -> SECRET (input hidden)
 
 if [ "$INTERACTIVE" = true ]; then
   printf '  %sAnswer each question, or press Enter for the default in brackets.%s\n\n' "$D" "$N"
-  if [ ! -f "$CONF_DIR/forge.toml" ]; then
-    d="$(suggest_public_url)"
-    while :; do
-      ask PUBLIC_URL "Public URL people and nodes open (http(s)://name-or-IP[:port])" "$d"
-      u="$(clean_public_url "$PUBLIC_URL")"
-      [ -n "$u" ] && { PUBLIC_URL="$u"; break; }
-      QN=$((QN - 1)); printf '     %sNot a reachable URL. Use http://<name or IP>:3880 or https://<name>; 0.0.0.0 is only a listen address.%s\n' "$Y" "$N"
-    done
-    AGENT_HOST="$(printf '%s' "$PUBLIC_URL" | sed -E 's#^[a-z]+://##; s#[:/].*$##')"
-    case "$PUBLIC_URL" in https://*) SECURE=true ;; *) SECURE=false ;; esac
-  fi
   while :; do
     ask ENVIRONMENT "Environment (production, staging, development, test)" "development"
     case "$ENVIRONMENT" in production|staging|development|test) break ;; esac
@@ -445,7 +434,7 @@ if [ "$INTERACTIVE" = true ]; then
   fi
 
   section "REVIEW"
-  [ -f "$CONF_DIR/forge.toml" ] || row "Public URL" "$PUBLIC_URL"
+  [ -f "$CONF_DIR/forge.toml" ] || row "Console" "${PUBLIC_URL:-any name or IP of this machine, port 3880}"
   row "Environment" "$ENVIRONMENT"
   if [ "$FRESH_CONF" = true ]; then
     if [ "$DB_KIND" != postgres ]; then row "Database" "SQLite in $DATA_DIR"
@@ -509,15 +498,23 @@ AGENTS=$(find "$PREFIX/dist" -maxdepth 1 -name 'forge-agent*' ! -name '*.prev' |
 step "Binaries" "server, analytics worker, plugin runner, $AGENTS agent binaries"
 
 if [ ! -f "$CONF_DIR/forge.toml" ]; then
+  # public_url and agent_public_url only when pinned; without them the server
+  # uses the address each request came in on. cookie_secure stays false then:
+  # Secure follows the request (HTTPS from a trusted proxy).
+  PIN_LINES=""; AGENT_NAMES=""
+  if [ -n "$PUBLIC_URL" ]; then
+    PIN_LINES="public_url = \"$PUBLIC_URL\"
+agent_public_url = \"https://$AGENT_HOST:3843\"
+"
+    [ "$AGENT_HOST" = "$HOST" ] || AGENT_NAMES="\"$AGENT_HOST\", "
+  fi
   cat > "$CONF_DIR/forge.toml" <<EOF
 # Orbyn Forge control plane (written by install.sh; see forge.toml.example).
 data_dir = "$DATA_DIR"
 api_listen = "0.0.0.0:3880"
-public_url = "$PUBLIC_URL"
-cookie_secure = $SECURE
+${PIN_LINES}cookie_secure = $SECURE
 agent_listen = "0.0.0.0:3843"
-agent_public_url = "https://$AGENT_HOST:3843"
-agent_hostnames = ["$AGENT_HOST", "$HOST", "localhost", "127.0.0.1"]
+agent_hostnames = [${AGENT_NAMES}"$HOST", "localhost", "127.0.0.1"]
 agent_dist_dir = "$PREFIX/dist"
 
 [update]
@@ -910,8 +907,26 @@ else
 fi
 
 section "ACCESS"
-row "Console" "$PUBLIC_URL"
-row "Agents" "$AGENT_URL  ${D}(nodes connect out to TCP $AGENT_PORT and $WORKER_PORT)${N}"
+CONSOLE_PORT="$(port_of "$API_LISTEN")"; CONSOLE_PORT="${CONSOLE_PORT:-3880}"
+if [ -n "$PUBLIC_URL" ]; then
+  row "Console" "$PUBLIC_URL  ${D}(pinned)${N}"
+  FIRST_URL="$PUBLIC_URL"
+else
+  FIRST_URL=""
+  for ip in $(hostname -I 2>/dev/null); do
+    case "$ip" in *:*) continue ;; esac   # IPv4 only
+    row "Console" "http://$ip:$CONSOLE_PORT"
+    [ -n "$FIRST_URL" ] || FIRST_URL="http://$ip:$CONSOLE_PORT"
+  done
+  row "Console" "http://$HOST:$CONSOLE_PORT"
+  [ -n "$FIRST_URL" ] || FIRST_URL="http://$HOST:$CONSOLE_PORT"
+  printf '    %s%s Any name or IP of this machine works; pin one later in Settings or with --public-url.%s\n' "$D" "$DOT" "$N"
+fi
+if [ -n "$AGENT_URL" ]; then
+  row "Agents" "$AGENT_URL  ${D}(nodes connect to TCP $AGENT_PORT and $WORKER_PORT)${N}"
+else
+  row "Agents" "nodes connect to TCP $AGENT_PORT and $WORKER_PORT on the address they use"
+fi
 row "Analytics" "$WORKER_STATE"
 
 if [ "$ADMIN_CREATED" = true ]; then
@@ -926,6 +941,11 @@ if [ "$ADMIN_CREATED" = true ]; then
   fi
   printf '    %s%s Sign in, then in Settings add your email, change the password and set up MFA.%s\n' "$D" "$DOT" "$N"
 fi
+
+section "RESTRICT ACCESS"
+printf '    %s%s Every interface listens. Narrow who may connect, for example:%s\n' "$D" "$DOT" "$N"
+printf '      ufw allow from <node subnet> to any port %s proto tcp\n' "$AGENT_PORT"
+printf '      [security.access] allow = ["10.0.0.0/8"] in %s/forge.toml\n' "$CONF_DIR"
 
 section "SECURITY"
 row "MFA" "$MFA_STATE ${D}(forge-server mfa on|off)${N}"
@@ -952,7 +972,7 @@ row "Logs" "journalctl -u forge-server -f"
 row "Uninstall" "sudo sh $CONF_DIR/install.sh --uninstall"
 
 section "NEXT STEPS"
-printf '    1. Open %s and sign in%s.\n' "$PUBLIC_URL" "$( [ "$ADMIN_CREATED" = true ] && printf ' as %s' "$ADMIN_USER")"
+printf '    1. Open %s and sign in%s.\n' "$FIRST_URL" "$( [ "$ADMIN_CREATED" = true ] && printf ' as %s' "$ADMIN_USER")"
 if [ "$GENERATED" = true ]; then
   printf '       The password is also in %s (sudo cat it).\n' "$PASSWORD_FILE"
 elif [ "$ADMIN_CREATED" = false ] && [ -f "$PASSWORD_FILE" ]; then
@@ -962,7 +982,7 @@ printf '    2. Allow TCP %s and %s from your nodes to this server.\n' "$AGENT_PO
 printf '    3. Add nodes: Overview > Add node (docs: /docs/guides/add-nodes/).\n'
 if [ "$SECURE" != true ]; then
   printf '\n'
-  note "Production" "Put a TLS proxy (Caddy, Nginx) in front and use an https:// public URL."
+  note "Production" "Put a TLS proxy (Caddy, Nginx) in front and pin its https:// address."
 fi
 printf '\n'
 unset FORGE_ADMIN_PASSWORD
