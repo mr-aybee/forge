@@ -5655,3 +5655,9 @@ A delivery may pick the image tag (`?tag=` or a JSON `"tag"`) only when the webh
 **Decision.** The first public release candidate, `v0.0.1-rc-01`, is signed with a new Ed25519 release key. Its public half, `6yf7l7jBEw6u446vqWAgt7P7bqEuaY5tpbYnWPHBmbg`, replaces the earlier key in `RELEASE_PUBLIC_KEY`, `get-forge.sh`, `get-forge.ps1`, the installation guide and `.gitleaks.toml`. The private half is the `FORGE_RELEASE_KEY` Actions secret of `mr-aybee/forge`. It was generated on the maintainer's machine with `forge-server release keygen` and never left it except into that secret.
 
 **Why.** The public repository had never published a release, so no install trusted the old key. The key could therefore be swapped directly, without the rotation release a key change otherwise needs (see development/releases in the docs). The version also restarts at 0.0.1 for the public line; the earlier `v0.1.0-rc-*` tags from the private repository were dropped.
+
+## D-163 The website moves to its own repository
+
+**Decision.** The website (`website/`) moves to `github.com/mr-aybee/forge-website` and is hosted separately. The documentation stays in this repository (`docs/`). The website image clones this repository at a chosen ref, builds `docs/` and serves it at `/docs/`, so `forge.orbyntech.com/docs/` links keep working. The docs keep their own copy of the brand tokens (`docs/src/styles/tokens.css`). This repository's CI no longer builds the website, and releases no longer push its image.
+
+**Why.** The website changes on a different rhythm from Forge and needs no Rust CI, release signing or code review by Forge maintainers. Keeping the docs here keeps them next to the code they describe, where a change and its docs land in one pull request.

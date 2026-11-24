@@ -1,5 +1,5 @@
 /* Diagrams rendered by src/plugins/diagrams.mjs. Colours come from
-   the shared brand tokens (website/src/styles/tokens.css). */
+   the shared brand tokens (docs/src/styles/tokens.css). */
 
 .forge-diagram {
   --fd-line: color-mix(in srgb, var(--forge-accent) 55%, var(--forge-border));

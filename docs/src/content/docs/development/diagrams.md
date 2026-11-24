@@ -143,5 +143,5 @@ Then open the page with `npm run dev` and check it in both themes.
 
 ## Next steps
 
-- [Website and docs site](/docs/development/website/): how the docs share
-  the website's design.
+- [Website and docs site](/docs/development/website/): where the website lives and
+  how the docs share its design.
