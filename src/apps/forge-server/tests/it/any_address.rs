@@ -132,7 +132,7 @@ async fn allowed_hosts_refuse_other_names_with_421_and_are_audited() {
     let (s, v) = admin.get("/api/v1/server/settings").await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["allowed_hosts"]["hosts"], json!(["*"]), "{v}");
-    assert_eq!(v["public_address"]["last_admin"].as_str(), Some(h.base.as_str()), "recorded at sign-in: {v}");
+    assert!(v["public_address"]["last_admin"].is_null(), "loopback is never recorded: {v}");
 
     // MFA first, then validated patterns.
     let (s, _) = admin.put("/api/v1/server/allowed-hosts", json!({ "hosts": ["127.0.0.1"] })).await;
@@ -174,21 +174,30 @@ async fn allowed_hosts_refuse_other_names_with_421_and_are_audited() {
 
 #[tokio::test]
 async fn last_admin_address_is_recorded_only_on_trusted_hosts_and_audited() {
-    let h = start().await;
+    let h = start_configured(|c| c.agent_hostnames.push("forge.test".into())).await;
     let p = port(&h.base);
-    // Signing in on a name nobody configured records nothing.
     let anon = Client::anonymous(&h.base);
-    let body = login_body(&h.base, ADMIN_EMAIL, PASSWORD).await;
-    let (s, b) = send_as(&anon, Method::POST, "/api/v1/auth/login", &format!("evil.test:{p}"), &[], Some(body)).await;
-    assert_eq!(s, StatusCode::OK, "{b}");
+    // Signing in on a name nobody configured, or on loopback, records nothing.
+    for host in [format!("evil.test:{p}"), format!("localhost:{p}"), format!("127.0.0.1:{p}")] {
+        let body = login_body(&h.base, ADMIN_EMAIL, PASSWORD).await;
+        let (s, b) = send_as(&anon, Method::POST, "/api/v1/auth/login", &host, &[], Some(body)).await;
+        assert_eq!(s, StatusCode::OK, "signing in on {host} works: {b}");
+    }
     let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
     let (_, v) = admin.get("/api/v1/server/settings").await;
-    assert_eq!(v["public_address"]["last_admin"].as_str(), Some(h.base.as_str()), "{v}");
+    assert!(v["public_address"]["last_admin"].is_null(), "{v}");
+    // A configured name is recorded and audited.
+    let body = login_body(&h.base, ADMIN_EMAIL, PASSWORD).await;
+    let (s, b) = send_as(&anon, Method::POST, "/api/v1/auth/login", &format!("forge.test:{p}"), &[], Some(body)).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    let recorded = format!("http://forge.test:{p}");
+    let (_, v) = admin.get("/api/v1/server/settings").await;
+    assert_eq!(v["public_address"]["last_admin"].as_str(), Some(recorded.as_str()), "{v}");
     let (_, log) = admin.get("/api/v1/audit?action=server.last_admin_address.update").await;
     let items = log.as_array().unwrap();
-    assert_eq!(items.len(), 1, "one change (loopback), never evil.test: {log}");
+    assert_eq!(items.len(), 1, "one change, never evil.test or loopback: {log}");
     assert!(!log.to_string().contains("evil.test"), "{log}");
-    assert_eq!(items[0]["details"]["to"], h.base.as_str(), "{log}");
+    assert_eq!(items[0]["details"]["to"], recorded.as_str(), "{log}");
     h.app.stop().await;
 }
 

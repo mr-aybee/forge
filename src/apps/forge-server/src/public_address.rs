@@ -119,11 +119,13 @@ fn host_of(s: &str) -> Option<String> {
 }
 
 /// Whether `host` (canonical form, as `RequestOrigin::host`) may be recorded
-/// as the last administrator address: loopback or an address of this
-/// machine, its host name, a configured name (`configured`: URLs or names),
-/// or a match in an explicit allowed-hosts list (not `*`). A `Host` header
-/// is client-controlled, and the recorded value feeds emails, webhooks and
-/// node downloads, so a name nobody configured is never trusted.
+/// as the last administrator address: an address of this machine, its host
+/// name, a configured name (`configured`: URLs or names), or a match in an
+/// explicit allowed-hosts list (not `*`). A `Host` header is
+/// client-controlled, and the recorded value feeds emails, webhooks and
+/// node downloads, so a name nobody configured is never trusted. Loopback
+/// and `localhost` are never recorded, even when configured: no other
+/// machine reaches Forge there (signing in on them still works).
 #[must_use]
 pub fn host_trusted(
     host: &str,
@@ -134,10 +136,15 @@ pub fn host_trusted(
     let Ok(host) = forge_core::allowed_hosts::normalize_host(host) else { return false };
     let bare = host.trim_start_matches('[').trim_end_matches(']');
     if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
-        if ip.is_loopback() || local.ips.contains(&ip) {
+        if ip.is_loopback() || ip.is_unspecified() {
+            return false;
+        }
+        if local.ips.contains(&ip) {
             return true;
         }
-    } else if host == "localhost" || local.hostnames.contains(&host) {
+    } else if host == "localhost" || host.ends_with(".localhost") {
+        return false;
+    } else if local.hostnames.contains(&host) {
         return true;
     }
     if configured.iter().filter_map(|c| host_of(c)).any(|c| c == host) {
@@ -273,9 +280,16 @@ mod tests {
         use forge_core::allowed_hosts::{AllowedHosts, parse_list};
         let local = LocalNames { hostnames: vec!["lab-a".into()], ips: vec!["192.0.2.5".parse().unwrap()] };
         let any = AllowedHosts::default();
-        let configured = ["https://forge.example.com", "forge.internal", ""];
-        for h in ["127.0.0.1", "[::1]", "localhost", "192.0.2.5", "lab-a", "forge.example.com", "forge.internal"] {
+        let configured = ["https://forge.example.com", "forge.internal", "", "localhost", "127.0.0.1"];
+        for h in ["192.0.2.5", "lab-a", "forge.example.com", "forge.internal"] {
             assert!(host_trusted(h, &local, &configured, &any), "{h}");
+        }
+        // Loopback is never recorded, even when configured or allowed.
+        let loopback_ok = AllowedHosts::default();
+        loopback_ok.set(Some(parse_list(&["localhost", "127.0.0.1", "app.localhost"]).unwrap()));
+        for h in ["127.0.0.1", "127.0.0.2", "[::1]", "localhost", "app.localhost", "0.0.0.0"] {
+            assert!(!host_trusted(h, &local, &configured, &any), "{h}");
+            assert!(!host_trusted(h, &local, &configured, &loopback_ok), "{h} allowed explicitly");
         }
         for h in ["evil.test", "192.0.2.99", "lab-a.evil.test", "[2001:db8::1]"] {
             assert!(!host_trusted(h, &local, &configured, &any), "{h} with allowed hosts *");

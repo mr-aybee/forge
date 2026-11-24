@@ -142,10 +142,10 @@ port gets `400`.
   `/install.ps1`. Emails, alerts, webhooks and OIDC always use the pinned
   public address, or the address an administrator last signed in on. That
   address is recorded (and audited as `server.last_admin_address.update`)
-  only when the host is loopback, an address or the host name of the
-  server, a configured name (`agent_hostnames`, `public_url`,
-  `node_public_url`, the runtime public address) or a match in an explicit
-  allowed-hosts list (not `*`). MCP connector OAuth needs a pinned address
+  only when the host is an address or the host name of the server, a
+  configured name (`agent_hostnames`, `public_url`, `node_public_url`, the
+  runtime public address) or a match in an explicit allowed-hosts list (not
+  `*`), and never when it is loopback or `localhost`. MCP connector OAuth needs a pinned address
   and answers `409 no_public_address` without one. A forged `Host` header
   therefore cannot redirect links that leave Forge.
 - **HSTS** is sent only on HTTPS responses, never to a plain-HTTP name.
