@@ -5,8 +5,8 @@
 .EXAMPLE
   Invoke-WebRequest https://github.com/mr-aybee/forge/releases/latest/download/get-forge.ps1 -OutFile get-forge.ps1
   .\get-forge.ps1                                   # latest stable release
-  .\get-forge.ps1 -Version v0.1.0-rc-03             # one release, also a pre-release
-  .\get-forge.ps1 -File .\forge-0.1.0-x86_64-windows.zip
+  .\get-forge.ps1 -Version v0.0.1-rc-01             # one release, also a pre-release
+  .\get-forge.ps1 -File .\forge-0.0.1-x86_64-windows.zip
   .\get-forge.ps1 -PublicUrl http://forge.example.com:8080   # other options go to install.ps1
 
 .DESCRIPTION

@@ -3,8 +3,8 @@
 #
 #   curl -fsSLO https://github.com/mr-aybee/forge/releases/latest/download/get-forge.sh
 #   sudo sh get-forge.sh                          # latest stable release, interactive
-#   sudo sh get-forge.sh --version v0.1.0-rc-03   # one release, also a pre-release
-#   sudo sh get-forge.sh --file ./forge-0.1.0-x86_64-linux.tar.gz   # a downloaded package
+#   sudo sh get-forge.sh --version v0.0.1-rc-01   # one release, also a pre-release
+#   sudo sh get-forge.sh --file ./forge-0.0.1-x86_64-linux.tar.gz   # a downloaded package
 #   sudo sh get-forge.sh --version latest -- --yes --public-url https://forge.example.com
 #
 # Options (everything else, or everything after --, goes to install.sh):
