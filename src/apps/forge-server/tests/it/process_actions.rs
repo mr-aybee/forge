@@ -18,7 +18,7 @@ async fn start_mfa(require_mfa: bool) -> Harness {
     let mut config = test_config(dir.path());
     let api = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let agent = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    config.public_url = format!("http://{}", api.local_addr().unwrap());
+    config.public_url = Some(format!("http://{}", api.local_addr().unwrap()));
     config.security.require_mfa = require_mfa;
     let state = Services::build(config).await.unwrap();
     let init =

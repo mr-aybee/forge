@@ -83,7 +83,7 @@ pub async fn start_configured(change: impl FnOnce(&mut ServerConfig)) -> Harness
     change(&mut config);
     let api = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let agent = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    config.public_url = format!("http://{}", api.local_addr().unwrap());
+    config.public_url = Some(format!("http://{}", api.local_addr().unwrap()));
     let state = Services::build(config).await.unwrap();
     let init = bootstrap::init_admin(&state, None, Some(ADMIN_EMAIL), "Admin", PASSWORD, false).await.unwrap();
     let app = App::start_with(state, api, agent).unwrap();

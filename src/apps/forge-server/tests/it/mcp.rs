@@ -17,7 +17,7 @@ async fn start_mcp(max_mode: &str) -> Harness {
     let mut config = test_config(dir.path());
     let api = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let agent = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    config.public_url = format!("http://{}", api.local_addr().unwrap());
+    config.public_url = Some(format!("http://{}", api.local_addr().unwrap()));
     config.mcp.enabled = true;
     config.mcp.max_mode = forge_core::model::AgentMode::parse(max_mode).unwrap();
     // The development toggle must never give an agent MFA.
@@ -577,7 +577,7 @@ async fn restart_with(h: &Harness, enabled: bool, max_mode: &str) -> (forge_serv
     let mut config = test_config(h.dir.path());
     let api = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let agent = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    config.public_url = format!("http://{}", api.local_addr().unwrap());
+    config.public_url = Some(format!("http://{}", api.local_addr().unwrap()));
     config.mcp.enabled = enabled;
     config.mcp.max_mode = forge_core::model::AgentMode::parse(max_mode).unwrap();
     config.dev_skip_mfa = false;

@@ -1007,7 +1007,8 @@ fn sftp_endpoint(state: &AppState) -> (String, u16) {
     use std::net::SocketAddr;
     let cfg = &state.config.sftp;
     let host = cfg.public_host.clone().unwrap_or_else(|| {
-        let url = state.config.public_url.as_str();
+        let url = state.public_address.get();
+        let url = url.as_str();
         let rest = url.split_once("://").map_or(url, |(_, r)| r);
         let host = rest.split(['/', '?']).next().unwrap_or("localhost");
         // Strip a port, keeping IPv6 brackets.

@@ -24,8 +24,11 @@ pub struct ServerConfig {
     pub agent_listen: SocketAddr,
     /// Names/IPs in the agent listener's certificate.
     pub agent_hostnames: Vec<String>,
-    /// External URL of the API/UI (used for OAuth redirects and Origin checks).
-    pub public_url: String,
+    /// Pinned external URL of the API/UI (D-167). Optional: unset means
+    /// "auto", and request-time links use the address the client used.
+    /// Background links (alerts, OIDC) need it, the runtime public address,
+    /// or the address an administrator last signed in on.
+    pub public_url: Option<String>,
     /// Agent endpoint printed in enrollment instructions.
     pub agent_public_url: String,
     /// Mark session cookies `Secure` (keep `true` outside local development).
@@ -700,6 +703,30 @@ impl Default for JobSettings {
     }
 }
 
+/// Fallback console URL for background node work when no `public_url` or
+/// `node_public_url` is configured.
+pub const DEFAULT_PUBLIC_URL: &str = "http://localhost:3880";
+
+/// Checks that a configured console URL is one browsers and nodes can
+/// reach: an `http`/`https` origin whose host is not a wildcard address
+/// (`0.0.0.0`, `::`), which listeners accept but no client can dial.
+pub fn check_reachable_url(url: &str) -> anyhow::Result<()> {
+    let canonical = crate::public_address::validate(url).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let u = url::Url::parse(&canonical)?;
+    let unspecified = match u.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_unspecified(),
+        Some(url::Host::Ipv6(ip)) => ip.is_unspecified(),
+        Some(url::Host::Domain(_)) => false,
+        None => true,
+    };
+    if unspecified {
+        anyhow::bail!(
+            "`{url}` is a listen-everywhere address, not one a browser can open; use this machine's name or IP, or leave public_url unset"
+        );
+    }
+    Ok(())
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -710,7 +737,7 @@ impl Default for ServerConfig {
             api_listen: SocketAddr::from(([127, 0, 0, 1], 3880)),
             agent_listen: SocketAddr::from(([0, 0, 0, 0], 3843)),
             agent_hostnames: vec!["localhost".into(), "127.0.0.1".into()],
-            public_url: "http://localhost:3880".into(),
+            public_url: None,
             agent_public_url: "https://localhost:3843".into(),
             cookie_secure: true,
             ui_dir: None,
@@ -767,7 +794,7 @@ impl ServerConfig {
             cfg.agent_listen = v.parse()?;
         }
         if let Ok(v) = std::env::var("FORGE_PUBLIC_URL") {
-            cfg.public_url = v;
+            cfg.public_url = Some(v).filter(|v| !v.trim().is_empty());
         }
         if let Ok(v) = std::env::var("FORGE_COOKIE_SECURE") {
             cfg.cookie_secure = v != "false" && v != "0";
@@ -836,8 +863,17 @@ impl ServerConfig {
         if !(1..=365).contains(&self.security.refresh_token_days) {
             anyhow::bail!("[security] refresh_token_days must be 1 to 365");
         }
+        if let Some(u) = &self.public_url {
+            check_reachable_url(u).map_err(|e| anyhow::anyhow!("public_url: {e}"))?;
+        }
         for p in &self.security.trusted_proxies {
-            p.parse::<crate::throttle::TrustedNet>().map_err(|e| anyhow::anyhow!("[security] trusted_proxies: {e}"))?;
+            let net = p
+                .parse::<crate::throttle::TrustedNet>()
+                .map_err(|e| anyhow::anyhow!("[security] trusted_proxies: {e}"))?;
+            // Trusting everyone would let any client set X-Forwarded-*.
+            if net.prefix() == 0 {
+                anyhow::bail!("[security] trusted_proxies: `{p}` trusts every address; list your proxies");
+            }
         }
         let a = &self.security.access;
         for (key, list) in [
@@ -983,9 +1019,12 @@ impl ServerConfig {
         redact_url(&self.database_url())
     }
 
+    /// The console URL for background node work (SSH bootstrap, agent
+    /// update downloads): `node_public_url`, else `public_url`, else
+    /// [`DEFAULT_PUBLIC_URL`]. Request-time links use the request's address.
     #[must_use]
     pub fn node_forge_url(&self) -> &str {
-        self.node_public_url.as_deref().unwrap_or(&self.public_url)
+        self.node_public_url.as_deref().or(self.public_url.as_deref()).unwrap_or(DEFAULT_PUBLIC_URL)
     }
 
     #[must_use]
@@ -1181,6 +1220,31 @@ mod database_tests {
         for (n, ok) in [(7, false), (8, true), (32, true), (33, false)] {
             c.analytics.worker_max_uploads = Some(n);
             assert_eq!(c.validate().is_ok(), ok, "worker_max_uploads = {n}");
+        }
+    }
+
+    /// D-167: `public_url` is optional, and when set it must be an address
+    /// a client can open; trusting every address as a proxy is refused.
+    #[test]
+    fn public_url_is_optional_and_reachable_and_proxies_are_not_everyone() {
+        let mut c = ServerConfig::default();
+        assert!(c.public_url.is_none() && c.validate().is_ok(), "unset means auto");
+        for (url, ok) in [
+            ("https://forge.example.com", true),
+            ("http://192.0.2.1:3880", true),
+            ("http://[2001:db8::1]:3880", true),
+            ("http://0.0.0.0:3880", false),
+            ("http://[::]:3880", false),
+            ("forge.example.com", false),
+            ("https://forge.example.com/sub", false),
+        ] {
+            c.public_url = Some(url.into());
+            assert_eq!(c.validate().is_ok(), ok, "{url}");
+        }
+        c.public_url = None;
+        for (p, ok) in [("10.0.0.0/8", true), ("0.0.0.0/0", false), ("::/0", false), ("192.0.2.1", true)] {
+            c.security.trusted_proxies = vec![p.into()];
+            assert_eq!(c.validate().is_ok(), ok, "{p}");
         }
     }
 

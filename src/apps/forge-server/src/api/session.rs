@@ -163,6 +163,7 @@ pub async fn login(
     State(state): State<AppState>,
     crate::auth::SecureCookies(secure): crate::auth::SecureCookies,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    origin: crate::request_origin::RequestOrigin,
     headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<Response> {
@@ -199,9 +200,39 @@ pub async fn login(
     state.captchas.succeeded(&key);
     let tokens = state.identity.create_web_session(user.id, mfa).await?;
     audit_login(&state, &format!("user:{}", user.id), AuditOutcome::Success, "password").await;
+    record_admin_address(&state, user.id, &origin).await;
     let ttl = state.identity.config().web_session_ttl.as_secs();
     let body = Json(json!({ "user": user, "mfa": mfa, "csrf_token": tokens.csrf_token })).into_response();
     Ok(with_cookies(body, session_cookies(&tokens.session_token, &tokens.csrf_token, ttl, secure)))
+}
+
+/// Remembers the address a platform administrator signed in on, for links
+/// built without a request when no address is pinned (D-167). Never fails
+/// the sign-in: a store error is logged.
+pub(crate) async fn record_admin_address(
+    state: &AppState,
+    user: forge_core::UserId,
+    origin: &crate::request_origin::RequestOrigin,
+) {
+    let req = forge_core::AccessRequest::new(
+        forge_core::Principal::User(user),
+        forge_core::Action::SystemUpdate,
+        EntityRef::platform(),
+        forge_core::AuthzContext { mfa: true },
+    );
+    if !state.authz.is_allowed(&req).await {
+        return;
+    }
+    if let Err(e) = crate::public_address::record_last_admin(
+        &state.store,
+        &state.public_address,
+        &origin.origin(),
+        state.clock.now(),
+    )
+    .await
+    {
+        tracing::warn!(error = %e, "could not record the administrator's console address");
+    }
 }
 
 pub async fn logout(

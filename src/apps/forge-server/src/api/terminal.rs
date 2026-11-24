@@ -322,17 +322,15 @@ fn client_kind(caller: &Caller, headers: &HeaderMap) -> ApiResult<&'static str> 
 pub async fn open(
     State(state): State<AppState>,
     caller: Caller,
+    origin: crate::request_origin::RequestOrigin,
     Path(id): Path<ServerId>,
     Query(q): Query<TerminalQuery>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> ApiResult<Response> {
     // Cross-site WebSocket hijacking guard.
-    if !crate::public_address::origin_header_ok(&state.public_address, &headers) {
-        return Err(ApiError::forbidden(format!(
-            "origin not allowed; open the console at {}",
-            state.public_address.get()
-        )));
+    if !crate::request_origin::origin_header_ok(&state, &origin, &headers) {
+        return Err(ApiError::forbidden("origin not allowed; open the console on the address you use"));
     }
     let client = client_kind(&caller, &headers)?;
     let (workspace, endpoint) = prepare(&state, &caller, id, &q, Action::TerminalOpen).await?;
@@ -450,12 +448,13 @@ fn limit_message(r: super::remote_sessions::Refusal) -> String {
 pub async fn container_shell(
     State(state): State<AppState>,
     caller: Caller,
+    origin: crate::request_origin::RequestOrigin,
     Path((id, container_id)): Path<(ServerId, String)>,
     Query(q): Query<ContainerShellQuery>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> ApiResult<Response> {
-    if !crate::public_address::origin_header_ok(&state.public_address, &headers) {
+    if !crate::request_origin::origin_header_ok(&state, &origin, &headers) {
         return Err(ApiError::forbidden("origin not allowed"));
     }
     if !super::containers::valid_container_id(&container_id) {
@@ -536,12 +535,13 @@ pub async fn container_shell_check(
 pub async fn exec(
     State(state): State<AppState>,
     caller: Caller,
+    origin: crate::request_origin::RequestOrigin,
     Path(id): Path<ServerId>,
     Query(q): Query<TerminalQuery>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> ApiResult<Response> {
-    if !crate::public_address::origin_header_ok(&state.public_address, &headers) {
+    if !crate::request_origin::origin_header_ok(&state, &origin, &headers) {
         return Err(ApiError::forbidden("origin not allowed"));
     }
     let client = client_kind(&caller, &headers)?;

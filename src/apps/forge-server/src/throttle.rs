@@ -55,6 +55,12 @@ impl std::str::FromStr for TrustedNet {
 }
 
 impl TrustedNet {
+    /// The prefix length (`0` covers every address).
+    #[must_use]
+    pub const fn prefix(&self) -> u8 {
+        self.prefix
+    }
+
     pub(crate) fn contains(&self, ip: IpAddr) -> bool {
         let bits = |ip: IpAddr| -> (u128, u8) {
             match ip {

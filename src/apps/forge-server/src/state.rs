@@ -142,6 +142,8 @@ pub struct Services {
     /// The console address used in links people follow: the runtime setting
     /// `server.public_address`, else `public_url` (D-120).
     pub public_address: forge_core::public_address::PublicAddress,
+    /// Hosts the console answers on (`server.allowed_hosts`, D-167).
+    pub allowed_hosts: forge_core::allowed_hosts::AllowedHosts,
 }
 
 impl Services {
@@ -212,7 +214,9 @@ impl Services {
             Err(e) => tracing::warn!(error = %e, "could not close stale tunnel rows"),
         }
 
-        let public_address = crate::public_address::load(&store, &config.public_url).await?;
+        let public_address =
+            crate::public_address::load(&store, config.public_url.as_deref().unwrap_or_default()).await?;
+        let allowed_hosts = crate::allowed_hosts::load(&store).await?;
 
         // Authorization: load every persisted role binding as a template link.
         let policy = Arc::new(PolicyEngine::with_clock(clock.clone())?);
@@ -274,11 +278,17 @@ impl Services {
             Arc::new(store.clone()),
             Arc::new(store.clone()),
             clock.clone(),
-            forge_identity::webauthn::RelyingParty::from_public_url(&config.public_url)
-                .map_err(|e| anyhow::anyhow!("public_url: {e}"))?,
         );
         let oidc = match &config.oidc {
-            Some(o) => Some(Self::oidc_provider(&public_address.get(), o).await?),
+            Some(o) => {
+                // The redirect URL must be stable: OIDC needs a pinned address.
+                let pinned = public_address.pinned().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "[oidc] needs a pinned console address: set public_url in forge.toml or run `forge-server public-address set <url>`"
+                    )
+                })?;
+                Some(Self::oidc_provider(&pinned, o).await?)
+            }
             None => None,
         };
 
@@ -584,7 +594,7 @@ impl Services {
             ),
             mail: Arc::new(crate::notify_mail::SmtpMailer::new(
                 crate::notifying::target_rules(&config.alerts),
-                &config.public_url,
+                &public_address.get(),
             )),
             secrets: Arc::new(crate::notifying::VaultSecrets {
                 vault: Arc::new(store.clone()),
@@ -678,6 +688,7 @@ impl Services {
             sftp_host_key,
             sftp_bound: std::sync::OnceLock::new(),
             public_address,
+            allowed_hosts,
         });
         // The rollout job reaches endpoints and health through the API (#73).
         let _ = rollout_effects.set(crate::api::deployments::effects(&state));

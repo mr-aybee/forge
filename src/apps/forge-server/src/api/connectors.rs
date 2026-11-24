@@ -80,7 +80,8 @@ impl ConsentRequests {
 }
 
 fn issuer(state: &AppState) -> String {
-    state.config.public_url.trim_end_matches('/').to_owned()
+    // A stable address: the pinned one, else the last administrator's.
+    state.public_address.get()
 }
 
 /// The canonical resource identifier of `/mcp` (RFC 8707, RFC 9728).

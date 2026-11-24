@@ -7,7 +7,7 @@
 
 use axum::http::HeaderMap;
 use forge_core::ports::SettingsRepository;
-use forge_core::public_address::{PublicAddress, SETTING_KEY};
+use forge_core::public_address::{LAST_ADMIN_KEY, PublicAddress, SETTING_KEY};
 use forge_core::{DomainError, DomainResult, Timestamp};
 
 use crate::throttle::TrustedNet;
@@ -52,18 +52,45 @@ pub fn validate(input: &str) -> Result<String, AddressError> {
     Ok(url.origin().ascii_serialization())
 }
 
-/// Reads the runtime setting at start. A stored value that no longer
-/// validates is ignored with a warning (links fall back to `public_url`).
+/// Reads the runtime setting and the last administrator address at start.
+/// A stored value that no longer validates is ignored with a warning.
+/// `configured` is `public_url` from `forge.toml` (empty when not set).
 pub async fn load(settings: &dyn SettingsRepository, configured: &str) -> anyhow::Result<PublicAddress> {
     let addr = PublicAddress::new(configured);
-    let stored = settings.all_settings().await?.into_iter().find(|(k, _)| k == SETTING_KEY).map(|(_, v)| v);
-    if let Some(v) = stored.filter(|v| !v.trim().is_empty()) {
+    let all = settings.all_settings().await?;
+    let stored =
+        |key: &str| all.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone()).filter(|v| !v.trim().is_empty());
+    if let Some(v) = stored(SETTING_KEY) {
         match validate(&v) {
             Ok(v) => addr.set_runtime(Some(v)),
             Err(e) => tracing::warn!(error = %e, "ignoring the stored public address; links use public_url"),
         }
     }
+    if let Some(v) = stored(LAST_ADMIN_KEY) {
+        match validate(&v) {
+            Ok(v) => addr.set_last_admin(Some(v)),
+            Err(e) => tracing::warn!(error = %e, "ignoring the stored last administrator address"),
+        }
+    }
     Ok(addr)
+}
+
+/// Records `origin` as the address an administrator last signed in on,
+/// for links built without a request (D-167). Writes only on a change.
+/// Store first, then memory.
+pub async fn record_last_admin(
+    settings: &dyn SettingsRepository,
+    addr: &PublicAddress,
+    origin: &str,
+    now: Timestamp,
+) -> DomainResult<()> {
+    let v = validate(origin).map_err(|e| DomainError::Invalid(e.to_string()))?;
+    if addr.last_admin().as_deref() == Some(v.as_str()) {
+        return Ok(());
+    }
+    settings.put_setting(LAST_ADMIN_KEY, &v, now).await?;
+    addr.set_last_admin(Some(v));
+    Ok(())
 }
 
 /// Stores (or with `None` clears) the runtime setting and applies it.
@@ -92,9 +119,9 @@ fn origin_of(url: &str) -> Option<String> {
     url::Url::parse(url).ok().map(|u| u.origin().ascii_serialization()).filter(|o| o != "null")
 }
 
-/// Browser origins allowed on WebSockets and `/mcp`: the configured
-/// `public_url` and the runtime public address. Never derived from the
-/// request's `Host` header.
+/// Browser origins always allowed on WebSockets and `/mcp`, besides the
+/// request's own origin (see `crate::request_origin::origin_header_ok`):
+/// the configured `public_url` and the runtime public address.
 #[must_use]
 pub fn allowed_origins(addr: &PublicAddress) -> Vec<String> {
     let mut v: Vec<String> = [Some(addr.configured().to_owned()), addr.runtime()]
@@ -111,16 +138,6 @@ pub fn allowed_origins(addr: &PublicAddress) -> Vec<String> {
 pub fn origin_allowed(addr: &PublicAddress, origin: &str) -> bool {
     let o = origin.trim().trim_end_matches('/');
     allowed_origins(addr).iter().any(|a| a.eq_ignore_ascii_case(o))
-}
-
-/// The Origin guard for browser-facing sockets: no header (a CLI or
-/// server-to-server client) passes; a browser's must be allowed.
-#[must_use]
-pub fn origin_header_ok(addr: &PublicAddress, headers: &HeaderMap) -> bool {
-    match headers.get(axum::http::header::ORIGIN) {
-        None => true,
-        Some(v) => v.to_str().is_ok_and(|o| origin_allowed(addr, o)),
-    }
 }
 
 /// Whether session cookies get `Secure`: always with `cookie_secure`, and
@@ -169,10 +186,6 @@ mod tests {
         assert!(!origin_allowed(&a, "https://forge.example.com.evil.test"));
         assert!(!origin_allowed(&a, "null"));
         assert!(!origin_allowed(&a, ""));
-        let mut h = HeaderMap::new();
-        assert!(origin_header_ok(&a, &h));
-        h.insert(axum::http::header::ORIGIN, "https://evil.test".parse().unwrap());
-        assert!(!origin_header_ok(&a, &h));
     }
 
     #[test]

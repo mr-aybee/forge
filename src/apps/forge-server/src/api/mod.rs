@@ -314,6 +314,10 @@ pub fn router(state: AppState) -> Router {
             "/server/public-address",
             axum::routing::put(server_settings::put_public_address).delete(server_settings::delete_public_address),
         )
+        .route(
+            "/server/allowed-hosts",
+            axum::routing::put(server_settings::put_allowed_hosts).delete(server_settings::delete_allowed_hosts),
+        )
         .route("/settings/{key}", axum::routing::put(settings::put).delete(settings::delete))
         .route("/access/catalog", get(access::catalog))
         .route("/access/profiles", get(access::list).post(access::create))
@@ -463,13 +467,6 @@ pub fn router(state: AppState) -> Router {
         app = app.fallback(crate::ui_embed::serve);
     }
 
-    // HSTS only with TLS cookies: browsers ignore it over plain http anyway.
-    if state.config.cookie_secure {
-        app = app.layer(SetResponseHeaderLayer::if_not_present(
-            header::STRICT_TRANSPORT_SECURITY,
-            HeaderValue::from_static("max-age=31536000"),
-        ));
-    }
     // The /api/v1 router for in-process dispatch: /mcp tools and approvals.
     app.layer(axum::Extension(mcp_dispatch))
         .layer(compression())
@@ -488,6 +485,8 @@ pub fn router(state: AppState) -> Router {
             HeaderName::from_static("cross-origin-opener-policy"),
             HeaderValue::from_static("same-origin"),
         ))
+        // Allowed hosts (421) and HSTS on HTTPS responses only (D-167).
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::request_origin::guard))
         // Address lists and rate limits before anything else runs (D-161).
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::net_access::guard))
         // Paths only: query strings may carry OAuth codes and must not be

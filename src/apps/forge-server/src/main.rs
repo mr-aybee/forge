@@ -71,6 +71,14 @@ enum Cmd {
         #[command(subcommand)]
         action: AddressAction,
     },
+    /// The hosts the console answers on (D-167): `get`, `set <pattern>...`
+    /// or `clear` (back to `*`, any host). Patterns: `*`, a host name or
+    /// IP, or `*.example.com`. Other hosts get 421. Audited as
+    /// system:forge. Restart a running server to apply it there.
+    AllowedHosts {
+        #[command(subcommand)]
+        action: HostsAction,
+    },
     /// Exits non-zero when the database has applied migrations this binary
     /// does not know (it is older than the database). Used by the
     /// self-update dry run; never changes the database.
@@ -149,6 +157,19 @@ enum AddressAction {
     /// Sets it: an absolute http(s) origin such as https://forge.example.com.
     Set { url: String },
     /// Removes the setting; links use `public_url` from forge.toml.
+    Clear,
+}
+
+#[derive(Subcommand)]
+enum HostsAction {
+    /// Prints the allowed host patterns.
+    Get,
+    /// Replaces the list, for example `forge.example.com 192.0.2.1`.
+    Set {
+        #[arg(required = true)]
+        hosts: Vec<String>,
+    },
+    /// Allows any host again (`*`).
     Clear,
 }
 
@@ -388,6 +409,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Cmd::PublicAddress { action } => public_address(config, action).await?,
+        Cmd::AllowedHosts { action } => allowed_hosts(config, action).await?,
         Cmd::Db(cmd) => db_command(&config, cmd).await?,
         Cmd::Analytics(AnalyticsCmd::Install { binary, sha256 }) => {
             let paths = forge_server::analytics_install::paths(&config);
@@ -435,6 +457,35 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `forge-server allowed-hosts get|set|clear`.
+async fn allowed_hosts(config: ServerConfig, action: HostsAction) -> anyhow::Result<()> {
+    use forge_server::api::server_settings::{AUDIT_ALLOWED_HOSTS_CLEAR, AUDIT_ALLOWED_HOSTS_UPDATE};
+    let state = Services::build(config).await?;
+    let hosts = &state.allowed_hosts;
+    let (audit, value) = match action {
+        HostsAction::Get => {
+            println!("{}", hosts.list().join(" "));
+            return Ok(());
+        }
+        HostsAction::Set { hosts: list } => {
+            forge_core::allowed_hosts::parse_list(&list).map_err(|e| anyhow::anyhow!("{e}"))?;
+            (AUDIT_ALLOWED_HOSTS_UPDATE, Some(list))
+        }
+        HostsAction::Clear => (AUDIT_ALLOWED_HOSTS_CLEAR, None),
+    };
+    let from = hosts.list();
+    forge_server::allowed_hosts::save(&state.store, hosts, value.as_deref(), state.clock.now())
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let to = hosts.list();
+    state.audit_system(audit, serde_json::json!({ "from": from, "to": to, "via": "forge-server allowed-hosts" })).await;
+    println!(
+        "Allowed hosts: {}. Restart forge-server to apply it to a running server: systemctl restart forge-server",
+        to.join(" ")
+    );
+    Ok(())
+}
+
 /// `forge-server public-address get|set|clear`.
 async fn public_address(config: ServerConfig, action: AddressAction) -> anyhow::Result<()> {
     use forge_server::api::server_settings::{AUDIT_PUBLIC_ADDRESS_CLEAR, AUDIT_PUBLIC_ADDRESS_UPDATE};
@@ -442,9 +493,12 @@ async fn public_address(config: ServerConfig, action: AddressAction) -> anyhow::
     let addr = &state.public_address;
     let (audit, value) = match action {
         AddressAction::Get => {
-            match addr.runtime() {
-                Some(v) => println!("{v} (setting; public_url in forge.toml: {})", addr.configured()),
-                None => println!("{} (public_url in forge.toml; no setting)", addr.configured()),
+            let configured = Some(addr.configured()).filter(|c| !c.is_empty()).unwrap_or("not set");
+            match (addr.runtime(), addr.last_admin()) {
+                (Some(v), _) => println!("{v} (setting; public_url in forge.toml: {configured})"),
+                (None, _) if configured != "not set" => println!("{configured} (public_url in forge.toml; no setting)"),
+                (None, Some(last)) => println!("{last} (not pinned: the address an administrator last signed in on)"),
+                (None, None) => println!("not pinned, and no administrator has signed in yet"),
             }
             return Ok(());
         }

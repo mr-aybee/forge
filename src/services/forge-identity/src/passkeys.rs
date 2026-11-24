@@ -68,7 +68,6 @@ pub struct PasskeyService {
     repo: Arc<dyn PasskeyRepository>,
     users: Arc<dyn UserRepository>,
     clock: Arc<dyn Clock>,
-    rp: RelyingParty,
     rp_name: String,
 }
 
@@ -101,18 +100,8 @@ fn challenge_of(client_data_json: &[u8]) -> Result<Vec<u8>, PasskeyError> {
 
 impl PasskeyService {
     #[must_use]
-    pub fn new(
-        repo: Arc<dyn PasskeyRepository>,
-        users: Arc<dyn UserRepository>,
-        clock: Arc<dyn Clock>,
-        rp: RelyingParty,
-    ) -> Self {
-        Self { repo, users, clock, rp, rp_name: "Orbyn Forge".into() }
-    }
-
-    #[must_use]
-    pub const fn relying_party(&self) -> &RelyingParty {
-        &self.rp
+    pub fn new(repo: Arc<dyn PasskeyRepository>, users: Arc<dyn UserRepository>, clock: Arc<dyn Clock>) -> Self {
+        Self { repo, users, clock, rp_name: "Orbyn Forge".into() }
     }
 
     async fn new_challenge(&self, user: Option<UserId>, purpose: &str) -> Result<Vec<u8>, PasskeyError> {
@@ -144,8 +133,9 @@ impl PasskeyService {
         keys.iter().map(|k| json!({ "type": "public-key", "id": k.credential_id })).collect()
     }
 
-    /// Options for registering a new passkey for `user`.
-    pub async fn register_begin(&self, user: &User) -> Result<Value, PasskeyError> {
+    /// Options for registering a new passkey for `user` on `rp` (the
+    /// console address of this request: a passkey is scoped to its name).
+    pub async fn register_begin(&self, user: &User, rp: &RelyingParty) -> Result<Value, PasskeyError> {
         let existing = self.repo.list_passkeys(user.id).await?;
         if existing.len() >= MAX_PASSKEYS {
             return Err(PasskeyError::Invalid(format!("at most {MAX_PASSKEYS} passkeys per account")));
@@ -154,7 +144,7 @@ impl PasskeyService {
         let name = user.username.clone().or_else(|| user.email.clone()).unwrap_or_else(|| user.id.to_string());
         Ok(json!({
             "challenge": b64(&c),
-            "rp": { "id": self.rp.id, "name": self.rp_name },
+            "rp": { "id": rp.id, "name": self.rp_name },
             "user": { "id": b64(user.id.to_string().as_bytes()), "name": name, "displayName": user.display_name },
             "pubKeyCredParams": [
                 { "type": "public-key", "alg": -7 },
@@ -169,7 +159,12 @@ impl PasskeyService {
     }
 
     /// Verifies and stores a new passkey.
-    pub async fn register_finish(&self, user: &User, r: &RegistrationResponse) -> Result<Passkey, PasskeyError> {
+    pub async fn register_finish(
+        &self,
+        user: &User,
+        r: &RegistrationResponse,
+        rp: &RelyingParty,
+    ) -> Result<Passkey, PasskeyError> {
         let cd = unb64(&r.client_data_json, "client data")?;
         let att = unb64(&r.attestation_object, "attestation")?;
         let (challenge, _) = self.take(&cd, purpose::REGISTER, Some(user.id)).await?;
@@ -177,7 +172,7 @@ impl PasskeyService {
         if self.repo.list_passkeys(user.id).await?.len() >= MAX_PASSKEYS {
             return Err(PasskeyError::Invalid(format!("at most {MAX_PASSKEYS} passkeys per account")));
         }
-        let cred = webauthn::verify_registration(&self.rp, &challenge, &cd, &att)?;
+        let cred = webauthn::verify_registration(rp, &challenge, &cd, &att)?;
         let credential_id = b64(&cred.credential_id);
         if self.repo.passkey_by_credential(&credential_id).await?.is_some() {
             return Err(PasskeyError::Invalid("this passkey is already registered".into()));
@@ -201,11 +196,11 @@ impl PasskeyService {
     }
 
     /// Options for a passwordless sign-in (discoverable credentials).
-    pub async fn login_begin(&self) -> Result<Value, PasskeyError> {
+    pub async fn login_begin(&self, rp: &RelyingParty) -> Result<Value, PasskeyError> {
         let c = self.new_challenge(None, purpose::LOGIN).await?;
         Ok(json!({
             "challenge": b64(&c),
-            "rpId": self.rp.id,
+            "rpId": rp.id,
             "timeout": CHALLENGE_TTL.as_millis(),
             "userVerification": "required",
             "allowCredentials": [],
@@ -215,11 +210,11 @@ impl PasskeyService {
     /// Verifies a passwordless sign-in; returns the user (MFA-verified) and
     /// the passkey used. The signature is checked before the account state,
     /// so failures reveal nothing about accounts.
-    pub async fn login_finish(&self, a: &AssertionResponse) -> Result<(User, String), PasskeyError> {
+    pub async fn login_finish(&self, a: &AssertionResponse, rp: &RelyingParty) -> Result<(User, String), PasskeyError> {
         let cd = unb64(&a.client_data_json, "client data")?;
         let (challenge, _) = self.take(&cd, purpose::LOGIN, None).await?;
         let key = self.repo.passkey_by_credential(&a.credential_id).await?.ok_or(PasskeyError::UnknownCredential)?;
-        self.verify(&challenge, &key, &cd, a).await?;
+        self.verify(rp, &challenge, &key, &cd, a).await?;
         let user = self.users.get_user(key.user_id).await?;
         if user.disabled {
             return Err(PasskeyError::Disabled);
@@ -228,7 +223,7 @@ impl PasskeyService {
     }
 
     /// Options for re-verifying `user` with one of their passkeys.
-    pub async fn step_up_begin(&self, user: &User) -> Result<Value, PasskeyError> {
+    pub async fn step_up_begin(&self, user: &User, rp: &RelyingParty) -> Result<Value, PasskeyError> {
         let keys = self.repo.list_passkeys(user.id).await?;
         if keys.is_empty() {
             return Err(PasskeyError::Invalid(
@@ -238,7 +233,7 @@ impl PasskeyService {
         let c = self.new_challenge(Some(user.id), purpose::STEP_UP).await?;
         Ok(json!({
             "challenge": b64(&c),
-            "rpId": self.rp.id,
+            "rpId": rp.id,
             "timeout": CHALLENGE_TTL.as_millis(),
             "userVerification": "required",
             "allowCredentials": Self::allow_list(&keys),
@@ -247,7 +242,12 @@ impl PasskeyService {
 
     /// Verifies a step-up: the credential must be one of `user`'s. Returns
     /// the passkey used.
-    pub async fn step_up_finish(&self, user: &User, a: &AssertionResponse) -> Result<String, PasskeyError> {
+    pub async fn step_up_finish(
+        &self,
+        user: &User,
+        a: &AssertionResponse,
+        rp: &RelyingParty,
+    ) -> Result<String, PasskeyError> {
         let cd = unb64(&a.client_data_json, "client data")?;
         let (challenge, _) = self.take(&cd, purpose::STEP_UP, Some(user.id)).await?;
         let key = self
@@ -256,12 +256,13 @@ impl PasskeyService {
             .await?
             .filter(|k| k.user_id == user.id)
             .ok_or(PasskeyError::UnknownCredential)?;
-        self.verify(&challenge, &key, &cd, a).await?;
+        self.verify(rp, &challenge, &key, &cd, a).await?;
         Ok(key.id)
     }
 
     async fn verify(
         &self,
+        rp: &RelyingParty,
         challenge: &[u8],
         key: &Passkey,
         cd: &[u8],
@@ -274,7 +275,7 @@ impl PasskeyService {
         let sig = unb64(&a.signature, "signature")?;
         let stored = StoredCredential { credential_id: &id, public_key: &public, sign_count: key.sign_count };
         let count = webauthn::verify_assertion(
-            &self.rp,
+            rp,
             challenge,
             &stored,
             &Assertion { credential_id: &id, client_data_json: cd, authenticator_data: &auth, signature: &sig },

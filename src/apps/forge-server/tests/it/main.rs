@@ -22,6 +22,7 @@ mod alert_templates;
 mod alerts;
 mod analytics_settings;
 mod analytics_worker;
+mod any_address;
 mod api_authz;
 mod app_deploy;
 mod app_health;

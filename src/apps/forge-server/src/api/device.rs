@@ -107,6 +107,7 @@ fn user_agent(headers: &HeaderMap) -> String {
 pub async fn authorize(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    origin: crate::request_origin::RequestOrigin,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -143,7 +144,9 @@ pub async fn authorize(
         },
     );
     drop(m);
-    let base = state.public_address.get();
+    // The address the client used (D-167): the person opens it on the same
+    // network.
+    let base = origin.origin();
     let mut r = Json(json!({
         "device_code": device_code,
         "user_code": code,

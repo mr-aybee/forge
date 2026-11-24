@@ -47,6 +47,7 @@ use serde_json::{Value, json};
 
 use crate::auth::{Caller, Ws};
 use crate::error::{ApiError, ApiResult};
+use crate::request_origin::RequestOrigin;
 use crate::service_ports::{LOOPBACK, ServicePort, role_for_target};
 use crate::state::AppState;
 use crate::tunnels::{Limits, NewTunnel, Refusal, Target, Tunnel};
@@ -106,11 +107,11 @@ pub fn settings_view(state: &AppState) -> Value {
 
 /// The checks every tunnel request makes: a person (no AI connector), and
 /// the Origin guard for WebSockets.
-fn person(caller: &Caller, headers: &HeaderMap, state: &AppState) -> ApiResult<()> {
+fn person(caller: &Caller, origin: &RequestOrigin, headers: &HeaderMap, state: &AppState) -> ApiResult<()> {
     if caller.session.session.connection_id.is_some() {
         return Err(ApiError::forbidden("AI connectors cannot open port tunnels"));
     }
-    if !crate::public_address::origin_header_ok(&state.public_address, headers) {
+    if !crate::request_origin::origin_header_ok(state, origin, headers) {
         return Err(ApiError::forbidden("origin not allowed"));
     }
     Ok(())
@@ -536,11 +537,12 @@ pub struct OpenRequest {
 pub async fn open(
     State(state): State<AppState>,
     caller: Caller,
+    origin: RequestOrigin,
     Ws(ws): Ws,
     headers: HeaderMap,
     Json(req): Json<OpenRequest>,
 ) -> ApiResult<Response> {
-    person(&caller, &headers, &state)?;
+    person(&caller, &origin, &headers, &state)?;
     let hits = resolve(&state, ws, &req.target, true).await?;
     let [entry] = hits.as_slice() else { return Ok(ambiguous(&hits)) };
     let server = state.store.get_server(entry.server_id).await.map_err(|_| ApiError::not_found("server not found"))?;
@@ -694,10 +696,11 @@ pub struct DirectCert {
 pub async fn ssh_cert(
     State(state): State<AppState>,
     caller: Caller,
+    origin: RequestOrigin,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> ApiResult<Json<DirectCert>> {
-    person(&caller, &headers, &state)?;
+    person(&caller, &origin, &headers, &state)?;
     let t = owned(&state, &caller, &id)?;
     if !t.direct {
         return Err(ApiError::conflict("this tunnel relays through the server; it was not opened with --direct"));
@@ -760,11 +763,12 @@ fn owned(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Tunnel> {
 pub async fn control(
     State(state): State<AppState>,
     caller: Caller,
+    origin: RequestOrigin,
     Path(id): Path<String>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> ApiResult<Response> {
-    person(&caller, &headers, &state)?;
+    person(&caller, &origin, &headers, &state)?;
     if caller.session.session.kind != SessionKind::Bearer {
         return Err(ApiError::forbidden("tunnels are opened with the forge CLI"));
     }
@@ -849,11 +853,12 @@ pub async fn control(
 pub async fn connect(
     State(state): State<AppState>,
     caller: Caller,
+    origin: RequestOrigin,
     Path(id): Path<String>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> ApiResult<Response> {
-    person(&caller, &headers, &state)?;
+    person(&caller, &origin, &headers, &state)?;
     let t = owned(&state, &caller, &id)?;
     let slot = state.tunnels.connect(&id, limits(&state)).map_err(|r| refusal(&r))?;
     let mut revoked = state.tunnels.watch(&id).ok_or_else(|| ApiError::not_found("no open tunnel with this id"))?;

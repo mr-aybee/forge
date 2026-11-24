@@ -584,8 +584,8 @@ fn rpc_result(id: Value, result: Value) -> Value {
 
 /// Browsers send `Origin`; it must be this Forge (DNS rebinding defence).
 /// Server-to-server connectors send none.
-fn origin_ok(state: &AppState, headers: &HeaderMap) -> bool {
-    crate::public_address::origin_header_ok(&state.public_address, headers)
+fn origin_ok(state: &AppState, origin: &crate::request_origin::RequestOrigin, headers: &HeaderMap) -> bool {
+    crate::request_origin::origin_header_ok(state, origin, headers)
 }
 
 /// `GET` and `DELETE /mcp`: this server keeps no stream or session.
@@ -599,13 +599,14 @@ pub async fn not_allowed() -> Response {
 pub async fn post(
     State(state): State<AppState>,
     Extension(router): Extension<McpRouter>,
+    origin: crate::request_origin::RequestOrigin,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
     if !state.config.mcp.enabled {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "MCP is not enabled on this Forge" }))).into_response();
     }
-    if !origin_ok(&state, &headers) {
+    if !origin_ok(&state, &origin, &headers) {
         return (StatusCode::FORBIDDEN, Json(json!({ "error": "origin not allowed" }))).into_response();
     }
     // Only a connector's token for this resource; never API keys, CLI or
@@ -660,7 +661,7 @@ pub async fn post(
         "initialize" => rpc_result(id, initialize(&params, &connection)),
         "ping" => rpc_result(id, json!({})),
         "tools/list" => rpc_result(id, json!({ "tools": list(&connection) })),
-        "tools/call" => match call(&state, &router, token, &connection, &params).await {
+        "tools/call" => match call(&state, &router, token, &connection, &params, &origin.origin()).await {
             Ok(r) => rpc_result(id, r),
             Err((code, m)) => rpc_error(id, code, &m),
         },
@@ -711,6 +712,7 @@ async fn call(
     token: &str,
     c: &AgentConnection,
     params: &Value,
+    console: &str,
 ) -> Result<Value, (i64, String)> {
     let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
     let Some(t) = tool(name) else { return Err((-32602, format!("unknown tool `{name}`"))) };
@@ -730,7 +732,7 @@ async fn call(
                     return Ok(tool_error(m));
                 }
             };
-            return queue(state, c, t, &args).await;
+            return queue(state, c, t, &args, console).await;
         }
         Decision::Run => {}
     }
@@ -787,7 +789,14 @@ const APPROVAL_RETENTION_MS: i64 = 90 * 24 * 60 * 60 * 1000;
 
 /// Turns a change into a pending approval for the connection's owner
 /// (D-073). Nothing runs until they approve it in the console.
-async fn queue(state: &AppState, c: &AgentConnection, t: &Tool, args: &Value) -> Result<Value, (i64, String)> {
+/// Queues an approval; `console` is the console address the link names.
+async fn queue(
+    state: &AppState,
+    c: &AgentConnection,
+    t: &Tool,
+    args: &Value,
+    console: &str,
+) -> Result<Value, (i64, String)> {
     use forge_core::ports::ApprovalRepository;
     let (method, uri, body) = match plan_request(t, args) {
         Ok(p) => p,
@@ -833,7 +842,7 @@ async fn queue(state: &AppState, c: &AgentConnection, t: &Tool, args: &Value) ->
     if let Err(e) = state.audit.append(ev).await {
         tracing::error!(error = %e, "audit write failed");
     }
-    let url = format!("{}/approvals?id={}", state.public_address.get(), a.id);
+    let url = format!("{console}/approvals?id={}", a.id);
     Ok(json!({
         "content": [{ "type": "text", "text": format!(
             "Waiting for approval {}: the person who connected you approves or denies it in the Forge console \
