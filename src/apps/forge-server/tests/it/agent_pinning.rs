@@ -163,7 +163,7 @@ async fn an_unreadable_pin_file_fails_closed() {
     // At start: refused with a message that says what to do.
     std::fs::write(paths.pins(), "server_keys = 7").unwrap();
     let err = format!("{:#}", Agent::load(paths.clone()).unwrap_err());
-    assert!(err.contains("refusing to connect") && err.contains("forge-agent pins list"), "{err}");
+    assert!(err.contains("refusing to connect") && err.contains("forge-agent pins reset"), "{err}");
 
     // While running: the link closes instead of falling back to the CA.
     std::fs::write(paths.pins(), &good).unwrap();
