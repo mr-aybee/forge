@@ -581,9 +581,10 @@ a.press:active {
   border: 1px solid transparent;
   border-radius: 4px;
   color: var(--color-muted);
-  font: 600 11px var(--font-mono);
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 0 !important; /* hides CodeMirror's label text; ::after draws the icon */
   cursor: pointer;
-  font-size: 0;
 }
 .cm-editor .cm-search label input {
   position: absolute;
