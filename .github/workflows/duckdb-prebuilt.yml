@@ -12,7 +12,7 @@ name: Prebuilt DuckDB
 
 on:
   push:
-    branches: [master, ci/native-arm]  # TEMP: test from the branch; remove before merge
+    branches: [master]
     paths:
       - Cargo.lock
       - rust-toolchain.toml
