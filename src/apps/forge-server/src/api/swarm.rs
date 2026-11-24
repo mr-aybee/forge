@@ -272,12 +272,16 @@ pub async fn service_get(
     let cluster = service_cluster(&state, &app).await?;
     let spec = crate::jobs::app::build_spec(&app, None).map_err(ApiError::bad_request)?;
     let slot = state.swarm.serving_slot(app.id).await?;
-    let name = forge_catalog::swarm_service::service_name(&app.id.to_string(), &slot);
+    let legacy = forge_catalog::swarm_service::service_name(&app.id.to_string(), &slot);
     let op = forge_catalog::swarm::SwarmOp::ServiceStatus { service_id: app.id.to_string(), slot };
-    let (status, status_error) = match state.swarm.run(cluster, &caller.principal().to_string(), &op).await {
-        Ok(v) => (Some(serde_json::from_value(v).map_err(forge_core::DomainError::internal)?), None),
-        Err(e) => (None, Some(e.to_string())),
-    };
+    let (status, status_error): (Option<forge_catalog::swarm::SwarmServiceStatus>, _) =
+        match state.swarm.run(cluster, &caller.principal().to_string(), &op).await {
+            Ok(v) => (Some(serde_json::from_value(v).map_err(forge_core::DomainError::internal)?), None),
+            Err(e) => (None, Some(e.to_string())),
+        };
+    // The name Docker reports; an older agent reports none, and then its
+    // services carry the id-based name.
+    let name = status.as_ref().map(|s| s.name.clone()).filter(|n| !n.is_empty()).unwrap_or(legacy);
     let settings = spec.swarm.clone().unwrap_or_default();
     let managers = state.swarm.view_managers(cluster).await?;
     let ha = forge_catalog::swarm_service::ha_report(&settings, spec.healthcheck.is_some(), managers);

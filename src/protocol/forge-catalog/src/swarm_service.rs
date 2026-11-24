@@ -134,6 +134,10 @@ impl Default for UpdatePolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SwarmSettings {
+    /// Docker service name; empty: `<environment>-<service>`. Docker cannot
+    /// rename a service, so it applies when the service is first created.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
     #[serde(default)]
     pub mode: ServiceMode,
     /// Tasks in replicated mode.
@@ -160,6 +164,7 @@ pub struct SwarmSettings {
 impl Default for SwarmSettings {
     fn default() -> Self {
         Self {
+            name: String::new(),
             mode: ServiceMode::Replicated,
             replicas: 1,
             constraints: Vec::new(),
@@ -198,6 +203,11 @@ fn label_name_ok(k: &str) -> bool {
 
 impl SwarmSettings {
     pub fn validate(&self) -> Result<(), String> {
+        if !self.name.is_empty() && !docker_name_ok(&self.name) {
+            return Err(format!(
+                "service name: lowercase letters, digits and `-`, starting with a letter or digit, up to {MAX_NAME} characters"
+            ));
+        }
         if self.mode == ServiceMode::Replicated && self.replicas > MAX_REPLICAS {
             return Err(format!("replicas: at most {MAX_REPLICAS}"));
         }
@@ -226,6 +236,37 @@ fn compact(id: &str) -> Option<String> {
 #[must_use]
 pub fn id_ok(id: &str) -> bool {
     compact(id).is_some()
+}
+
+/// Longest chosen Docker service name: Docker allows 63, and a slot adds `-a`.
+pub const MAX_NAME: usize = 61;
+
+/// A Docker service name Forge accepts: `a-z`, `0-9` and `-`, not starting
+/// or ending with `-`, up to [`MAX_NAME`].
+#[must_use]
+pub fn docker_name_ok(n: &str) -> bool {
+    (1..=MAX_NAME).contains(&n.len())
+        && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !n.starts_with('-')
+        && !n.ends_with('-')
+}
+
+/// `<environment>-<service>` as a Docker name: lowercased, other characters
+/// as `-`, cut to [`MAX_NAME`]. `None` when nothing usable is left.
+#[must_use]
+pub fn default_name(environment: &str, service: &str) -> Option<String> {
+    let mut out = String::new();
+    for c in format!("{environment}-{service}").chars() {
+        let c = c.to_ascii_lowercase();
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            out.push(c);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let cut: String = out.trim_matches('-').chars().take(MAX_NAME).collect();
+    let name = cut.trim_end_matches('-').to_owned();
+    docker_name_ok(&name).then_some(name)
 }
 
 /// The Swarm service of Forge service `service_id` in `slot`: `forge-<id>`
@@ -453,6 +494,23 @@ pub fn service_def(
 }
 
 impl ServiceDef {
+    /// The Docker service name for a new service: the chosen name, else
+    /// `<environment>-<service>`, with `-a` / `-b` for a slot. Falls back to
+    /// the id-based [`service_name`]. An existing service keeps its name.
+    #[must_use]
+    pub fn docker_name(&self) -> String {
+        let base = if self.settings.name.is_empty() {
+            default_name(&self.environment, &self.service)
+        } else {
+            Some(self.settings.name.clone())
+        };
+        match base {
+            Some(b) if self.slot.is_empty() => b,
+            Some(b) => format!("{b}-{}", self.slot),
+            None => service_name(&self.service_id, &self.slot),
+        }
+    }
+
     /// The definition for `slot`, publishing each container port on the
     /// slot's own port from `ports` (container port → published port), so
     /// two slots run side by side. The edge sends traffic to those ports.
@@ -681,7 +739,7 @@ impl ServiceDef {
             })
             .collect();
         let mut spec = json!({
-            "Name": service_name(&self.service_id, &self.slot),
+            "Name": self.docker_name(),
             "Labels": {
                 MANAGED_LABEL: "true",
                 SERVICE_ID_LABEL: self.service_id,
@@ -790,7 +848,7 @@ mod tests {
         let d = def(&s).unwrap();
         assert_eq!(d.bind_sources(), vec!["/srv/conf"]);
         let v = d.engine_spec();
-        assert_eq!(v["Name"], "forge-01900000000070008000000000000001");
+        assert_eq!(v["Name"], "prod-web");
         assert_eq!(v["Labels"][MANAGED_LABEL], "true");
         assert_eq!(v["Labels"][SERVICE_ID_LABEL], SVC);
         let print = v["Labels"][SPEC_LABEL].as_str().unwrap().to_owned();
@@ -815,9 +873,30 @@ mod tests {
     }
 
     #[test]
+    fn docker_names_are_readable_or_chosen() {
+        let d = def(&SwarmSettings::default()).unwrap();
+        assert_eq!(d.docker_name(), "prod-web");
+        assert_eq!(d.engine_spec()["Name"], "prod-web");
+        let mut chosen = SwarmSettings { name: "shop-db".into(), ..SwarmSettings::default() };
+        let d = def(&chosen).unwrap();
+        assert_eq!(d.docker_name(), "shop-db");
+        let ports = d.ports.iter().map(|p| (p.target, 20000)).collect();
+        assert_eq!(d.into_slot("a", &ports).unwrap().docker_name(), "shop-db-a");
+        chosen.name = "Shop DB".into();
+        assert!(def(&chosen).is_err(), "names are lowercase letters, digits and -");
+    }
+
+    #[test]
     fn names_come_from_ids_so_environments_never_collide() {
         assert_ne!(service_name(SVC, ""), service_name(ENV, ""));
         assert_eq!(service_name(SVC, "a"), "forge-01900000000070008000000000000001-a");
+        assert_eq!(default_name("Prod", "Web API").as_deref(), Some("prod-web-api"));
+        assert_eq!(default_name("prod", "pg_main..v2").as_deref(), Some("prod-pg-main-v2"));
+        assert_eq!(default_name("", "__").as_deref(), None);
+        assert!(default_name("e", &"x".repeat(200)).is_some_and(|n| n.len() == MAX_NAME));
+        assert!(
+            docker_name_ok("shop-db") && !docker_name_ok("Shop") && !docker_name_ok("-x") && !docker_name_ok("a_b")
+        );
         assert!(id_ok(SVC));
         assert!(!id_ok("a-b-c"));
         assert!(!id_ok("../../etc/passwd-0000-0000-0000-00000000"));
@@ -898,7 +977,7 @@ mod tests {
         assert!(service_def(&reserved, &SwarmSettings::default(), SVC, ENV).is_err(), "slot ports are Forge's");
         let a = d.clone().into_slot("a", &ports).unwrap();
         let v = a.engine_spec();
-        assert_eq!(v["Name"], "forge-01900000000070008000000000000001-a");
+        assert_eq!(v["Name"], "prod-web-a");
         assert_eq!(v["Labels"][SLOT_LABEL], "a");
         assert_eq!(v["EndpointSpec"]["Ports"][0]["PublishedPort"], 21000);
         assert!(d.clone().into_slot("c", &ports).is_err());

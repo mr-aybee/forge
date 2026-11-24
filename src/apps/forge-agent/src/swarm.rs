@@ -127,6 +127,9 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
                     }
                     let version =
                         cur["Version"]["Index"].as_u64().ok_or("Docker did not report the service version")?;
+                    // Docker cannot rename a service: it keeps the name it was created with.
+                    let mut spec = spec;
+                    spec["Name"] = cur["Spec"]["Name"].clone();
                     api_auth("POST", &format!("/services/{id}/update?version={version}"), &spec, auth).await?;
                     Ok(json!({ "id": id, "created": false }))
                 }
@@ -194,11 +197,34 @@ async fn api_auth(method: &str, path: &str, body: &Value, auth: Option<&str>) ->
 /// none. A service with that name that does not carry the same Forge id is
 /// refused: Forge never touches a service it did not make for this id.
 async fn owned(service_id: &str, slot: &str) -> Result<Option<Value>, String> {
-    let Some(cur) = api("GET", &format!("/services/{}", service_name(service_id, slot)), None, QUICK).await? else {
-        return Ok(None);
+    // Found by its Forge id label, so its Docker name can be anything
+    // (a chosen name, `<environment>-<service>`, or the older `forge-<id>`).
+    let list =
+        api("GET", &format!("/services?filters={}", id_filter(service_id)), None, QUICK).await?.unwrap_or(Value::Null);
+    let mut found = list
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|svc| svc["Spec"]["Labels"][SLOT_LABEL].as_str().unwrap_or_default() == slot);
+    let Some(cur) = found.next() else {
+        // Before labels were searched: a service under the id-based name.
+        let Some(cur) = api("GET", &format!("/services/{}", service_name(service_id, slot)), None, QUICK).await? else {
+            return Ok(None);
+        };
+        check_owner(&cur, service_id, slot)?;
+        return Ok(Some(cur));
     };
-    check_owner(&cur, service_id, slot)?;
-    Ok(Some(cur))
+    if found.next().is_some() {
+        return Err("more than one Swarm service carries this Forge id; remove the extra one".into());
+    }
+    check_owner(cur, service_id, slot)?;
+    Ok(Some(cur.clone()))
+}
+
+/// `filters={"label":{"forge.service.id=<id>":true}}`, percent-encoded (the
+/// id is checked to be a UUID before any op runs).
+fn id_filter(service_id: &str) -> String {
+    format!("%7B%22label%22%3A%7B%22{SERVICE_ID_LABEL}%3D{service_id}%22%3Atrue%7D%7D")
 }
 
 pub(crate) fn check_owner(cur: &Value, service_id: &str, slot: &str) -> Result<(), String> {
@@ -227,8 +253,8 @@ async fn change_service(
     Ok(json!({ "id": id }))
 }
 
-/// `filters={"service":{"<name>":true}}`, percent-encoded (names are
-/// checked to letters, digits, `-`, `_` and `.`).
+/// `filters={"service":{"<id>":true}}`, percent-encoded (a Docker id is
+/// alphanumeric).
 fn task_filter(name: &str) -> String {
     format!("%7B%22service%22%3A%7B%22{name}%22%3Atrue%7D%7D")
 }
@@ -237,9 +263,9 @@ async fn service_status(service_id: &str, slot: &str) -> Result<SwarmServiceStat
     let Some(svc) = owned(service_id, slot).await? else {
         return Ok(SwarmServiceStatus::default());
     };
-    let name = service_name(service_id, slot);
-    let tasks =
-        api("GET", &format!("/tasks?filters={}", task_filter(&name)), None, QUICK).await?.unwrap_or(Value::Null);
+    let id = svc["ID"].as_str().filter(|i| !i.is_empty() && i.bytes().all(|b| b.is_ascii_alphanumeric()));
+    let id = id.ok_or("Docker did not report a valid service id")?;
+    let tasks = api("GET", &format!("/tasks?filters={}", task_filter(id)), None, QUICK).await?.unwrap_or(Value::Null);
     Ok(status_from(&svc, &tasks))
 }
 
@@ -252,6 +278,7 @@ pub(crate) fn status_from(svc: &Value, tasks: &Value) -> SwarmServiceStatus {
     SwarmServiceStatus {
         exists: true,
         id: svc["ID"].as_str().unwrap_or_default().to_owned(),
+        name: svc["Spec"]["Name"].as_str().unwrap_or_default().to_owned(),
         mode: if replicated { "replicated" } else { "global" }.to_owned(),
         desired: if replicated {
             svc["Spec"]["Mode"]["Replicated"]["Replicas"].as_u64().unwrap_or(0)

@@ -78,10 +78,13 @@ places its tasks, so you do not pick nodes.
 1. Open **Services → New service** and choose an environment of the Swarm
    cluster. **Systemd** is unavailable: a swarm runs containers only.
 2. Fill in **Image**, **Ports** and the other sections as usual.
-3. In **Swarm**, choose **Replicated** with a replica count, or **Global** for
-   one task on every matching node. Add **Placement constraints** (for example
-   **Node role** `==` `worker`, or **Node label** `zone` `==` `a`), **Spread
-   over node labels**, **Max tasks per node** and **Published ports**
+3. In **Swarm**, optionally set **Docker service name** (lowercase letters,
+   digits and `-`, up to 61 characters). Empty means `<environment>-<service>`,
+   for example `prod-postgres`. Choose **Replicated** with a replica count, or **Global** for
+   one task on every matching node. Under **Run on**, select **Rule** to add a
+   placement rule (for example **Node role** `=` `worker`, or **Node label**
+   `zone` `=` `a`). Under **Spread over**, select **Label** to spread tasks
+   over a node label. Then set **Max tasks per node** and **Published ports**
    (**Ingress mesh** or **Host**). **Rollout** and **Restart policy** hold
    the update and restart settings; the defaults update one task at a time
    and pause on failure.
@@ -118,9 +121,18 @@ you can delete it.
 :::
 
 :::note
-Forge names each Swarm service `forge-<service-id>` and gives each
-environment its own encrypted overlay network that other containers cannot
-join. Forge only changes Swarm services it created for that service.
+Docker names each task container `<service-name>.<replica>.<task-id>`, for
+example `prod-postgres.1.emcnoltw17figl697yaizgvc7`. The task ID is random
+and changes whenever Swarm replaces the task. Docker cannot rename a running
+service, so a changed **Docker service name** applies only after **Remove**
+and **Deploy**. Services created before names were configurable keep the
+name `forge-<service-id>`.
+
+Forge finds its services by the `forge.service.id` label, not by name, and
+only changes Swarm services it created for that service. Each environment
+gets its own encrypted overlay network that other containers cannot join.
+In **Projects**, a Swarm service shows a `swarm` tag, its running tasks and
+the node each one runs on.
 :::
 
 ## Deploy releases with a strategy

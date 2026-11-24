@@ -4,7 +4,7 @@ import { type ReactNode, useState } from "react";
 import type { SwarmFailureAction, SwarmPublishMode, SwarmRestartCondition, SwarmServiceMode, SwarmSettings, SwarmUpdateOrder } from "../../api/swarm";
 import { Button, IconButton, Input, Segmented, Select } from "../ui";
 import { FormField, Grid, NumberInput } from "./parts";
-import { CONSTRAINT_RE, SPREAD_RE } from "./sections";
+import { CONSTRAINT_RE, DOCKER_NAME_RE, SPREAD_RE } from "./sections";
 
 /** Constraint keys Docker accepts; the two `labels` kinds take a label name. */
 const KEYS = [
@@ -16,6 +16,8 @@ const KEYS = [
   { id: "node.labels.", label: "Node label", hint: "value" },
   { id: "engine.labels.", label: "Engine label", hint: "value" },
 ] as const;
+
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
 const FAIL: Record<SwarmFailureAction, string> = { pause: "pauses on failure", rollback: "rolls back on failure", continue: "continues on failure" };
 const RESTART: Record<SwarmRestartCondition, string> = { any: "on any exit", "on-failure": "on non-zero exit", none: "never" };
@@ -58,12 +60,29 @@ function useRowIds(n: number) {
 }
 
 /** Docker Swarm settings of a container service in a Swarm cluster. */
-export function SwarmSection({ value, onChange }: { value: SwarmSettings; onChange: (v: SwarmSettings) => void }) {
+export function SwarmSection({ value, onChange, serviceName = "" }: { value: SwarmSettings; onChange: (v: SwarmSettings) => void; serviceName?: string }) {
   const set = (p: Partial<SwarmSettings>) => onChange({ ...value, ...p });
   const global = value.mode === "global";
   const badReplicas = value.replicas < 1 || value.replicas > 1000;
   return (
     <div className="space-y-5">
+      <Field
+        label="Docker service name"
+        htmlFor="swarm-name"
+        hint="Containers show as <name>.<replica>.<task>. Used when the service is first created: Docker can't rename a running service."
+        error={value.name && !DOCKER_NAME_RE.test(value.name) ? "Lowercase letters, digits and -, up to 61 characters." : undefined}
+      >
+        <div className="w-80 max-w-full">
+          <Input
+            id="swarm-name"
+            className="font-mono text-xs"
+            placeholder={`<environment>-${slug(serviceName) || "<service>"}`}
+            value={value.name}
+            onChange={(e) => set({ name: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-") })}
+          />
+        </div>
+      </Field>
+
       {/* Scheduling: four compact controls in one strip. */}
       <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-4">
         <Field label="Mode" hint={global ? "One task on every matching node." : "A fixed number of tasks."}>

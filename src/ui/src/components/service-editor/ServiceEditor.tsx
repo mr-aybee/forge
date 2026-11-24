@@ -86,7 +86,7 @@ export function ServiceEditor({ value, onChange, mode, basics, basicsState, fact
       case "health":
         return { node: <HealthSection value={value} set={set} serviceId={serviceId} /> };
       case "swarm":
-        return { node: value.swarm ? <SwarmSection value={value.swarm} onChange={(w) => set({ swarm: w })} /> : null };
+        return { node: value.swarm ? <SwarmSection value={value.swarm} serviceName={value.name ?? ""} onChange={(w) => set({ swarm: w })} /> : null };
       case "advanced":
         return {
           // Keyed on the view so the YAML text starts from the current form each time it opens.

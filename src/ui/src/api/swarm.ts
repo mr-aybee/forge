@@ -220,6 +220,8 @@ export type SwarmPublishMode = "ingress" | "host";
 
 /** `swarm` of a container service in a Swarm cluster (server: `forge_catalog::swarm_service::SwarmSettings`). */
 export interface SwarmSettings {
+  /** Docker service name; empty: `<environment>-<service>`. Set when the service is first created. */
+  name: string;
   mode: SwarmServiceMode;
   /** Replicated mode only; 1 to 1000. */
   replicas: number;
@@ -235,6 +237,7 @@ export interface SwarmSettings {
 }
 
 export const defaultSwarmSettings = (): SwarmSettings => ({
+  name: "",
   mode: "replicated",
   replicas: 1,
   constraints: [],
@@ -254,6 +257,7 @@ export function normSwarmSettings(v: unknown): SwarmSettings {
   const r = rec(o.restart);
   const u = rec(o.update);
   return {
+    name: typeof o.name === "string" ? o.name : "",
     mode: oneOf(o.mode, ["replicated", "global"] as const, d.mode),
     replicas: num(o.replicas) ?? d.replicas,
     constraints: strs(o.constraints),
@@ -291,6 +295,8 @@ export interface SwarmTask {
 export interface SwarmServiceStatus {
   exists: boolean;
   id?: string;
+  /** Docker service name; task containers are `<name>.<replica>.<task id>`. */
+  name?: string;
   mode?: string;
   desired: number;
   running: number;

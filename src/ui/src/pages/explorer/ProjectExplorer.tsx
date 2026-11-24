@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNod
 import { useIsFetching, useQueryClient } from "@tanstack/react-query";
 
 import { explorerKeys, useExplorerTree } from "../../api/explorer";
+import { useServiceSwarm, useSwarm } from "../../api/swarm";
 import { fleetKeys, useAllEnvironments, useClusters, useProjects, useServiceAction } from "../../api/hooks";
 import { useObjectStores } from "../../api/storage";
 import type { Environment, Project } from "../../api/types";
@@ -140,7 +141,9 @@ function useNodeActions(onDialog: (d: ExplorerDialog) => void, onLogs: (serviceI
     ];
   };
   const serviceActions = (n: TreeService): RowAction[] => [
-    { label: "Logs", icon: ScrollText, tone: "accent", disabled: n.placements.length === 0, hint: n.placements.length === 0 ? "Not placed on any node" : undefined, onSelect: () => onLogs(n.id) },
+    n.swarm
+      ? { label: "Logs", icon: ScrollText, tone: "accent", onSelect: () => void navigate({ to: "/services/$serviceId", params: { serviceId: n.id } }) }
+      : { label: "Logs", icon: ScrollText, tone: "accent", disabled: n.placements.length === 0, hint: n.placements.length === 0 ? "Not placed on any node" : undefined, onSelect: () => onLogs(n.id) },
     { label: "View", icon: ExternalLink, onSelect: () => void navigate({ to: "/services/$serviceId", params: { serviceId: n.id } }) },
     { label: "Edit configuration", icon: ServerIcon, onSelect: () => void navigate({ to: "/services/$serviceId", params: { serviceId: n.id }, search: { tab: "configuration" } }) },
     pinAction({ kind: "service", id: n.id, label: n.name }),
@@ -491,6 +494,7 @@ function PlacementTags({ service }: { service: TreeService }) {
   const [all, setAll] = useState(false);
   const shown = all ? service.placements : service.placements.slice(0, TAGS_SHOWN);
   const more = service.placements.length - shown.length;
+  if (service.swarm) return <span className="shrink-0 rounded bg-accent-soft px-1.5 font-mono text-[10px] text-accent" title="Placed by Docker Swarm">swarm</span>;
   if (service.placements.length === 0) return <span className="shrink-0 text-[11px] text-faint">not placed</span>;
   return (
     <span className="flex min-w-0 shrink flex-wrap justify-end gap-1">
@@ -783,24 +787,36 @@ function ServiceDetails({ s, onLogs }: { s: TreeService; onLogs: () => void }) {
   return (
     <>
       <div className="flex flex-wrap gap-2">
-        <Button onClick={onLogs} disabled={s.placements.length === 0} title={s.placements.length === 0 ? "Not placed on any node" : "Logs from one node or all of them"}>
-          <ScrollText className="size-4" /> Logs
-        </Button>
+        {s.swarm ? (
+          <Link to="/services/$serviceId" params={{ serviceId: s.id }} className="inline-flex" title="Swarm logs are on the service page">
+            <Button>
+              <ScrollText className="size-4" /> Logs
+            </Button>
+          </Link>
+        ) : (
+          <Button onClick={onLogs} disabled={s.placements.length === 0} title={s.placements.length === 0 ? "Not placed on any node" : "Logs from one node or all of them"}>
+            <ScrollText className="size-4" /> Logs
+          </Button>
+        )}
         <Link to="/services/$serviceId" params={{ serviceId: s.id }} className="inline-flex">
           <Button>
             <ExternalLink className="size-4" /> Open service
           </Button>
         </Link>
       </div>
-      <Field label="Running">
-        <HealthLabel health={s.health} />
-      </Field>
+      {s.swarm ? (
+        <SwarmDetails id={s.id} />
+      ) : (
+        <Field label="Running">
+          <HealthLabel health={s.health} />
+        </Field>
+      )}
       <Field label="Rollout">{s.rollout === "idle" ? <span className="text-muted">idle</span> : <RolloutMark rollout={s.rollout} />}</Field>
       <Field label="Runtime">
         <span className="font-mono text-xs">{s.runtime}</span>
       </Field>
       <Field label="Updated">{ago(s.service.updated_at)}</Field>
-      <div>
+      <div hidden={s.swarm}>
         <h3 className="mb-1 text-xs text-muted">Placements</h3>
         {s.placements.length === 0 ? (
           <span className="text-xs text-faint">Not placed on any node</span>
@@ -891,5 +907,60 @@ function HealthLabel({ health }: { health: RunHealth }) {
     <span className="inline-flex items-center gap-1.5 text-xs">
       <HealthDot health={health} /> {HEALTH[health].label}
     </span>
+  );
+}
+
+/** A Swarm service: its Docker name, running tasks and where they run. */
+function SwarmDetails({ id }: { id: string }) {
+  const q = useServiceSwarm(id);
+  const v = q.data;
+  const cluster = useSwarm(v?.cluster_id ?? "", !!v?.cluster_id).data;
+  if (q.isLoading) return <Skeleton rows={3} />;
+  if (q.error || !v) return <ErrorNote error={q.error ?? "No swarm status"} />;
+  const st = v.status;
+  const host = (nodeId?: string) => cluster?.nodes?.find((n) => n.id === nodeId)?.hostname ?? cluster?.members.find((m) => m.node_id === nodeId)?.hostname ?? nodeId?.slice(0, 10) ?? "—";
+  const tasks = (st?.tasks ?? []).filter((t) => t.desired_state === "running" || t.state === "running").sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
+  return (
+    <>
+      <Field label="Running">
+        {!st ? (
+          <span className="text-xs text-warn">{v.status_error ? `Swarm status unavailable: ${v.status_error}` : "Unknown"}</span>
+        ) : !st.exists ? (
+          <span className="text-xs text-faint">Not deployed to the swarm yet</span>
+        ) : (
+          <span className={`font-mono text-xs tabular-nums ${st.running >= st.desired && st.desired > 0 ? "text-ok" : "text-warn"}`}>
+            {st.running}/{st.desired} tasks
+          </span>
+        )}
+      </Field>
+      <Field label="Docker name">
+        <span className="inline-flex min-w-0 items-center gap-1">
+          <span className="truncate font-mono text-xs" title={v.name}>
+            {v.name}
+          </span>
+          <CopyIcon text={v.name} label="Copy Docker name" />
+        </span>
+      </Field>
+      {tasks.length > 0 && (
+        <div>
+          <h3 className="mb-1 text-xs text-muted">Tasks</h3>
+          <ul className="divide-y divide-line rounded-md border border-line">
+            {tasks.map((t) => (
+              <li key={t.id} className="flex items-center gap-2 px-2 py-1.5 text-xs" title={`${v.name}.${t.slot ?? ""}.${t.id}`}>
+                <span className="font-mono text-faint">#{t.slot ?? "·"}</span>
+                <ServerIcon className="size-3.5 text-muted" aria-hidden />
+                <span className="font-medium">{host(t.node_id)}</span>
+                <Badge tone={t.state === "running" ? "ok" : t.state === "failed" || t.state === "rejected" ? "bad" : "muted"}>{t.state}</Badge>
+                {t.error && (
+                  <span className="min-w-0 truncate text-bad" title={t.error}>
+                    {t.error}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </>
   );
 }
