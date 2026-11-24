@@ -83,12 +83,13 @@ case "$cmd" in
     [ -d "$host_target/$target/release" ] || { echo "::error::nothing built in $host_target"; exit 1; }
     printf 'libduckdb-sys %s\n%s\ntarget %s\nimage %s\n' \
       "$(duckdb_version)" "$(rustc_version)" "$target" "$IMAGE" > "$host_target/PREBUILT"
-    # Dependencies only: workspace crates (forge-*) rebuild from source
-    # anyway. DuckDB's object files are dropped; libduckdb.a stays.
-    tar --zstd -cf "$out" -C "$host_target" \
-      --exclude='forge-*' --exclude='forge_*' --exclude='libforge_*' \
-      --exclude='libduckdb-sys-*/out/*.o' \
-      PREBUILT {release,"$target"/release}/{deps,build,.fingerprint}
+    # Cargo's build-dir layout keeps each unit's outputs and fingerprint in
+    # <profile>/build/<package>/<hash>/. Dependencies only: workspace crates
+    # (forge-*) rebuild from source anyway. DuckDB's object files are
+    # dropped; libduckdb.a stays.
+    tar --zstd -T0 -cf "$out" -C "$host_target" \
+      --exclude='forge-*' --exclude='libduckdb-sys/*.o' \
+      PREBUILT release/build "$target"/release/build
     rm "$host_target/PREBUILT"
     ls -la "$out"
     ;;

@@ -66,7 +66,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/image"
           bash scripts/ci/alpine.sh pack ${{ matrix.target }} "$RUNNER_TEMP/image/prebuilt.tar.zst"
           # Free the build tree before docker copies the tarball.
-          rm -rf target/alpine/${{ matrix.target }}/release/forge* target/alpine/${{ matrix.target }}/release/deps/forge*
+          rm -rf target/alpine/${{ matrix.target }}/release/forge* target/alpine/${{ matrix.target }}/release/build/forge-*
       - name: Publish to GHCR
         env:
           REF: ${{ steps.pack.outputs.ref }}
