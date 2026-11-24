@@ -219,7 +219,7 @@ FEED=http://10.50.0.1:8000
 TAG=$(curl -fsS -H "Authorization: token anything" $FEED/repos/orbyntech/forge/releases/latest | jq -r .tag_name)
 curl -fLO -H "Authorization: token anything" "$FEED/orbyntech/forge/releases/download/$TAG/forge-${TAG#v}-x86_64-linux.tar.gz"
 tar xzf "forge-${TAG#v}-x86_64-linux.tar.gz" && cd "forge-${TAG#v}-x86_64-linux"
-sudo ./install.sh --public-url http://10.50.0.10:8080
+sudo ./install.sh --public-url http://10.50.0.10:3880
 ```
 
 The installer creates the administrator **`admin`** (no email needed) with a
@@ -242,7 +242,7 @@ public_key = "<scripts/setup_testing/.keys/release.pub>"
 sudo systemctl restart forge-server
 ```
 
-Open `http://10.50.0.10:8080` and sign in. Take checkpoint **"forge-installed"**.
+Open `http://10.50.0.10:3880` and sign in. Take checkpoint **"forge-installed"**.
 
 > **Note (installer bug, fixed: `init` now validates before creating the database, and the installer generates the password):** With a
 > password under 12 characters, the first run failed *after* `init` had
@@ -271,7 +271,7 @@ Open `http://10.50.0.10:8080` and sign in. Take checkpoint **"forge-installed"**
 
 Console → **Nodes → Add node**, for `10.50.0.11` and `10.50.0.12`:
 *Assisted* with `<lab-user>` and SSH credentials (sudo-capable), or *Manual*
-with the one-line installer run on the node. Agents connect to lab-a on TCP 7443.
+with the one-line installer run on the node. Agents connect to lab-a on TCP 3843.
 
 ## 11. Update loop
 

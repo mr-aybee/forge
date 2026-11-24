@@ -1,7 +1,7 @@
 data_dir = "scripts/dev/.data"
 api_listen = "127.0.0.1:8090"
-agent_listen = "127.0.0.1:7443"
+agent_listen = "127.0.0.1:3843"
 public_url = "http://localhost:8090"
-agent_public_url = "https://127.0.0.1:7443"
+agent_public_url = "https://127.0.0.1:3843"
 cookie_secure = false      # plain HTTP on localhost only
 ui_dir = "src/ui/dist"

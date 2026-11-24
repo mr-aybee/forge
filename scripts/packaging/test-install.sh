@@ -8,7 +8,7 @@
 #   2. installs the first release with get-forge.sh --version (the GitHub path),
 #      non-interactive, with a generated admin password and the agent on the
 #      server itself; checks the console, API, agent downloads, the analytics
-#      worker (DuckDB) on 55132, permissions and the MANIFEST version;
+#      worker (DuckDB) on 3832, permissions and the MANIFEST version;
 #   3. re-installs from the downloaded package (get-forge.sh --file);
 #   4. upgrades to the "latest" release (the second one) and checks that
 #      configuration, data and the administrator are kept;
@@ -137,7 +137,7 @@ run 'test ! -e /opt/forge && test ! -e /etc/forge' || { echo "FAIL: files were i
 echo "refused: $(grep -o '[^ ]* does not match SHA256SUMS' "$WORK/bad.log")"
 
 echo "--- 2. fresh install from a release (get-forge.sh --version)"
-run 'sh /root/get-forge.sh --version "v$V1" -- --yes --public-url http://localhost:8080 --admin-email admin@example.com \
+run 'sh /root/get-forge.sh --version "v$V1" -- --yes --public-url http://localhost:3880 --admin-email admin@example.com \
        --environment production --mfa required --allow-elevated-tokens no \
        --install-agent --cluster default --terminal-account forge-ops '"${DB:+--db-local}" | tee "$WORK/install.log"
 grep -q "is installed and running" "$WORK/install.log"
@@ -147,20 +147,20 @@ grep -q "Saved to *\/var\/lib\/forge\/initial-admin-password" "$WORK/install.log
 echo "--- checks"
 run '
   set -e
-  curl -fsS http://127.0.0.1:8080/api/version; echo
-  curl -s -o /tmp/i.html http://127.0.0.1:8080/; grep -q "<div id=\"root\"" /tmp/i.html || { echo "FAIL: console: embedded"; exit 1; }; echo "console: embedded"
-  [ "$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/api/nope)" = 404 ] || { echo "FAIL: unknown api path: 404"; exit 1; }; echo "unknown api path: 404"
-  curl -fsS -o /dev/null http://127.0.0.1:8080/install.sh || { echo "FAIL: node installer: served"; exit 1; }; echo "node installer: served"
-  curl -fsS -o /dev/null http://127.0.0.1:8080/agent/download/linux/x86_64/forge-agent || { echo "FAIL: agent binary: served from the package"; exit 1; }; echo "agent binary: served from the package"
+  curl -fsS http://127.0.0.1:3880/api/version; echo
+  curl -s -o /tmp/i.html http://127.0.0.1:3880/; grep -q "<div id=\"root\"" /tmp/i.html || { echo "FAIL: console: embedded"; exit 1; }; echo "console: embedded"
+  [ "$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3880/api/nope)" = 404 ] || { echo "FAIL: unknown api path: 404"; exit 1; }; echo "unknown api path: 404"
+  curl -fsS -o /dev/null http://127.0.0.1:3880/install.sh || { echo "FAIL: node installer: served"; exit 1; }; echo "node installer: served"
+  curl -fsS -o /dev/null http://127.0.0.1:3880/agent/download/linux/x86_64/forge-agent || { echo "FAIL: agent binary: served from the package"; exit 1; }; echo "agent binary: served from the package"
   systemctl is-active forge-server
   grep -q "^allow_elevated_tokens = false" /etc/forge/forge.toml || { echo "FAIL: elevated tokens: off (production, MFA required)"; exit 1; }; echo "elevated tokens: off (production, MFA required)"
   grep -q "^engine = \"duckdb\"" /etc/forge/forge.toml || { echo "FAIL: analytics: duckdb (default)"; exit 1; }; echo "analytics: duckdb (default)"
   # No pgrep in minimal images: look through /proc.
   grep -qs forge-analytics-worker /proc/[0-9]*/cmdline || { echo "analytics worker: NOT running"; exit 1; }
   echo "analytics worker: running"
-  rc=0; curl -sk -o /dev/null --max-time 3 https://127.0.0.1:55132/ || rc=$?
-  [ "$rc" != 7 ] && [ "$rc" != 28 ] || { echo "analytics upload port 55132: NOT listening (curl rc $rc)"; exit 1; }
-  echo "analytics upload port 55132: listening (curl rc $rc, client certificate required)"
+  rc=0; curl -sk -o /dev/null --max-time 3 https://127.0.0.1:3832/ || rc=$?
+  [ "$rc" != 7 ] && [ "$rc" != 28 ] || { echo "analytics upload port 3832: NOT listening (curl rc $rc)"; exit 1; }
+  echo "analytics upload port 3832: listening (curl rc $rc, client certificate required)"
   grep -q "\"version\": \"$V1\"" /opt/forge/dist/MANIFEST.json || { echo "FAIL: agent folder: MANIFEST.json $V1"; exit 1; }; echo "agent folder: MANIFEST.json $V1"
   [ "$(stat -c "%a %U" /var/lib/forge/initial-admin-password)" = "600 root" ] || { echo "FAIL: admin password file: 600 root"; exit 1; }; echo "admin password file: 600 root"
   grep -q "^password: ..*" /var/lib/forge/initial-admin-password
@@ -185,7 +185,7 @@ run '
   grep -q "\"version\": \"$V2\"" /opt/forge/dist/MANIFEST.json || { echo "FAIL: agent folder: MANIFEST.json $V2"; exit 1; }; echo "agent folder: MANIFEST.json $V2"
   test -f /var/lib/forge/forge.db || { echo "FAIL: database: kept"; exit 1; }; echo "database: kept"
   grep -q "^engine = \"duckdb\"" /etc/forge/forge.toml || { echo "FAIL: configuration: kept"; exit 1; }; echo "configuration: kept"
-  curl -fsS -o /dev/null http://127.0.0.1:8080/api/health || { echo "FAIL: health: ok"; exit 1; }; echo "health: ok"
+  curl -fsS -o /dev/null http://127.0.0.1:3880/api/health || { echo "FAIL: health: ok"; exit 1; }; echo "health: ok"
 '
 
 echo "--- 5. uninstall"

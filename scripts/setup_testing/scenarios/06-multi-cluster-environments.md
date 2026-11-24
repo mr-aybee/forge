@@ -71,7 +71,7 @@ forge access list
 Sign in as each user with a second context:
 
 ```powershell
-forge contexts add lab-alice --server http://10.50.0.10:8080; forge auth login   # as alice
+forge contexts add lab-alice --server http://10.50.0.10:3880; forge auth login   # as alice
 forge nodes list              # expect lab-b only (and maybe shared nodes)
 forge nodes exec lab-c -- id  # expect: permission denied (exit 4)
 forge contexts use lab-bob; forge auth login                                          # as bob

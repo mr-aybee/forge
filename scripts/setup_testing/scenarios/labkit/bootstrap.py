@@ -62,7 +62,7 @@ def mfa_off(lab) -> None:
     print("MFA is on after the install: turning it off (lab only)")
     lab.ssh("lab-a", f"{cli} off && systemctl restart forge-server", sudo=True)
     for _ in range(30):
-        if lab.ssh("lab-a", "curl -fsS http://127.0.0.1:8080/api/health", check=False).returncode == 0:
+        if lab.ssh("lab-a", "curl -fsS http://127.0.0.1:3880/api/health", check=False).returncode == 0:
             return
         time.sleep(2)
 

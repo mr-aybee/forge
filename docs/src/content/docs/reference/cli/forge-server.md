@@ -102,7 +102,7 @@ RUST_LOG=forge_server=debug ./forge-server --config ./forge.toml
 **Sample output** (log lines at start):
 
 ```text
-INFO forge_server: Orbyn Forge control plane started api=0.0.0.0:8080 agents=0.0.0.0:7443 version="<version>"
+INFO forge_server: Orbyn Forge control plane started api=0.0.0.0:3880 agents=0.0.0.0:3843 version="<version>"
 ```
 
 An info line follows at every start:
@@ -221,10 +221,10 @@ sudo -u forge /opt/forge/forge-server --config /etc/forge/forge.toml config
 ServerConfig {
     data_dir: "/var/lib/forge",
     database_url: None,
-    api_listen: 0.0.0.0:8080,
-    agent_listen: 0.0.0.0:7443,
+    api_listen: 0.0.0.0:3880,
+    agent_listen: 0.0.0.0:3843,
     public_url: "https://<forge-host>",
-    agent_public_url: "https://<forge-host>:7443",
+    agent_public_url: "https://<forge-host>:3843",
     cookie_secure: true,
     environment: Production,
     security: SecuritySettings {
@@ -350,7 +350,7 @@ sudo systemctl restart forge-server
 
 ```text
 $ forge-server --config /etc/forge/forge.toml public-address get
-http://192.0.2.10:8080 (public_url in forge.toml; no setting)
+http://192.0.2.10:3880 (public_url in forge.toml; no setting)
 
 $ forge-server --config /etc/forge/forge.toml public-address set https://forge.example.com
 Links now use https://forge.example.com. Restart forge-server to apply it to a running server: systemctl restart forge-server

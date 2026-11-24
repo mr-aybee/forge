@@ -12,11 +12,11 @@ rejected, so typos fail loudly.
 | --- | --- | --- |
 | `data_dir` | `.forge-data` | Database, keys, CA, plugin artifacts |
 | `database_url` | `sqlite:<data_dir>/forge.db` | Older one-line form: `sqlite:…` or `postgres://…`. When set it wins over `[database]`. Env: `FORGE_DATABASE_URL` |
-| `api_listen` | `127.0.0.1:8080` | API + UI listener (plain HTTP; front with TLS) |
-| `agent_listen` | `0.0.0.0:7443` | Agent mTLS listener |
+| `api_listen` | `127.0.0.1:3880` | API + UI listener (plain HTTP; front with TLS) |
+| `agent_listen` | `0.0.0.0:3843` | Agent mTLS listener |
 | `agent_hostnames` | `["localhost", "127.0.0.1"]` | Names/IPs in the agent listener certificate |
-| `public_url` | `http://localhost:8080` | External API/UI URL: the direct address of the console. Default for the [public address](#public-address) in links, and always an allowed browser origin. Also the WebAuthn relying party, the OAuth issuer for AI connectors and the SFTP host default |
-| `agent_public_url` | `https://localhost:7443` | Printed in enrollment instructions |
+| `public_url` | `http://localhost:3880` | External API/UI URL: the direct address of the console. Default for the [public address](#public-address) in links, and always an allowed browser origin. Also the WebAuthn relying party, the OAuth issuer for AI connectors and the SFTP host default |
+| `agent_public_url` | `https://localhost:3843` | Printed in enrollment instructions |
 | `node_public_url` | `public_url` | API URL as reachable from nodes (installer downloads) |
 | `agent_dist_dir` | `<data_dir>/dist` | Agent binaries handed to nodes: `forge-agent-linux-<arch>` and `forge-agent-helper-linux-<arch>` (`x86_64`, `aarch64`), served at `/agent/download/linux/<arch>/<binary>`, and `forge-agent-windows-x86_64.exe`, served at `/agent/download/windows/x86_64/forge-agent`. Releases ship only the Linux builds; a Windows agent build comes only from a source build of your own, which is not verified. The server hashes the builds at start-up and bakes the hashes into the installers, so restart it after you add or replace a build. `MANIFEST.json` in the folder (`{"version": "<version>", "files": {"<file>": "<sha256>"}}`) names the version of these builds: agent updates go to that version, not the server's. A build missing from the manifest, or with another hash, is not served; an unreadable manifest serves nothing. Without a manifest, the builds count as the server's own version. Release packages and the self-updater write it; for your own builds run `python3 scripts/dev/dist_manifest.py <dir> <version>` |
 | `cookie_secure` | `true` | `Secure` flag on session cookies. With `false`, cookies still get `Secure` on requests that a [trusted proxy](#security) reports as HTTPS (`X-Forwarded-Proto: https`) |
@@ -389,7 +389,7 @@ removed name again, add it to `allowed_commands` and restart the agent.
 :::
 
 ```toml
-server_url = "https://<forge-host>:7443"
+server_url = "https://<forge-host>:3843"
 allowed_commands = ["ping", "collect_facts", "service_status", "package", "container", "app", "site", "dns", "probe", "ingress", "fabric", "storage", "files", "access", "cancel", "processes", "process_action", "update", "stack", "terminal_account", "names", "tunnel", "container_exec", "docker_tls", "swarm"]
 ```
 
@@ -428,7 +428,7 @@ password_file = "/etc/forge/db-password"
 | `embedded_binary` | `<data_dir>/analytics/bin/clickhouse` | `embedded`: the engine binary, installed with `forge-server analytics install` |
 | `worker_memory_limit_mb` | `2048` | Resident memory of the analytics worker process, MiB, above which `forge-server` restarts it. `0` is no limit; otherwise at least `128`. Does not include the embedded engine, which has its own budget (`embedded_memory_mb`). With `duckdb` it does include DuckDB, which runs inside the worker |
 | `worker_binary` | `forge-analytics-worker` next to `forge-server` | Path of the analytics worker binary |
-| `worker_agent_listen` | `0.0.0.0:55132` | Address where the analytics worker accepts spool uploads from agents (HTTP/2 over mTLS). Nodes must reach this port; see [Network ports](/docs/reference/network-ports/) |
+| `worker_agent_listen` | `0.0.0.0:3832` | Address where the analytics worker accepts spool uploads from agents (HTTP/2 over mTLS). Nodes must reach this port; see [Network ports](/docs/reference/network-ports/) |
 | `worker_agent_url` | `https://<host of agent_public_url>:<port of worker_agent_listen>` | URL agents upload spool files to, sent at enrollment and in every heartbeat answer. Its host must be one of `agent_hostnames`, which the worker's certificate names. Set it when nodes reach the worker under another name or port, for example through NAT |
 | `worker_max_uploads` | `32` with `duckdb`, else `8` | Spool files the worker imports at once, `8` to `32`; with `duckdb`, every file waiting is written in one batch, so more slots mean larger batches; other values stop the server at startup. Each slot is one agent upload in flight, so a higher value stores more rows per second and uses more network. One more upload answers `429` at once; the agent backs off and retries, and the file waits in its spool. On a 2-CPU engine, 4 slots stored about 4,000 rows/s and 32 about 10,000 rows/s (see `scripts/dev/benchmarks/2026-11-21-chdb-capped-node-scaling.md`) |
 | `cpu_quota_vcpu` | `0` | `embedded`: CPU cap of the engine, vCPUs (decimal). `0` is no cap; otherwise 0.1–256. Rounded up to whole CPUs: the engine is pinned to them (CPU affinity) and its thread pools are sized to match. Linux only. `duckdb`: DuckDB's `threads`, rounded up; `0` uses 2 threads |

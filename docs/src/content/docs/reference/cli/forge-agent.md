@@ -140,7 +140,7 @@ Usage: forge-agent enroll [OPTIONS] --server <SERVER> --token <TOKEN>
 
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
-| `--server <SERVER>` | URL | | Yes | Agent endpoint of the control plane (the agent listener, port `7443` by default). Env: `FORGE_SERVER` | `--server https://<forge-host>:7443` |
+| `--server <SERVER>` | URL | | Yes | Agent endpoint of the control plane (the agent listener, port `3843` by default). Env: `FORGE_SERVER` | `--server https://<forge-host>:3843` |
 | `--token <TOKEN>` | string | | Yes | One-time enrollment token. Prefer `FORGE_ENROLL_TOKEN` so the token stays out of shell history and `ps` | `FORGE_ENROLL_TOKEN=<token>` |
 | `--hostname <HOSTNAME>` | string | the OS hostname | No | Hostname reported to Forge instead of the detected one | `--hostname <node-name>` |
 | `--terminal-account <NAME>` | string | none | No | Terminal account the installer created on this machine. Forge saves it to the node's terminal logins when it is a valid login name (1–32 characters of `A-Z a-z 0-9 _ . -`, not starting with `-`), not saved yet, and the list holds fewer than 32 accounts, audited as `server.logins.update` by the person who created the token. It does not create the account; [`forge-agent-helper terminal-account`](/docs/reference/cli/forge-agent-helper/#forge-agent-helper-terminal-account) does | `--terminal-account forge-ops` |
@@ -158,7 +158,7 @@ token out of shell history:
 read -rs FORGE_ENROLL_TOKEN && export FORGE_ENROLL_TOKEN
 sudo --preserve-env=FORGE_ENROLL_TOKEN runuser -u forge-agent -- \
   /usr/local/bin/forge-agent --state-dir /var/lib/forge-agent \
-  enroll --server https://<forge-host>:7443
+  enroll --server https://<forge-host>:3843
 unset FORGE_ENROLL_TOKEN
 ```
 
@@ -166,7 +166,7 @@ Enroll a Windows node (PowerShell as Administrator, in the folder that holds
 `forge-agent.exe`). This is the command the UI shows:
 
 ```powershell
-$t = Read-Host 'Enrollment token' -AsSecureString; $env:FORGE_ENROLL_TOKEN = [Net.NetworkCredential]::new('', $t).Password; Remove-Variable t; .\forge-agent.exe enroll --server https://<forge-host>:7443; Remove-Item Env:FORGE_ENROLL_TOKEN
+$t = Read-Host 'Enrollment token' -AsSecureString; $env:FORGE_ENROLL_TOKEN = [Net.NetworkCredential]::new('', $t).Password; Remove-Variable t; .\forge-agent.exe enroll --server https://<forge-host>:3843; Remove-Item Env:FORGE_ENROLL_TOKEN
 ```
 
 The token is read masked at the `Enrollment token` prompt, so it stays out
@@ -186,13 +186,13 @@ Report the terminal account the installer created, so Forge offers it on
 **Open terminal**:
 
 ```sh
-forge-agent enroll --server https://<forge-host>:7443 --terminal-account forge-ops
+forge-agent enroll --server https://<forge-host>:3843 --terminal-account forge-ops
 ```
 
 Report a different hostname:
 
 ```sh
-forge-agent enroll --server https://<forge-host>:7443 --hostname <node-name>
+forge-agent enroll --server https://<forge-host>:3843 --hostname <node-name>
 ```
 
 ### Sample output

@@ -33,12 +33,12 @@ docker build -q -t forge-lab-cp -f Dockerfile.cp . >/dev/null
 cat > "$LAB/forge.toml" <<TOML
 data_dir = "/var/lib/forge"
 api_listen = "0.0.0.0:8090"
-agent_listen = "0.0.0.0:7443"
+agent_listen = "0.0.0.0:3843"
 # Lab only: no authenticator needed (refused for non-loopback public URLs).
 dev_skip_mfa = true
 public_url = "http://localhost:8090"
 node_public_url = "http://forge-cp:8090"
-agent_public_url = "https://forge-cp:7443"
+agent_public_url = "https://forge-cp:3843"
 agent_hostnames = ["forge-cp", "localhost", "127.0.0.1"]
 cookie_secure = false
 ui_dir = "/opt/forge/ui"
@@ -64,7 +64,7 @@ if ! docker ps -a --format '{{.Names}}' | grep -qx forge-cp; then
       /opt/forge/bin/forge-server --config /etc/forge/forge.toml init --email "$ADMIN_EMAIL" >/dev/null
   fi
   docker run -d --name forge-cp --hostname forge-cp --network "$NET" \
-    --cpus 1 --memory 1g -p 8090:8090 -p 7443:7443 "${cp_mounts[@]}" \
+    --cpus 1 --memory 1g -p 8090:8090 -p 3843:3843 "${cp_mounts[@]}" \
     forge-lab-cp /opt/forge/bin/forge-server --config /etc/forge/forge.toml serve >/dev/null
 else
   docker start forge-cp >/dev/null
@@ -114,7 +114,7 @@ print(json.dumps(b))')
     -d '{"ttl_minutes":10}' http://localhost:8090/api/v1/enrollment-tokens | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
   rm -f "$jar"
   docker exec -e FORGE_ENROLL_TOKEN="$token" forge-cp \
-    "$AGENT" --state-dir "$AGENT_STATE" enroll --server https://127.0.0.1:7443 --hostname forge-cp >/dev/null
+    "$AGENT" --state-dir "$AGENT_STATE" enroll --server https://127.0.0.1:3843 --hostname forge-cp >/dev/null
 fi
 # The control agent only runs read-only commands (including peer probes).
 CONF="$LAB/cp-data/control-agent/agent.toml"

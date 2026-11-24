@@ -1,10 +1,10 @@
 #!/bin/sh
 # Installs (or upgrades) the Orbyn Forge control plane from this package.
 #
-#   sudo ./install.sh --public-url http://forge.example.com:8080
+#   sudo ./install.sh --public-url http://forge.example.com:3880
 #
 # Options:
-#   --public-url URL        URL users open (default: http://<hostname>:8080)
+#   --public-url URL        URL users open (default: http://<hostname>:3880)
 #   --public-address URL    address people use when Forge is published on a
 #                           domain through an ingress (https://forge.example.com,
 #                           origin only). Stored as the runtime setting; links in
@@ -254,7 +254,7 @@ OLD_VERSION=""
 [ -x "$PREFIX/forge-server" ] && OLD_VERSION="$("$PREFIX/forge-server" --version 2>/dev/null | awk '{print $2}')" || true
 
 HOST="$(hostname -f 2>/dev/null || hostname)"
-[ -n "$PUBLIC_URL" ] || PUBLIC_URL="http://$HOST:8080"
+[ -n "$PUBLIC_URL" ] || PUBLIC_URL="http://$HOST:3880"
 if [ -z "$AGENT_HOST" ]; then
   AGENT_HOST="$(printf '%s' "$PUBLIC_URL" | sed -E 's#^[a-z]+://##; s#[:/].*$##')"
 fi
@@ -324,7 +324,7 @@ if [ "$INTERACTIVE" = true ]; then
   printf '  %sAnswer each question, or press Enter for the default in brackets.%s\n\n' "$D" "$N"
   if [ ! -f "$CONF_DIR/forge.toml" ]; then
     IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-    ask PUBLIC_URL "Public URL users open" "http://${IP:-$HOST}:8080"
+    ask PUBLIC_URL "Public URL users open" "http://${IP:-$HOST}:3880"
     AGENT_HOST="$(printf '%s' "$PUBLIC_URL" | sed -E 's#^[a-z]+://##; s#[:/].*$##')"
     case "$PUBLIC_URL" in https://*) SECURE=true ;; *) SECURE=false ;; esac
   fi
@@ -480,11 +480,11 @@ if [ ! -f "$CONF_DIR/forge.toml" ]; then
   cat > "$CONF_DIR/forge.toml" <<EOF
 # Orbyn Forge control plane (written by install.sh; see forge.toml.example).
 data_dir = "$DATA_DIR"
-api_listen = "0.0.0.0:8080"
+api_listen = "0.0.0.0:3880"
 public_url = "$PUBLIC_URL"
 cookie_secure = $SECURE
-agent_listen = "0.0.0.0:7443"
-agent_public_url = "https://$AGENT_HOST:7443"
+agent_listen = "0.0.0.0:3843"
+agent_public_url = "https://$AGENT_HOST:3843"
 agent_hostnames = ["$AGENT_HOST", "$HOST", "localhost", "127.0.0.1"]
 agent_dist_dir = "$PREFIX/dist"
 
@@ -614,6 +614,9 @@ if [ "$FRESH_CONF" = true ]; then
       fi
     fi
     printf '\n[analytics]\nengine = "%s"\n' "$ANALYTICS"
+    # Written out: the code default stays 55132 so installs whose forge.toml
+    # never named the port keep it on upgrade.
+    printf 'worker_agent_listen = "0.0.0.0:3832"\n'
     [ -z "$ANALYTICS_URL" ] || printf 'url = "%s"\n' "$ANALYTICS_URL"
     [ -z "$ANALYTICS_NAME" ] || printf 'name = "%s"\n' "$ANALYTICS_NAME"
     if [ -n "${FORGE_ANALYTICS_PASSWORD:-}" ]; then
@@ -729,11 +732,11 @@ conf_value() { # conf_value <table or -> <key>: a quoted value from forge.toml
     }' "$CONF_DIR/forge.toml"
 }
 port_of() { printf '%s' "$1" | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p'; }
-API_LISTEN="$(conf_value - api_listen)"; API_LISTEN="${API_LISTEN:-0.0.0.0:8080}"
-API_PORT="$(port_of "$API_LISTEN")"; API_PORT="${API_PORT:-8080}"
-AGENT_PORT="$(port_of "$(conf_value - agent_listen)")"; AGENT_PORT="${AGENT_PORT:-7443}"
+API_LISTEN="$(conf_value - api_listen)"; API_LISTEN="${API_LISTEN:-0.0.0.0:3880}"
+API_PORT="$(port_of "$API_LISTEN")"; API_PORT="${API_PORT:-3880}"
+AGENT_PORT="$(port_of "$(conf_value - agent_listen)")"; AGENT_PORT="${AGENT_PORT:-3843}"
 ANALYTICS_ENGINE="$(conf_value analytics engine)"; ANALYTICS_ENGINE="${ANALYTICS_ENGINE:-off}"
-WORKER_PORT="$(port_of "$(conf_value analytics worker_agent_listen)")"; WORKER_PORT="${WORKER_PORT:-55132}"
+WORKER_PORT="$(port_of "$(conf_value analytics worker_agent_listen)")"; WORKER_PORT="${WORKER_PORT:-55132}"  # code default when forge.toml names none
 # The local address for checks: the API's own host unless it listens on all.
 API_HOST="$(printf '%s' "$API_LISTEN" | sed -E 's/:[0-9]+$//; s/^\[(.*)\]$/\1/')"
 case "$API_HOST" in ""|0.0.0.0|::) LOCAL_API="http://127.0.0.1:$API_PORT" ;; *:*) LOCAL_API="http://[$API_HOST]:$API_PORT" ;; *) LOCAL_API="http://$API_HOST:$API_PORT" ;; esac

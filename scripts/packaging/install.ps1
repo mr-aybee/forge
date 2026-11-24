@@ -3,7 +3,7 @@
   Installs (or upgrades) the Orbyn Forge control plane on Windows from this package.
 
 .EXAMPLE
-  .\install.ps1 -PublicUrl http://forge.example.com:8080
+  .\install.ps1 -PublicUrl http://forge.example.com:3880
 
 .DESCRIPTION
   Binaries go to "C:\Program Files\Orbyn Forge", configuration and data to
@@ -114,7 +114,7 @@ $newVersion = (& "$here\forge-server.exe" --version).Split(' ')[1]
 $oldVersion = if (Test-Path "$InstallDir\forge-server.exe") { (& "$InstallDir\forge-server.exe" --version).Split(' ')[1] } else { "" }
 
 $hostName = [System.Net.Dns]::GetHostEntry($env:COMPUTERNAME).HostName
-if (-not $PublicUrl) { $PublicUrl = "http://${hostName}:8080" }
+if (-not $PublicUrl) { $PublicUrl = "http://${hostName}:3880" }
 if (-not $AgentHost) { $AgentHost = ([Uri]$PublicUrl).Host }
 $secure = if ($PublicUrl.StartsWith("https://")) { "true" } else { "false" }
 $data = Join-Path $DataRoot "data"
@@ -150,11 +150,11 @@ if (-not (Test-Path $conf)) {
   @"
 # Orbyn Forge control plane (written by install.ps1; see forge.toml.example).
 data_dir = "$dataToml"
-api_listen = "0.0.0.0:8080"
+api_listen = "0.0.0.0:3880"
 public_url = "$PublicUrl"
 cookie_secure = $secure
-agent_listen = "0.0.0.0:7443"
-agent_public_url = "https://${AgentHost}:7443"
+agent_listen = "0.0.0.0:3843"
+agent_public_url = "https://${AgentHost}:3843"
 agent_hostnames = ["$AgentHost", "$hostName", "localhost", "127.0.0.1"]
 agent_dist_dir = "$distToml"
 
@@ -182,6 +182,9 @@ enabled = true
     }
   }
   $db += "`n[analytics]`nengine = `"$Analytics`"`n"
+  # Written out: the code default stays 55132 so installs whose forge.toml
+  # never named the port keep it on upgrade.
+  $db += "worker_agent_listen = `"0.0.0.0:3832`"`n"
   if ($AnalyticsUrl) { $db += "url = `"$AnalyticsUrl`"`n" }
   if ($AnalyticsName) { $db += "name = `"$AnalyticsName`"`n" }
   if ($env:FORGE_ANALYTICS_PASSWORD) {
@@ -272,9 +275,9 @@ function Conf-Port([string]$table, [string]$key, [int]$default) {
   }
   return $default
 }
-$apiPort = Conf-Port "" "api_listen" 8080
-$agentPort = Conf-Port "" "agent_listen" 7443
-$workerPort = Conf-Port "analytics" "worker_agent_listen" 55132
+$apiPort = Conf-Port "" "api_listen" 3880
+$agentPort = Conf-Port "" "agent_listen" 3843
+$workerPort = Conf-Port "analytics" "worker_agent_listen" 55132  # code default when forge.toml names none
 foreach ($p in $apiPort, $agentPort, $workerPort) {
   $name = "Orbyn Forge $p"
   if (-not (Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue)) {

@@ -56,7 +56,7 @@ accepts it only if all of these hold:
 
 ```toml
 # agent.toml — the server's owner has the final say
-server_url = "https://forge.example.com:7443"
+server_url = "https://forge.example.com:3843"
 allowed_commands = ["ping", "collect_facts", "service_status"]
 ```
 

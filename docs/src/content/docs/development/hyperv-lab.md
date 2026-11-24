@@ -14,7 +14,7 @@ container and App Store tests.
 
 | VM (Hyper-V name) | Address | Role |
 | --- | --- | --- |
-| `lab-a` (LAB-A) | 192.0.2.10 | Forge server, console at `http://192.0.2.10:8080` |
+| `lab-a` (LAB-A) | 192.0.2.10 | Forge server, console at `http://192.0.2.10:3880` |
 | `lab-b` (LAB-B) | 192.0.2.11 | Node |
 | `lab-c` (LAB-C) | 192.0.2.12 | Node and **Docker Engine** |
 | Windows host | 192.0.2.1 | Gateway (NAT), release feed on `:8000` |

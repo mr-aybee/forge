@@ -28,7 +28,7 @@ The root helper (`forge-agent-helper`) watches Docker's `/events` and
 follows each container that starts. The agent fetches what the helper
 collected on every heartbeat and writes it to its
 [spool](/docs/concepts/analytics/#node-spools). The agent uploads the
-spool straight to the analytics worker on port `55132`; the lines and
+spool straight to the analytics worker on port `3832`; the lines and
 samples never pass through `forge-server`. Collection needs a running
 analytics engine: while `[analytics] engine = "off"`, the server tells
 nodes not to collect.
@@ -43,7 +43,7 @@ flow:
         - { label: "Docker Engine", note: "/events, logs, stats" }
         - { label: "forge-agent-helper (root)", note: "follows containers, buffers, keeps cursors" }
         - { label: "forge-agent", note: "seals lines and samples into the spool" }
-        - { label: "forge-analytics-worker", note: "mTLS :55132 · attributes from the client certificate" }
+        - { label: "forge-analytics-worker", note: "mTLS :3832 · attributes from the client certificate" }
         - { label: "Analytics", note: "app_logs, container_metrics_1m / _1h", tone: accent }
 ```
 

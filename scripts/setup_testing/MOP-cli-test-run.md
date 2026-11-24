@@ -28,7 +28,7 @@ cargo build --release -p forge-cli                    # builds target\release\fo
 $env:Path = "<repo-root>\target\release;$env:Path"   # or add it to your user PATH once
 $env:FORGE_ALLOW_HTTP = "1"     # the lab server is plain http (lab only: tokens go unencrypted)
 
-forge contexts add lab --server http://10.50.0.10:8080
+forge contexts add lab --server http://10.50.0.10:3880
 forge auth login               # admin password: scripts\setup_testing\.lab\forge-admin.env
 forge auth whoami
 forge version                  # client and server versions
@@ -73,7 +73,7 @@ It prints a one-time token. On the node (as a sudo user):
 
 ```sh
 read -rs FORGE_ENROLL_TOKEN && export FORGE_ENROLL_TOKEN     # paste the token, press Enter
-curl -fsSL 'http://10.50.0.10:8080/install.sh?terminal_account=forge-ops' \
+curl -fsSL 'http://10.50.0.10:3880/install.sh?terminal_account=forge-ops' \
   | sudo --preserve-env=FORGE_ENROLL_TOKEN sh
 ```
 
@@ -615,7 +615,7 @@ forge packages install --file nginx.json
 forge packages installed
 ```
 
-lab-a's Forge server listens on `:8080`, and Nginx on `:80`, so they don't
+lab-a's Forge server listens on `:3880`, and Nginx on `:80`, so they don't
 clash.
 
 ### 5b.6 Create the load-balanced Site ✅

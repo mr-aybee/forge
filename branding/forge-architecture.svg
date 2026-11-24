@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 500" width="960" height="500" role="img" aria-label="Orbyn Forge architecture: operators reach the control plane over HTTPS from the web console, the forge CLI and API clients; AI agents connect to its MCP endpoint with audience-bound OAuth tokens; agents on Linux, Windows and edge nodes dial out to it over mutual TLS, and upload their analytics spools to the analytics worker over mutual TLS on port 55132.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 500" width="960" height="500" role="img" aria-label="Orbyn Forge architecture: operators reach the control plane over HTTPS from the web console, the forge CLI and API clients; AI agents connect to its MCP endpoint with audience-bound OAuth tokens; agents on Linux, Windows and edge nodes dial out to it over mutual TLS, and upload their analytics spools to the analytics worker over mutual TLS on port 3832.">
   <!-- README architecture diagram. Self-contained dark card so it reads on GitHub light and dark themes. -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
@@ -137,6 +137,6 @@
   <text class="s" x="764" y="404">outbound agent link</text>
   <line x1="730" y1="424" x2="756" y2="424" class="line" marker-end="url(#arr)"/>
   <text class="s" x="764" y="428">operator request</text>
-  <text class="lbl" x="730" y="456">spool uploads · mTLS :55132</text>
+  <text class="lbl" x="730" y="456">spool uploads · mTLS :3832</text>
   <text class="s" x="730" y="472">apps log to the node on :5341</text>
 </svg>

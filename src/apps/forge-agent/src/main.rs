@@ -20,7 +20,7 @@ struct Cli {
 enum Cmd {
     /// Enrolls this machine with a one-time token.
     Enroll {
-        /// Agent endpoint of the control plane, e.g. https://forge.example.com:7443
+        /// Agent endpoint of the control plane, e.g. https://forge.example.com:3843
         #[arg(long, env = "FORGE_SERVER")]
         server: String,
         /// Enrollment token. Prefer the environment variable so it stays out of shell history.

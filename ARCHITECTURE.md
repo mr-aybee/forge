@@ -11,7 +11,7 @@ in [`docs/`](docs/) (Astro Starlight).
 | Process | Crate | Responsibility | Trust |
 | --- | --- | --- | --- |
 | Control plane | `forge-server` | REST API + WebSocket, MCP endpoint (`/mcp`), identity, authorization, registry, jobs, audit, agent hub, plugin host | Highest: holds fleet state |
-| Analytics worker | `forge-analytics-worker` | All analytics work (D-141, D-142): the mTLS spool upload listener for agents (`:55132`), import of spool files, ingest of off-fleet service logs and of old agents' heartbeat telemetry, node-minute and container buffers, the log batch writer, log searches and history reads, retention and runtime tuning, and the embedded ClickHouse engine as its own child, or the DuckDB store in its own process (D-143). A child of `forge-server`, which supervises it (restart on exit, hang or memory limit) and talks to it over a private Unix socket | Trusted; holds no control-plane state, never reads the operational database |
+| Analytics worker | `forge-analytics-worker` | All analytics work (D-141, D-142): the mTLS spool upload listener for agents (`:3832`), import of spool files, ingest of off-fleet service logs and of old agents' heartbeat telemetry, node-minute and container buffers, the log batch writer, log searches and history reads, retention and runtime tuning, and the embedded ClickHouse engine as its own child, or the DuckDB store in its own process (D-143). A child of `forge-server`, which supervises it (restart on exit, hang or memory limit) and talks to it over a private Unix socket | Trusted; holds no control-plane state, never reads the operational database |
 | Plugin runner | `forge-plugin-runner` | Executes one Wasm component under fuel/epoch/memory budgets, spawned on demand | Untrusted code |
 | Node agent | `forge-agent` | Dials out to the control plane over mTLS, verifies signed commands, reports facts. Keeps the node's analytics spool, runs the local log listener (`127.0.0.1:5341` and the Docker bridge gateway) and uploads the spool to the analytics worker (D-142) | Trusted for its own server only |
 | Privileged helper | `forge-agent-helper` | Runs the few privileged operations from a fixed allowlist | Root/SYSTEM, minimal surface |
@@ -74,7 +74,7 @@ phases add adapters (PostgreSQL, OpenBao, KMS) without touching services.
  │ authn (login challenge, MFA policy) → Cedar authz → service    │◄──────┘
  │   → audit                                                      │
  │ job engine (re-authorizes every step)                          │
- │ agent hub (mTLS :7443)    plugin host ──spawn──┐               │
+ │ agent hub (mTLS :3843)    plugin host ──spawn──┐               │
  │ analytics supervisor ──spawn──┐                │               │
  └──────────▲───────────────────│────────────────│───────────────┘
             │ outbound-only     │ Unix socket    │ stdio (JSON lines)
@@ -82,7 +82,7 @@ phases add adapters (PostgreSQL, OpenBao, KMS) without touching services.
             │ mTLS, signed cmds ▼             ┌─ Plugin runner ──────────┐
             │      ┌─ Analytics worker ─────┐ │ wasmtime, no WASI, typed │
             │      │ spool uploads (mTLS    │ │ host calls via host only │
-            │      │ :55132), ingest, query │ └──────────────────────────┘
+            │      │ :3832), ingest, query  │ └──────────────────────────┘
             │      │ └─ embedded engine     │
             │      │    (127.0.0.1 only)    │
             │      └──────────▲─────────────┘
@@ -149,7 +149,7 @@ phases add adapters (PostgreSQL, OpenBao, KMS) without touching services.
    operational database; it gets the maps it needs (active nodes, service
    placements, ingest key hashes) pushed to it. See D-141.
    Its spool upload listener (`[analytics] worker_agent_listen`, default
-   `0.0.0.0:55132`) is a second network-facing mTLS endpoint for agents:
+   `0.0.0.0:3832`) is a second network-facing mTLS endpoint for agents:
    HTTP/2, client certificates verified against the Forge CA, the node
    must be in the pushed active-node list, and a file must name the
    certificate's node. Its server certificate and key are issued by

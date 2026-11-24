@@ -25,10 +25,10 @@ Create `forge.toml`:
 
 ```toml
 data_dir = "./.forge-data"
-api_listen = "127.0.0.1:8080"
-agent_listen = "0.0.0.0:7443"
-public_url = "http://localhost:8080"
-agent_public_url = "https://localhost:7443"
+api_listen = "127.0.0.1:3880"
+agent_listen = "0.0.0.0:3843"
+public_url = "http://localhost:3880"
+agent_public_url = "https://localhost:3843"
 cookie_secure = false        # local HTTP only; keep true behind TLS
 ui_dir = "src/ui/dist"
 ```
@@ -49,7 +49,7 @@ unset FORGE_ADMIN_PASSWORD
 forge-server --config forge.toml serve
 ```
 
-Open `http://localhost:8080` in a browser and sign in.
+Open `http://localhost:3880` in a browser and sign in.
 
 ## 4. Enroll an agent
 
@@ -58,7 +58,7 @@ In the console, open **Overview**, select **Add node**, then the
 the token with an [API key](/docs/guides/settings-and-api-keys/):
 
 ```sh
-curl -s -X POST http://localhost:8080/api/v1/enrollment-tokens \
+curl -s -X POST http://localhost:3880/api/v1/enrollment-tokens \
   -H "Authorization: Bearer $FORGE_API_KEY" \
   -H 'Content-Type: application/json' -d '{}'
 ```
@@ -69,7 +69,7 @@ machine to manage (here the same machine, so the agent binary is in
 
 ```sh
 printf 'Enrollment token: '; stty -echo; read -r FORGE_ENROLL_TOKEN; stty echo; echo; export FORGE_ENROLL_TOKEN
-forge-agent --state-dir ./agent-state enroll --server https://localhost:7443
+forge-agent --state-dir ./agent-state enroll --server https://localhost:3843
 unset FORGE_ENROLL_TOKEN
 forge-agent --state-dir ./agent-state run
 ```

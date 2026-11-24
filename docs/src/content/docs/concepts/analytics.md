@@ -127,7 +127,7 @@ passes data to the worker without decoding it. Node data does not pass
 through `forge-server` at all.
 
 ```
-apps on a node ──:5341──▶ forge-agent ──spool files, mTLS :55132──────────────▶ forge-analytics-worker ──▶ engine
+apps on a node ──:5341──▶ forge-agent ──spool files, mTLS :3832──────────────▶ forge-analytics-worker ──▶ engine
                             │ heartbeats: live sample, spool status              ▲  import, buffers,
                             ▼                                                    │  batch writer,
 off-fleet apps ──/api/events/raw──▶ forge-server ──control socket (0600 + secret)┘  searches, retention
@@ -179,7 +179,7 @@ flow:
     - steps:
         - { label: "Apps, Docker, the node", note: "POST :5341 · container output · minute samples" }
         - { label: "Spool on the node", note: "write buffer → sealed .zst files", tone: accent }
-        - { label: "Analytics worker", note: "mTLS :55132 · checks, parses, stores" }
+        - { label: "Analytics worker", note: "mTLS :3832 · checks, parses, stores" }
         - { label: "Analytics database", note: "app_logs · node history · container metrics" }
 ```
 

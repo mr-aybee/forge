@@ -7,7 +7,7 @@ sidebar:
 
 This guide publishes the Forge console on a domain through an existing
 cluster ingress. An Nginx edge node terminates TLS and proxies plain HTTP to
-the Forge server. The direct address (`http://<forge-ip>:8080`) keeps working,
+the Forge server. The direct address (`http://<forge-ip>:3880`) keeps working,
 and every link Forge sends, in alert emails, webhooks and approvals, uses the
 domain.
 
@@ -19,11 +19,11 @@ flow:
       steps:
         - { label: browser, edge: HTTPS }
         - { label: edge node, note: "Nginx, certificate", edge: HTTP }
-        - { label: "forge-server `:8080`", tone: accent }
+        - { label: "forge-server `:3880`", tone: accent }
     - title: Direct (still works)
       steps:
         - { label: browser, edge: HTTP }
-        - { label: "forge-server `:8080`", tone: accent }
+        - { label: "forge-server `:3880`", tone: accent }
 ```
 
 Forge needs no certificate of its own. The ingress endpoint handles TLS, with
@@ -36,8 +36,8 @@ edge.
   node running **Nginx**. For Let's Encrypt, **Certbot** on every edge.
 - A DNS record for the domain that points at the edges (yours, or
   Forge-managed through the profile).
-- The edges can reach the Forge server's API port (`api_listen`, `8080` by
-  default). The installer listens on `0.0.0.0:8080`.
+- The edges can reach the Forge server's API port (`api_listen`, `3880` by
+  default). The installer listens on `0.0.0.0:3880`.
 - Creating and applying the endpoint needs `workspace.manage` and
   `proxy.manage` on each edge with an MFA-verified session (**Admin** or
   **Platform admin**).
@@ -68,7 +68,7 @@ edge.
    - **Name:** `forge-console`.
    - **Domains:** `forge.example.com`.
    - **Active upstreams:** the Forge server's address as the edge reaches it,
-     for example `<forge-ip>:8080`. With typed targets, use an **Address**
+     for example `<forge-ip>:3880`. With typed targets, use an **Address**
      target with the same `host:port`.
    - **WebSockets:** on (the default). The console's live updates, terminal
      and tunnels use WebSockets.
@@ -84,7 +84,7 @@ edge.
      "name": "forge-console",
      "domains": ["forge.example.com"],
      "cluster_id": "<cluster-id>",
-     "targets": [{ "kind": "external", "address": "<forge-ip>:8080" }],
+     "targets": [{ "kind": "external", "address": "<forge-ip>:3880" }],
      "tls": "acme",
      "acme_email": "<admin-email>",
      "websockets": true
@@ -125,7 +125,7 @@ edge.
   certificate.
 - Open a node's terminal or watch a job. Live updates work, so the WebSocket
   origin check accepts the domain.
-- Open `http://<forge-ip>:8080`. The direct address still works.
+- Open `http://<forge-ip>:3880`. The direct address still works.
 - When the next alarm fires, the **Open the alarm** link in the email, and
   `links.alarm` in a webhook payload, start with `https://forge.example.com`.
   A **Send test** message carries no alarm link.
@@ -135,7 +135,7 @@ edge.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `502 Bad Gateway` on the domain | The edge cannot reach `<forge-ip>:8080` | Check `api_listen` is not `127.0.0.1`, and that a firewall allows the edge |
+| `502 Bad Gateway` on the domain | The edge cannot reach `<forge-ip>:3880` | Check `api_listen` is not `127.0.0.1`, and that a firewall allows the edge |
 | Terminal or live updates fail on the domain with `origin not allowed` | The public address is not set, or it differs from the URL in the browser (scheme, host or port) | Set the public address to exactly the origin you open, for example `https://forge.example.com` |
 | `value: use the origin only…` when you save | The address has a path, query or user name | Enter only `https://` and the host, with a port only when it is not 443 |
 | Sign-in on the domain works but you are signed out on the next page | `cookie_secure = true` is fine; with `false`, the edge is not in `trusted_proxies`, so cookies lack `Secure` and the browser may drop them | Add the edge's address to `[security] trusted_proxies` and restart |

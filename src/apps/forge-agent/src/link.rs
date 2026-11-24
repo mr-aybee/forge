@@ -27,7 +27,7 @@ impl Endpoint {
         let authority = rest.split('/').next().unwrap_or_default();
         let (host, port) = match authority.rsplit_once(':') {
             Some((h, p)) if !h.ends_with(']') || h.starts_with('[') => (h, p.parse().context("bad port")?),
-            _ => (authority, 7443),
+            _ => (authority, 3843),
         };
         if host.is_empty() {
             bail!("missing host in server URL");
@@ -173,7 +173,7 @@ mod tests {
         );
         assert_eq!(
             Endpoint::parse("https://cp.example").ok(),
-            Some(Endpoint { host: "cp.example".into(), port: 7443 })
+            Some(Endpoint { host: "cp.example".into(), port: 3843 })
         );
         assert_eq!(
             Endpoint::parse("https://127.0.0.1:7443/").ok(),

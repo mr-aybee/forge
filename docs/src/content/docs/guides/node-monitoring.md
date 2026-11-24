@@ -289,7 +289,7 @@ same. To cut a node off, see [Revoke a node](/docs/guides/add-nodes/#revoke-a-no
 | "the node did not answer in time" | The node did not answer within 30 seconds | Check that the node is online, then try again |
 | **History is not available**: "analytics is off on this server" | No analytics engine is set | Set `[analytics] engine`; see [Choose and connect databases](/docs/guides/databases/) |
 | **History is not available**: "analytics is unavailable" | The analytics database is starting or cannot be reached | Run `forge nodes analytics` and read `last_error` |
-| History stops at some time while the node stays online | The node cannot reach the analytics worker on TCP `55132`; its history waits in the node's spool | Open TCP `55132` from the node to the control plane. The spool uploads the backlog, up to its cap (512 MiB, 72 hours by default) |
+| History stops at some time while the node stays online | The node cannot reach the analytics worker on TCP `3832`; its history waits in the node's spool | Open TCP `3832` from the node to the control plane. The spool uploads the backlog, up to its cap (512 MiB, 72 hours by default) |
 | History has no top processes | The agent is older than the control plane | [Update the agent](/docs/guides/update-agents/) |
 | Facts look stale | Facts refresh once a day | Select **Collect facts** on **Details** |
 | CPU looks too high for a container | Inside containers, CPU figures are the host's | Read memory, which honours the container's limit |

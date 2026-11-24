@@ -1,7 +1,7 @@
 """What a CI job does after it published a release: deploy it with Forge.
 
     python ci_deploy.py --template forge.deploy.yaml --var TAG=v2 --var SHA256=<hex> \
-        --token-file ci.token [--server http://10.50.0.10:8080] [--environment prod]
+        --token-file ci.token [--server http://10.50.0.10:3880] [--environment prod]
 
 Fills `${NAME}` placeholders in the template from `--var NAME=value`, then
 runs `forge deploy apply -f <file> --wait` with the token in FORGE_TOKEN (as

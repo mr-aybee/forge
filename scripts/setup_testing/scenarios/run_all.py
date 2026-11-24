@@ -35,7 +35,7 @@ SETUP = HERE.parent
 REPO = SETUP.parent.parent
 LAB = SETUP / ".lab"
 DISTRO = "Ubuntu-24.04"
-FORWARDS = ["18080=10.50.0.10:8080", "18081=10.50.0.10:80", "18082=10.50.0.11:80"]
+FORWARDS = ["18080=10.50.0.10:3880", "18081=10.50.0.10:80", "18082=10.50.0.11:80"]
 
 SCENARIOS = sorted(p.name for p in HERE.glob("[0-9][0-9]-*.py") if not p.name.startswith(("00-", "10-")))
 

@@ -29,7 +29,7 @@ step and exits non-zero on any failure.
    │     /acme/hello-py/releases/download/<v1|v2|v3|broken>/hello-py-<v>.{tar.gz,zip}
    │     /acme/hello-sh/releases/download/v1/hello-sh-v1.tar.gz
    │     /acme/hello-py.git        (smart HTTP; tags v1, v2, v3)
-   ├── forge CLI → http://10.50.0.10:8080
+   ├── forge CLI → http://10.50.0.10:3880
  lab-a  server + nginx edge (endpoints s12…s16.lab.local)
  lab-b  native services (python3)           tags zone:a, runtime:native
  lab-c  containers + native services        tags zone:b, runtime:native, docker:yes

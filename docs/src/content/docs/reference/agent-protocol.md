@@ -15,7 +15,7 @@ types in `messages.rs` are wire-compatible).
 | `POST /agent/v1/enroll` | no | `EnrollRequest` → `EnrollResponse` |
 | `POST /agent/v1/heartbeat` | **yes** | `Heartbeat` → `HeartbeatResponse` |
 | `POST /agent/v1/renew` | **yes** | `RenewRequest` → `RenewResponse` |
-| `POST /agent/v1/spool` (analytics worker, port `55132`) | **yes** | One sealed spool file → `SpoolAck`. See [Analytics spool](#analytics-spool) |
+| `POST /agent/v1/spool` (analytics worker, port `3832`) | **yes** | One sealed spool file → `SpoolAck`. See [Analytics spool](#analytics-spool) |
 
 ## SignedCommand
 
@@ -111,13 +111,13 @@ the settings. See [Analytics: node spools](/docs/concepts/analytics/#node-spools
 
 | Message | Field | Meaning |
 | --- | --- | --- |
-| `EnrollResponse` | `analytics_url` (6) | The worker's upload URL (`https://host:55132`); empty while analytics is off. The agent stores it in `agent.toml` |
+| `EnrollResponse` | `analytics_url` (6) | The worker's upload URL (`https://host:3832`); empty while analytics is off. The agent stores it in `agent.toml` |
 | `Heartbeat` | `spool` (10) | `SpoolStatus`, present from agents that spool. Its presence tells the server not to expect `container_logs`, `NodeMetrics.containers` or `top_processes` |
 | `HeartbeatResponse` | `analytics` (6) | `AnalyticsAgentConfig`; absent while analytics is off, and the agent then writes nothing to the spool |
 
 | Message | Field | Type | Meaning |
 | --- | --- | --- | --- |
-| `AnalyticsAgentConfig` | `url` (1) | string | `https://host:55132` of the worker (`[analytics] worker_agent_url`) |
+| `AnalyticsAgentConfig` | `url` (1) | string | `https://host:3832` of the worker (`[analytics] worker_agent_url`) |
 | | `spool` (2) | `SpoolTuning` | Spool limits |
 | | `keys` (3) | repeated `IngestKey` | Ingest keys of the services placed on this node, at most 4,096 |
 | | `listener` (4) | `ListenerTuning` | Local listener limits |
@@ -151,7 +151,7 @@ In `SpoolTuning` and `ListenerTuning`, `0` keeps the agent's default; see
 
 ```http
 POST /agent/v1/spool HTTP/2
-Host: <forge-host>:55132
+Host: <forge-host>:3832
 Content-Type: application/x-ndjson+zstd
 x-forge-spool-file: <node-id>-<file-id>
 

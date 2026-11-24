@@ -29,7 +29,7 @@ this works, see [Analytics: node spools](/docs/concepts/analytics/#node-spools).
   `dba` and `auditor`. The `customer` role cannot read logs.
 - The service exists in Forge. See [Services](/docs/guides/services/).
 - For a service on a node: the node reaches the control plane on TCP
-  `55132` (the analytics worker). See [Network ports](/docs/reference/network-ports/).
+  `3832` (the analytics worker). See [Network ports](/docs/reference/network-ports/).
   Systemd and container services are supported on Linux nodes.
 - For an app outside the fleet: the machine reaches the Forge server over
   HTTPS.
@@ -257,10 +257,10 @@ browser remembers your choice.
 | `Connection refused` on `127.0.0.1:5341` | The node runs no listener: analytics is off on the server, or the agent is from an older release | Turn on analytics; [update the agent](/docs/guides/update-agents/) |
 | `Could not resolve host: forge-node` in a container | The container was not deployed by Forge as a service or stack, or its stack was deployed before Forge added the entry | Redeploy the service or stack, or add `forge-node:host-gateway` to the container's extra hosts |
 | `Connection refused` from `forge-node:5341`, and the agent logged that the Docker bridge gateway is not on this host | The node runs in a container and uses the host's Docker socket, so the bridge address is not its own | Run the app on the node itself and use `http://127.0.0.1:5341`, or send to the server URL |
-| `429 the node's log spool is full` | The node cannot upload (TCP `55132` blocked or the worker down) and the spool reached its cap, or the node's disk is below the free-space floor (256 MiB) | Open TCP `55132` from the node to the control plane; free disk on the node. Clients that retry resend the batch |
+| `429 the node's log spool is full` | The node cannot upload (TCP `3832` blocked or the worker down) and the spool reached its cap, or the node's disk is below the free-space floor (256 MiB) | Open TCP `3832` from the node to the control plane; free disk on the node. Clients that retry resend the batch |
 | `429 rate limited` | A container sends more than 50 requests a second with one key | Send larger batches less often; a platform administrator can raise `[analytics.listener] rate_per_sec` |
 | `413 body too large` from the node | A request body is over 1 MiB | Lower the client's batch size |
-| Events from a node never appear, the node answers `201` | The node cannot reach the worker on TCP `55132`, or the lines are not valid CLEF | Open the port; check the agent's log for upload errors; send one JSON object per line |
+| Events from a node never appear, the node answers `201` | The node cannot reach the worker on TCP `3832`, or the lines are not valid CLEF | Open the port; check the agent's log for upload errors; send one JSON object per line |
 | `400 line N is not a JSON object` (server) | A CLEF line is not one JSON object | Send one JSON object per line, with no wrapping array |
 | `400 a batch holds at most 10000 events` | The request holds more than 10,000 events | Lower the client's batch size |
 | `503 analytics_off` | `[analytics] engine = "off"` | Turn on analytics; see [Configuration](/docs/reference/configuration/#analytics) |
