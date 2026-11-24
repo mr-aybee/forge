@@ -254,7 +254,34 @@ OLD_VERSION=""
 [ -x "$PREFIX/forge-server" ] && OLD_VERSION="$("$PREFIX/forge-server" --version 2>/dev/null | awk '{print $2}')" || true
 
 HOST="$(hostname -f 2>/dev/null || hostname)"
-[ -n "$PUBLIC_URL" ] || PUBLIC_URL="http://$HOST:3880"
+
+# A public URL people and nodes can reach: http(s)://host[:port][/path].
+# Adds http:// when only host[:port] is given and drops a trailing slash.
+# Prints the cleaned URL, or nothing when it is not usable (no host, or a
+# listen-only address such as 0.0.0.0 that nobody can connect to).
+clean_public_url() {
+  u="$(printf '%s' "$1" | tr -d '[:space:]')"
+  case "$u" in http://*|https://*) ;; "") return 0 ;; *) u="http://$u" ;; esac
+  u="${u%/}"
+  host="$(printf '%s' "$u" | sed -E 's#^[a-z]+://##; s#/.*$##; s#:[0-9]+$##; s#^\[(.*)\]$#\1#')"
+  case "$host" in ""|0.0.0.0|::|"[::]"|*" "*) return 0 ;; esac
+  printf '%s' "$u" | grep -Eq '^https?://[^/:]+(:[0-9]{1,5})?(/.*)?$|^https?://\[[0-9a-fA-F:]+\](:[0-9]{1,5})?(/.*)?$' || return 0
+  printf '%s' "$u"
+}
+# The suggested public URL: this machine's DNS name when it resolves, else
+# its first IP address.
+suggest_public_url() {
+  case "$HOST" in *.*) getent hosts "$HOST" >/dev/null 2>&1 && { printf 'http://%s:3880' "$HOST"; return; } ;; esac
+  ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  printf 'http://%s:3880' "${ip:-$HOST}"
+}
+
+if [ -n "$PUBLIC_URL" ]; then
+  given="$PUBLIC_URL"
+  PUBLIC_URL="$(clean_public_url "$given")"
+  [ -n "$PUBLIC_URL" ] || die "--public-url $given is not a URL people and nodes can open. Use http(s)://<name or IP>[:port], for example http://forge.example.com:3880 (not 0.0.0.0, which is a listen address)."
+fi
+[ -n "$PUBLIC_URL" ] || PUBLIC_URL="$(suggest_public_url)"
 if [ -z "$AGENT_HOST" ]; then
   AGENT_HOST="$(printf '%s' "$PUBLIC_URL" | sed -E 's#^[a-z]+://##; s#[:/].*$##')"
 fi
@@ -323,8 +350,13 @@ read_secret() { # read_secret "prompt" -> SECRET (input hidden)
 if [ "$INTERACTIVE" = true ]; then
   printf '  %sAnswer each question, or press Enter for the default in brackets.%s\n\n' "$D" "$N"
   if [ ! -f "$CONF_DIR/forge.toml" ]; then
-    IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-    ask PUBLIC_URL "Public URL users open" "http://${IP:-$HOST}:3880"
+    d="$(suggest_public_url)"
+    while :; do
+      ask PUBLIC_URL "Public URL people and nodes open (http(s)://name-or-IP[:port])" "$d"
+      u="$(clean_public_url "$PUBLIC_URL")"
+      [ -n "$u" ] && { PUBLIC_URL="$u"; break; }
+      QN=$((QN - 1)); printf '     %sNot a reachable URL. Use http://<name or IP>:3880 or https://<name>; 0.0.0.0 is only a listen address.%s\n' "$Y" "$N"
+    done
     AGENT_HOST="$(printf '%s' "$PUBLIC_URL" | sed -E 's#^[a-z]+://##; s#[:/].*$##')"
     case "$PUBLIC_URL" in https://*) SECURE=true ;; *) SECURE=false ;; esac
   fi
@@ -669,6 +701,11 @@ if [ "$NEW_DB" = true ]; then
   if ! out=$(FORGE_ADMIN_PASSWORD="$FORGE_ADMIN_PASSWORD" runuser -u forge -- \
     "$PREFIX/forge-server" --config "$CONF_DIR/forge.toml" "$@" 2>&1); then
     rm -f "$DATA_DIR/forge.db" "$DATA_DIR/forge.db-wal" "$DATA_DIR/forge.db-shm" "$PASSWORD_FILE"
+    # A new install also drops the configuration it wrote, so the re-run is a
+    # new install again and asks every question (an upgrade keeps its own).
+    if [ "$FRESH_CONF" = true ]; then
+      rm -f "$CONF_DIR/forge.toml" "$CONF_DIR/db-password" "$CONF_DIR/analytics-password"
+    fi
     printf '%s\n' "$out" | sed 's/^/      /' >&2
     die "Could not create the administrator. Nothing was kept; fix the problem and run the installer again."
   fi
