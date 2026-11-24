@@ -11,7 +11,7 @@ pull requests from forks. Nobody pushes to the main repository directly.
    ```sh
    git clone https://github.com/<your-user>/forge.git
    cd forge
-   git remote add upstream https://github.com/orbyntech/forge.git
+   git remote add upstream https://github.com/mr-aybee/forge.git
    ```
 3. **Branch from `develop`**:
    ```sh
@@ -37,7 +37,9 @@ pull requests from forks. Nobody pushes to the main repository directly.
 The first time you contribute, CI on your PR waits for a maintainer to approve it.
 Feature and fix branches (`feat/…`, `fix/…`) are squash-merged into `develop`.
 `develop` is merged into `master` with a merge commit (never squashed), so
-`master` keeps every `develop` commit. Releases are tagged on `master`.
+`master` keeps every `develop` commit. `master` is then merged back into
+`develop` with a merge commit, so `develop` holds everything in `master`.
+Releases are tagged on `master`.
 
 ## Guidelines
 

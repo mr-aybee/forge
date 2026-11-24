@@ -1,12 +1,14 @@
 ---
 title: forge update
-description: Replace the forge CLI with the latest signed release after checking its signature, checksum and that it starts, on Linux, macOS and Windows.
+description: Replace the forge CLI with the latest signed release after checking its signature, checksum and that it starts, on Linux and Windows.
 sidebar:
   order: 28
 ---
 
 `forge update` replaces the running `forge` binary with the latest signed
-release. It works the same on Linux, macOS and Windows, and needs no sign-in.
+release. It works the same on Linux and Windows, and needs no sign-in. Releases
+include no macOS binary, so a CLI built from source on macOS cannot update
+itself this way.
 To update the Forge server, use [`forge system`](/docs/reference/cli/system/)
 instead. It takes the [global flags](/docs/reference/cli/#global-flags).
 

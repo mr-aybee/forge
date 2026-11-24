@@ -175,7 +175,8 @@ unless asked.
 - Fork `mr-aybee/forge`, clone your fork, and branch from `upstream/develop`.
   Open a PR into `develop`. `feat/…` and `fix/…` PRs are squash-merged into
   `develop`; `develop` is merged into `master` with a merge commit, never
-  squashed. Releases are tagged on `master`.
+  squashed, and `master` is then merged back into `develop` the same way.
+  Releases are tagged on `master`.
 - Work in that one clone. Don't create git worktrees or sibling copies.
 - Make small commits with imperative subjects.
 - Keep `DECISIONS.md` current for significant choices.

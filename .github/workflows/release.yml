@@ -160,9 +160,10 @@ jobs:
       matrix:
         # Both Linux targets build in the `cross` images: their musl GCC
         # toolchains compile DuckDB's bundled C++ (musl-tools on the host has
-        # no C++ compiler). Windows builds are paused for now; to restore
-        # them, add {"target":"x86_64-pc-windows-msvc","os":"windows","exe":".exe","file":""}.
-        include: ${{ fromJSON('[{"target":"x86_64-unknown-linux-musl","os":"linux","exe":"","file":"x86-64"},{"target":"aarch64-unknown-linux-musl","os":"linux","exe":"","file":"ARM aarch64"}]') }}
+        # no C++ compiler). The server, agent and their services ship for
+        # Linux only (x86_64, aarch64); Windows builds the `forge` CLI only
+        # (`cli_only`). No macOS builds.
+        include: ${{ fromJSON('[{"target":"x86_64-unknown-linux-musl","os":"linux","exe":"","file":"x86-64","cli_only":false},{"target":"aarch64-unknown-linux-musl","os":"linux","exe":"","file":"ARM aarch64","cli_only":false},{"target":"x86_64-pc-windows-msvc","os":"windows","exe":".exe","file":"","cli_only":true}]') }}
     runs-on: ${{ matrix.os == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
@@ -205,7 +206,9 @@ jobs:
           fi
           echo "CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}" >> "$GITHUB_ENV"
           # The heavy lock: nothing else compiles on the host meanwhile.
-          bash scripts/ci/build.sh heavy $build -j "$FORGE_CI_BUILD_JOBS" --locked --release --target ${{ matrix.target }} -p forge-server -p forge-agent -p forge-plugin-runner -p forge-analytics-worker
+          if [ "${{ matrix.cli_only }}" != true ]; then
+            bash scripts/ci/build.sh heavy $build -j "$FORGE_CI_BUILD_JOBS" --locked --release --target ${{ matrix.target }} -p forge-server -p forge-agent -p forge-plugin-runner -p forge-analytics-worker
+          fi
           # The `forge` CLI in a second build in this job: it reuses the
           # compiled dependencies, and building it separately keeps its extra
           # features (zbus blocking API for the keyring) out of the server and
@@ -219,12 +222,17 @@ jobs:
           t=${{ matrix.target }}; x="${{ matrix.exe }}"
           src="$CARGO_TARGET_DIR/$t/release"
           mkdir -p out
-          cp "$src/forge-server$x" "out/forge-server-$t$x"
-          cp "$src/forge-plugin-runner$x" "out/forge-plugin-runner-$t$x"
-          cp "$src/forge-analytics-worker$x" "out/forge-analytics-worker-$t$x"
           # The CLI: forge-cli-<target>[.exe], never under forge-agent-
           # (the updater hands every forge-agent-* asset to nodes).
           cp "$src/forge$x" "out/forge-cli-$t$x"
+          if [ "${{ matrix.cli_only }}" = true ]; then
+            "out/forge-cli-$t$x" --version
+            ls -la out
+            exit 0
+          fi
+          cp "$src/forge-server$x" "out/forge-server-$t$x"
+          cp "$src/forge-plugin-runner$x" "out/forge-plugin-runner-$t$x"
+          cp "$src/forge-analytics-worker$x" "out/forge-analytics-worker-$t$x"
           case "$t" in
             x86_64-unknown-linux-musl)
               cp "$src/forge-agent" out/forge-agent-linux-x86_64
@@ -232,8 +240,6 @@ jobs:
             aarch64-unknown-linux-musl)
               cp "$src/forge-agent" out/forge-agent-linux-aarch64
               cp "$src/forge-agent-helper" out/forge-agent-helper-linux-aarch64 ;;
-            x86_64-pc-windows-msvc)
-              cp "$src/forge-agent.exe" out/forge-agent-windows-x86_64.exe ;;
           esac
           if [ "${{ matrix.os }}" = linux ]; then
             for f in out/*; do
@@ -246,7 +252,7 @@ jobs:
           # The native binaries start, and the server reports the release
           # version (the self-updater compares it; the worker reports its
           # Cargo version).
-          if [ "$t" = x86_64-unknown-linux-musl ] || [ "$t" = x86_64-pc-windows-msvc ]; then
+          if [ "$t" = x86_64-unknown-linux-musl ]; then
             got=$("out/forge-server-$t$x" --version)
             echo "$got"
             case "$got" in *" $VERSION") ;; *) echo "::error::forge-server reports '$got', expected version $VERSION (is FORGE_BUILD_VERSION passed through Cross.toml?)"; exit 1 ;; esac
@@ -259,63 +265,9 @@ jobs:
           path: out/*
           retention-days: 7
 
-  # The `forge` CLI for macOS (server and agent are not built for macOS).
-  # One Apple-silicon job builds both targets: Apple clang and the macOS SDK
-  # cover x86_64 too, and one job is half the minutes of two (macOS minutes
-  # count 10x on GitHub-hosted runners). Not code-signed or notarised.
-  cli-macos:
-    name: Build forge CLI (macOS)
-    needs: version
-    runs-on: macos-14
-    env:
-      # Same minimum for both architectures, also for the C code `ring` builds.
-      MACOSX_DEPLOYMENT_TARGET: "11.0"
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.version.outputs.ref }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: apple-darwin-cli
-      - name: Build
-        shell: bash
-        env:
-          # Compiled in, so `forge update` knows which release it is running.
-          FORGE_BUILD_VERSION: ${{ needs.version.outputs.version }}
-        run: cargo build --release --locked -p forge-cli --target aarch64-apple-darwin --target x86_64-apple-darwin
-      - name: Check and collect binaries
-        shell: bash
-        run: |
-          mkdir -p out
-          for arch in aarch64 x86_64; do
-            t="$arch-apple-darwin"; bin="target/$t/release/forge"
-            got=$(lipo -archs "$bin")
-            want=$arch; [ "$arch" = aarch64 ] && want=arm64
-            [ "$got" = "$want" ] || { echo "::error::$bin is built for '$got', expected '$want'"; exit 1; }
-            # Only system libraries; never OpenSSL (CLAUDE.md: ring is the one crypto provider).
-            libs=$(otool -L "$bin" | tail -n +2 | awk '{ print $1 }')
-            echo "$t links:"; echo "$libs"
-            if echo "$libs" | grep -vE '^(/usr/lib/|/System/Library/)' | grep -q .; then
-              echo "::error::$bin links a non-system library; check its dependencies for OpenSSL or Homebrew libraries"; exit 1
-            fi
-            cp "$bin" "out/forge-cli-$t"
-          done
-          ./out/forge-cli-aarch64-apple-darwin --version
-          ls -la out
-      - uses: actions/upload-artifact@v4
-        with:
-          name: bin-apple-darwin-cli
-          path: out/*
-          retention-days: 7
-
   package:
     name: Package and sign
-    needs: [version, build, cli-macos]
-    # cli-macos is skipped without a macOS runner; package anyway.
-    if: ${{ !cancelled() && needs.version.result == 'success' && needs.build.result == 'success' && (needs.cli-macos.result == 'success' || needs.cli-macos.result == 'skipped') }}
+    needs: [version, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -10,6 +10,14 @@ create and what they print. Each release package carries one installer:
 `install.sh` in the Linux packages and `install.ps1` in the Windows package.
 For a walk-through, see [Installation](/docs/getting-started/installation/).
 
+:::note
+Releases do not publish a Windows package (`forge-<version>-x86_64-windows.zip`)
+yet. `install.ps1` and `get-forge.ps1` still exist and are described here, but
+`get-forge.ps1` stops with `The release has no Windows package.` against a
+current release. A Windows control plane comes only from a package you build
+from source with `scripts/packaging/package.sh`, and it is not verified.
+:::
+
 | Installer | Platform | Runs as | Supervisor it sets up |
 | --- | --- | --- | --- |
 | `install.sh` | Linux x86_64 or aarch64 with systemd | root | `forge-server.service` (systemd) |
@@ -530,6 +538,8 @@ Errors go to standard error after a `✖` (or `x`) mark.
 
 Download a release from GitHub (or take a package on disk), verify it, and
 run its `install.sh` or `install.ps1`. Both are assets of every release.
+Releases have no Windows package yet, so `get-forge.ps1` works only with
+`-File` and a package you built yourself.
 
 **Requires:** root (`get-forge.sh`) or PowerShell as Administrator
 (`get-forge.ps1`); `curl`, `tar`, `gzip` and OpenSSL 1.1.1 or later on Linux
