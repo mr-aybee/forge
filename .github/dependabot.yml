@@ -6,7 +6,7 @@ updates:
     target-branch: develop
     open-pull-requests-limit: 5
   - package-ecosystem: npm
-    directories: [/src/ui, /docs, /website]
+    directories: [/src/ui, /docs]
     schedule: { interval: weekly }
     target-branch: develop
     open-pull-requests-limit: 5

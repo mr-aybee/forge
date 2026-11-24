@@ -6,7 +6,7 @@
 
 **One secure control center for your Windows and Linux machines.**
 
-[![CI](https://github.com/mr-aybee/forge/actions/workflows/ci.yml/badge.svg)](https://github.com/mr-aybee/forge/actions/workflows/ci.yml)
+[![CI](https://github.com/orbyntech/forge/actions/workflows/ci.yml/badge.svg)](https://github.com/orbyntech/forge/actions/workflows/ci.yml)
 ![Rust 1.89+](https://img.shields.io/badge/rust-1.89%2B-0f4060?logo=rust)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-17647e)](LICENSE)
 ![Platforms](https://img.shields.io/badge/nodes-Windows%20%7C%20Linux-0a2444)
@@ -101,7 +101,7 @@ trust boundaries and the data model.
 On a Linux server with systemd (x86_64 or arm64):
 
 ```sh
-curl -fsSLO https://github.com/mr-aybee/forge/releases/latest/download/get-forge.sh
+curl -fsSLO https://github.com/orbyntech/forge/releases/latest/download/get-forge.sh
 sudo sh get-forge.sh
 ```
 
@@ -194,7 +194,6 @@ login for the test nodes `node-1`, `node-2` and `node-3`. Stop with
 | `src/apps` | `forge-server`, `forge-analytics-worker`, `forge-agent`, `forge-plugin-runner`, `forge` CLI |
 | `src/ui` | Web console (React + TypeScript) |
 | `src/tools`, `src/plugins` | Fleet benchmark, sample plugin |
-| `website/` | forge.orbyntech.com (React + TypeScript) and its container image |
 | `docs/` | Documentation site, served at `/docs/`: `cd docs; npm ci; npm run dev` |
 | `scripts/` | Dev config, the WSL lab, release packaging and the license |
 | `branding/` | Logo files |
@@ -218,9 +217,9 @@ login for the test nodes `node-1`, `node-2` and `node-3`. Stop with
 Contributions arrive as pull requests from forks:
 
 ```sh
-git clone https://github.com/<your-user>/forge.git   # your fork of mr-aybee/forge
+git clone https://github.com/<your-user>/forge.git   # your fork of orbyntech/forge
 cd forge
-git remote add upstream https://github.com/mr-aybee/forge.git
+git remote add upstream https://github.com/orbyntech/forge.git
 git switch -c <topic> upstream/develop
 ```
 

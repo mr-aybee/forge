@@ -134,14 +134,14 @@ the home lab the feed on `10.50.0.1:8000` stands in for GitHub.
 2. On lab-a, download and unpack the newest release from the lab feed:
    ```bash
    FEED=http://10.50.0.1:8000
-   TAG=$(curl -fsS "$FEED/repos/mr-aybee/forge/releases/latest" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
+   TAG=$(curl -fsS "$FEED/repos/orbyntech/forge/releases/latest" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
    VER=${TAG#v}
    cd /tmp && rm -rf forge-pkg && mkdir forge-pkg && cd forge-pkg
-   curl -fLO "$FEED/mr-aybee/forge/releases/download/$TAG/forge-$VER-x86_64-linux.tar.gz"
+   curl -fLO "$FEED/orbyntech/forge/releases/download/$TAG/forge-$VER-x86_64-linux.tar.gz"
    tar xzf "forge-$VER-x86_64-linux.tar.gz" && cd "forge-$VER-x86_64-linux"
    ```
    (A real user replaces the feed with
-   `https://github.com/mr-aybee/forge/releases/latest/download/forge-<version>-x86_64-linux.tar.gz`.)
+   `https://github.com/orbyntech/forge/releases/latest/download/forge-<version>-x86_64-linux.tar.gz`.)
 3. Install the server. Run the installer without options; on the terminal it
    asks the questions and shows a review screen:
    ```bash
@@ -181,7 +181,7 @@ the home lab the feed on `10.50.0.1:8000` stands in for GitHub.
    KEY='<contents of release.pub>'
    sudo sed -i '/^\[update\]/,$d' /etc/forge/forge.toml
    printf '[update]\nenabled = true\nfeed_url = "%s"\npublic_key = "%s"\n' \
-     "http://10.50.0.1:8000/repos/mr-aybee/forge/releases/latest" "$KEY" \
+     "http://10.50.0.1:8000/repos/orbyntech/forge/releases/latest" "$KEY" \
      | sudo tee -a /etc/forge/forge.toml >/dev/null
    sudo systemctl restart forge-server
    ```

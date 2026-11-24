@@ -32,8 +32,8 @@ The binary is `target/release/forge` (`forge.exe` on Windows).
 On arm64, use `aarch64` instead of `x86_64`:
 
 ```sh
-curl -fLO https://github.com/mr-aybee/forge/releases/latest/download/forge-cli-x86_64-unknown-linux-musl
-curl -fLO https://github.com/mr-aybee/forge/releases/latest/download/SHA256SUMS
+curl -fLO https://github.com/orbyntech/forge/releases/latest/download/forge-cli-x86_64-unknown-linux-musl
+curl -fLO https://github.com/orbyntech/forge/releases/latest/download/SHA256SUMS
 grep ' forge-cli-x86_64-unknown-linux-musl$' SHA256SUMS | sha256sum -c
 sudo install -m 0755 forge-cli-x86_64-unknown-linux-musl /usr/local/bin/forge
 forge --version
@@ -45,7 +45,7 @@ In PowerShell, as the user who runs the CLI:
 
 ```powershell
 $f = "forge-cli-x86_64-pc-windows-msvc.exe"
-$base = "https://github.com/mr-aybee/forge/releases/latest/download"
+$base = "https://github.com/orbyntech/forge/releases/latest/download"
 Invoke-WebRequest "$base/$f" -OutFile $f
 Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
 $want = ((Select-String -Path SHA256SUMS -Pattern " $([regex]::Escape($f))$").Line -split '\s+')[0]

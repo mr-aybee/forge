@@ -57,7 +57,7 @@ forge update [OPTIONS]
 
 | Variable | Type | Default | Description | Example |
 | --- | --- | --- | --- | --- |
-| `FORGE_UPDATE_FEED` | URL | the public release feed, `https://api.github.com/repos/mr-aybee/forge/releases/latest` | A GitHub-style "latest release" document, for a mirror. HTTPS only; plain HTTP only to a loopback address | `https://<mirror-host>/releases/latest` |
+| `FORGE_UPDATE_FEED` | URL | the public release feed, `https://api.github.com/repos/orbyntech/forge/releases/latest` | A GitHub-style "latest release" document, for a mirror. HTTPS only; plain HTTP only to a loopback address | `https://<mirror-host>/releases/latest` |
 | `FORGE_UPDATE_PUBLIC_KEY` | string, base64url | the Forge release key | The Ed25519 public key that signs the mirror's `SHA256SUMS` | `<base64url-public-key>` |
 
 :::caution
@@ -87,15 +87,15 @@ $ forge update --check
 {
   "available": true,
   "current": "0.1.0",
-  "feed": "https://api.github.com/repos/mr-aybee/forge/releases/latest",
+  "feed": "https://api.github.com/repos/orbyntech/forge/releases/latest",
   "latest": "0.1.1-dev.20261113.214755",
-  "url": "https://github.com/mr-aybee/forge/releases/tag/v0.1.1-dev.20261113.214755"
+  "url": "https://github.com/orbyntech/forge/releases/tag/v0.1.1-dev.20261113.214755"
 }
 ```
 
 ```text
 $ forge -o json update --check
-{"result":{"available":true,"current":"0.1.0","feed":"https://api.github.com/repos/mr-aybee/forge/releases/latest","latest":"0.1.1-dev.20261113.214755","url":"https://github.com/mr-aybee/forge/releases/tag/v0.1.1-dev.20261113.214755"},"schema":"forge.cli/v1"}
+{"result":{"available":true,"current":"0.1.0","feed":"https://api.github.com/repos/orbyntech/forge/releases/latest","latest":"0.1.1-dev.20261113.214755","url":"https://github.com/orbyntech/forge/releases/tag/v0.1.1-dev.20261113.214755"},"schema":"forge.cli/v1"}
 ```
 
 | Field | Description |

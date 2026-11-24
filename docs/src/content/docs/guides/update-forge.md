@@ -53,7 +53,7 @@ Run the installer of the newer release, as for a new install. It replaces
 the binaries and keeps the configuration and data:
 
 ```sh
-curl -fsSLO https://github.com/mr-aybee/forge/releases/download/<tag>/get-forge.sh
+curl -fsSLO https://github.com/orbyntech/forge/releases/download/<tag>/get-forge.sh
 sudo sh get-forge.sh --version <tag> -- --yes
 ```
 
@@ -93,7 +93,7 @@ packages you downloaded yourself.
 ```toml
 [update]
 enabled = true
-feed_url = "https://api.github.com/repos/mr-aybee/forge/releases/latest"
+feed_url = "https://api.github.com/repos/orbyntech/forge/releases/latest"
 ```
 
 `enabled = false` stops the checks. See

@@ -33,7 +33,7 @@ workloads run on Docker Engine **inside lab-c**.
 - **Builds** come from the local release feed: `publish.py` builds natively on Linux or in WSL on Windows
   (Rust only, no Docker), signs with the dev key in `.keys/`, and writes
   `releases/<tag>/`. `feed_server.py` serves them at 10.50.0.1:8000
-  imitating GitHub (`mr-aybee/forge`). The feed must be
+  imitating GitHub (`orbyntech/forge`). The feed must be
   running for installs and self-updates.
 
 ## Commands (from the repo root on Windows)

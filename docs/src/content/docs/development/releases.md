@@ -25,7 +25,7 @@ ticked (unticked by default).
 | Rust (Windows) | clippy, build, tests | full runs or agent changes |
 | cargo deny + cargo audit | licences, advisories, sources | dependency changes |
 | Store on PostgreSQL | builds with the `postgres` feature | store or lockfile changes |
-| UI, website and docs | `npm ci && npm run build` for each, then `npm audit --omit=dev --audit-level=high` | web changes |
+| UI and docs | `npm ci && npm run build` for each, then `npm audit --omit=dev --audit-level=high` | web changes |
 
 A new commit cancels the older run of the same branch or pull request.
 There is no scheduled run.
@@ -43,14 +43,14 @@ macOS. The repository is public, so these minutes are free.
   container is capped with
   `CROSS_CONTAINER_OPTS="--memory=12g --memory-swap=12g"`, so a link that
   runs away fails the job with a clear error.
-- **Latest wins.** `ci.yml` and manual website builds cancel the older run
+- **Latest wins.** `ci.yml` runs cancel the older run
   of the same ref. A newer release dry run of the same tag replaces the
   older one. A tagged release is never cancelled.
 - **Build cache.** Rust jobs use `Swatinem/rust-cache`.
 
 ### Repository settings
 
-Maintainers keep these settings on `mr-aybee/forge`:
+Maintainers keep these settings on `orbyntech/forge`:
 
 | Setting | Value |
 | --- | --- |
@@ -128,9 +128,6 @@ tag, delete it (`git push origin :refs/tags/<tag>`), fix, and tag again.
 5. **Publish**: creates the release in this repository as a draft, uploads
    the assets, then publishes it (pre-release for `-rc-NN`). Only this job
    has write access, through the workflow's `GITHUB_TOKEN`.
-6. **Website image**: builds `website/Dockerfile` and, for a published
-   release, pushes it to `ghcr.io/mr-aybee/forge-website` (see
-   [Website and docs site](/docs/development/website/)).
 
 The asset names are a public contract: `install.sh`, `install.ps1`,
 `get-forge.*`, the server's self-updater (`update.rs`) and `forge update`
@@ -154,7 +151,7 @@ it again; existing assets are replaced (`--clobber`).
 
 ### Where releases are published
 
-Source and releases live in the same public repository, `mr-aybee/forge`,
+Source and releases live in the same public repository, `orbyntech/forge`,
 under the Apache License 2.0 (the root `LICENSE`, shipped in every package
 as `LICENSE.txt`). Releases appear under **Releases** on GitHub.
 
@@ -230,7 +227,7 @@ On the lab server, point the updater at the feed and trust that key:
 
 ```toml
 [update]
-feed_url = "http://192.0.2.1:8000/repos/mr-aybee/forge/releases/latest"
+feed_url = "http://192.0.2.1:8000/repos/orbyntech/forge/releases/latest"
 public_key = "<scripts/setup_testing/.keys/release.pub>"
 ```
 

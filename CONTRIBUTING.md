@@ -1,17 +1,17 @@
 # Contributing to Orbyn Forge
 
 Thanks for helping. Forge is developed in the open at
-[`mr-aybee/forge`](https://github.com/mr-aybee/forge). All changes arrive as
+[`orbyntech/forge`](https://github.com/orbyntech/forge). All changes arrive as
 pull requests from forks. Nobody pushes to the main repository directly.
 
 ## Workflow
 
-1. **Fork** `mr-aybee/forge` on GitHub (the **Fork** button).
+1. **Fork** `orbyntech/forge` on GitHub (the **Fork** button).
 2. **Clone your fork** and add the main repository as `upstream`:
    ```sh
    git clone https://github.com/<your-user>/forge.git
    cd forge
-   git remote add upstream https://github.com/mr-aybee/forge.git
+   git remote add upstream https://github.com/orbyntech/forge.git
    ```
 3. **Branch from `develop`**:
    ```sh
@@ -31,7 +31,7 @@ pull requests from forks. Nobody pushes to the main repository directly.
    (cd docs && npm ci && npm run build)
    (cd website && npm ci && npm run build)
    ```
-6. **Push to your fork** and open a pull request into `mr-aybee/forge:develop`.
+6. **Push to your fork** and open a pull request into `orbyntech/forge:develop`.
    Fill in the PR template.
 
 The first time you contribute, CI on your PR waits for a maintainer to approve it.
@@ -53,7 +53,7 @@ Releases are tagged on `master`.
 
 ## Reporting bugs and ideas
 
-Use [GitHub Issues](https://github.com/mr-aybee/forge/issues). For security
+Use [GitHub Issues](https://github.com/orbyntech/forge/issues). For security
 problems, follow [`SECURITY.md`](SECURITY.md) instead.
 
 ## License

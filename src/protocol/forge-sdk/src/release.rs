@@ -15,7 +15,7 @@ use base64::Engine;
 pub const RELEASE_PUBLIC_KEY: &str = "6yf7l7jBEw6u446vqWAgt7P7bqEuaY5tpbYnWPHBmbg";
 
 /// Where releases are published (GitHub "latest release" document).
-pub const DEFAULT_FEED: &str = "https://api.github.com/repos/mr-aybee/forge/releases/latest";
+pub const DEFAULT_FEED: &str = "https://api.github.com/repos/orbyntech/forge/releases/latest";
 
 /// Verifies `sig_b64` (Ed25519) over `data` with a base64url public key.
 ///

@@ -149,7 +149,7 @@ only when its `SHA256SUMS.sig` verifies against `public_key`.
 | Key | Default | Description |
 | --- | --- | --- |
 | `update.enabled` | `true` | Check the feed every six hours and offer updates in the console |
-| `update.feed_url` | `https://api.github.com/repos/mr-aybee/forge/releases/latest` | GitHub "latest release" API URL, or a mirror that answers in the same shape |
+| `update.feed_url` | `https://api.github.com/repos/orbyntech/forge/releases/latest` | GitHub "latest release" API URL, or a mirror that answers in the same shape |
 | `update.releases_url` | `feed_url` without its trailing `/latest` | GitHub-compatible "list releases" URL. The server reads `<releases_url>?per_page=50` for the version list and `<releases_url>/tags/v<version>` for one release |
 | `update.public_key` | Forge's release key (built in) | Base64url Ed25519 public key that release checksums are signed with. Set it only for a mirror that signs its own builds |
 | `update.agent_batch_timeout_secs` | `1800` | Seconds one batch of an agent rollout waits for its offline nodes to come online (`1` to `86400`). The rollout itself waits, so an offline node holds no job worker; a node still offline at the end is skipped. The batch itself may run 10 minutes longer, for a node that came online at the last moment to restart on the new version |

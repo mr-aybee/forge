@@ -1,7 +1,7 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/mr-aybee/forge/security/advisories/new
+    url: https://github.com/orbyntech/forge/security/advisories/new
     about: Report security problems privately, not as an issue.
   - name: Documentation
     url: https://forge.orbyntech.com/docs/

@@ -576,7 +576,7 @@ What they check, in order, before anything is installed:
 
 | Environment variable | Description |
 | --- | --- |
-| `FORGE_RELEASES_URL` | Release base URL, default `https://github.com/mr-aybee/forge/releases`. A mirror must have the same `download/<tag>/<file>` and `latest/download/<file>` layout; `file://` and `http://` mirrors work, since the signature, not the transport, makes a download trusted |
+| `FORGE_RELEASES_URL` | Release base URL, default `https://github.com/orbyntech/forge/releases`. A mirror must have the same `download/<tag>/<file>` and `latest/download/<file>` layout; `file://` and `http://` mirrors work, since the signature, not the transport, makes a download trusted |
 | `FORGE_RELEASE_PUBLIC_KEY` | Trust another release key (base64url), for example a lab key. A warning is printed |
 
 When `get-forge.sh` runs from a pipe and a terminal is attached, the

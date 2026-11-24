@@ -1,8 +1,8 @@
 /*
- * Applies the Orbyn Forge brand (website/src/styles/tokens.css) to Starlight
+ * Applies the Orbyn Forge brand (docs/src/styles/tokens.css) to Starlight
  * so the docs and forge.orbyntech.com look like one site.
  */
-@import "../../../website/src/styles/tokens.css";
+@import "./tokens.css";
 
 :root {
   --sl-font: var(--forge-font-sans);
