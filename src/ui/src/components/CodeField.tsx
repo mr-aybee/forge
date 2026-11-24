@@ -6,9 +6,8 @@ import { TextArea } from "./ui";
 const Lazy = lazy(() => import("./files/Editor").then((m) => ({ default: m.CodeField })));
 
 /**
- * A form field for code (YAML, .env, nginx, shell…): the file editor's
- * CodeMirror with VS Code colours. It loads on first use; until then a
- * plain text area stands in.
+ * A form field for code (YAML, .env, nginx, shell…) in Monaco, the VS Code
+ * editor. It loads on first use; until then a plain text area stands in.
  */
 export function CodeField(p: CodeFieldProps) {
   const fallback = (

@@ -165,7 +165,7 @@ export function FileExplorer({ serverId, disabled, initialRoot }: { serverId: st
   // F2 renames, Delete trashes the selected row.
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
-      if (!selected || dialog || panel || (ev.target as HTMLElement)?.closest("input,textarea,.cm-editor")) return;
+      if (!selected || dialog || panel || (ev.target as HTMLElement)?.closest("input,textarea,.monaco-editor")) return;
       const e = entries.find((x) => x.name === selected);
       if (!e || e.protected) return;
       if (ev.key === "F2" && canWrite && canDelete) setDialog({ kind: "rename", entry: e });
@@ -464,7 +464,7 @@ export function FileExplorer({ serverId, disabled, initialRoot }: { serverId: st
           onDrop={(e) => void onDrop(e)}
           onContextMenu={(ev) => {
             // Leave the native menu in text fields; everywhere else show the folder menu.
-            if ((ev.target as HTMLElement)?.closest("input,textarea,.cm-editor")) return;
+            if ((ev.target as HTMLElement)?.closest("input,textarea,.monaco-editor")) return;
             ev.preventDefault();
             setMenu({ ...menuPoint(ev), actions: folderActions, label: `Actions for ${path}` });
           }}

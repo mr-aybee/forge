@@ -697,7 +697,7 @@ export function useRowMenu() {
     onContextMenu: (ev: React.MouseEvent<HTMLElement>) => {
       if (!actions.some((a) => !a.hidden)) return;
       const t = ev.target as HTMLElement | null;
-      if (t?.closest("a[href],input,textarea,select,[contenteditable],.cm-editor")) return;
+      if (t?.closest("a[href],input,textarea,select,[contenteditable],.monaco-editor")) return;
       const sel = window.getSelection();
       if (sel && !sel.isCollapsed && sel.toString().trim() && ev.currentTarget.contains(sel.anchorNode)) return;
       ev.preventDefault();
