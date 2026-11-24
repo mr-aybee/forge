@@ -34,7 +34,7 @@ file (see [Internal names](#internal-names)).
 ## Create the network
 
 1. Open the cluster and select **Network** in the sidebar. You can also
-   create the network in **Set up a cluster** with **Create the Forge cluster
+   create the network in **New cluster → Default** with **Create the Forge cluster
    network now**.
 2. Under **Set up the cluster network**, pick the size:
    - **Class B · /16** (default): 65,534 addresses, up to 239 nodes and 256

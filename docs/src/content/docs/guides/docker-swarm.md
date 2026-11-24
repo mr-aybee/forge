@@ -23,9 +23,8 @@ see [Cluster modes](/docs/concepts/clusters/#cluster-modes).
 
 ## Steps
 
-1. Go to **Clusters** → **New cluster**. Enter a name, set **Mode** to
-   **Docker Swarm**, then select **Create cluster**. You cannot change the
-   mode later.
+1. Go to **Clusters** → **New cluster** → **Swarm**. Enter a name, then
+   select **Create cluster**. You cannot change the mode later.
 2. Assign your Linux nodes to the cluster: on each node, open **Settings** →
    **Cluster**, or use `PATCH /servers/{id}` with `cluster_id`.
 3. Open the cluster and select the **Swarm** tab. Select **Create swarm**.
