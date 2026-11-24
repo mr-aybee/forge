@@ -241,6 +241,15 @@ function AllowedHostsForm({
           </span>
         </div>
       )}
+      {any && !pinned && (
+        <div className="flex items-start gap-2 rounded-md border border-warn/40 bg-warn-soft px-3 py-2 text-xs text-warn">
+          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+          <span>
+            With <Mono>*</Mono> there is no DNS-rebinding protection. Narrow the
+            list to the names you use.
+          </span>
+        </div>
+      )}
       {!view.any && (
         <Button
           type="button"

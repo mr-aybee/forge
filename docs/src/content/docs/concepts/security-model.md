@@ -133,22 +133,32 @@ port gets `400`.
   terminal, tunnels) and `/mcp` must equal the request's own origin on an
   allowed host, or the pinned address. Requests without `Origin` (the CLI,
   scripts) pass. State-changing API calls also need the double-submit CSRF
-  token.
+  token. With allowed hosts `*` this is not a DNS-rebinding defence: only
+  host-only cookies and bearer authentication block a rebound name, and
+  narrowing allowed hosts restores the protection.
 - **Links.** Request-derived addresses go only into links a signed-in user
   receives (Add node commands, device and approval links, the OpenAPI
   `servers` entry) and into the token-protected `/install.sh` and
-  `/install.ps1`. Emails, alerts, webhooks, OIDC and OAuth always use the
-  pinned public address, or the address an administrator last signed in on.
-  A forged `Host` header therefore cannot redirect links that leave Forge.
+  `/install.ps1`. Emails, alerts, webhooks and OIDC always use the pinned
+  public address, or the address an administrator last signed in on. That
+  address is recorded (and audited as `server.last_admin_address.update`)
+  only when the host is loopback, an address or the host name of the
+  server, a configured name (`agent_hostnames`, `public_url`,
+  `node_public_url`, the runtime public address) or a match in an explicit
+  allowed-hosts list (not `*`). MCP connector OAuth needs a pinned address
+  and answers `409 no_public_address` without one. A forged `Host` header
+  therefore cannot redirect links that leave Forge.
 - **HSTS** is sent only on HTTPS responses, never to a plain-HTTP name.
 
 ## Pinned server key
 
 Agents do not check the control plane's host name. They check its key.
 
-The agent listener (`3843`) and the analytics upload listener (`3832`)
-present certificates from Forge's internal CA for one long-lived
-control-plane key. Each agent keeps a pin set: the SHA-256 fingerprints of
+The agent listener (`3843`) presents certificates from Forge's internal CA
+for one long-lived control-plane key. The analytics upload listener (`3832`)
+has its own key pair, so the worker process never holds the agent hub's key;
+its fingerprints are announced as extra pins labelled `analytics` and
+`analytics-next`, and agents accept any pinned key on both connections. Each agent keeps a pin set: the SHA-256 fingerprints of
 the SubjectPublicKeyInfo of the keys it trusts. It accepts the server only if
 the leaf certificate's key is pinned, the certificate is within its validity
 period, and it allows server authentication. Another certificate from the
@@ -171,7 +181,16 @@ node reaches Forge on any IP or name, through NAT, or across networks.
   `[agent_tls] rotate_days` (default 365), once the next key has been
   announced for `grace_days` (default 30) and every online agent has it,
   the listeners switch. The old key is kept sealed for one more rotation.
-  Agents drop a key 30 days after Forge stops announcing it.
+  Agents drop a key 30 days after Forge stops announcing it. The analytics
+  keys rotate on the same schedule.
+- **Replay.** Announcements are accepted for 5 minutes after signing and
+  carry a sequence the server bumps on every change of its key set. A node
+  refuses one older than the last it applied, or one with the same sequence
+  and other keys.
+- **Revocation.** `forge-server agent-key rotate --now --revoke` switches at
+  once and revokes the old keys. Agents remove revoked keys from their pins
+  immediately and never pin them again from an announcement;
+  `forge-agent pins add` needs `--force` for one.
 - **Manual control.** `forge-server agent-key show|list|rotate [--now]` on the
   server, `forge-agent pins list|add|remove|fetch` on a node. A node offline
   for the whole grace period, or a forced switch, needs `pins add`.
@@ -179,7 +198,13 @@ node reaches Forge on any IP or name, through NAT, or across networks.
   database. Only fingerprints appear in output, the API and audit. On Linux
   nodes the pin set is owned by root; the agent user cannot change it, and
   the root helper writes only announcements signed by the command key over
-  an already pinned link. A set holds at most 8 keys.
+  an already pinned link. A set holds at most 8 keys. A pin file that exists
+  but cannot be read, parsed or is too large stops the agent from
+  connecting (it never falls back to the CA and host name); only a missing
+  file means "not pinned yet".
+- **Acknowledgements.** The server records only fingerprints it holds,
+  stores a report that drops keys at most once a minute per agent, and
+  forgets the reports of deleted nodes.
 - **Older agents.** An agent with no pins keeps checking the CA and the host
   name until it receives a pin over its existing link.
 

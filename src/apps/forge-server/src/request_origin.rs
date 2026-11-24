@@ -286,6 +286,11 @@ impl FromRequestParts<AppState> for RequestOrigin {
 /// (a CLI or server-to-server client) passes. A browser's must equal the
 /// request's own origin on an allowed host, or be the pinned address
 /// (kept for proxies that are not in `trusted_proxies`).
+///
+/// This guarantees same-origin only. It is not a DNS-rebinding defence
+/// while allowed hosts is `*`: a rebound name is its own origin, so only
+/// host-only cookies and bearer authentication stop it there. Narrowing
+/// `allowed_hosts` restores rebinding protection.
 #[must_use]
 pub fn origin_header_ok(state: &AppState, request: &RequestOrigin, headers: &HeaderMap) -> bool {
     let Some(v) = headers.get(header::ORIGIN) else { return true };
