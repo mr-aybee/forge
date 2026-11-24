@@ -79,6 +79,8 @@ pub struct ServerConfig {
     pub alerts: AlertSettings,
     /// Port tunnels from the CLI (D-091, D-100).
     pub tunnels: TunnelSettings,
+    /// The control-plane key agents pin and its rotation (D-167).
+    pub agent_tls: AgentTlsSettings,
     /// The file this configuration was read from (set by `load`).
     #[serde(skip)]
     pub config_path: Option<PathBuf>,
@@ -113,6 +115,25 @@ impl Default for SftpSettings {
             max_hours: 7 * 24,
             allow_never_expiry: false,
         }
+    }
+}
+
+/// `[agent_tls]`: rotation of the control-plane key that agents pin (D-167).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AgentTlsSettings {
+    /// Days a key serves before the server switches to the next one
+    /// (after `grace_days` and once every online agent has it); 0: only
+    /// `forge-server agent-key rotate` switches.
+    pub rotate_days: u32,
+    /// Days the next key is announced to agents before a switch, and days
+    /// agents keep a retired key afterwards.
+    pub grace_days: u32,
+}
+
+impl Default for AgentTlsSettings {
+    fn default() -> Self {
+        Self { rotate_days: 365, grace_days: 30 }
     }
 }
 
@@ -750,6 +771,7 @@ impl Default for ServerConfig {
             names: NameSettings::default(),
             alerts: AlertSettings::default(),
             tunnels: TunnelSettings::default(),
+            agent_tls: AgentTlsSettings::default(),
             config_path: None,
             heartbeat_hold_secs: 25,
             offline_after_secs: 90,
@@ -920,6 +942,12 @@ impl ServerConfig {
                 "[alerts] delivery_retry_base_secs must be 1 to 3600, and delivery_retry_max_secs from it to 86400"
             );
         }
+        let k = &self.agent_tls;
+        if k.rotate_days > 3650 || k.grace_days > 365 || (k.rotate_days > 0 && k.grace_days >= k.rotate_days) {
+            anyhow::bail!(
+                "[agent_tls] rotate_days must be 0 to 3650 and grace_days 0 to 365, less than rotate_days when it is set"
+            );
+        }
         let t = &self.tunnels;
         if t.max_per_user == 0 || t.max_connections_per_node == 0 || t.max_connections == 0 {
             anyhow::bail!("[tunnels] limits must be at least 1");
@@ -1030,6 +1058,14 @@ impl ServerConfig {
     #[must_use]
     pub fn node_agent_url(&self) -> &str {
         &self.agent_public_url
+    }
+
+    /// The port agents upload spool files to on the host of their own
+    /// server URL (D-167); `None` when `[analytics] worker_agent_url` names
+    /// another address, which agents then use as given.
+    #[must_use]
+    pub fn worker_agent_port(&self) -> Option<u16> {
+        self.analytics.worker_agent_url.is_none().then(|| self.analytics.worker_agent_listen.port())
     }
 
     /// The URL agents upload spool files to (D-142): `[analytics]

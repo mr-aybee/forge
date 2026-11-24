@@ -9,7 +9,7 @@ use prost::Message;
 use ring::rand::SystemRandom;
 use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
 
-use crate::messages::{CommandBody, SignedCommand};
+use crate::messages::{CommandBody, ServerKeys, SignedCommand, SignedServerKeys};
 use crate::{Command, MAX_CLOCK_SKEW, MAX_COMMAND_TTL};
 
 /// Signs commands for agents (control plane only).
@@ -81,6 +81,59 @@ impl CommandSigner {
         let signature = self.key.sign(&bytes).as_ref().to_vec();
         SignedCommand { body: bytes, signature, key_id: self.key_id.clone() }
     }
+}
+
+/// Prefix of what is signed for [`ServerKeys`], so such a signature can never
+/// pass as one over a command body.
+const SERVER_KEYS_CONTEXT: &[u8] = b"forge-server-keys-v1\0";
+
+/// How long a signed key announcement is accepted after it was issued.
+pub const SERVER_KEYS_MAX_AGE: Duration = Duration::from_secs(3600);
+
+fn server_keys_message(body: &[u8]) -> Vec<u8> {
+    let mut m = Vec::with_capacity(SERVER_KEYS_CONTEXT.len() + body.len());
+    m.extend_from_slice(SERVER_KEYS_CONTEXT);
+    m.extend_from_slice(body);
+    m
+}
+
+impl CommandSigner {
+    /// Signs a control-plane key announcement (D-167).
+    #[must_use]
+    pub fn sign_server_keys(&self, keys: &ServerKeys) -> SignedServerKeys {
+        let body = keys.encode_to_vec();
+        let signature = self.key.sign(&server_keys_message(&body)).as_ref().to_vec();
+        SignedServerKeys { body, signature }
+    }
+}
+
+/// Checks a key announcement against the command key: the signature, the
+/// target node and its age (at most [`SERVER_KEYS_MAX_AGE`], with clock skew).
+pub fn verify_server_keys(
+    public_key: &[u8],
+    signed: &SignedServerKeys,
+    server_id: &str,
+    now: Timestamp,
+) -> Result<ServerKeys, VerifyError> {
+    UnparsedPublicKey::new(&ED25519, public_key)
+        .verify(&server_keys_message(&signed.body), &signed.signature)
+        .map_err(|_| VerifyError::BadSignature)?;
+    let keys = ServerKeys::decode(signed.body.as_slice()).map_err(|_| VerifyError::Malformed)?;
+    if keys.server_id != server_id {
+        return Err(VerifyError::WrongTarget);
+    }
+    let skew = i64::try_from(MAX_CLOCK_SKEW.as_millis()).unwrap_or(i64::MAX);
+    let max_age = i64::try_from(SERVER_KEYS_MAX_AGE.as_millis()).unwrap_or(i64::MAX);
+    if keys.issued_at_ms > now.0 + skew {
+        return Err(VerifyError::NotYetValid);
+    }
+    if now.0 > keys.issued_at_ms + max_age + skew {
+        return Err(VerifyError::Expired);
+    }
+    if keys.keys.len() > crate::messages::MAX_SERVER_KEYS {
+        return Err(VerifyError::Malformed);
+    }
+    Ok(keys)
 }
 
 fn uuid_like() -> String {
@@ -304,5 +357,29 @@ mod tests {
             v.verify(&cmd, now).unwrap();
         }
         assert!(v.seen.lock().unwrap().ids.len() <= 2);
+    }
+
+    #[test]
+    fn server_key_announcements_are_signed_for_one_node_and_fresh() {
+        let (s, _) = pair();
+        let keys = ServerKeys {
+            server_id: "srv-1".into(),
+            issued_at_ms: T0.0,
+            keys: vec![crate::messages::ServerKey { sha256: "ab".repeat(32), label: "current".into() }],
+        };
+        let signed = s.sign_server_keys(&keys);
+        assert_eq!(verify_server_keys(&s.public_key(), &signed, "srv-1", T0), Ok(keys.clone()));
+        assert_eq!(verify_server_keys(&s.public_key(), &signed, "srv-2", T0), Err(VerifyError::WrongTarget));
+        let late = T0.plus(SERVER_KEYS_MAX_AGE + MAX_CLOCK_SKEW + Duration::from_secs(1));
+        assert_eq!(verify_server_keys(&s.public_key(), &signed, "srv-1", late), Err(VerifyError::Expired));
+        let other = CommandSigner::generate().unwrap();
+        assert_eq!(verify_server_keys(&other.public_key(), &signed, "srv-1", T0), Err(VerifyError::BadSignature));
+        let mut tampered = signed.clone();
+        tampered.body.push(0);
+        assert_eq!(verify_server_keys(&s.public_key(), &tampered, "srv-1", T0), Err(VerifyError::BadSignature));
+        // A command signature never passes as an announcement.
+        let (_, cmd) = s.issue("srv-1", "u", Command::Ping(Ping {}), T0, ttl());
+        let forged = SignedServerKeys { body: cmd.body, signature: cmd.signature };
+        assert_eq!(verify_server_keys(&s.public_key(), &forged, "srv-1", T0), Err(VerifyError::BadSignature));
     }
 }

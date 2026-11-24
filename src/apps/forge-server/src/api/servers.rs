@@ -114,7 +114,8 @@ pub async fn create_enrollment_token(
     };
     caller.authorize(Action::ServerEnroll, scope.clone()).await?;
     let ttl = req.ttl_minutes.unwrap_or(60).clamp(1, 1440);
-    let generated = forge_pki::enrollment::generate(state.ca.fingerprint());
+    let generated =
+        forge_pki::enrollment::generate(state.ca.fingerprint(), Some(&state.agent_keys.current_fingerprint()));
     let token = EnrollmentToken {
         id: forge_secrets::crypto::random_token::<9>(),
         workspace_id: org,

@@ -1,0 +1,399 @@
+//! The control-plane keys this node pins (D-167).
+//!
+//! The agent accepts the control plane only if the key in its certificate
+//! (SHA-256 of the SubjectPublicKeyInfo) is in this set; names and
+//! addresses are not checked, so the node reaches Forge by any address.
+//!
+//! **Where.** On Linux nodes set up by the installer (the default state
+//! directory) the set lives in `/var/lib/forge-agent-pins/pins.toml`,
+//! owned by root and readable by the agent user, which cannot change it.
+//! Only the root helper writes it, for a key announcement Forge signed with
+//! its command key ([`apply_signed`]), and `forge-agent pins` run as root.
+//! Elsewhere (Windows, where the agent is LocalSystem; a non-default state
+//! directory, as in tests) it is `pins.toml` in the state directory.
+//!
+//! **Rotation.** Forge announces its current and next key in every
+//! heartbeat reply. New ones are added; a pinned key Forge no longer
+//! announces is marked retired and dropped [`RETIRED_KEPT`] later, so the
+//! node still reaches a server that was rolled back meanwhile. At most
+//! [`MAX_PINS`] keys are kept; keys added by hand (`pins add`) are never
+//! retired by an announcement.
+
+use std::path::{Path, PathBuf};
+
+use forge_proto::messages::{ServerKey, SignedServerKeys};
+use serde::{Deserialize, Serialize};
+
+/// Most keys in a pin set.
+pub const MAX_PINS: usize = 8;
+/// Largest pin file read.
+pub const MAX_FILE: u64 = 64 * 1024;
+/// The root-owned folder of the pin file on Linux nodes.
+pub const SYSTEM_DIR: &str = "/var/lib/forge-agent-pins";
+/// The pin file's name.
+pub const FILE: &str = "pins.toml";
+/// How long a key Forge stopped announcing stays pinned (30 days).
+pub const RETIRED_KEPT: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 3600);
+/// Label of keys added by an operator.
+pub const LABEL_MANUAL: &str = "manual";
+/// Label of the key from the enrollment token.
+pub const LABEL_ENROLLMENT: &str = "enrollment";
+
+/// What can go wrong with the pin set.
+#[derive(Debug, thiserror::Error)]
+pub enum PinError {
+    #[error("not a key fingerprint: {0} (expected 64 hex digits, optionally prefixed sha256:)")]
+    Fingerprint(String),
+    #[error("the pin set is full ({MAX_PINS} keys); remove one first with 'forge-agent pins remove'")]
+    Full,
+    #[error("{0}: {1}")]
+    Io(String, String),
+    #[error("{0} is unreadable: {1}")]
+    Parse(String, String),
+    #[error("the key announcement was refused: {0}")]
+    Announcement(String),
+}
+
+/// One pinned key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Pin {
+    /// SHA-256 of the key's SubjectPublicKeyInfo, 64 lower-case hex digits.
+    pub sha256: String,
+    /// `current`, `next`, `enrollment` or `manual` (or an operator's own).
+    pub label: String,
+    /// When it was added (ms since epoch).
+    pub added_ms: i64,
+    /// When Forge stopped announcing it; dropped [`RETIRED_KEPT`] later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_ms: Option<i64>,
+}
+
+/// The pin file.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PinSet {
+    #[serde(default)]
+    pub server_keys: Vec<Pin>,
+}
+
+fn canonical(fp: &str) -> Result<String, PinError> {
+    forge_pki::parse_fingerprint(fp).ok_or_else(|| PinError::Fingerprint(fp.chars().take(80).collect()))
+}
+
+fn clean_label(label: &str) -> String {
+    let l: String = label.chars().filter(|c| !c.is_control()).take(40).collect();
+    if l.trim().is_empty() { LABEL_MANUAL.to_owned() } else { l.trim().to_owned() }
+}
+
+impl PinSet {
+    /// The pinned fingerprints.
+    #[must_use]
+    pub fn fingerprints(&self) -> Vec<String> {
+        self.server_keys.iter().map(|p| p.sha256.clone()).collect()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.server_keys.is_empty()
+    }
+
+    #[must_use]
+    pub fn contains(&self, fp: &str) -> bool {
+        self.server_keys.iter().any(|p| p.sha256 == fp)
+    }
+
+    /// Adds a key (or renames it and makes it active again). Returns
+    /// whether the set changed.
+    pub fn add(&mut self, fp: &str, label: &str, now_ms: i64) -> Result<bool, PinError> {
+        let fp = canonical(fp)?;
+        let label = clean_label(label);
+        if let Some(p) = self.server_keys.iter_mut().find(|p| p.sha256 == fp) {
+            let changed = p.label != label || p.retired_ms.is_some();
+            p.label = label;
+            p.retired_ms = None;
+            return Ok(changed);
+        }
+        self.make_room()?;
+        self.server_keys.push(Pin { sha256: fp, label, added_ms: now_ms, retired_ms: None });
+        Ok(true)
+    }
+
+    /// Removes a key. Returns whether it was pinned.
+    pub fn remove(&mut self, fp: &str) -> Result<bool, PinError> {
+        let fp = canonical(fp)?;
+        let before = self.server_keys.len();
+        self.server_keys.retain(|p| p.sha256 != fp);
+        Ok(self.server_keys.len() != before)
+    }
+
+    /// Drops the oldest retired key when the set is full.
+    fn make_room(&mut self) -> Result<(), PinError> {
+        if self.server_keys.len() < MAX_PINS {
+            return Ok(());
+        }
+        let oldest = self
+            .server_keys
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| p.retired_ms.map(|r| (r, i)))
+            .min()
+            .map(|(_, i)| i)
+            .ok_or(PinError::Full)?;
+        self.server_keys.remove(oldest);
+        Ok(())
+    }
+
+    /// Applies the keys Forge announced (already verified): adds new ones,
+    /// retires announced keys it no longer names, drops keys retired longer
+    /// than [`RETIRED_KEPT`]. Keys added by hand are left alone. Returns
+    /// whether the set changed.
+    pub fn apply_announcement(&mut self, keys: &[ServerKey], now_ms: i64) -> Result<bool, PinError> {
+        let announced: Vec<(String, String)> = keys
+            .iter()
+            .map(|k| canonical(&k.sha256).map(|fp| (fp, clean_label(&k.label))))
+            .collect::<Result<_, _>>()?;
+        if announced.is_empty() {
+            return Ok(false);
+        }
+        let mut changed = false;
+        for (fp, label) in &announced {
+            match self.server_keys.iter_mut().find(|p| &p.sha256 == fp) {
+                Some(p) => {
+                    let relabel = p.label != *label && p.label != LABEL_MANUAL;
+                    if relabel || p.retired_ms.is_some() {
+                        if relabel {
+                            p.label.clone_from(label);
+                        }
+                        p.retired_ms = None;
+                        changed = true;
+                    }
+                }
+                None => {
+                    self.make_room()?;
+                    self.server_keys.push(Pin {
+                        sha256: fp.clone(),
+                        label: label.clone(),
+                        added_ms: now_ms,
+                        retired_ms: None,
+                    });
+                    changed = true;
+                }
+            }
+        }
+        let kept = i64::try_from(RETIRED_KEPT.as_millis()).unwrap_or(i64::MAX);
+        for p in &mut self.server_keys {
+            if p.retired_ms.is_none() && p.label != LABEL_MANUAL && !announced.iter().any(|(fp, _)| *fp == p.sha256) {
+                p.retired_ms = Some(now_ms);
+                changed = true;
+            }
+        }
+        let before = self.server_keys.len();
+        self.server_keys.retain(|p| p.retired_ms.is_none_or(|r| now_ms - r < kept));
+        Ok(changed || self.server_keys.len() != before)
+    }
+
+    pub fn parse(text: &str, origin: &str) -> Result<Self, PinError> {
+        let set: Self = toml::from_str(text).map_err(|e| PinError::Parse(origin.into(), e.to_string()))?;
+        if set.server_keys.len() > MAX_PINS {
+            return Err(PinError::Parse(origin.into(), format!("more than {MAX_PINS} keys")));
+        }
+        for p in &set.server_keys {
+            if forge_pki::parse_fingerprint(&p.sha256).as_deref() != Some(p.sha256.as_str()) {
+                return Err(PinError::Parse(origin.into(), format!("bad fingerprint {}", p.sha256)));
+            }
+        }
+        Ok(set)
+    }
+
+    pub fn to_toml(&self) -> Result<String, PinError> {
+        toml::to_string_pretty(self).map_err(|e| PinError::Parse(FILE.into(), e.to_string()))
+    }
+}
+
+/// Where the pin file of the agent with state directory `state_dir` lives.
+#[must_use]
+pub fn path(state_dir: &Path) -> PathBuf {
+    if root_owned(state_dir) { Path::new(SYSTEM_DIR).join(FILE) } else { state_dir.join(FILE) }
+}
+
+/// Whether the pins of `state_dir` live in the root-owned [`SYSTEM_DIR`]:
+/// on Linux and macOS for the default state directory, the installer's.
+#[must_use]
+pub fn root_owned(state_dir: &Path) -> bool {
+    cfg!(unix) && state_dir == crate::config::StatePaths::default_dir()
+}
+
+/// Reads the pin set; a missing file is an empty set. Blocking.
+pub fn load(path: &Path) -> Result<PinSet, PinError> {
+    let shown = path.display().to_string();
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(PinSet::default()),
+        Err(e) => return Err(PinError::Io(shown, e.to_string())),
+        Ok(m) if !m.is_file() => return Err(PinError::Io(shown, "not a regular file".into())),
+        Ok(m) if m.len() > MAX_FILE => return Err(PinError::Io(shown, format!("larger than {MAX_FILE} bytes"))),
+        Ok(_) => {}
+    }
+    let raw = crate::self_update::read_nofollow(path, MAX_FILE)
+        .ok_or_else(|| PinError::Io(shown.clone(), "not readable".into()))?;
+    PinSet::parse(&String::from_utf8_lossy(&raw), &shown)
+}
+
+/// Writes the pin set (readable by everyone, writable by its owner),
+/// creating its folder. Blocking.
+pub fn save(path: &Path, set: &PinSet) -> Result<(), PinError> {
+    let shown = path.display().to_string();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| PinError::Io(dir.display().to_string(), e.to_string()))?;
+        #[cfg(unix)]
+        if dir == Path::new(SYSTEM_DIR) {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::symlink_metadata(dir).map_err(|e| PinError::Io(SYSTEM_DIR.into(), e.to_string()))?;
+            if !meta.is_dir() {
+                return Err(PinError::Io(SYSTEM_DIR.into(), "not a directory".into()));
+            }
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| PinError::Io(SYSTEM_DIR.into(), e.to_string()))?;
+        }
+    }
+    crate::self_update::write_nofollow(path, set.to_toml()?.as_bytes()).map_err(|e| PinError::Io(shown, e))
+}
+
+/// Checks a key announcement against Forge's command key and this node's
+/// id, then applies it to the pin file at `path`. Used by the root helper
+/// and, where the agent owns the file, by the agent itself. Blocking.
+pub fn apply_signed(
+    path: &Path,
+    signed: &SignedServerKeys,
+    command_public_key: &[u8],
+    server_id: &str,
+    now: forge_core::Timestamp,
+) -> Result<bool, PinError> {
+    let keys = forge_proto::verify_server_keys(command_public_key, signed, server_id, now)
+        .map_err(|e| PinError::Announcement(e.to_string()))?;
+    let mut set = load(path)?;
+    let changed = set.apply_announcement(&keys.keys, now.0)?;
+    if changed {
+        save(path, &set)?;
+    }
+    Ok(changed)
+}
+
+/// Part of every [`mismatch_message`], to recognise it in an error chain.
+pub const MISMATCH_MARK: &str = "is not pinned (pinned:";
+
+/// The message for a server whose key is not pinned.
+#[must_use]
+pub fn mismatch_message(presented: &str, pinned: &[String], endpoint: &str) -> String {
+    let pinned: Vec<String> = pinned.iter().map(|p| forge_pki::short_fingerprint(p)).collect();
+    format!(
+        "server key {} is not pinned (pinned: {}). If the server's key changed, run 'forge-server agent-key show' on the server and 'forge-agent pins add <fingerprint>' on this node. If it did not, something else is answering on {endpoint}.",
+        forge_pki::short_fingerprint(presented),
+        if pinned.is_empty() { "none".to_owned() } else { pinned.join(", ") },
+    )
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)] // reason: tests
+mod tests {
+    use super::*;
+    use forge_core::Timestamp;
+
+    const DAY: i64 = 24 * 3_600_000;
+
+    fn fp(n: u8) -> String {
+        format!("{n:02x}").repeat(32)
+    }
+
+    fn key(n: u8, label: &str) -> ServerKey {
+        ServerKey { sha256: fp(n), label: label.into() }
+    }
+
+    #[test]
+    fn announcements_add_retire_and_prune() {
+        let mut set = PinSet::default();
+        assert!(set.apply_announcement(&[key(1, "current"), key(2, "next")], 0).unwrap());
+        assert!(!set.apply_announcement(&[key(1, "current"), key(2, "next")], 10).unwrap(), "no change");
+        // The server switched: 2 is current, 3 is next, 1 is retired but kept.
+        assert!(set.apply_announcement(&[key(2, "current"), key(3, "next")], DAY).unwrap());
+        assert_eq!(set.fingerprints(), [fp(1), fp(2), fp(3)]);
+        assert_eq!(set.server_keys[0].retired_ms, Some(DAY));
+        // A key added by hand is never retired by an announcement.
+        set.add(&fp(9), "", DAY).unwrap();
+        // 30 days after retiring, 1 is dropped.
+        set.apply_announcement(&[key(2, "current"), key(3, "next")], DAY + 31 * DAY).unwrap();
+        assert_eq!(set.fingerprints(), [fp(2), fp(3), fp(9)]);
+        assert_eq!(set.server_keys[2].label, LABEL_MANUAL);
+    }
+
+    #[test]
+    fn the_set_holds_at_most_eight_keys() {
+        let mut set = PinSet::default();
+        for n in 1..=8 {
+            set.add(&fp(n), "manual", 0).unwrap();
+        }
+        assert!(matches!(set.add(&fp(9), "x", 0), Err(PinError::Full)));
+        assert!(matches!(set.apply_announcement(&[key(9, "next")], 0), Err(PinError::Full)));
+        // A retired key makes room.
+        let mut set = PinSet::default();
+        set.apply_announcement(&[key(1, "current")], 0).unwrap();
+        for n in 2..=8 {
+            set.add(&fp(n), "manual", 0).unwrap();
+        }
+        set.apply_announcement(&[key(2, "current")], 1).unwrap();
+        assert!(set.add(&fp(9), "x", 2).unwrap());
+        assert!(!set.contains(&fp(1)) && set.contains(&fp(9)));
+        // A file with more than eight is refused.
+        let mut big = PinSet::default();
+        for n in 1..=9 {
+            big.server_keys.push(Pin { sha256: fp(n), label: "x".into(), added_ms: 0, retired_ms: None });
+        }
+        assert!(PinSet::parse(&big.to_toml().unwrap(), "t").is_err());
+    }
+
+    #[test]
+    fn fingerprints_and_files_are_checked() {
+        let mut set = PinSet::default();
+        assert!(set.add("sha256:nothex", "x", 0).is_err());
+        assert!(set.add(&format!("sha256:{}", fp(10).to_uppercase()), "x", 0).unwrap());
+        assert_eq!(set.fingerprints(), [fp(10)]);
+        assert!(set.remove(&fp(10)).unwrap() && set.is_empty());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE);
+        assert!(load(&path).unwrap().is_empty(), "missing: empty");
+        set.add(&fp(1), "x", 0).unwrap();
+        save(&path, &set).unwrap();
+        assert_eq!(load(&path).unwrap(), set);
+        std::fs::write(&path, vec![b'#'; usize::try_from(MAX_FILE).unwrap() + 1]).unwrap();
+        assert!(load(&path).is_err(), "too large");
+        std::fs::write(&path, "server_keys = [{ sha256 = \"zz\", label = \"x\", added_ms = 0 }]").unwrap();
+        assert!(load(&path).is_err(), "bad fingerprint");
+    }
+
+    #[test]
+    fn only_a_signed_announcement_for_this_node_is_applied() {
+        let forge = forge_proto::CommandSigner::generate().unwrap();
+        let now = Timestamp(1_800_000_000_000);
+        let keys = forge_proto::messages::ServerKeys {
+            server_id: "srv-1".into(),
+            issued_at_ms: now.0,
+            keys: vec![key(1, "current"), key(2, "next")],
+        };
+        let signed = forge.sign_server_keys(&keys);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE);
+        let attacker = forge_proto::CommandSigner::generate().unwrap();
+        assert!(apply_signed(&path, &attacker.sign_server_keys(&keys), &forge.public_key(), "srv-1", now).is_err());
+        assert!(apply_signed(&path, &signed, &forge.public_key(), "srv-2", now).is_err());
+        assert!(load(&path).unwrap().is_empty());
+        assert!(apply_signed(&path, &signed, &forge.public_key(), "srv-1", now).unwrap());
+        assert_eq!(load(&path).unwrap().fingerprints(), [fp(1), fp(2)]);
+    }
+
+    #[test]
+    fn the_mismatch_message_says_what_to_do() {
+        let m = mismatch_message(&fp(0xab), &[fp(1)], "192.0.2.10:3843");
+        assert!(m.starts_with("server key sha256:abababab…abab is not pinned (pinned: sha256:01010101…0101)"), "{m}");
+        assert!(m.contains("forge-agent pins add <fingerprint>") && m.ends_with("answering on 192.0.2.10:3843."));
+    }
+}

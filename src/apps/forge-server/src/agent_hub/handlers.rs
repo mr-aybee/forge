@@ -161,6 +161,8 @@ pub(super) async fn enroll(
         command_public_key: state.signer.public_key(),
         heartbeat_interval_secs: state.config.heartbeat_hold_secs,
         analytics_url: if state.analytics_enabled { state.config.worker_agent_url() } else { String::new() },
+        server_keys: Some(state.agent_keys.announcement(&server_id.to_string(), now)),
+        analytics_port: analytics_port(&state),
     })
 }
 
@@ -223,6 +225,11 @@ pub(super) async fn heartbeat(
         state.publish(ServerEvent::server(server.id, AgentStatus::Online));
     }
     crate::facts::note_address(server.id, peer_addr.0.ip());
+    // The control-plane keys this agent pins: its acknowledgement of the
+    // next key (D-167). Never fails the heartbeat.
+    if let Err(e) = state.agent_keys.record_ack(&server.id.to_string(), &hb.pinned_server_keys, now).await {
+        tracing::warn!(server = %server.id, error = %e, "recording the agent's pinned keys failed");
+    }
     // OS, kernel and CPU facts: collected on connect, daily and right after
     // the agent changes version (facts.rs).
     crate::facts::maybe_collect(&state, server.id, server.agent_version != hb.agent_version);
@@ -289,6 +296,7 @@ pub(super) async fn heartbeat(
         container_telemetry,
         container_logs_ack,
         analytics: analytics_config(&state, server.id),
+        server_keys: Some(state.agent_keys.announcement(&server.id.to_string(), state.clock.now())),
     })
 }
 
@@ -303,7 +311,17 @@ fn analytics_config(state: &AppState, server: ServerId) -> Option<forge_proto::m
         spool: Some(state.config.analytics.spool.wire()),
         keys: state.analytics_maps.keys_for(server).as_ref().clone(),
         listener: Some(state.config.analytics.listener.wire()),
+        port: analytics_port(state),
     })
+}
+
+/// The worker's upload port for agents that dial it on their own server
+/// URL's host (D-167); 0 when analytics is off or the URL is configured.
+fn analytics_port(state: &AppState) -> u32 {
+    if !state.analytics_enabled {
+        return 0;
+    }
+    state.config.worker_agent_port().map_or(0, u32::from)
 }
 
 /// Forwards a heartbeat's metrics and container lines to the analytics

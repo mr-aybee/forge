@@ -153,7 +153,8 @@ pub async fn local_enroll_token(
             (c.id, true)
         }
     };
-    let generated = forge_pki::enrollment::generate(state.ca.fingerprint());
+    let generated =
+        forge_pki::enrollment::generate(state.ca.fingerprint(), Some(&state.agent_keys.current_fingerprint()));
     let token = EnrollmentToken {
         id: forge_secrets::crypto::random_token::<9>(),
         workspace_id: ws,

@@ -55,6 +55,35 @@ pub(crate) async fn offline_monitor(state: AppState, mut shutdown: watch::Receiv
     }
 }
 
+/// How often the control-plane key is checked for renewal and rotation.
+const AGENT_KEY_TICK: Duration = Duration::from_secs(60);
+
+/// Renews the agent listener certificate with the same key, switches to the
+/// next key when the rotation is ready, and picks up a switch made with
+/// `forge-server agent-key rotate` (D-167). A failed tick is logged and
+/// tried again at the next.
+pub(crate) async fn agent_key_upkeep(state: AppState, mut shutdown: watch::Receiver<bool>) {
+    let mut tick = tokio::time::interval(AGENT_KEY_TICK);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = tick.tick() => {}
+            _ = shutdown.changed() => break,
+        }
+        match state.agent_keys.tick(state.clock.now()).await {
+            Ok(out) => {
+                if out.renewed {
+                    tracing::info!(key = %state.agent_keys.current_fingerprint(), "agent listener certificate renewed (same key)");
+                }
+                if let Some(r) = out.rotated {
+                    state.audit_system(crate::agent_keys::AUDIT_KEY_ROTATE, serde_json::json!(r)).await;
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "agent key upkeep failed; trying again"),
+        }
+    }
+}
+
 /// How long observation history is kept.
 const OBSERVATION_HISTORY_MS: i64 = 7 * 24 * 3_600_000;
 /// Transitions kept in the feed (consumers further behind lose the oldest).

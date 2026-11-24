@@ -6,6 +6,7 @@
 //!   fingerprint (`<secret>.<ca-sha256>`), so a fresh agent can trust the
 //!   control plane without a pre-installed root.
 //! * [`PeerIdentity`] — parses an agent certificate presented over mTLS.
+//! * [`ControlPlaneKey`] — the listener key agents pin (D-167).
 //! * [`renewal_due`] — rotation policy (renew after ⅔ of the lifetime).
 //!
 //! Agent identity is never taken from the CSR: the CA overwrites the subject
@@ -14,9 +15,13 @@
 mod ca;
 pub mod enrollment;
 mod identity;
+pub mod server_key;
 
 pub use ca::{AgentCsr, CertificateAuthority, IssuedCertificate, SERVER_CERT_VALIDITY, ServerCertificate};
 pub use identity::PeerIdentity;
+pub use server_key::{
+    ControlPlaneKey, LeafError, ServerLeaf, inspect_server_leaf, parse_fingerprint, short_fingerprint,
+};
 
 use forge_core::Timestamp;
 

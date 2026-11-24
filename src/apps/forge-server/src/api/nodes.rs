@@ -126,6 +126,7 @@ pub async fn onboard(
     State(state): State<AppState>,
     caller: Caller,
     Ws(ws): Ws,
+    origin: RequestOrigin,
     Json(req): Json<OnboardRequest>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let scope = onboarding_scope(&state, ws, req.cluster_id).await?;
@@ -178,6 +179,9 @@ pub async fn onboard(
         hostname: req.hostname.map(|h| h.chars().take(63).collect()),
         terminal_account_sudo: account.is_some() && req.terminal_account_sudo,
         terminal_account: account,
+        // The addresses the node is told to use: the one the administrator
+        // reached Forge on (D-167), never a localhost default.
+        urls: Some(NodeUrls::from_state(&state, &origin).into()),
     };
     let job = state
         .jobs

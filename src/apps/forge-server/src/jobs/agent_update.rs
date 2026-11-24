@@ -39,6 +39,31 @@ use crate::agent_hub::CommandQueue;
 use crate::agent_update_policy::has_reached;
 use crate::install::AgentDist;
 
+/// Where nodes download agent binaries (D-167): `node_public_url`, else
+/// the console address (pinned, else the one an administrator last signed
+/// in on). Never a localhost default: with no address known the update
+/// fails with [`NO_DOWNLOAD_ADDRESS`].
+#[derive(Debug, Clone)]
+pub struct DownloadBase {
+    /// `node_public_url` from forge.toml.
+    pub node_public_url: Option<String>,
+    pub address: forge_core::public_address::PublicAddress,
+}
+
+impl DownloadBase {
+    #[must_use]
+    pub fn resolve(&self) -> Option<String> {
+        self.node_public_url
+            .clone()
+            .or_else(|| Some(self.address.get()))
+            .map(|u| u.trim_end_matches('/').to_owned())
+            .filter(|u| !u.is_empty())
+    }
+}
+
+/// Why an update cannot start before Forge knows an address of its own.
+pub const NO_DOWNLOAD_ADDRESS: &str = "Forge does not know an address nodes can download from yet: sign in to the console on the address nodes use, or set public_url or node_public_url in forge.toml";
+
 #[derive(Debug)]
 pub struct AgentUpdateJob {
     pub hub: Arc<CommandQueue>,
@@ -46,8 +71,8 @@ pub struct AgentUpdateJob {
     pub servers: Arc<dyn ServerRepository>,
     pub dist: Arc<AgentDist>,
     pub clock: Arc<dyn Clock>,
-    /// URL nodes download from (`node_forge_url`).
-    pub download_base: String,
+    /// Where nodes download the new binaries from.
+    pub download: DownloadBase,
     /// How long to wait for the node to come back on the new version.
     pub come_back: Duration,
     /// Parent rollouts (cancelled → stop).
@@ -286,7 +311,7 @@ impl AgentUpdateJob {
             &ctx.job.principal.to_string(),
             Command::AgentUpdate(AgentUpdate {
                 version: target.to_owned(),
-                download_base: self.download_base.clone(),
+                download_base: self.download.resolve().ok_or_else(|| StepError::Fatal(NO_DOWNLOAD_ADDRESS.into()))?,
                 arch,
                 agent_sha256,
                 helper_sha256,

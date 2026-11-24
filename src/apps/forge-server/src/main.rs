@@ -79,6 +79,12 @@ enum Cmd {
         #[command(subcommand)]
         action: HostsAction,
     },
+    /// The control-plane key agents pin (D-167): `show` the current and
+    /// next fingerprints, `list` the keys and which agents have them, or
+    /// `rotate` (once agents have the next key; `--now` at once). Audited
+    /// as system:forge. A running server applies a rotation within a minute.
+    #[command(subcommand)]
+    AgentKey(AgentKeyCmd),
     /// Exits non-zero when the database has applied migrations this binary
     /// does not know (it is older than the database). Used by the
     /// self-update dry run; never changes the database.
@@ -171,6 +177,21 @@ enum HostsAction {
     },
     /// Allows any host again (`*`).
     Clear,
+}
+
+#[derive(Subcommand)]
+enum AgentKeyCmd {
+    /// Prints the current and next key fingerprints and the rotation status.
+    Show,
+    /// Lists the keys and, per agent, which of them it has pinned.
+    List,
+    /// Switches to the next key once the grace period has passed and every
+    /// online agent has it; with `--now`, at once (agents without the next
+    /// key then need `forge-agent pins add`).
+    Rotate {
+        #[arg(long)]
+        now: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -410,6 +431,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Cmd::PublicAddress { action } => public_address(config, action).await?,
         Cmd::AllowedHosts { action } => allowed_hosts(config, action).await?,
+        Cmd::AgentKey(cmd) => agent_key(config, cmd).await?,
         Cmd::Db(cmd) => db_command(&config, cmd).await?,
         Cmd::Analytics(AnalyticsCmd::Install { binary, sha256 }) => {
             let paths = forge_server::analytics_install::paths(&config);
@@ -483,6 +505,65 @@ async fn allowed_hosts(config: ServerConfig, action: HostsAction) -> anyhow::Res
         "Allowed hosts: {}. Restart forge-server to apply it to a running server: systemctl restart forge-server",
         to.join(" ")
     );
+    Ok(())
+}
+
+/// `forge-server agent-key show|list|rotate [--now]` (D-167).
+async fn agent_key(config: ServerConfig, cmd: AgentKeyCmd) -> anyhow::Result<()> {
+    use forge_server::agent_keys::{AUDIT_KEY_ROTATE, AUDIT_KEY_ROTATE_REQUEST, LABEL_CURRENT, LABEL_NEXT};
+    let state = Services::build(config).await?;
+    let keys = &state.agent_keys;
+    let now = state.clock.now();
+    let fp = |s: &str| format!("{}{s}", forge_pki::server_key::FINGERPRINT_PREFIX);
+    match cmd {
+        AgentKeyCmd::Show => {
+            for k in keys.keys().iter().filter(|k| k.label == LABEL_CURRENT || k.label == LABEL_NEXT) {
+                println!("{:<8} {}", k.label, fp(&k.sha256));
+            }
+            println!("rotation {}", serde_json::to_string(&keys.rotation_status(now))?);
+        }
+        AgentKeyCmd::List => {
+            let list = keys.keys();
+            for k in &list {
+                println!("{:<8} {}  created {}", k.label, fp(&k.sha256), k.created_at.0);
+            }
+            println!();
+            for (server, ack) in keys.acknowledgements() {
+                let has: Vec<&str> = list.iter().filter(|k| ack.keys.contains(&k.sha256)).map(|k| k.label).collect();
+                println!(
+                    "{server}  pins {}  since {}",
+                    if has.is_empty() { "none of these".to_owned() } else { has.join(", ") },
+                    ack.since_ms
+                );
+            }
+        }
+        AgentKeyCmd::Rotate { now: at_once } => {
+            let next = keys.keys().into_iter().find(|k| k.label == LABEL_NEXT).map(|k| k.sha256).unwrap_or_default();
+            let (online, acknowledged) = keys.ack_counts(&next, now);
+            match keys.rotate(now, at_once).await? {
+                Some(r) => {
+                    state.audit_system(AUDIT_KEY_ROTATE, serde_json::json!(r)).await;
+                    println!(
+                        "Switched to {} ({acknowledged} of {online} agents that pin had it). A running server serves it within a minute. Agents without it: run 'forge-agent pins add {}' on them.",
+                        fp(&r.to),
+                        r.to
+                    );
+                }
+                None => {
+                    state
+                        .audit_system(
+                            AUDIT_KEY_ROTATE_REQUEST,
+                            serde_json::json!({ "next": next, "online": online, "acknowledged": acknowledged }),
+                        )
+                        .await;
+                    println!(
+                        "Rotation requested: Forge switches to {} once the grace period has passed and every online agent has it ({acknowledged} of {online} now).",
+                        fp(&next)
+                    );
+                }
+            }
+        }
+    }
     Ok(())
 }
 
