@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient, type QueryKey } from "@tanstack/
 
 import { ApiError, api, get, post } from "./client";
 import type {
+  ClusterMode,
   ServiceHealthView,
   ServiceInput,
   ServiceInstance,
@@ -407,7 +408,7 @@ export const useDeleteProject = () => useAction((id: string) => api<void>("DELET
 
 export const useSaveCluster = () =>
   useAction(
-    ({ id, ...b }: { id?: string; name: string; description: string; environment_id: string | null; abbr?: string; icon?: string }) =>
+    ({ id, ...b }: { id?: string; name: string; description: string; environment_id: string | null; abbr?: string; icon?: string; mode?: ClusterMode }) =>
       id ? api<Cluster>("PUT", `/api/v1/clusters/${id}`, b) : post<Cluster>(`/api/v1/clusters`, b),
     [["clusters"]],
   );

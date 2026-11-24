@@ -237,6 +237,26 @@ namespace Forge {
   action "stack.privileged" in ["role:platform_admin", "role:workspace_admin"]
     appliesTo { principal: [User], resource: [Environment, Cluster], context: RequestContext };
 
+  // Docker images, volumes and networks on a node (D-157).
+  action "docker.image.manage" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+  action "docker.volume.manage" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+  action "docker.network.manage" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+
+  // Container registries and their credentials (D-158): MFA guardrail.
+  action "registry.manage" in ["role:platform_admin", "role:workspace_admin"]
+    appliesTo { principal: [User], resource: [Workspace, Server], context: RequestContext };
+
+  // Deploy webhooks (D-159): long-lived deploy credentials, MFA guardrail.
+  action "webhook.manage" in ["role:platform_admin", "role:workspace_admin", "role:operator", "role:developer"]
+    appliesTo { principal: [User], resource: [Workspace], context: RequestContext };
+
+  // Docker Swarm membership and nodes in a Swarm cluster (D-154): MFA guardrail.
+  action "swarm.manage" in ["role:platform_admin", "role:workspace_admin"]
+    appliesTo { principal: [User], resource: [Cluster, Server], context: RequestContext };
+
   // An uploaded certificate's private key leaves the vault for an edge node
   // (endpoint apply). Administrators, MFA. On a server: its workspace's
   // administrators (the job runner re-checks it on the edge).

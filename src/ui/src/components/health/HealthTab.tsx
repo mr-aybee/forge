@@ -499,9 +499,6 @@ export function HealthTab({ app, onDirtyChange }: { app: Service; onDirtyChange?
 
         {mode === "yaml" ? (
           <div className="space-y-1.5 p-2">
-            <Suspense fallback={<Skeleton rows={8} />}>
-              <YamlEditor value={yamlText} docKey={`health-${yamlKey}`} onChange={onYaml} height="h-[28rem]" />
-            </Suspense>
             {yamlErrors.length > 0 ? (
               <div role="alert" className="rounded-md border border-bad/40 bg-bad-soft px-3 py-2 text-xs text-bad">
                 <div className="mb-0.5 font-medium">The YAML can't be used yet. You stay in YAML until it's fixed.</div>
@@ -517,6 +514,9 @@ export function HealthTab({ app, onDirtyChange }: { app: Service; onDirtyChange?
             ) : (
               <p className="px-1 text-[11px] text-faint">Same policy as the form. Unknown fields are refused. Switching back to the form normalizes formatting and drops comments.</p>
             )}
+            <Suspense fallback={<Skeleton rows={8} />}>
+              <YamlEditor value={yamlText} docKey={`health-${yamlKey}`} onChange={onYaml} height="h-[min(28rem,55vh)]" />
+            </Suspense>
           </div>
         ) : (
           <div className="p-3">

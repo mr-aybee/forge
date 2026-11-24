@@ -53,7 +53,7 @@ const services = createRoute({
   }),
   component: lazyRouteComponent(() => import("../pages/Services"), "Services"),
 });
-const APP_TABS = ["overview", "configuration", "health", "storage", "releases"] as const;
+const APP_TABS = ["overview", "configuration", "health", "storage", "releases", "webhooks"] as const;
 export type AppTab = (typeof APP_TABS)[number];
 const service = createRoute({
   getParentRoute: parent,
@@ -133,7 +133,7 @@ const clusters = createRoute({
   validateSearch: (s: Record<string, unknown>): ClustersSearch => ({ q: optStr(s.q), status: optOneOf(s.status, CLUSTER_STATES), view: optOneOf(s.view, CLUSTER_VIEWS) }),
   component: lazyRouteComponent(() => import("../pages/Clusters"), "Clusters"),
 });
-export const CLUSTER_TABS = ["overview", "network", "containers"] as const;
+export const CLUSTER_TABS = ["overview", "network", "containers", "swarm"] as const;
 export type ClusterTab = (typeof CLUSTER_TABS)[number];
 const cluster = createRoute({
   getParentRoute: parent,
@@ -191,11 +191,15 @@ const nodes = createRoute({
 });
 const addNode = createRoute({ getParentRoute: parent, path: "/nodes/add", component: lazyRouteComponent(() => import("../pages/AddNode"), "AddNode") });
 const NODE_TABS = ["overview", "processes", "services", "packages", "containers", "files", "terminal", "credentials", "details"] as const;
+export const DOCKER_TABS = ["containers", "images", "volumes", "networks", "events", "disk"] as const;
+export type DockerTab = (typeof DOCKER_TABS)[number];
 const node = createRoute({
   getParentRoute: parent,
   path: "/nodes/$nodeId",
-  validateSearch: (s: Record<string, unknown>): { tab?: (typeof NODE_TABS)[number]; root?: string } => ({
+  validateSearch: (s: Record<string, unknown>): { tab?: (typeof NODE_TABS)[number]; root?: string; docker?: DockerTab } => ({
     tab: NODE_TABS.find((t) => t === s.tab),
+    // Docker tab: which sub-tab (containers when absent).
+    docker: DOCKER_TABS.find((t) => t === s.docker),
     // Files tab: open this file root (id) first.
     root: typeof s.root === "string" && s.root ? s.root : undefined,
   }),
@@ -409,6 +413,11 @@ const settingsAnalytics = createRoute({
   path: "/settings/analytics",
   component: lazyRouteComponent(() => import("../pages/AnalyticsSettings"), "AnalyticsSettings"),
 });
+const settingsRegistries = createRoute({
+  getParentRoute: parent,
+  path: "/settings/registries",
+  component: lazyRouteComponent(() => import("../pages/Registries"), "Registries"),
+});
 const settingsSection = createRoute({
   getParentRoute: parent,
   path: "/settings/$section",
@@ -454,6 +463,7 @@ const routeTree = rootRoute.addChildren([
   plugins,
   settings,
   settingsAnalytics,
+  settingsRegistries,
   settingsSection,
   profile,
   profileSection,

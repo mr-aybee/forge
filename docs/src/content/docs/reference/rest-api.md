@@ -1590,7 +1590,138 @@ with `details.reason` and `details.detail`.
 | --- | --- | --- |
 | GET / POST | `/clusters` | `view` / `workspace.manage` |
 | GET / PUT / DELETE | `/clusters/{id}` | `view` / `workspace.manage` |
-| PATCH | `/servers/{id}` | `server.manage` on the node; with `cluster_id` also `server.enroll` on that cluster; leaving a cluster needs `server.enroll` on the cluster left; changing the environment needs `server.enroll` on the new and on the old environment — `{cluster_id, environment_id}`, both optional (`null` or omitted clears). See [Moving a node between clusters](#moving-a-node-between-clusters) → the updated server |
+
+**Cluster body** (`POST /clusters`, `PUT /clusters/{id}`):
+
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `name` | string | required | Letters, digits, spaces, `-`, `_`, `.`; unique per workspace |
+| `description` | string | `""` | Up to 500 characters |
+| `environment_id` | string or `null` | `null` | Environment this cluster serves |
+| `abbr` | string | initials of the name | Up to 4 letters or digits |
+| `icon` | string | none | Data URL (PNG, JPEG, WebP, GIF or SVG), up to 128 KB; `""` removes it |
+| `mode` | `default` or `swarm` | `default` | Set on `POST` only. On `PUT` it may be omitted or repeated; a different value returns `400`. See [Cluster modes](/docs/concepts/clusters/#cluster-modes) |
+
+### Docker images, volumes and networks
+
+On any Linux node with Docker Engine. The node's root helper runs each
+operation; nothing needs the Docker TLS endpoint.
+
+| Method | Path | Permission |
+| --- | --- | --- |
+| GET | `/servers/{id}/docker/images` | `server.manage` on the node: `[{id, full_id, tags, digests, size, created, containers, dangling}]` |
+| GET | `/servers/{id}/docker/volumes` | `server.manage`: `[{name, driver, mountpoint, scope, created, labels, managed}]` |
+| GET | `/servers/{id}/docker/networks` | `server.manage`: `[{id, name, driver, scope, internal, attachable, subnets, containers, protected}]` |
+| GET | `/servers/{id}/docker/disk-usage` | `server.manage`: `{images, containers, volumes, build_cache}`, each `{count, bytes}` |
+| GET | `/servers/{id}/docker/events?since_secs=` | `server.manage`: up to 1000 recent events, newest first (`since_secs` at most 86400, default 300) |
+| POST | `/servers/{id}/docker/ops` | By operation (below). `200` with the node's answer, or `202` with a `docker.op` job for pulls, pushes and prunes |
+
+**Operations** (`{"op": "<name>", …}`):
+
+| `op` | Fields | Permission |
+| --- | --- | --- |
+| `image_inspect`, `image_history` | `id` | `server.manage` |
+| `image_remove` | `id`, `force` | `docker.image.manage` |
+| `image_tag` | `id`, `repo`, `tag` | `docker.image.manage` |
+| `image_pull` | `image` | `docker.image.manage` (job) |
+| `image_push` | `image` (a registry with `allow_push`) | `registry.manage`, MFA (job) |
+| `image_prune` | `all` (default: dangling only) | `docker.image.manage` (job) |
+| `volume_inspect` | `name` | `server.manage` |
+| `volume_create` | `name`, `labels` (local driver, no options) | `docker.volume.manage` |
+| `volume_remove` | `name`, `force` | `docker.volume.manage` |
+| `volume_prune` | | `docker.volume.manage` (job) |
+| `network_inspect` | `id` | `server.manage` |
+| `network_create` | `name`, `driver` (`bridge`/`overlay`), `subnet`, `gateway`, `internal`, `attachable` (overlay only), `labels` | `docker.network.manage` |
+| `network_remove` | `id` | `docker.network.manage` |
+| `network_connect`, `network_disconnect` | `network`, `container` (`force` for disconnect) | `docker.network.manage` |
+| `network_prune` | (Forge's networks are kept) | `docker.network.manage` (job) |
+
+`400` for registry credentials (`registry_auth`), driver options, reserved
+labels (`forge.*`) and Docker's or Forge's own networks (`bridge`, `host`,
+`none`, `ingress`, `docker_gwbridge`, `forge-*`).
+
+### Container registries
+
+| Method | Path | Permission |
+| --- | --- | --- |
+| GET | `/registries` | `view` on the workspace: `[{id, workspace_id, name, kind, host, username, created_by, created_at, updated_at}]` (never the secret) |
+| POST | `/registries` | `registry.manage` (MFA): `{name, kind, host, username, secret, allow_push}` → `201` the registry |
+| PUT | `/registries/{id}` | `registry.manage` (MFA): the same body; without `secret` the stored one stays, unless `host`, `kind` or `username` changes (`422`) |
+| DELETE | `/registries/{id}` | `registry.manage` (MFA) → `204` |
+
+`kind` is `docker_hub`, `ghcr`, `gitlab`, `ecr` or `custom`. `host` is
+`host[:port]` (a scheme or trailing slash is removed); Docker Hub's is
+`docker.io`. `409` when the workspace already has a registry for the host.
+Image pushes (`image_push`) need `registry.manage` and a registry for the
+image's host with `allow_push` (default `false`).
+
+### Deploy webhooks
+
+| Method | Path | Permission |
+| --- | --- | --- |
+| GET | `/webhooks` | `view` on the workspace (never the token or secret) |
+| POST | `/webhooks` | `webhook.manage` (MFA) and `deploy` on the service (or `stack.manage` on the stack's environment): `{name, target, signature, tag_pattern, enabled}` → `201 {webhook, token, secret}` (shown once) |
+| PUT | `/webhooks/{id}` | The same: changes `name`, `tag_pattern`, `enabled`; the target and signature stay |
+| POST | `/webhooks/{id}/rotate` | The same: new token and secret → `{webhook, token, secret}` |
+| DELETE | `/webhooks/{id}` | The same → `204` |
+| GET | `/webhooks/{id}/deliveries` | `view`: the newest 100 deliveries `{at, outcome, reason, job_id, tag, source_ip}` |
+| POST | `/hooks/{token}` | The secret URL (no session); body at most 64 KiB → `202 {jobs, status_url}` |
+| GET | `/hooks/{token}/jobs/{job}` | The secret URL: `{id, kind, status, error}` of a job this webhook started |
+
+`target` is `{"kind": "service", "id"}` or `{"kind": "stack", "id"}`.
+`signature` is `none`, `github` (`X-Hub-Signature-256: sha256=<hmac(body)>`),
+`gitlab` (`X-Gitlab-Token: <secret>`) or `forge` (`X-Forge-Timestamp:
+<unix>`, `X-Forge-Signature: sha256=<hmac("<timestamp>.<body>")>`, within 300
+seconds). A delivery's tag comes from `?tag=` or a JSON body's `"tag"`, only
+when `tag_pattern` is set (`*` matches any characters). Answers: `401` bad
+signature, `403` disabled or the creator can no longer deploy, `404` unknown
+URL, `422` refused tag, `429` rate limit (10 per minute per webhook, 60 per
+source address).
+
+### Compose app templates
+
+| Method | Path | Permission |
+| --- | --- | --- |
+| GET | `/stack-templates` | `view` on the workspace: `[{id, title, description, category, compose, variables: [{name, label, default, secret}]}]` |
+| POST | `/stacks/from-template` | As `POST /stacks`: `{template, environment_id, server_id, name, values}` → `201 {stack, preview}`. Empty secret variables are generated; unknown variables and values with a newline or `'` give `400` |
+
+### Docker Swarm
+
+Swarm clusters only (`mode: swarm`). Joins and leaves start a `swarm.member`
+job; node changes and token rotation run through a manager at once. Join
+tokens never leave the server.
+
+| Method | Path | Permission |
+| --- | --- | --- |
+| GET | `/clusters/{id}/swarm` | `view` on the cluster: `{cluster_id, mode, swarm, members, nodes, nodes_error, quorum}` |
+| POST | `/clusters/{id}/swarm/members` | `swarm.manage` (MFA) on the cluster: join a node → `202 {job, installs}` |
+| PATCH | `/clusters/{id}/swarm/members/{server}` | `swarm.manage` (MFA): change role, availability or labels → the swarm node |
+| DELETE | `/clusters/{id}/swarm/members/{server}?force=` | `swarm.manage` (MFA): leave → `202` the job |
+| POST | `/clusters/{id}/swarm/tokens/rotate` | `swarm.manage` (MFA): `{worker, manager}` → `204` |
+
+**Join body:**
+
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `server_id` | string | required | A Linux node already assigned to the cluster |
+| `role` | `manager` or `worker` | required | The first node must be `manager` |
+| `advertise_addr` | string | Docker's choice | IP address or interface name other nodes reach this node on |
+| `default_addr_pool` | string array | Docker's default | Overlay address pools (CIDR), first node only, at most 8 |
+| `autolock` | boolean | `false` | Lock manager keys at rest, first node only |
+
+`installs` lists Docker Engine install jobs Forge started first on a node
+without a running engine; the join waits for them.
+
+**Node body** (`PATCH`): `role` (`manager`/`worker`), `availability`
+(`active`, `pause`, `drain`), `labels` (object; replaces all labels). At least
+one is required. Demoting the last manager returns `409`.
+
+**Errors:** `422` when the cluster is not a Swarm cluster, the node is not in
+the cluster or not Linux, or the first node is not a manager; `409` while the
+node is already joining, joined or leaving, when the last manager would leave
+while workers remain, or when no manager answers.
+
+| PATCH | `/servers/{id}` | `server.manage` on the node; with `cluster_id` also `server.enroll` on that cluster; leaving a cluster needs `server.enroll` on the cluster left; changing the environment needs `server.enroll` on the new and on the old environment — `{cluster_id, environment_id}`, both optional (`null` or omitted clears). With `swarm_role` (`manager`/`worker`) and a Swarm `cluster_id`, the node also joins the cluster's swarm (`swarm.manage`, MFA; see [Docker Swarm](#docker-swarm)). A node in a swarm cannot move to another cluster until it leaves (`409`). See [Moving a node between clusters](#moving-a-node-between-clusters) → the updated server |
 | POST | `/nodes/probe` | `node.onboard` (MFA) — returns SSH host key |
 | POST | `/nodes/onboard` | `node.onboard` (MFA) — starts `node.bootstrap` |
 | GET | `/onboarding` | `server.enroll` — what the manual path needs: `{agents_available, install_url, agent_url, linux, windows_available, windows}`. `agents_available` is `true` when `agent_dist_dir` holds any agent build; `windows_available` when it holds `forge-agent-windows-x86_64.exe`. `install_url` is `<forge-url>/install.sh`; `agent_url` is `agent_public_url`. `linux` and `windows` are command templates with a literal `<token>` placeholder |

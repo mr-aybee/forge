@@ -23,6 +23,8 @@ pub mod container_telemetry;
 #[cfg(unix)]
 pub mod docker;
 #[cfg(unix)]
+pub mod docker_ops;
+#[cfg(unix)]
 pub mod docker_tls;
 pub mod enroll;
 pub mod exec_stream;
@@ -56,6 +58,8 @@ pub mod spool_upload;
 pub mod ssh_principals;
 #[cfg(unix)]
 pub mod stacks;
+#[cfg(unix)]
+pub mod swarm;
 pub mod terminal_accounts;
 pub mod tls;
 pub mod tunnel;

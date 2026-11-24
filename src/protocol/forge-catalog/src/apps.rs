@@ -128,6 +128,11 @@ pub struct AppSpec {
     /// commit, or an archive checked by its SHA-256).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<crate::deploy::ArtifactRef>,
+    /// Container services in a Swarm cluster (D-154): replicas, placement,
+    /// restart and update behaviour. Never sent to a node: Swarm clusters
+    /// run the service through a manager.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swarm: Option<crate::swarm_service::SwarmSettings>,
 }
 
 impl std::fmt::Debug for AppSpec {
@@ -163,6 +168,7 @@ impl std::fmt::Debug for AppSpec {
             slot,
             release,
             artifact,
+            swarm,
         } = self;
         let env: Vec<String> = env.iter().map(|(k, _)| format!("{k}=***")).collect();
         f.debug_struct("AppSpec")
@@ -195,6 +201,7 @@ impl std::fmt::Debug for AppSpec {
             .field("release", release)
             // URLs may carry a signed query: the kind only.
             .field("artifact", &artifact.as_ref().map(crate::deploy::ArtifactRef::kind))
+            .field("swarm", swarm)
             .finish()
     }
 }
@@ -306,13 +313,24 @@ fn valid_port_map(p: &str) -> bool {
         }
 }
 
+/// `source:/container/path[:ro|rw]`, where the source is a host folder
+/// (absolute) or a named Docker volume. Named volumes never touch a host
+/// path, so only host folders go through the host-path policy.
 fn valid_volume(v: &str) -> bool {
     let parts: Vec<&str> = v.split(':').collect();
-    match parts.as_slice() {
-        [h, c] => valid_abs_path(h) && valid_abs_path(c),
-        [h, c, "ro" | "rw"] => valid_abs_path(h) && valid_abs_path(c),
-        _ => false,
-    }
+    let (source, target) = match parts.as_slice() {
+        [s, t] | [s, t, "ro" | "rw"] => (*s, *t),
+        _ => return false,
+    };
+    let source_ok =
+        if source.starts_with('/') { valid_abs_path(source) } else { crate::swarm_service::volume_name_ok(source) };
+    source_ok && valid_abs_path(target)
+}
+
+/// The host folder a container volume binds, or `None` for a named volume.
+#[must_use]
+pub fn volume_host_path(v: &str) -> Option<&str> {
+    v.split(':').next().filter(|s| s.starts_with('/'))
 }
 
 /// A container image reference: `registry/repo[:tag][@sha256:…]`.
@@ -518,12 +536,14 @@ impl AppSpec {
                     return Err(format!("invalid port mapping `{p}`"));
                 }
                 if let Some(v) = self.volumes.iter().find(|v| !valid_volume(v)) {
-                    return Err(format!("invalid volume `{v}` (use /host/path:/container/path[:ro])"));
+                    return Err(format!(
+                        "invalid volume `{v}` (use /host/path:/container/path[:ro] or volume-name:/container/path[:ro])"
+                    ));
                 }
                 // The same host-mount rules as compose stacks: never the
                 // Docker socket, system paths or Forge's own folders.
                 for v in &self.volumes {
-                    let host = v.split(':').next().unwrap_or_default();
+                    let Some(host) = volume_host_path(v) else { continue };
                     if let Some(why) = crate::stacks::protected_host_path(host) {
                         return Err(format!("volume `{v}` is not allowed: {why}"));
                     }
@@ -755,6 +775,7 @@ mod tests {
             slot: String::new(),
             release: String::new(),
             artifact: None,
+            swarm: None,
             log_max_mb: 0,
         }
     }
@@ -857,6 +878,15 @@ mod tests {
         }
         c.volumes = vec!["/srv/data/api:/data".into()];
         c.validate().unwrap();
+        // Named Docker volumes: a safe name and an absolute target.
+        c.volumes = vec!["pgdata:/var/lib/postgresql/data".into(), "cache_1:/cache:ro".into()];
+        c.validate().unwrap();
+        assert_eq!(volume_host_path("pgdata:/data"), None);
+        assert_eq!(volume_host_path("/srv/x:/data"), Some("/srv/x"));
+        for v in ["../etc:/x", "pg data:/x", "pgdata:relative", "-flag:/x", "pgdata", "a:/b:rx"] {
+            c.volumes = vec![v.into()];
+            assert!(c.validate().is_err(), "{v}");
+        }
     }
 
     #[test]

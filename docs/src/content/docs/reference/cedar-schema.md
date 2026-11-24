@@ -114,6 +114,12 @@ out at every assignable scope.
 | `deploy.approve` | ✓ | ✓ | ✓ | | | | |
 | `stack.manage` | ✓ | ✓ | ✓ | ✓ | | | |
 | `stack.privileged` † | ✓ | ✓ | | | | | |
+| `swarm.manage` † | ✓ | ✓ | | | | | |
+| `docker.image.manage` | ✓ | ✓ | ✓ | | | | |
+| `docker.volume.manage` | ✓ | ✓ | ✓ | | | | |
+| `docker.network.manage` | ✓ | ✓ | ✓ | | | | |
+| `registry.manage` † | ✓ | ✓ | | | | | |
+| `webhook.manage` † | ✓ | ✓ | ✓ | ✓ | | | |
 | `certificate.use` † | ✓ | ✓ | | | | | |
 | `secret.read` † | ✓ | ✓ | | | | | |
 | `secret.manage` † (on the platform: create, change and delete credential vault items) | ✓ | | | | | | |
@@ -163,6 +169,8 @@ uninstall a store or issue standalone keys. See
 with an uploaded certificate checks it on the workspace; the `agent.command`
 job checks it again on each edge before it unseals the private key.
 
+`swarm.manage` applies to a Swarm cluster (and its nodes): it joins and
+removes swarm nodes and changes their role, availability and labels.
 `stack.manage` and `stack.privileged` apply to an environment (or a cluster).
 `stack.privileged` is needed to deploy a compose stack with host-access
 settings; see [Compose extensions and policy](/docs/reference/compose-extensions/#policy).

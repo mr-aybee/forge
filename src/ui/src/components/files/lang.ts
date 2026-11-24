@@ -1,5 +1,5 @@
 // Language names and detection for the file editor (kept apart from
-// CodeMirror so the explorer can use them without loading the editor).
+// the editor so the explorer can use them without loading the editor).
 
 export const LANGUAGES = [
   "plain",

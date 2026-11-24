@@ -1,0 +1,55 @@
+# PostgreSQL on Docker Swarm through Forge (forge deploy apply).
+#
+# A database keeps its data in a named volume, and a named volume lives on
+# ONE node. So the service runs one replica, pinned to the node labelled
+# `forge.db=postgres`, and every update stops the old task before starting
+# the new one: two postgres processes must never share one data folder. That
+# means a short outage per release, which `allowDowntime` accepts openly.
+#
+#   forge clusters swarm node lab lab-b --label forge.db=postgres
+#   echo '{"name":"postgres","runtime":"container","image":"postgres:17-alpine"}' \
+#     | forge services create --environment prod --file @-
+#   forge services update postgres --environment prod --secret-env POSTGRES_PASSWORD --yes < password-file
+#   forge deploy apply --file postgres.yml
+apiVersion: forge/v1
+kind: Deployment
+metadata:
+  name: postgres
+  environment: prod
+  description: PostgreSQL 17, single primary on a labelled node
+spec:
+  runtime: container
+  artifact:
+    image: postgres:17-alpine
+  env:
+    POSTGRES_USER: app
+    POSTGRES_DB: app
+    PGDATA: /var/lib/postgresql/data/pgdata
+  secrets:
+    - POSTGRES_PASSWORD
+  template:
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    memoryMb: 512
+    swarm:
+      mode: replicated
+      replicas: 1
+      constraints:
+        - node.labels.forge.db==postgres
+      restart:
+        condition: any
+        delay_secs: 5
+      # Used by `forge services swarm deploy|restart`; releases follow
+      # `strategy` below.
+      update:
+        order: stop-first
+        parallelism: 1
+        failure_action: rollback
+        monitor_secs: 30
+  # Releases use this strategy (it decides the Swarm update order).
+  strategy:
+    type: rolling
+    replacement: stop-first
+    allowDowntime: true

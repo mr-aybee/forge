@@ -5555,3 +5555,97 @@ needed.
   repository is archived.
 - Lab machines in docs and scripts are named `lab-a` … `lab-z`.
 - Example addresses use `192.0.2.x`.
+
+## D-154 Cluster modes: Default and Docker Swarm (supersedes D-033)
+
+**Decision.** Every cluster has a mode, `default` or `swarm`. You choose it at
+creation, and it cannot be changed afterwards. It is stored in
+`clusters.mode`, added by migration `0002`. Existing clusters migrate as
+`default` and behave as before.
+
+- **Default clusters** keep Forge's own orchestration, for system services and
+  containers.
+- **Swarm clusters:**
+  - Every node runs Docker Engine and joins one Docker Swarm. Forge inits the
+    swarm on the first manager and joins the other nodes during onboarding.
+  - Swarm schedules containers. Only container services are allowed.
+  - Projects, environments, applications and services keep their meaning.
+  - Deployments still go through Forge. Its strategies map onto Swarm's
+    native update and rollback config where that fits; blue-green and canary
+    are built from paired services behind Forge's ingress.
+
+**Why.** D-033 parked Swarm until a workload needed scheduling across nodes.
+Container management at the level of Portainer needs that now: replicas,
+placement, node drain and rolling updates, all driven by CI. Docker already
+does this well, so Forge drives Swarm and does not build a scheduler of its
+own.
+
+**Not done yet.** Converting an existing cluster to the other mode.
+
+## D-156 Deployment strategies on Docker Swarm
+
+**Decision.** Releases in a Swarm cluster go through the same deployment record, events, pause, abort and approval as node rollouts. The steps come from a Swarm plan (`forge_catalog::swarm_rollout`):
+
+| Strategy | On Swarm |
+| --- | --- |
+| Rolling | The service's own update: `batch_size` tasks at a time; start or stop first; Swarm rolls back on failure when `auto_rollback` is set |
+| Recreate | The same update with every task at once, stop first |
+| Blue-Green | A second Swarm service (slot `a`/`b`) at full size on Forge-allocated ports; once healthy, the edge moves all traffic to it; the old slot is scaled to zero and kept |
+| Canary | The new slot grows step by step while the edge gives it the same share of traffic; then it takes all traffic |
+| Manual | Refused: Swarm cannot hold an update between batches |
+
+HA is a property, not a strategy: the service's Swarm view scores replicas, spread, health check, restart, rollback on failure and manager quorum.
+
+**Why.** Swarm already does rolling updates well, so Forge uses its update config instead of driving tasks itself. Swarm cannot split traffic between two versions of one service, so Blue-Green and Canary use two services and the weighted routing that node rollouts already use (slot records and the edge), which keeps one model for both cluster modes.
+
+**Trade-offs.** Blue-Green and Canary need a site in front of the service. Slotted and unslotted services do not switch strategies in place. Failure handling moves traffic back to the old slot, or lets Swarm roll the service back.
+
+## D-157 Docker images, volumes and networks through the node's helper
+
+**Decision.** Every node's Docker images, volumes and networks can be managed from Forge through a closed, typed operation set (`forge_catalog::docker_ops::DockerOp`). The node's root helper runs it over the local Engine API. Reads need `server.manage`. Changes need `docker.image.manage`, `docker.volume.manage` or `docker.network.manage`, held by administrators and operators. Pulls, pushes and prunes run as `docker.op` jobs; everything else answers at once. Every change is audited as `docker.<op>`.
+
+**Limits.**
+- Volumes are created with the local driver and without options, and networks as plain bridge or overlay. Driver options can bind host paths, so they are never accepted.
+- Docker's networks (`bridge`, `host`, `none`, `ingress`, `docker_gwbridge`) and Forge's (`forge-*` or labelled `forge.managed`) cannot be removed, connected or pruned. The node resolves an id to the network's name before it checks.
+- Registry credentials never pass through this API, because job payloads are stored. Private registries come with the registry model.
+
+**Why not the Engine API proxy (D-125)?** The proxy needs the node's mutual-TLS endpoint, which is an opt-in that restarts dockerd. The typed set works on every node, and its smaller surface is easier to review. The action names have a `docker.` prefix because `network.manage` is a retired action, and reusing it would quietly grant the new rights to old stored profiles.
+
+## D-158 Container registries
+
+**Decision.** A workspace keeps container registries (`docker_hub`, `ghcr`, `gitlab`, `ecr`, `custom`) with a host, a user name and a secret. The secret is sealed with the envelope under `registry:<id>`; no API answer, log, audit entry or job payload carries it. When Forge pulls, pushes or deploys an image, it matches the image's host (Docker Hub for references without one) to a registry. It then adds Docker's `X-Registry-Auth` to the transient signed command only: `docker.op` steps, Swarm service applies (`--with-registry-auth`) and Swarm rollouts.
+
+Managing registries needs `registry.manage`: administrators, with MFA. Pushes go only to registries added in Forge, so an operator cannot send an image to an arbitrary registry.
+
+**Not yet.** ECR tokens expire after 12 hours and are not refreshed automatically; update the secret, or use a custom registry with a long-lived credential. Compose stacks do not use registries yet.
+
+## D-159 Deploy webhooks
+
+**Decision.** A deploy webhook is a secret URL, `POST /hooks/<token>`, that CI calls to deploy a service (on Default or Swarm clusters) or a compose stack. The token (`whk_…`, 256 bits) is stored as its SHA-256. An optional signature adds a second factor:
+- `github` uses `X-Hub-Signature-256`, the HMAC of the body;
+- `gitlab` uses `X-Gitlab-Token`;
+- `forge` uses `X-Forge-Signature`, the HMAC of `<timestamp>.<body>`, with `X-Forge-Timestamp` within five minutes to stop replays.
+
+The secret is sealed. The token and the secret are shown once and can be rotated.
+
+A delivery runs as the webhook's creator, through the same deploy paths and checks as the console. Permissions are re-checked on every delivery; the delivery never counts as MFA, so MFA-guarded work (privileged binds) is refused. It is audited as `webhook.deliver`, with the webhook in `via`.
+
+A delivery may pick the image tag (`?tag=` or a JSON `"tag"`) only when the webhook has a tag pattern such as `v*`. Deliveries are rate-limited per source address (before any lookup) and per webhook. The newest 100 deliveries per webhook are kept. `GET /hooks/<token>/jobs/<id>` reports only jobs that webhook started.
+
+**Why.** CI needs one call that deploys without holding a user's token. A URL credential that can only deploy one target, is checked again against its creator's current rights, and leaves a record of every call is narrower than a service-account token. Signatures, especially the timestamped one, stop a leaked URL being replayed from a log.
+
+## D-160 Compose app templates
+
+**Decision.** Forge ships a small set of compose app templates: Nginx, PostgreSQL, Redis, MariaDB, WordPress and Uptime Kuma. Each has pinned images (never `latest`), health checks and named volumes. A template's `${VAR}` placeholders are filled from the stack's `.env`, so Docker Compose does the substitution and Forge renders nothing into YAML. Secret variables left empty get a random 192-bit value and are sealed like any stack `.env`. A stack made from a template goes through the normal stack checks: policy, MFA for privileged settings, and audit.
+
+**Not done.** Git-backed stacks, where a stack follows a branch and redeploys on push. They need a git fetcher on the control plane and deploy keys, which means a new dependency and a new trust boundary, so they are on the roadmap. Until then, a deploy webhook (D-159) redeploys a stack from CI.
+
+## D-161 Address lists and API-wide rate limits
+
+**Decision.**
+- **Address lists, `[security.access]`:** `deny` is refused everywhere. A non-empty `allow` limits the console, API, MCP and OAuth. `webhooks_allow` and `nodes_allow` apply instead of `allow` to `/hooks/*` and to the node installers and agent downloads, so CI and new nodes keep working while the console is closed to the internet. The server refuses to start with an `allow` list that excludes loopback or a trusted proxy.
+- **Rate limit, `[security.rate_limit]`:** a sliding minute per client address, 1200 by default, with an IPv6 `/64` keyed as one address.
+- **One limiter:** a single bounded limiter (`rate_limit::Windows`) is shared by the API limit, the webhook limits, replay protection and enrollment attempts. When it is full of active keys it refuses newcomers rather than resetting, because a reset would lift every limit during a flood.
+- **Specific limits:** agent enrollment is limited to 20 attempts per minute per address. Agent downloads are streamed, with at most 16 at once.
+
+**Why.** Before this change, only sign-in and a few endpoints had limits, and the control plane could not be closed to unknown networks without a firewall in front. The lists use the same client-address logic as the sign-in throttle, so a reverse proxy is handled the same way everywhere.

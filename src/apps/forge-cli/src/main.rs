@@ -14,6 +14,7 @@ mod api;
 mod apicmd;
 mod appspec;
 mod cmds;
+mod containercmd;
 mod creds;
 mod ctx;
 mod deploycmd;
@@ -116,6 +117,12 @@ pub enum Cmd {
     /// A node's Docker Engine API over mutual TLS: the endpoint, the call catalog and raw calls.
     #[command(subcommand)]
     Docker(dockercmd::DockerCmd),
+    /// Container registries and their credentials (D-158).
+    #[command(subcommand)]
+    Registries(containercmd::RegistriesCmd),
+    /// Deploy webhooks for CI/CD (D-159).
+    #[command(subcommand)]
+    Webhooks(containercmd::WebhooksCmd),
     /// Releases and rollouts of services from forge.deploy.yaml: validate, plan, apply, rollback.
     #[command(subcommand)]
     Deploy(deploycmd::DeployCmd),
@@ -369,6 +376,8 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Alerts(c) => alertscmd::run(g, c).await,
         Cmd::Tunnel(c) => tunnelcmd::run(g, c).await,
         Cmd::Docker(c) => dockercmd::run(g, c).await,
+        Cmd::Registries(c) => containercmd::registries(g, c).await,
+        Cmd::Webhooks(c) => containercmd::webhooks(g, c).await,
         Cmd::Deploy(c) => deploycmd::run(g, c).await,
         Cmd::Agents(c) => agentscmd::run(g, c).await,
         Cmd::Jobs(c) => cmds::jobs(g, c).await,

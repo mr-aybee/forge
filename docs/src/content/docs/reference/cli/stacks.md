@@ -882,3 +882,40 @@ signed in; `4` no `stack.manage`; `6` no such stack; `7` the stack still runs
 on a node.
 
 **See also**: [`forge stacks down`](#forge-stacks-down).
+
+## Templates
+
+Ready compose apps with pinned images (see
+[Docker resources](/docs/guides/docker-resources/)). Empty secret
+variables are generated and stored sealed in the stack's `.env`.
+
+### forge stacks templates
+
+Compose app templates and their variables
+
+**Synopsis**
+
+```text
+forge stacks templates [OPTIONS]
+```
+
+### forge stacks from-template
+
+Create a compose stack from a template
+
+**Synopsis**
+
+```text
+forge stacks from-template [OPTIONS] --environment <ENVIRONMENT> --node <NODE> <TEMPLATE> <NAME>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<template>` | string | - | yes | Template id (see `forge stacks templates`) | - |
+| `<name>` | string | - | yes | Name of the new stack | - |
+| `--environment` | string | - | no | Environment (id or name) | - |
+| `--node` | string | - | no | Node it runs on (id, host name or name) | - |
+| `--set` | flag | - | no | <KEY=VALUE> A variable (`KEY=VALUE`, repeat). Empty secrets are generated | - |
+

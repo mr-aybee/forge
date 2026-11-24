@@ -322,3 +322,22 @@ async fn stack_reads_never_show_env_values_and_preview_needs_the_node() {
     assert_eq!(s, StatusCode::OK, "{p}");
     assert!(clean(&p), "{p}");
 }
+
+/// Compose app templates (D-160): listed for viewers; a stack made from one
+/// gets its secrets generated and sealed, and unknown variables are refused.
+#[tokio::test]
+async fn stacks_come_from_templates_with_generated_secrets() {
+    let h = crate::common::start().await;
+    let admin = crate::common::Client::login(&h.base, crate::common::ADMIN_EMAIL, crate::common::PASSWORD).await;
+    let (s, list) = admin.get("/api/v1/stack-templates").await;
+    assert_eq!(s, reqwest::StatusCode::OK);
+    assert!(list.as_array().unwrap().iter().any(|t| t["id"] == "postgres"), "{list}");
+    let (s, e) = admin
+        .post("/api/v1/stacks/from-template", serde_json::json!({"template": "nope", "environment_id": forge_core::EnvironmentId::new(), "server_id": forge_core::ServerId::new(), "name": "db"}))
+        .await;
+    assert_eq!(s, reqwest::StatusCode::BAD_REQUEST, "{e}");
+    let (s, e) = admin
+        .post("/api/v1/stacks/from-template", serde_json::json!({"template": "postgres", "environment_id": forge_core::EnvironmentId::new(), "server_id": forge_core::ServerId::new(), "name": "db", "values": {"EVIL": "x"}}))
+        .await;
+    assert_eq!(s, reqwest::StatusCode::BAD_REQUEST, "{e}");
+}

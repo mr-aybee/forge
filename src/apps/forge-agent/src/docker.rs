@@ -36,6 +36,19 @@ pub(crate) async fn call_at(
     body: Option<&Value>,
     timeout: Duration,
 ) -> Result<(u16, Bytes), String> {
+    call_with_registry_auth(socket, method, path, body, None, timeout).await
+}
+
+/// [`call_at`] with Docker's `X-Registry-Auth` header (pulls and pushes from
+/// private registries). The value is a credential: never logged.
+pub(crate) async fn call_with_registry_auth(
+    socket: &std::path::Path,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    registry_auth: Option<&str>,
+    timeout: Duration,
+) -> Result<(u16, Bytes), String> {
     let run = async {
         let stream = tokio::net::UnixStream::connect(socket)
             .await
@@ -43,11 +56,15 @@ pub(crate) async fn call_at(
         let (mut sender, conn) =
             hyper::client::conn::http1::handshake(TokioIo::new(stream)).await.map_err(|e| e.to_string())?;
         tokio::spawn(conn);
-        let req = Request::builder()
+        let mut req = Request::builder()
             .method(method)
             .uri(format!("http://docker/v1.43{path}"))
             .header("Host", "docker")
-            .header("Content-Type", "application/json")
+            .header("Content-Type", "application/json");
+        if let Some(auth) = registry_auth {
+            req = req.header("X-Registry-Auth", auth);
+        }
+        let req = req
             .body(Full::new(body.map_or_else(Bytes::new, |b| Bytes::from(b.to_string()))))
             .map_err(|e| e.to_string())?;
         let resp = sender.send_request(req).await.map_err(|e| e.to_string())?;
@@ -58,6 +75,78 @@ pub(crate) async fn call_at(
             .map_err(|e| format!("reading Docker response: {e}"))?
             .to_bytes();
         Ok((status, body))
+    };
+    tokio::time::timeout(timeout, run).await.map_err(|_| "Docker did not respond in time".to_owned())?
+}
+
+/// Longest single line kept while streaming (a progress line is short).
+const MAX_LINE: usize = 1024 * 1024;
+
+/// Runs an Engine API call whose answer is a stream of JSON lines (pulls,
+/// pushes, events) without keeping the whole answer: `on_line` sees each
+/// line as it arrives. Returns the status. `registry_auth` is a credential
+/// and never logged.
+pub(crate) async fn call_lines(
+    method: &str,
+    path: &str,
+    registry_auth: Option<&str>,
+    timeout: Duration,
+    mut on_line: impl FnMut(&str),
+) -> Result<u16, String> {
+    let run = async {
+        let socket = std::path::Path::new(SOCKET);
+        let stream = tokio::net::UnixStream::connect(socket)
+            .await
+            .map_err(|e| format!("{} ({}: {e})", forge_catalog::apps::DOCKER_UNAVAILABLE, socket.display()))?;
+        let (mut sender, conn) =
+            hyper::client::conn::http1::handshake(TokioIo::new(stream)).await.map_err(|e| e.to_string())?;
+        tokio::spawn(conn);
+        let mut req = Request::builder()
+            .method(method)
+            .uri(format!("http://docker/v1.43{path}"))
+            .header("Host", "docker")
+            .header("Content-Type", "application/json");
+        if let Some(auth) = registry_auth {
+            req = req.header("X-Registry-Auth", auth);
+        }
+        let req = req.body(Full::new(Bytes::new())).map_err(|e| e.to_string())?;
+        let resp = sender.send_request(req).await.map_err(|e| e.to_string())?;
+        let status = resp.status().as_u16();
+        let mut body = resp.into_body();
+        if !(200..300).contains(&status) {
+            let raw = http_body_util::Limited::new(body, 64 * 1024)
+                .collect()
+                .await
+                .map(http_body_util::Collected::to_bytes)
+                // An unreadable error body still yields the status.
+                .unwrap_or_default();
+            return Err(docker_error(status, &raw));
+        }
+        let mut buf: Vec<u8> = Vec::new();
+        // Set while dropping the rest of a line that grew too long.
+        let mut skipping = false;
+        while let Some(frame) = body.frame().await {
+            let frame = frame.map_err(|e| format!("reading Docker response: {e}"))?;
+            let Ok(data) = frame.into_data() else { continue };
+            buf.extend_from_slice(&data);
+            while let Some(pos) = buf.iter().position(|b| *b == b'\n') {
+                let line: Vec<u8> = buf.drain(..=pos).collect();
+                if skipping {
+                    skipping = false;
+                } else {
+                    on_line(String::from_utf8_lossy(&line).trim());
+                }
+            }
+            if buf.len() > MAX_LINE {
+                // A line this long is not progress: drop it up to its end.
+                buf.clear();
+                skipping = true;
+            }
+        }
+        if !buf.is_empty() && !skipping {
+            on_line(String::from_utf8_lossy(&buf).trim());
+        }
+        Ok(status)
     };
     tokio::time::timeout(timeout, run).await.map_err(|_| "Docker did not respond in time".to_owned())?
 }
@@ -151,7 +240,7 @@ fn short(id: &str) -> String {
 }
 
 /// Demultiplexes Docker's stdout/stderr log stream (non-TTY containers).
-fn demux(raw: &[u8]) -> String {
+pub(crate) fn demux(raw: &[u8]) -> String {
     let mut out = Vec::new();
     let mut i = 0;
     let framed = raw.len() >= 8 && matches!(raw[0], 0..=2) && raw[1..4] == [0, 0, 0];

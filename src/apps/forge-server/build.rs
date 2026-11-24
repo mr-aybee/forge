@@ -40,6 +40,7 @@ fn mime(path: &str) -> &'static str {
         "webp" => "image/webp",
         "woff2" => "font/woff2",
         "woff" => "font/woff",
+        "ttf" => "font/ttf",
         "txt" => "text/plain; charset=utf-8",
         "webmanifest" => "application/manifest+json",
         _ => "application/octet-stream",

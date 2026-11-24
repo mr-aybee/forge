@@ -26,7 +26,7 @@ or change its priority.
 
 Open **Nodes** and select the node; the **Cluster** filter narrows the list to
 one cluster. The node page has the tabs
-**Overview**, **Processes**, **Services**, **Packages**, **Containers**, **Files**,
+**Overview**, **Processes**, **Services**, **Packages**, **Docker**, **Files**,
 **SSH / Terminal**, **Credentials** (when you may manage it) and **Details**
 (identity, placement, agent commands, facts and recent jobs).
 

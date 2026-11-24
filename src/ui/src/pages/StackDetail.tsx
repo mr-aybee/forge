@@ -8,13 +8,14 @@ import { type StackDetail as Detail, type StackNode, jobServer, useDeleteStack, 
 import { nodeName, type Job } from "../api/types";
 import { errorText, useToast } from "../app/toast";
 import { NodeJobTabs } from "../components/JobLog";
+import { WebhooksTab } from "../components/deploy/WebhooksTab";
 import { Designer, Findings, NodeLink, StateChip, YamlEditor } from "../components/stacks/parts";
 import { RevisionsPanel } from "../components/stacks/Revisions";
 import { ServicePorts } from "../components/tunnels/ServicePorts";
 import { DeployDialog, DownDialog, ExposeDialog, KindBadge, LogsDialog, UpdateDialog } from "../components/stacks/StackDialogs";
 import { Badge, Button, actionHover, Confirm, CopyButton, CopyIcon, Empty, ErrorNote, IconButton, PageHeader, Panel, RowMenu, type RowAction, Skeleton, Table, Td, ago, time, useRowMenu } from "../components/ui";
 
-type Tab = "services" | "compose" | "revisions";
+type Tab = "services" | "compose" | "revisions" | "webhooks";
 type ServiceAction = "start" | "stop" | "restart" | "pull";
 
 export function StackDetail() {
@@ -196,6 +197,7 @@ function StackView({ d, tab, setTab, fetching }: { d: Detail; tab: Tab; setTab: 
             ["services", "Services"],
             ["compose", "Compose"],
             ["revisions", "Revisions"],
+            ["webhooks", "Webhooks"],
           ] as const
         ).map(([id, label]) => (
           <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className={`press -mb-px border-b-2 px-3 py-2 text-[13px] focus-visible:outline-2 focus-visible:outline-accent ${tab === id ? "border-accent text-accent" : "border-transparent text-muted hover:text-fg"}`}>
@@ -235,6 +237,8 @@ function StackView({ d, tab, setTab, fetching }: { d: Detail; tab: Tab; setTab: 
               <div className="max-h-[66vh] overflow-y-auto p-3">{d.preview ? <Designer preview={d.preview} /> : <p className="rounded-md bg-bad-soft px-3 py-2 text-xs text-bad">{d.preview_error ?? "No preview available."}</p>}</div>
             </Panel>
           </div>
+        ) : tab === "webhooks" ? (
+          <WebhooksTab target={{ kind: "stack", id: s.id }} targetName={s.name} />
         ) : (
           <Panel>
             <RevisionsPanel d={d} onRollback={(rev) => setDialog({ k: "deploy", revision: rev })} />

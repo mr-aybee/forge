@@ -285,6 +285,10 @@ impl Agent {
             forge_proto::Command::StackAction(_) => true,
             // Restarting dockerd can take a minute.
             forge_proto::Command::DockerTlsAction(_) => true,
+            // Joining a swarm waits for the managers' consensus.
+            forge_proto::Command::SwarmAction(_) => true,
+            // Pulls, pushes and prunes move layers.
+            forge_proto::Command::DockerAction(_) => true,
             _ => false,
         };
         // Stop a running background operation: its task is dropped, which
@@ -365,7 +369,15 @@ impl Agent {
             // heartbeat instead of after the server's hold. A transfer is a
             // chain of such operations, so this sets its speed (issue #15).
             // Anything slower carries on in the background as before.
-            let quick = matches!(command, forge_proto::Command::FileAction(_));
+            // Docker and Swarm commands are the same: mostly reads and small
+            // changes (lists, inspects, node updates) that a person waits
+            // for; pulls, pushes and joins carry on in the background.
+            let quick = matches!(
+                command,
+                forge_proto::Command::FileAction(_)
+                    | forge_proto::Command::DockerAction(_)
+                    | forge_proto::Command::SwarmAction(_)
+            );
             let (quick_tx, quick_rx) = tokio::sync::oneshot::channel::<CommandResult>();
             let task = tokio::spawn(async move {
                 let r = crate::progress::scope(op.clone(), exec.execute(&cmd, &signed)).await;

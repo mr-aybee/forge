@@ -39,3 +39,5 @@ description: What is planned next.
   silences and maintenance windows exist today (see
   [Alerts](/docs/concepts/alerts/) and
   [Silences and maintenance windows](/docs/concepts/silences/)).
+
+- **Git-backed stacks:** a stack that follows a Git branch with a deploy key and redeploys on push. Until then, use a [deploy webhook](/docs/guides/deploy-webhooks/) from CI.

@@ -718,3 +718,66 @@ fn deploy_approve_roles() {
     bind(&engine, other, Role::Operator, workspace("b"));
     assert!(!allowed(&engine, other, Action::DeployApprove, &app, true), "cross-workspace");
 }
+
+/// Swarm membership and nodes (D-154): administrators only, always with MFA.
+#[test]
+fn swarm_manage_is_admin_only_with_mfa() {
+    let engine = PolicyEngine::new().unwrap();
+    let cl = ResourceRef::new(EntityRef::new(EntityKind::Cluster, "swarm-eu"), vec![workspace("a")]);
+    let (admin, op, dev, auditor) = (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+    bind(&engine, admin, Role::WorkspaceAdmin, workspace("a"));
+    bind(&engine, op, Role::Operator, workspace("a"));
+    bind(&engine, dev, Role::Developer, workspace("a"));
+    bind(&engine, auditor, Role::Auditor, workspace("a"));
+    assert!(!allowed(&engine, admin, Action::SwarmManage, &cl, false));
+    assert!(allowed(&engine, admin, Action::SwarmManage, &cl, true));
+    for u in [op, dev, auditor] {
+        assert!(!allowed(&engine, u, Action::SwarmManage, &cl, true));
+    }
+}
+
+/// Docker resources on a node (D-157): administrators and operators, no MFA;
+/// developers and auditors cannot.
+#[test]
+fn docker_resources_are_for_operators() {
+    let engine = PolicyEngine::new().unwrap();
+    let node = ResourceRef::new(EntityRef::new(EntityKind::Server, "lab-a"), vec![workspace("a")]);
+    let (admin, op, dev, auditor) = (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+    bind(&engine, admin, Role::WorkspaceAdmin, workspace("a"));
+    bind(&engine, op, Role::Operator, workspace("a"));
+    bind(&engine, dev, Role::Developer, workspace("a"));
+    bind(&engine, auditor, Role::Auditor, workspace("a"));
+    for a in [Action::ImageManage, Action::VolumeManage, Action::NetworkManage] {
+        assert!(allowed(&engine, admin, a, &node, false), "{a:?}");
+        assert!(allowed(&engine, op, a, &node, false), "{a:?}");
+        assert!(!allowed(&engine, dev, a, &node, true), "{a:?}");
+        assert!(!allowed(&engine, auditor, a, &node, true), "{a:?}");
+    }
+}
+
+/// Registries hold credentials (D-158): administrators only, with MFA.
+#[test]
+fn registry_manage_is_admin_only_with_mfa() {
+    let engine = PolicyEngine::new().unwrap();
+    let ws = ResourceRef::new(EntityRef::new(EntityKind::Workspace, "a"), vec![]);
+    let (admin, op) = (UserId::new(), UserId::new());
+    bind(&engine, admin, Role::WorkspaceAdmin, workspace("a"));
+    bind(&engine, op, Role::Operator, workspace("a"));
+    assert!(!allowed(&engine, admin, Action::RegistryManage, &ws, false));
+    assert!(allowed(&engine, admin, Action::RegistryManage, &ws, true));
+    assert!(!allowed(&engine, op, Action::RegistryManage, &ws, true));
+}
+
+/// Deploy webhooks (D-159): whoever deploys may create them, always with MFA;
+/// auditors cannot.
+#[test]
+fn webhook_manage_needs_mfa() {
+    let engine = PolicyEngine::new().unwrap();
+    let ws = ResourceRef::new(EntityRef::new(EntityKind::Workspace, "a"), vec![]);
+    let (dev, auditor) = (UserId::new(), UserId::new());
+    bind(&engine, dev, Role::Developer, workspace("a"));
+    bind(&engine, auditor, Role::Auditor, workspace("a"));
+    assert!(!allowed(&engine, dev, Action::WebhookManage, &ws, false));
+    assert!(allowed(&engine, dev, Action::WebhookManage, &ws, true));
+    assert!(!allowed(&engine, auditor, Action::WebhookManage, &ws, true));
+}

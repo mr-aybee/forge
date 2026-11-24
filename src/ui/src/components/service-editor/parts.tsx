@@ -10,7 +10,7 @@ export function SectionCard({ meta, status, messages, actions, children }: { met
   const Icon = meta.icon;
   return (
     <section id={sectionDomId(meta.id)} aria-labelledby={`${sectionDomId(meta.id)}-title`} className="scroll-mt-4 rounded-lg border border-line bg-panel">
-      <header className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-line px-4 py-2.5">
+      <header className="card-head flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-t-lg border-b border-line px-4 py-2.5">
         <Icon className="size-4 shrink-0 text-accent" aria-hidden />
         <h3 id={`${sectionDomId(meta.id)}-title`} className="text-[13px] font-semibold">
           {meta.label}

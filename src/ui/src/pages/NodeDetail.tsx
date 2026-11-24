@@ -11,8 +11,7 @@ import { isShell, sessionLabel, useTerminals } from "../app/terminals";
 import { errorText, useToast } from "../app/toast";
 import { JobDetail } from "../components/JobsDrawer";
 import { jobTitle, useJobNames } from "../components/jobMeta";
-import { NodeContainers } from "../components/NodeContainers";
-import { DockerApiPanel } from "../components/node/DockerApiPanel";
+import { DockerWorkspace } from "../components/docker/DockerWorkspace";
 import { NodePackages } from "../components/NodePackages";
 import { SshAccess } from "../components/SshAccess";
 import { MoveClusterDialog } from "../components/node/MoveClusterDialog";
@@ -98,7 +97,7 @@ const trigger =
 
 export function NodeDetail() {
   const { nodeId } = useParams({ from: "/nodes/$nodeId" });
-  const { tab, root: rootParam } = useSearch({ from: "/nodes/$nodeId" });
+  const { tab, root: rootParam, docker: dockerTab } = useSearch({ from: "/nodes/$nodeId" });
   const navigate = useNavigate();
   const node = useServer(nodeId);
   const clusters = useClusters().data ?? [];
@@ -191,7 +190,7 @@ export function NodeDetail() {
             <Package className="size-4" /> Packages
           </Tabs.Trigger>
           <Tabs.Trigger value="containers" className={trigger}>
-            <Container className="size-4" /> Containers
+            <Container className="size-4" /> Docker
           </Tabs.Trigger>
           <Tabs.Trigger value="files" className={trigger}>
             <FolderOpen className="size-4" /> Files
@@ -228,10 +227,11 @@ export function NodeDetail() {
           <NodePackages node={n} />
         </Tabs.Content>
         <Tabs.Content value="containers">
-          <div className="space-y-4">
-            <NodeContainers node={n} />
-            {n.os === "linux" && <DockerApiPanel node={n} />}
-          </div>
+          <DockerWorkspace
+            node={n}
+            tab={dockerTab ?? "containers"}
+            onTab={(t) => void navigate({ to: "/nodes/$nodeId", params: { nodeId }, search: { tab: "containers", docker: t === "containers" ? undefined : t }, replace: true })}
+          />
         </Tabs.Content>
         <Tabs.Content value="files">
           <FileExplorer serverId={n.id} disabled={n.status === "revoked"} initialRoot={rootParam} />

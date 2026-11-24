@@ -43,14 +43,19 @@ const RETIRE_WAIT: Duration = Duration::from_secs(120);
 const ANALYSIS_EVERY: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone, Deserialize)]
-struct Payload {
-    deployment_id: DeploymentId,
+pub(super) struct Payload {
+    pub(super) deployment_id: DeploymentId,
+    /// Container volumes (or, on Swarm, host binds) outside the approved
+    /// roots that the submitter was authorized for (`stack.privileged`).
     #[serde(default)]
-    privileged_mounts: Vec<String>,
+    pub(super) privileged_mounts: Vec<String>,
     #[serde(default)]
     remove: Vec<ServerId>,
     #[serde(default)]
     names: BTreeMap<String, String>,
+    /// A rollout in this Docker Swarm cluster (D-156).
+    #[serde(default)]
+    pub(super) swarm_cluster: Option<forge_core::ClusterId>,
 }
 
 #[derive(Debug)]
@@ -70,11 +75,17 @@ pub struct DeployJob {
     pub clock: Arc<dyn Clock>,
     /// Pause between probes and between looks at a request.
     pub tick: Duration,
+    /// Rollouts in Docker Swarm clusters (D-156).
+    pub swarm: Arc<crate::swarm::SwarmService>,
+    pub swarms: Arc<dyn forge_core::swarm::SwarmRepository>,
+    pub ops: super::node_op::NodeOps,
+    /// Credentials for private images, resolved per step (never stored).
+    pub registries: Arc<crate::registries::RegistryService>,
 }
 
 /// Why a rollout stopped.
 #[derive(Debug)]
-enum Stop {
+pub(super) enum Stop {
     /// Try the step again later (a node did not answer).
     Retry(String),
     Failed(String),
@@ -97,15 +108,15 @@ impl From<forge_core::DomainError> for Stop {
     }
 }
 
-type Done<T = ()> = Result<T, Stop>;
+pub(super) type Done<T = ()> = Result<T, Stop>;
 
 /// What every step needs.
-struct Run<'a> {
-    principal: String,
-    app: Service,
-    release: Release,
-    policy: RolloutPolicy,
-    payload: &'a Payload,
+pub(super) struct Run<'a> {
+    pub(super) principal: String,
+    pub(super) app: Service,
+    pub(super) release: Release,
+    pub(super) policy: RolloutPolicy,
+    pub(super) payload: &'a Payload,
 }
 
 impl Run<'_> {
@@ -126,11 +137,11 @@ fn server_of(t: &str) -> Done<ServerId> {
 }
 
 impl DeployJob {
-    fn effects(&self) -> Done<&Arc<dyn RolloutEffects>> {
+    pub(super) fn effects(&self) -> Done<&Arc<dyn RolloutEffects>> {
         self.effects.get().ok_or_else(|| Stop::Retry("the control plane is still starting".into()))
     }
 
-    async fn event(&self, id: DeploymentId, level: &str, server: Option<ServerId>, message: String) {
+    pub(super) async fn event(&self, id: DeploymentId, level: &str, server: Option<ServerId>, message: String) {
         let e = DeploymentEvent {
             deployment_id: id,
             seq: 0,
@@ -144,13 +155,13 @@ impl DeployJob {
         }
     }
 
-    async fn save(&self, d: &mut Deployment) -> Done {
+    pub(super) async fn save(&self, d: &mut Deployment) -> Done {
         d.updated_at = self.clock.now();
         self.deploys.put_deployment(d).await?;
         Ok(())
     }
 
-    async fn audit(&self, principal: &str, d: &Deployment, action: &str, ok: bool, details: Value) {
+    pub(super) async fn audit(&self, principal: &str, d: &Deployment, action: &str, ok: bool, details: Value) {
         let ev = AuditEvent::new(
             principal,
             action,
@@ -165,7 +176,7 @@ impl DeployJob {
     }
 
     /// Acts on a request between steps: holds while paused, stops on abort.
-    async fn checkpoint(&self, d: &mut Deployment) -> Done {
+    pub(super) async fn checkpoint(&self, d: &mut Deployment) -> Done {
         loop {
             let cur = self.deploys.get_deployment(d.id).await?.ok_or_else(|| Stop::Failed("deployment gone".into()))?;
             match cur.request {
@@ -200,7 +211,7 @@ impl DeployJob {
     }
 
     /// Stops a wait early on abort; a pause during a wait holds after it.
-    async fn aborted(&self, id: DeploymentId) -> Done {
+    pub(super) async fn aborted(&self, id: DeploymentId) -> Done {
         let cur = self.deploys.get_deployment(id).await?;
         if cur.is_some_and(|c| c.request == Some(DeploymentRequest::Abort)) {
             self.deploys.clear_request(id).await?;
@@ -210,7 +221,7 @@ impl DeployJob {
     }
 
     /// The release as stored now (the first pull may have pinned its digest).
-    async fn fresh_release(&self, r: &Run<'_>) -> Done<Release> {
+    pub(super) async fn fresh_release(&self, r: &Run<'_>) -> Done<Release> {
         Ok(self.releases.get_release(r.release.id).await?.unwrap_or_else(|| r.release.clone()))
     }
 
@@ -503,7 +514,7 @@ impl DeployJob {
         }
     }
 
-    async fn approve(&self, d: &mut Deployment, r: &Run<'_>, reason: &str) -> Done {
+    pub(super) async fn approve(&self, d: &mut Deployment, r: &Run<'_>, reason: &str) -> Done {
         d.state = DeploymentState::AwaitingApproval;
         self.save(d).await?;
         self.event(d.id, "info", None, format!("waiting for approval: {reason}")).await;
@@ -567,7 +578,7 @@ impl DeployJob {
         Ok(())
     }
 
-    async fn load(&self, p: &Payload) -> Result<(Deployment, Service, Release, Plan, RolloutPolicy), StepError> {
+    async fn load(&self, p: &Payload) -> Result<(Deployment, Service, Release, Value, RolloutPolicy), StepError> {
         let retry = |e: forge_core::DomainError| StepError::Retryable(e.to_string());
         let d = self
             .deploys
@@ -587,8 +598,7 @@ impl DeployJob {
             .await
             .map_err(retry)?
             .ok_or_else(|| StepError::Fatal("release not found".into()))?;
-        let plan: Plan =
-            serde_json::from_value(d.plan.clone()).map_err(|e| StepError::Fatal(format!("bad plan: {e}")))?;
+        let plan = d.plan.clone();
         let policy: RolloutPolicy =
             serde_json::from_value(release.policy.clone()).map_err(|e| StepError::Fatal(format!("bad policy: {e}")))?;
         Ok((d, app, release, plan, policy))
@@ -602,6 +612,10 @@ impl DeployJob {
             return Ok(());
         }
         let r = Run { principal: ctx.job.principal.to_string(), app, release, policy, payload: &p };
+        if let Some(cluster) = p.swarm_cluster {
+            return self.swarm_rollout(ctx, &mut d, &r, cluster, plan).await;
+        }
+        let plan: Plan = serde_json::from_value(plan).map_err(|e| StepError::Fatal(format!("bad plan: {e}")))?;
         if d.state == DeploymentState::Pending {
             d.state = DeploymentState::Running;
             self.save(&mut d).await.map_err(stop_error)?;
@@ -794,7 +808,7 @@ impl DeployJob {
             json!({ "service": app.name, "release": d.release_number, "from": d.from_release }),
         )
         .await;
-        if let Some(fx) = self.effects.get() {
+        if let (Some(fx), Ok(plan)) = (self.effects.get(), serde_json::from_value::<Plan>(plan)) {
             for t in &plan.targets {
                 if let Ok(server) = t.server_id.parse() {
                     fx.push_health(app.id, server).await;

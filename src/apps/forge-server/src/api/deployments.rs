@@ -105,6 +105,19 @@ async fn authorize(state: &AppState, caller: &Caller, p: &Prepared) -> ApiResult
     let spec = crate::jobs::app::build_spec(&crate::deploy::release_app(&p.app, &p.release), None)
         .map_err(ApiError::bad_request)?;
     let mut mounts = std::collections::BTreeSet::new();
+    if let Some(sw) = &p.swarm {
+        // In a swarm a task may run on any node: host binds are approved
+        // only inside an approved root on every node (D-156).
+        let settings = spec.swarm.clone().unwrap_or_default();
+        let def = forge_catalog::swarm_service::service_def(
+            &spec,
+            &settings,
+            &p.app.id.to_string(),
+            &p.app.environment_id.to_string(),
+        )
+        .map_err(ApiError::bad_request)?;
+        mounts.extend(state.swarm.privileged_binds(sw.cluster, &def.bind_sources()).await?);
+    }
     for n in &p.nodes {
         let roots = crate::stacks::bind_roots(&state.store, *n).await;
         mounts.extend(crate::jobs::app::privileged_mounts(&spec, &roots));
@@ -122,7 +135,9 @@ async fn prepare(
     input: &DocInput,
 ) -> ApiResult<Prepared> {
     let doc = crate::deploy::read_document(&input.yaml, input.environment.as_deref())?;
-    Ok(state.deploy.prepare(ws, &doc, &input.yaml, &caller.principal()).await?)
+    let p = state.deploy.prepare(ws, &doc, &input.yaml, &caller.principal()).await?;
+    state.swarm.check_runtime(p.app.environment_id, &p.app.runtime).await?;
+    Ok(p)
 }
 
 async fn next_number(state: &AppState, app: ServiceId) -> DomainResult<i64> {
@@ -327,19 +342,25 @@ pub async fn get(
     Path(id): Path<DeploymentId>,
 ) -> ApiResult<Json<DeploymentView>> {
     let (d, app) = load_deployment(&state, &caller, id).await?;
-    let plan: cat::Plan = serde_json::from_value(d.plan.clone()).map_err(forge_core::DomainError::internal)?;
-    let names = node_names(&state, &plan).await?;
+    let steps = step_lines(&state, &d.plan).await?;
     let events = state.store.list_events(d.id, 0, 1_000).await?;
     let can_control = caller.can(Action::Deploy, svc_ref(app.id)).await;
     let can_approve = d.created_by != caller.principal() && caller.can(Action::DeployApprove, svc_ref(app.id)).await;
-    Ok(Json(DeploymentView {
-        steps: plan.steps.iter().map(|s| s.describe(&names)).collect(),
-        service: app.name,
-        deployment: d,
-        events,
-        can_control,
-        can_approve,
-    }))
+    Ok(Json(DeploymentView { steps, service: app.name, deployment: d, events, can_control, can_approve }))
+}
+
+/// The plan's steps for people. A deployment stores a per-node [`cat::Plan`]
+/// (which always has `targets`) or, on a Swarm cluster, a
+/// [`SwarmPlan`](forge_catalog::swarm_rollout::SwarmPlan) (see `deploy.rs`).
+async fn step_lines(state: &AppState, stored: &serde_json::Value) -> DomainResult<Vec<String>> {
+    if stored.get("targets").is_some() {
+        let plan: cat::Plan = serde_json::from_value(stored.clone()).map_err(forge_core::DomainError::internal)?;
+        let names = node_names(state, &plan).await?;
+        return Ok(plan.steps.iter().map(|s| s.describe(&names)).collect());
+    }
+    let plan: forge_catalog::swarm_rollout::SwarmPlan =
+        serde_json::from_value(stored.clone()).map_err(forge_core::DomainError::internal)?;
+    Ok(plan.steps.iter().map(forge_catalog::swarm_rollout::SwarmStep::describe).collect())
 }
 
 async fn node_names(state: &AppState, plan: &cat::Plan) -> DomainResult<std::collections::BTreeMap<String, String>> {

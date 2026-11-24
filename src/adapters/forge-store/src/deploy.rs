@@ -389,6 +389,33 @@ impl DeploymentRepository for Store {
         Ok(())
     }
 
+    async fn replace_slots(&self, app: ServiceId, rows: &[SlotRecord]) -> DomainResult<()> {
+        let mut tx = self.pool().begin().await.map_err(db_err)?;
+        sqlx::query("DELETE FROM deploy_slots WHERE service_id = $1")
+            .bind(app.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        for s in rows.iter().filter(|s| s.service_id == app) {
+            sqlx::query(
+                "INSERT INTO deploy_slots (service_id, server_id, slot, release_number, weight, state, ports, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            )
+            .bind(s.service_id.to_string())
+            .bind(s.server_id.to_string())
+            .bind(&s.slot)
+            .bind(s.release_number)
+            .bind(i64::from(s.weight))
+            .bind(&s.state)
+            .bind(s.ports.to_string())
+            .bind(s.updated_at.0)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        }
+        tx.commit().await.map_err(db_err)
+    }
+
     async fn delete_slot(&self, app: ServiceId, server: ServerId, slot: &str) -> DomainResult<()> {
         sqlx::query("DELETE FROM deploy_slots WHERE service_id = $1 AND server_id = $2 AND slot = $3")
             .bind(app.to_string())

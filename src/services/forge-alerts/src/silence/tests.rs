@@ -204,6 +204,7 @@ async fn env() -> Env {
         environment_id: None,
         abbr: String::new(),
         icon: None,
+        mode: Default::default(),
         created_at: Timestamp(1),
     };
     store.create_cluster(&cluster).await.unwrap();

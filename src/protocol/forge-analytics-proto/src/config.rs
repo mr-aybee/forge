@@ -49,7 +49,9 @@ pub enum StoreSelection {
     /// A ClickHouse server; the password comes from [`PASSWORD_ENV`].
     Clickhouse { url: String },
     /// The ClickHouse engine the worker runs and supervises.
-    Embedded { paths: EmbeddedPaths, port: u16, database: String },
+    /// The paths are boxed: they make the variant much larger than the
+    /// others on Windows (clippy::large_enum_variant).
+    Embedded { paths: Box<EmbeddedPaths>, port: u16, database: String },
     /// DuckDB in the worker's own process (D-143): one database file per
     /// UTC day and family under `dir`. Its memory limit and threads come
     /// from the tuning (`memory_budget_mb`, `cpu_quota_vcpu`).

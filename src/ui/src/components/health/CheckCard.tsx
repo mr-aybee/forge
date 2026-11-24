@@ -5,8 +5,9 @@ import { ChevronRight, Copy, Info, Plus, ShieldAlert, Trash2, X } from "lucide-r
 import { useEffect, useState, type ReactNode } from "react";
 
 import type { HealthHeader, HealthProbe, HealthProbeType, HealthPurpose, HttpProbe, TcpProbe } from "../../api/types";
-import { IconButton, Input, Select, Switch, TextArea } from "../ui";
+import { IconButton, Input, Select, Switch } from "../ui";
 import { type DraftCheck, MAX_ARGS, MAX_HEADERS, defaultProbe, isRemoteHost } from "./model";
+import { CodeField } from "../CodeField";
 
 /** Looks up the server's error for a path suffix of this check (`probe.port`). */
 export type ErrLookup = (suffix: string) => string | undefined;
@@ -377,7 +378,7 @@ export function CheckCard({
               </Select>
             </F>
             <F label="Script" error={err("probe.script")} className="min-w-[14rem] flex-1">
-              <TextArea aria-invalid={!!err("probe.script")} className={`${bad(err("probe.script"))}`} rows={Math.min(10, Math.max(3, p.script.split("\n").length))} placeholder="test -r /run/myapp/heartbeat || exit 1" value={p.script} onChange={(e) => setProbe({ script: e.target.value })} spellCheck={false} />
+              <CodeField lang="shell" invalid={!!err("probe.script")} maxLines={12} placeholder="test -r /run/myapp/heartbeat || exit 1" value={p.script} onChange={(script) => setProbe({ script })} />
             </F>
           </div>
         )}

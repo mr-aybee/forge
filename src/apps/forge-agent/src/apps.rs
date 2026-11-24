@@ -841,7 +841,8 @@ async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, Str
             // Forge paths), made without following links, then the
             // resolved path checked too (see `stacks::walk_host_path`).
             for v in &spec.volumes {
-                let host = v.split(':').next().unwrap_or_default();
+                // Named volumes live in Docker's own storage: no host path.
+                let Some(host) = forge_catalog::apps::volume_host_path(v) else { continue };
                 if let Some(why) = forge_catalog::stacks::protected_host_path(host) {
                     return Err(format!("volume `{v}` is not allowed: {why}"));
                 }

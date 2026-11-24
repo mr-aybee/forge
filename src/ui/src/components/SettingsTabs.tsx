@@ -3,6 +3,7 @@ import { Link, useRouterState } from "@tanstack/react-router";
 const TABS = [
   { to: "/settings", label: "Server" },
   { to: "/settings/analytics", label: "Analytics" },
+  { to: "/settings/registries", label: "Registries" },
 ] as const;
 
 /** Tabs between the server-level settings pages under Administration → Settings. */

@@ -1,22 +1,27 @@
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { ClusterBadge, imageToDataUrl, initials } from "../components/ClusterBadge";
-import { Pencil, Plus, ServerCog, Sparkles, Trash2 } from "lucide-react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { Boxes, ChevronDown, Pencil, Plus, ServerCog, Sparkles, SquareDashed, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { useAllEnvironments, useClusters, useDeleteCluster, useSaveCluster } from "../api/hooks";
-import type { Cluster } from "../api/types";
+import type { Cluster, ClusterMode } from "../api/types";
 import { errorText, useToast } from "../app/toast";
 import { ClusterWizard } from "../components/setup/ClusterWizard";
+import { ModePicker } from "../components/ClusterModePicker";
 import { usePinAction } from "../components/Pins";
-import { Button, Confirm, Empty, ErrorNote, FadeSwitch, Field, IconButton, Input, Modal, PageHeader, Panel, RowMenu, Select, Skeleton, Table, Td, TextArea, VIEW_CARDS, VIEW_LIST, ViewToggle, usePageView } from "../components/ui";
+import { Badge, Button, Confirm, Empty, ErrorNote, FadeSwitch, Field, IconButton, Input, Modal, PageHeader, Panel, RowMenu, Select, Skeleton, Table, Td, TextArea, VIEW_CARDS, VIEW_LIST, ViewToggle, usePageView } from "../components/ui";
 import { FilterBar } from "../components/filters/FilterBar";
 import type { ClustersSearch } from "../app/router";
 
 const VIEWS = [VIEW_LIST, VIEW_CARDS] as const;
 type Health = "healthy" | "degraded" | "empty";
+
+export const modeLabel = (c: Pick<Cluster, "mode">) => (c.mode === "swarm" ? "Swarm" : "Default");
+
 const healthOf = (c: Cluster): Health => (!c.node_count ? "empty" : (c.nodes_online ?? 0) === c.node_count ? "healthy" : "degraded");
 
-export function ClusterForm({ initial, onDone }: { initial?: Cluster; onDone: () => void }) {
+export function ClusterForm({ initial, mode = "default", onDone }: { initial?: Cluster; mode?: ClusterMode; onDone: () => void }) {
     const envs = useAllEnvironments();
   const save = useSaveCluster();
   const toast = useToast();
@@ -26,6 +31,7 @@ export function ClusterForm({ initial, onDone }: { initial?: Cluster; onDone: ()
     environment_id: initial?.environment_id ?? "",
     abbr: initial?.abbr ?? "",
     icon: initial?.icon ?? "",
+    mode: initial?.mode ?? mode,
   });
   return (
     <form
@@ -33,7 +39,7 @@ export function ClusterForm({ initial, onDone }: { initial?: Cluster; onDone: ()
       onSubmit={(e) => {
         e.preventDefault();
         save.mutate(
-          { id: initial?.id, name: f.name, description: f.description, environment_id: f.environment_id || null, abbr: f.abbr, icon: f.icon },
+          { id: initial?.id, name: f.name, description: f.description, environment_id: f.environment_id || null, abbr: f.abbr, icon: f.icon, ...(initial ? {} : { mode: f.mode }) },
           {
             onSuccess: (c) => {
               toast(initial ? `Cluster “${c.name}” updated` : `Cluster “${c.name}” created`);
@@ -46,6 +52,9 @@ export function ClusterForm({ initial, onDone }: { initial?: Cluster; onDone: ()
     >
       <Field label="Name" hint="Letters, digits, spaces, - _ .">
         <Input required autoFocus maxLength={63} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="edge-eu" />
+      </Field>
+      <Field label="Mode" hint={initial ? undefined : "Cannot be changed after the cluster is created."}>
+        <ModePicker value={f.mode} locked={!!initial} onChange={(mode) => setF({ ...f, mode })} />
       </Field>
       <Field label="Badge" hint="Shown next to the cluster name. Upload a PNG, JPEG, WebP or SVG (up to 128 KB), or set up to 4 letters.">
         <div className="flex flex-wrap items-center gap-3">
@@ -105,7 +114,7 @@ export function Clusters() {
   const envs = useAllEnvironments();
   const del = useDeleteCluster();
   const toast = useToast();
-  const [editing, setEditing] = useState<Cluster | "new">();
+  const [editing, setEditing] = useState<Cluster | "new" | "new-swarm">();
   const [deleting, setDeleting] = useState<Cluster>();
   const [delErr, setDelErr] = useState("");
   const [wizard, setWizard] = useState(false);
@@ -136,12 +145,7 @@ export function Clusters() {
         description="A cluster is a named group of nodes. Services and sites run on a cluster; permissions can be granted per cluster."
         actions={
           <>
-            <Button onClick={() => setEditing("new")}>
-              <Plus className="size-4" /> Empty cluster
-            </Button>
-            <Button variant="primary" onClick={() => setWizard(true)}>
-              <Sparkles className="size-4" /> Set up a cluster
-            </Button>
+            <NewClusterMenu onDefault={() => setWizard(true)} onSwarm={() => setEditing("new-swarm")} onEmpty={() => setEditing("new")} />
           </>
         }
       />
@@ -169,7 +173,7 @@ export function Clusters() {
         <Skeleton rows={3} />
       ) : all.length === 0 ? (
         <div className="rounded-lg border border-line bg-panel">
-          <Empty icon={<ServerCog className="size-5" />} title="No clusters yet" action={<Button variant="primary" onClick={() => setEditing("new")}>Create your first cluster</Button>}>
+          <Empty icon={<ServerCog className="size-5" />} title="No clusters yet" action={<NewClusterMenu label="Create your first cluster" onDefault={() => setWizard(true)} onSwarm={() => setEditing("new-swarm")} onEmpty={() => setEditing("new")} />}>
             Group nodes by region, purpose or customer — for example “edge-eu” or “windows-workers”.
           </Empty>
         </div>
@@ -191,6 +195,7 @@ export function Clusters() {
                         <span className="truncate" title={c.name}>
                           {c.name}
                         </span>
+                        {c.mode === "swarm" && <Badge tone="accent">Swarm</Badge>}
                       </Link>
                     </Td>
                     <Td className="py-1.5">
@@ -257,8 +262,8 @@ export function Clusters() {
         </FadeSwitch>
       )}
 
-      <Modal open={!!editing} onOpenChange={(o) => !o && setEditing(undefined)} title={editing === "new" ? "New cluster" : "Edit cluster"}>
-        {editing && <ClusterForm initial={editing === "new" ? undefined : editing} onDone={() => setEditing(undefined)} />}
+      <Modal open={!!editing} onOpenChange={(o) => !o && setEditing(undefined)} title={editing === "new" ? "New empty cluster" : editing === "new-swarm" ? "New Swarm cluster" : "Edit cluster"}>
+        {editing && <ClusterForm initial={typeof editing === "string" ? undefined : editing} mode={editing === "new-swarm" ? "swarm" : "default"} onDone={() => setEditing(undefined)} />}
       </Modal>
       <Confirm
         open={!!deleting}
@@ -315,5 +320,44 @@ export function Clusters() {
       />
       <ClusterWizard open={wizard} onOpenChange={setWizard} />
     </>
+  );
+}
+
+const NEW_KINDS = [
+  { id: "default", icon: Sparkles, title: "Default", text: "Guided setup: members, cluster network and Nginx ingress. Forge places services on nodes.", tone: "bg-accent-soft text-accent" },
+  { id: "swarm", icon: Boxes, title: "Swarm", text: "Docker Swarm places container services. Add nodes from the cluster's Swarm tab.", tone: "bg-ok-soft text-ok" },
+  { id: "empty", icon: SquareDashed, title: "Empty", text: "Only a name for now; add members, network and ingress later.", tone: "bg-panel-2 text-muted" },
+] as const;
+
+/** The one way to create a cluster: Default (wizard), Swarm or Empty. */
+function NewClusterMenu({ label = "New cluster", onDefault, onSwarm, onEmpty }: { label?: string; onDefault: () => void; onSwarm: () => void; onEmpty: () => void }) {
+  const run = { default: onDefault, swarm: onSwarm, empty: onEmpty };
+  return (
+    <DropdownMenu.Root modal={false}>
+      <DropdownMenu.Trigger asChild>
+        <Button variant="primary">
+          <Plus className="size-4" /> {label} <ChevronDown className="size-3.5 opacity-80" />
+        </Button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content align="end" sideOffset={6} className="animate-in z-50 w-80 rounded-lg border border-line bg-panel p-1.5 shadow-[var(--shadow-pop)]">
+          {NEW_KINDS.map((k) => (
+            <DropdownMenu.Item
+              key={k.id}
+              onSelect={run[k.id]}
+              className="flex cursor-pointer gap-3 rounded-md p-2.5 outline-none select-none data-[highlighted]:bg-panel-2"
+            >
+              <span className={`grid size-8 shrink-0 place-items-center rounded-md ${k.tone}`}>
+                <k.icon className="size-4" aria-hidden />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-[13px] font-medium">{k.title}</span>
+                <span className="mt-0.5 block text-xs text-muted">{k.text}</span>
+              </span>
+            </DropdownMenu.Item>
+          ))}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 }

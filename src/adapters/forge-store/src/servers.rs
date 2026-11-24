@@ -195,6 +195,7 @@ impl ServerRepository for Store {
             "DELETE FROM tunnels WHERE server_id = $1".into(),
             "DELETE FROM tunnel_grants WHERE server_id = $1".into(),
             "DELETE FROM docker_endpoints WHERE server_id = $1".into(),
+            "DELETE FROM swarm_members WHERE server_id = $1".into(),
             "DELETE FROM deploy_slots WHERE server_id = $1".into(),
             "DELETE FROM deployment_events WHERE server_id = $1".into(),
             "DELETE FROM entity_tags WHERE kind = 'server' AND entity_id = $1".into(),

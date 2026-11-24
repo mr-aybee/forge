@@ -107,18 +107,20 @@ async fn profiles_that_name_retired_actions_still_load_after_the_upgrade() {
     assert_eq!(parsed, vec!["deploy", "view"]);
 }
 
-/// The schema is one baseline migration (`0001_initial.sql`): it applies on
-/// a fresh database and creates the whole schema, project → environment →
-/// service included.
+/// The schema starts from one baseline migration (`0001_initial.sql`) with
+/// later changes as numbered migrations after it (CLAUDE.md rule 5). They all
+/// apply on a fresh database and create the whole schema, project →
+/// environment → service included.
 #[tokio::test]
-async fn the_single_baseline_migration_applies_on_a_fresh_database() {
+async fn the_baseline_and_later_migrations_apply_on_a_fresh_database() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open_sqlite(&dir.path().join("forge.db")).await.unwrap();
     let versions: Vec<i64> = sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
         .fetch_all(store.pool())
         .await
         .unwrap();
-    assert_eq!(versions, vec![1]);
+    let expected: Vec<i64> = (1..=i64::try_from(versions.len()).unwrap()).collect();
+    assert_eq!(versions, expected, "the baseline first, then one migration per number with no gaps");
     for table in
         ["projects", "environments", "services", "service_instances", "log_ingest_keys", "deployments", "user_pins"]
     {
@@ -135,5 +137,7 @@ async fn the_single_baseline_migration_applies_on_a_fresh_database() {
     .fetch_one(store.pool())
     .await
     .unwrap();
-    assert_eq!(objects, 149, "tables and indexes of the baseline");
+    // 149 from the baseline, + 5 tables and 4 indexes from 0002 (container
+    // platform: swarm, registries, webhooks).
+    assert_eq!(objects, 158, "tables and indexes after all migrations");
 }

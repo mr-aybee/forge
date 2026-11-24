@@ -18,10 +18,12 @@ mod containers;
 pub mod deployments;
 pub(crate) mod device;
 mod docker;
+mod docker_resources;
 mod events;
 pub(crate) mod fabric;
 pub(crate) mod fabric_reconcile;
 mod files;
+mod hooks;
 pub(crate) mod idempotency;
 mod ingress;
 pub(crate) mod ingress_dns;
@@ -44,6 +46,7 @@ mod plugins;
 mod processes;
 mod projects;
 mod reauth;
+mod registries;
 pub(crate) mod remote_sessions;
 mod routing;
 pub(crate) mod schema_types;
@@ -59,6 +62,7 @@ mod sites;
 mod stacks;
 mod storage;
 mod storage_grants;
+mod swarm;
 pub mod system_update;
 mod tags;
 mod telemetry;
@@ -67,6 +71,7 @@ mod terminal;
 mod traffic;
 mod tunnels;
 mod vault;
+mod webhooks;
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
@@ -180,6 +185,24 @@ pub fn router(state: AppState) -> Router {
         .route("/secrets/{id}", delete(nodes::delete_secret))
         .route("/clusters/{id}", get(clusters::get).put(clusters::update).delete(clusters::delete))
         .route("/clusters/{id}/profile", get(ingress::get).put(ingress::put))
+        .route("/clusters/{id}/swarm", get(swarm::get))
+        .route("/registries", get(registries::list).post(registries::create))
+        .route("/stack-templates", get(stacks::templates))
+        .route("/stacks/from-template", post(stacks::from_template))
+        .route("/webhooks", get(webhooks::list).post(webhooks::create))
+        .route("/webhooks/{id}", put(webhooks::update).delete(webhooks::delete))
+        .route("/webhooks/{id}/rotate", post(webhooks::rotate))
+        .route("/webhooks/{id}/deliveries", get(webhooks::deliveries))
+        .route("/registries/{id}", put(registries::update).delete(registries::delete))
+        .route("/servers/{id}/docker/images", get(docker_resources::images))
+        .route("/servers/{id}/docker/volumes", get(docker_resources::volumes))
+        .route("/servers/{id}/docker/networks", get(docker_resources::networks))
+        .route("/servers/{id}/docker/disk-usage", get(docker_resources::disk_usage))
+        .route("/servers/{id}/docker/events", get(docker_resources::events))
+        .route("/servers/{id}/docker/ops", post(docker_resources::op))
+        .route("/clusters/{id}/swarm/members", post(swarm::join))
+        .route("/clusters/{id}/swarm/members/{server}", patch(swarm::update_node).delete(swarm::leave))
+        .route("/clusters/{id}/swarm/tokens/rotate", post(swarm::rotate_tokens))
         .route("/clusters/{id}/fabric", get(fabric::get).put(fabric::put).delete(fabric::delete))
         .route("/clusters/{id}/fabric/suggest", post(fabric::suggest))
         .route("/fabric/suggest", post(fabric::suggest_new))
@@ -270,6 +293,8 @@ pub fn router(state: AppState) -> Router {
         .route("/services/{id}/storage", get(app_storage::list).post(app_storage::attach))
         .route("/services/{id}/storage/{access_key}", axum::routing::delete(app_storage::detach))
         .route("/services/{id}/deploy", post(services::deploy))
+        .route("/services/{id}/swarm", get(swarm::service_get).post(swarm::service_action))
+        .route("/services/{id}/swarm/logs", get(swarm::service_logs))
         // Releases and deployments (#73)
         .route("/deployments", post(deployments::apply))
         .route("/deployments/validate", post(deployments::validate))
@@ -393,6 +418,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(meta::health))
         // Seq-compatible log ingest (D-128): authenticated by its ingest key.
         .route("/api/events/raw", post(logs::ingest))
+        // Deploy webhooks (D-159): the secret URL is the credential.
+        .route("/hooks/{token}", post(hooks::fire).layer(axum::extract::DefaultBodyLimit::max(hooks::MAX_BODY)))
+        .route("/hooks/{token}/jobs/{job}", get(hooks::job))
         .route("/install.sh", get(nodes::install_script))
         .route("/install.ps1", get(nodes::install_ps1))
         .route("/agent/download/{os}/{arch}/{binary}", get(nodes::download))
@@ -453,16 +481,40 @@ pub fn router(state: AppState) -> Router {
         .layer(SetResponseHeaderLayer::if_not_present(
             header::CONTENT_SECURITY_POLICY,
             HeaderValue::from_static(
-                "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+                "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'",
             ),
         ))
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("cross-origin-opener-policy"),
             HeaderValue::from_static("same-origin"),
         ))
-        // Paths only: query strings may carry OAuth codes and must not be logged.
+        // Address lists and rate limits before anything else runs (D-161).
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::net_access::guard))
+        // Paths only: query strings may carry OAuth codes and must not be
+        // logged; a webhook path is its secret and is redacted too.
         .layer(TraceLayer::new_for_http().make_span_with(|req: &axum::http::Request<_>| {
-            tracing::info_span!("http", method = %req.method(), path = %req.uri().path())
+            tracing::info_span!("http", method = %req.method(), path = %log_path(req.uri().path()))
         }))
         .with_state(state)
+}
+
+/// A request path for the log: a webhook's URL token is a secret.
+fn log_path(path: &str) -> std::borrow::Cow<'_, str> {
+    match path.strip_prefix("/hooks/") {
+        Some(rest) => {
+            let tail = rest.split_once('/').map_or(String::new(), |(_, t)| format!("/{t}"));
+            std::borrow::Cow::Owned(format!("/hooks/<redacted>{tail}"))
+        }
+        None => std::borrow::Cow::Borrowed(path),
+    }
+}
+
+#[cfg(test)]
+mod log_path_tests {
+    #[test]
+    fn webhook_tokens_never_reach_the_log() {
+        assert_eq!(super::log_path("/hooks/whk_secret"), "/hooks/<redacted>");
+        assert_eq!(super::log_path("/hooks/whk_secret/jobs/1"), "/hooks/<redacted>/jobs/1");
+        assert_eq!(super::log_path("/api/v1/me"), "/api/v1/me");
+    }
 }

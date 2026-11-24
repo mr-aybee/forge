@@ -2,8 +2,9 @@ import { ClipboardPaste, Eye, EyeOff, FileCode2, KeyRound, LayoutGrid, Lock, Plu
 import { useState } from "react";
 
 import type { CatalogPackage, ServiceInput } from "../../api/types";
-import { Badge, Button, IconButton, Input, Modal, Mono, TextArea } from "../ui";
+import { Badge, Button, IconButton, Input, Modal, Mono } from "../ui";
 import { KEY_RE, SEALED, looksSecret, parseDotenv } from "./sections";
+import { CodeField } from "../CodeField";
 
 type EnvRow = ServiceInput["env"][number];
 
@@ -92,14 +93,14 @@ export function EnvSection({ value, set, mode, onMode, packages }: { value: Serv
       </div>
       {mode === "text" ? (
         <>
-          <TextArea
+          <CodeField
             aria-label="Variables as .env text"
-            rows={Math.max(8, text.split("\n").length + 1)}
+            lang="env"
+            minLines={8}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={setText}
             onBlur={() => setRows(fromText(text, rows))}
             placeholder={"DATABASE_URL=postgres://…\nDEBUG=false"}
-            spellCheck={false}
           />
           <p className="text-xs text-faint">
             One <Mono>KEY=value</Mono> per line. <Mono>{SEALED}</Mono> keeps a stored secret. New names that look secret are sealed.
@@ -197,7 +198,7 @@ export function EnvSection({ value, set, mode, onMode, packages }: { value: Serv
       </div>
       {paste !== null && (
         <Modal open onOpenChange={(o) => !o && setPaste(null)} title="Paste .env" description="KEY=value lines; comments and export prefixes are fine. Existing names are updated.">
-          <TextArea aria-label=".env text" rows={10} value={paste} onChange={(e) => setPaste(e.target.value)} placeholder={"DATABASE_URL=postgres://…\nDEBUG=false"} />
+          <CodeField aria-label=".env text" lang="env" minLines={10} value={paste} onChange={setPaste} placeholder={"DATABASE_URL=postgres://…\nDEBUG=false"} />
           <div className="mt-3 flex items-center justify-between">
             <Badge>{parseDotenv(paste).length} variables</Badge>
             <Button

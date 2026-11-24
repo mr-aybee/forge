@@ -29,6 +29,7 @@ export function CreateBasics({
   servers,
   onNewProject,
   onNewEnvironment,
+  swarm = false,
 }: {
   value: CreateBasicsValue;
   onChange: (v: CreateBasicsValue) => void;
@@ -38,6 +39,8 @@ export function CreateBasics({
   servers: Server[];
   onNewProject: () => void;
   onNewEnvironment: () => void;
+  /** The environment's cluster runs Docker Swarm: the swarm places tasks, so no node picker. */
+  swarm?: boolean;
 }) {
   const set = (p: Partial<CreateBasicsValue>) => onChange({ ...value, ...p });
   const inProject = environments.filter((n) => (value.project ? n.project_id === value.project : false));
@@ -126,7 +129,9 @@ export function CreateBasics({
       </FormField>
       <div className="min-w-0 space-y-1 md:col-span-2">
         <p className="text-xs font-medium text-muted">Placement</p>
-        {!env ? (
+        {swarm ? (
+          <p className="text-xs text-faint">The cluster runs Docker Swarm: the swarm places the tasks. Set replicas and constraints under Swarm.</p>
+        ) : !env ? (
           <p className="text-xs text-faint">Choose an environment to see its nodes.</p>
         ) : candidates.length === 0 ? (
           <p className="text-xs text-faint">{cluster ? `${cluster.name} has no nodes yet.` : "No nodes yet."} You can place the service after creating it.</p>
@@ -151,7 +156,7 @@ export function CreateBasics({
             })}
           </div>
         )}
-        <p className="text-xs text-faint">Optional. Every chosen node runs a replica; add standbys and change roles on the service page.</p>
+        {!swarm && <p className="text-xs text-faint">Optional. Every chosen node runs a replica; add standbys and change roles on the service page.</p>}
       </div>
     </Grid>
   );

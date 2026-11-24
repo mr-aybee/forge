@@ -26,6 +26,7 @@ pull requests from forks. Nobody pushes to the main repository directly.
    cargo clippy --workspace --all-targets -- -D warnings
    cargo test --workspace
    cargo deny check
+   docker run --rm -v "$PWD":/repo zricethezav/gitleaks:v8.21.2 dir /repo --no-banner
    (cd src/ui && npm ci && npm run build)
    (cd docs && npm ci && npm run build)
    (cd website && npm ci && npm run build)
