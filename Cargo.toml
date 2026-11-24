@@ -127,10 +127,8 @@ todo = "warn"
 
 [profile.release]
 opt-level = 3
-# Thin LTO with Cargo's default 16 codegen units (D-166): "similar" gains to
-# fat LTO at a fraction of the build time. To go back: lto = "fat",
-# codegen-units = 1.
-lto = "thin"
+lto = "fat"
+codegen-units = 1
 panic = "abort"
 strip = "symbols"
 

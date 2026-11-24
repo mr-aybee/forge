@@ -62,8 +62,7 @@ target/release/fleet-sim --agents 50 --agents 1000     # updates BENCHMARKS.md
 
 ### Build tips
 
-- `--release` (thin LTO, 16 codegen units) is for shipping. `perf` builds the
-  same code faster locally.
+- `--release` (fat LTO, one codegen unit) is for shipping. Use `perf` locally.
 - sccache: set `[build] rustc-wrapper = "sccache"` in your user-level
   `~/.cargo/config.toml`, **never** in the repo's `.cargo/config.toml`, where it
   breaks CI and `cross`. `python3 scripts/dev/build_env.py` reports your setup.

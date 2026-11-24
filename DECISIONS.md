@@ -5674,13 +5674,16 @@ A delivery may pick the image tag (`?tag=` or a JSON `"tag"`) only when the webh
 
 **Why.** With one maintainer, the `develop` → `master` → `develop` round trip added two pull requests and two CI runs per release without catching anything a pull request into `master` does not.
 
-## D-166 Faster release builds: thin LTO and a native ARM build
+## D-166 Faster release builds: native Alpine builds and a prebuilt DuckDB
 
 **Decision.**
-- `[profile.release]` uses `lto = "thin"` and Cargo's default 16 codegen units instead of `lto = "fat"` with one codegen unit. `opt-level = 3`, `panic = "abort"` and stripped symbols stay.
-- The `aarch64-unknown-linux-musl` release build runs natively on GitHub's `ubuntu-24.04-arm` runner, inside an Alpine container (musl-native GCC and libstdc++ for DuckDB's bundled C++), instead of cross-compiling with `cross` on an x86 runner.
+- Both Linux release targets build natively in one pinned Alpine image (`rust:<version>-alpine3.22@sha256:…`, set in `scripts/ci/alpine.sh`): `x86_64-unknown-linux-musl` on `ubuntu-latest`, `aarch64-unknown-linux-musl` on `ubuntu-24.04-arm`. Alpine's musl-native GCC and libstdc++ compile DuckDB's bundled C++. `release.yml` no longer uses `cross`; `Cross.toml` stays for local builds.
+- `.github/workflows/duckdb-prebuilt.yml` compiles the release dependencies (DuckDB included) in the same image, at the same in-container paths and with the same first cargo command, and publishes them to GHCR as `ghcr.io/orbyntech/forge-duckdb:<libduckdb-sys version>-<rustc version>-<target>`. The release build restores that artifact first, so Cargo finds libduckdb-sys fresh and skips the C++ build. A missing or mismatched artifact only makes the release slower.
+- `[profile.release]` keeps `lto = "fat"` and `codegen-units = 1`.
 - The `forge` CLI keeps its own cargo invocation: building it together with the server and agent would unify features and pull its keyring dependencies into those binaries.
 
-**Why.** A from-scratch release build took about 28 minutes on x86_64 and longer on aarch64. The build log showed about 6 minutes compiling all 828 crates, then about 17 minutes of single-threaded fat-LTO codegen. The Cargo book describes thin LTO as "similar to 'fat', but takes substantially less time to run while still achieving performance gains similar to 'fat'". Forge's runtime is bound by I/O and the database, not tight CPU loops. Tag builds cannot reuse caches: GitHub "cannot restore caches created for different tag names", so the build time itself had to come down. Cross-compiling DuckDB's bundled C++ is "best-effort" upstream; a native build avoids it.
+**Why.** A from-scratch release build took about 33 minutes per Linux target. The build logs showed that compiling DuckDB's 2,129 C++ files (`libduckdb-sys`, feature `bundled`) took 20 to 23 minutes of it, already in parallel. Thin LTO was tried and bought no build time, since DuckDB, not LTO, was the critical path, so the release profile went back to fat LTO. Tag builds cannot reuse caches: GitHub "cannot restore caches created for different tag names". A versioned artifact keyed on what DuckDB's output depends on (its crate version, the compiler, the target) works across tags. Cross-compiling DuckDB's bundled C++ is "best-effort" upstream; a native build avoids it.
 
-**Reverting.** Set `lto = "fat"` and `codegen-units = 1` in `[profile.release]`. For the ARM build, point the matrix entry back at `ubuntu-latest` with `cross`.
+**Consequences.** Bumping `libduckdb-sys` or the pinned image makes the next release compile DuckDB until `duckdb-prebuilt.yml` has run on `master` (it runs automatically when `Cargo.lock` or `scripts/ci/alpine.sh` changes). Crate sources in the build container get an old fixed mtime so build scripts do not rerun because of a fresh extraction; their content is pinned by `Cargo.lock` checksums.
+
+**Reverting.** Delete the restore step in `release.yml`, or point the Linux matrix entries back at `cross` on `ubuntu-latest`.

@@ -29,7 +29,7 @@ Windows code paths still exist in the source, so you can build
 are not verified. On Windows, releases publish only the `forge` CLI.
 :::
 
-Release builds use thin LTO, 16 codegen units and `panic = "abort"`. Linux
+Release builds use fat LTO, one codegen unit and `panic = "abort"`. Linux
 binaries are static musl builds with no runtime library dependencies. The
 server needs the system CA bundle (`ca-certificates` on Debian, Ubuntu and
 RHEL-likes) for outbound HTTPS.

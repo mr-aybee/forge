@@ -46,10 +46,11 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && !inputs.publish }}
 
 env:
-  # GitHub-hosted Linux runners have 4 vCPUs and 16 GiB. The cross container
-  # gets a memory cap so a runaway link fails the job with a clear error.
+  # GitHub-hosted Linux runners have 4 vCPUs and 16 GiB. The Alpine build
+  # container gets a memory cap so a runaway link fails the job with a clear
+  # error.
   FORGE_CI_BUILD_JOBS: 4
-  CROSS_CONTAINER_OPTS: --memory=12g --memory-swap=12g
+  FORGE_CI_CONTAINER_OPTS: --memory=14g --memory-swap=14g
   CARGO_TERM_COLOR: always
   # .cargo/config.toml links with LLD on Windows for fast local builds.
   # Shipped Windows binaries keep the MSVC linker.
@@ -158,15 +159,19 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        # x86_64 Linux builds in the `cross` image (its musl GCC compiles
-        # DuckDB's bundled C++; musl-tools on the host has no C++ compiler).
-        # aarch64 builds natively on an ARM runner inside an Alpine container
-        # (musl-native GCC and libstdc++), not cross-compiled (D-166). The
+        # Linux targets build natively in a pinned Alpine container
+        # (scripts/ci/alpine.sh: musl-native GCC and libstdc++ for DuckDB's
+        # bundled C++), aarch64 on an ARM runner, and restore the prebuilt
+        # DuckDB first (duckdb-prebuilt.yml, D-166). The
         # server, agent and their services ship for
         # Linux only (x86_64, aarch64); Windows builds the `forge` CLI only
         # (`cli_only`). No macOS builds.
         include: ${{ fromJSON('[{"target":"x86_64-unknown-linux-musl","os":"linux","exe":"","file":"x86-64","cli_only":false},{"target":"aarch64-unknown-linux-musl","os":"linux-arm","exe":"","file":"ARM aarch64","cli_only":false},{"target":"x86_64-pc-windows-msvc","os":"windows","exe":".exe","file":"","cli_only":true}]') }}
     runs-on: ${{ matrix.os == 'windows' && 'windows-latest' || (matrix.os == 'linux-arm' && 'ubuntu-24.04-arm' || 'ubuntu-latest') }}
+    # packages: read pulls the prebuilt DuckDB from this repository's GHCR.
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -176,18 +181,21 @@ jobs:
           name: ui-dist
           path: src/ui/dist
       - uses: dtolnay/rust-toolchain@stable
-        if: matrix.os != 'linux-arm'
+        if: matrix.os == 'windows'
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+        if: matrix.os == 'windows'
         with:
           key: release-${{ matrix.target }}
-      - name: Cross toolchain
-        if: matrix.os == 'linux'
-        shell: bash
+      - name: Restore the prebuilt DuckDB
+        if: matrix.os != 'windows'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          command -v cross >/dev/null || cargo install --locked cross
-          docker info >/dev/null 2>&1 || { echo "::error::cross needs Docker: install it on the runner and add the runner user to the docker group"; exit 1; }
+          printf '%s\n' "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin >/dev/null \
+            || echo "::warning::GHCR login failed; trying the prebuilt DuckDB anonymously"
+          bash scripts/ci/alpine.sh restore ${{ matrix.target }}
       - name: Build
         shell: bash
         env:
@@ -195,44 +203,18 @@ jobs:
           # The release version (e.g. 0.1.0-rc-03) is compiled in, so the
           # self-updater knows which release it is running.
           FORGE_BUILD_VERSION: ${{ needs.version.outputs.version }}
-          # A host-wide sccache wrapper does not exist inside the cross image.
+          # No host-wide sccache wrapper on release builds.
           RUSTC_WRAPPER: ""
         run: |
-          # cross gets its own target dir: build scripts compiled by the host
-          # toolchain need a newer glibc than the cross image has.
-          if [ "${{ matrix.os }}" = linux-arm ]; then
-            # Native aarch64 in Alpine: rustup's stable toolchain, built in
-            # the container as the runner's uid so the outputs stay readable.
-            export CARGO_TARGET_DIR="$PWD/target/alpine"
-            echo "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" >> "$GITHUB_ENV"
-            mkdir -p "$CARGO_TARGET_DIR"
-            docker run --rm -v "$PWD":"$PWD" -w "$PWD" \
-              -e CARGO_TARGET_DIR -e FORGE_BUILD_SHA -e FORGE_BUILD_VERSION -e CARGO_HOME=/cargo \
-              -v "$HOME/.cargo-alpine":/cargo \
-              rust:1-alpine3.22 sh -euc '
-                apk add -q --no-cache build-base g++ perl linux-headers
-                t=${{ matrix.target }}
-                cargo build --locked --release --target "$t" -p forge-server -p forge-agent -p forge-plugin-runner -p forge-analytics-worker
-                cargo build --locked --release --target "$t" -p forge-cli
-                chown -R '"$(id -u):$(id -g)"' "$CARGO_TARGET_DIR"'
+          if [ "${{ matrix.os }}" != windows ]; then
+            # Server, agent and services, then the CLI, in the container.
+            bash scripts/ci/alpine.sh build ${{ matrix.target }}
+            echo "CARGO_TARGET_DIR=$PWD/target/alpine" >> "$GITHUB_ENV"
             exit 0
-          elif [ "${{ matrix.os }}" = linux ]; then
-            build="cross build"
-            # One cache per target: each cross image builds its own host tools.
-            export CARGO_TARGET_DIR="${FORGE_CI_TARGET_DIR:-$PWD/target/cross}/${{ matrix.target }}"
-          else
-            build="cargo build"
           fi
-          echo "CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}" >> "$GITHUB_ENV"
-          # The heavy lock: nothing else compiles on the host meanwhile.
-          if [ "${{ matrix.cli_only }}" != true ]; then
-            bash scripts/ci/build.sh heavy $build -j "$FORGE_CI_BUILD_JOBS" --locked --release --target ${{ matrix.target }} -p forge-server -p forge-agent -p forge-plugin-runner -p forge-analytics-worker
-          fi
-          # The `forge` CLI in a second build in this job: it reuses the
-          # compiled dependencies, and building it separately keeps its extra
-          # features (zbus blocking API for the keyring) out of the server and
-          # agent binaries.
-          bash scripts/ci/build.sh heavy $build -j "$FORGE_CI_BUILD_JOBS" --locked --release --target ${{ matrix.target }} -p forge-cli
+          echo "CARGO_TARGET_DIR=target" >> "$GITHUB_ENV"
+          # Windows ships the `forge` CLI only.
+          bash scripts/ci/build.sh heavy cargo build -j "$FORGE_CI_BUILD_JOBS" --locked --release --target ${{ matrix.target }} -p forge-cli
       - name: Collect and check binaries
         shell: bash
         env:
@@ -274,7 +256,7 @@ jobs:
           if [ "$t" = x86_64-unknown-linux-musl ]; then
             got=$("out/forge-server-$t$x" --version)
             echo "$got"
-            case "$got" in *" $VERSION") ;; *) echo "::error::forge-server reports '$got', expected version $VERSION (is FORGE_BUILD_VERSION passed through Cross.toml?)"; exit 1 ;; esac
+            case "$got" in *" $VERSION") ;; *) echo "::error::forge-server reports '$got', expected version $VERSION (is FORGE_BUILD_VERSION passed into the build container?)"; exit 1 ;; esac
             "out/forge-analytics-worker-$t$x" --version
           fi
           ls -la out
