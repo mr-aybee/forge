@@ -195,6 +195,10 @@ enum AgentKeyCmd {
         now: bool,
         #[arg(long, requires = "now")]
         revoke: bool,
+        /// With --revoke: brand-new keys, never announced, to pin on every
+        /// node by hand (after a compromise of the key store or database).
+        #[arg(long, requires = "revoke")]
+        fresh: bool,
     },
 }
 
@@ -543,11 +547,12 @@ async fn agent_key(config: ServerConfig, cmd: AgentKeyCmd) -> anyhow::Result<()>
                 );
             }
         }
-        AgentKeyCmd::Rotate { now: at_once, revoke } => {
-            let mode = match (at_once, revoke) {
-                (true, true) => RotateMode::NowRevoke,
-                (true, false) => RotateMode::Now,
-                (false, _) => RotateMode::WhenReady,
+        AgentKeyCmd::Rotate { now: at_once, revoke, fresh } => {
+            let mode = match (at_once, revoke, fresh) {
+                (true, true, true) => RotateMode::NowFresh,
+                (true, true, false) => RotateMode::NowRevoke,
+                (true, false, _) => RotateMode::Now,
+                (false, ..) => RotateMode::WhenReady,
             };
             let next = keys.keys().into_iter().find(|k| k.label == LABEL_NEXT).map(|k| k.sha256).unwrap_or_default();
             let (online, acknowledged) = keys.ack_counts(&next, now);
@@ -557,6 +562,15 @@ async fn agent_key(config: ServerConfig, cmd: AgentKeyCmd) -> anyhow::Result<()>
                     state.audit_system(action, serde_json::json!(r)).await;
                     for k in &r.revoked {
                         println!("Revoked {}: agents unpin it at their next heartbeat.", fp(k));
+                    }
+                    if r.fresh {
+                        println!(
+                            "New keys, never announced: no agent has them. On every node run, as root:\n  forge-agent pins add {}\n  forge-agent pins add {} --label analytics\nor 'forge-agent pins fetch' and compare the key with {}.",
+                            r.to,
+                            r.worker,
+                            fp(&r.to)
+                        );
+                        return Ok(());
                     }
                     println!(
                         "Switched to {} ({acknowledged} of {online} agents that pin had it). A running server serves it within a minute. Agents without it: run 'forge-agent pins add {}' on them.",

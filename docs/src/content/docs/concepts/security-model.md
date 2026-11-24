@@ -184,13 +184,21 @@ node reaches Forge on any IP or name, through NAT, or across networks.
   Agents drop a key 30 days after Forge stops announcing it. The analytics
   keys rotate on the same schedule.
 - **Replay.** Announcements are accepted for 5 minutes after signing and
-  carry a sequence the server bumps on every change of its key set. A node
-  refuses one older than the last it applied, or one with the same sequence
-  and other keys.
+  carry a sequence the server raises on every change of its key set, to at
+  least the time of the change in milliseconds. A node refuses one older
+  than the last it applied, or one with the same sequence and other keys.
+  After restoring a database backup, run `forge-server agent-key rotate` so
+  the sequence moves past what nodes applied.
 - **Revocation.** `forge-server agent-key rotate --now --revoke` switches at
-  once and revokes the old keys. Agents remove revoked keys from their pins
-  immediately and never pin them again from an announcement;
-  `forge-agent pins add` needs `--force` for one.
+  once and revokes every old key that does not survive the switch (old
+  current, analytics and previous keys). Agents remove revoked keys from
+  their pins immediately and never pin them again from an announcement;
+  `forge-agent pins add` needs `--force` for one. This protects against a
+  single leaked key. After a compromise of the key store or the database it
+  is not enough, because the already-announced next key is stored beside the
+  current one: run `rotate --now --revoke --fresh`, which makes keys that
+  were never announced, and pin them on every node by hand
+  (`forge-agent pins add` or `forge-agent pins fetch`).
 - **Manual control.** `forge-server agent-key show|list|rotate [--now]` on the
   server, `forge-agent pins list|add|remove|fetch` on a node. A node offline
   for the whole grace period, or a forced switch, needs `pins add`.

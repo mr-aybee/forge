@@ -23,9 +23,14 @@
 //! any pinned key on both connections.
 //!
 //! **Replay and revocation.** Every change of the key set bumps a sequence
-//! sent in the announcement; nodes refuse an older one. `agent-key rotate
-//! --now --revoke` drops the old keys at once and lists them as revoked, so
-//! nodes unpin them and never pin them again from an announcement.
+//! sent in the announcement; nodes refuse an older one. The sequence is
+//! also at least the time of the change, so a database restored from a
+//! backup moves forward again at its next change. `agent-key rotate --now
+//! --revoke` drops every old key that does not survive the switch and
+//! lists them as revoked, so nodes unpin them and never pin them again
+//! from an announcement. It protects against one leaked key; the next key
+//! is stored alongside the current one, so after a compromise of the key
+//! store `--fresh` makes keys that were never announced, to pin by hand.
 //!
 //! **At rest.** The state lives in the settings table (`agent_tls.keys`):
 //! fingerprints, times and the private keys sealed with the server's
@@ -166,10 +171,14 @@ pub struct Rotation {
     pub from: String,
     pub to: String,
     pub next: String,
+    /// The analytics worker listener's key after the switch.
+    pub worker: String,
     /// Online agents that pin keys, and how many had the new key.
     pub online: usize,
     pub acknowledged: usize,
     pub forced: bool,
+    /// All keys were made new (`--fresh`); agents must pin them by hand.
+    pub fresh: bool,
     /// Fingerprints revoked by this switch (`--revoke`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub revoked: Vec<String>,
@@ -184,8 +193,13 @@ pub enum RotateMode {
     WhenReady,
     /// At once (`--now`).
     Now,
-    /// At once, revoking the old keys (`--now --revoke`).
+    /// At once, revoking every old key that does not survive the switch
+    /// (`--now --revoke`).
     NowRevoke,
+    /// At once with brand-new keys that were never announced, revoking
+    /// every old one (`--now --revoke --fresh`). Agents must be given the
+    /// new fingerprints by hand: for a compromised key store.
+    NowFresh,
 }
 
 /// What [`AgentKeys::tick`] did.
@@ -358,7 +372,7 @@ impl AgentKeys {
             if state.worker_next.is_none() {
                 state.worker_next = Some(seal(&d.envelope, &ControlPlaneKey::generate()?, now)?);
             }
-            state.sequence += 1;
+            state.sequence = next_sequence(state.sequence, now);
             write_state(d.settings.as_ref(), &state, now).await?;
         }
         let key = Arc::new(open(&d.envelope, &state.current)?);
@@ -585,7 +599,7 @@ impl AgentKeys {
             self.write().state = stored;
         }
         if matches!(self.rotation_status(now), RotationStatus::Ready) {
-            out.rotated = Some(self.switch(now, false, false).await?);
+            out.rotated = Some(self.switch(now, RotateMode::WhenReady).await?);
             return Ok(out);
         }
         let (nb, na) = {
@@ -610,8 +624,9 @@ impl AgentKeys {
     /// every online agent has the next key. Returns the switch, if made.
     pub async fn rotate(&self, now: Timestamp, mode: RotateMode) -> Result<Option<Rotation>, AgentKeyError> {
         match mode {
-            RotateMode::Now => return Ok(Some(self.switch(now, true, false).await?)),
-            RotateMode::NowRevoke => return Ok(Some(self.switch(now, true, true).await?)),
+            RotateMode::Now | RotateMode::NowRevoke | RotateMode::NowFresh => {
+                return Ok(Some(self.switch(now, mode).await?));
+            }
             RotateMode::WhenReady => {}
         }
         let state = {
@@ -624,52 +639,69 @@ impl AgentKeys {
     }
 
     /// Switches the listeners (agent hub and analytics worker) to their
-    /// next keys and makes new next keys. With `revoke`, the old keys are
-    /// not kept but revoked. Store first, then memory: a failed write
-    /// changes nothing.
-    async fn switch(&self, now: Timestamp, forced: bool, revoke: bool) -> Result<Rotation, AgentKeyError> {
+    /// next keys and makes new next keys. With [`RotateMode::NowRevoke`],
+    /// every key that does not survive the switch (the old current, worker
+    /// and previous keys) is revoked rather than kept; with
+    /// [`RotateMode::NowFresh`], all four keys are made new and every old
+    /// one is revoked. Store first, then memory: a failed write changes
+    /// nothing.
+    async fn switch(&self, now: Timestamp, mode: RotateMode) -> Result<Rotation, AgentKeyError> {
         let (old, next_sha) = {
             let l = self.read();
             (l.state.clone(), l.state.next.sha256.clone())
         };
         let (online, acknowledged) = self.ack_counts(&next_sha, now);
-        let fresh = seal(&self.d.envelope, &ControlPlaneKey::generate()?, now)?;
-        let fresh_worker = seal(&self.d.envelope, &ControlPlaneKey::generate()?, now)?;
-        let mut revoked_now = Vec::new();
-        let mut revoked = old.revoked.clone();
-        if revoke {
-            revoked_now.push(old.current.sha256.clone());
-            revoked_now.extend(old.worker.as_ref().map(|w| w.sha256.clone()));
-            revoked.extend(revoked_now.iter().cloned());
-            let max = forge_proto::messages::MAX_REVOKED_KEYS;
-            if revoked.len() > max {
-                revoked.drain(..revoked.len() - max);
-            }
-        }
-        let state = KeyState {
+        let new_key =
+            || -> Result<StoredKey, AgentKeyError> { seal(&self.d.envelope, &ControlPlaneKey::generate()?, now) };
+        let fresh_set = mode == RotateMode::NowFresh;
+        let (current, worker) = if fresh_set {
+            (new_key()?, Some(new_key()?))
+        } else {
+            (old.next.clone(), old.worker_next.clone().or_else(|| old.worker.clone()))
+        };
+        let revoke = matches!(mode, RotateMode::NowRevoke | RotateMode::NowFresh);
+        let mut state = KeyState {
             previous: (!revoke).then(|| old.current.clone()),
-            current: old.next.clone(),
-            next: fresh,
+            current,
+            next: new_key()?,
             current_since_ms: now.0,
             rotation_requested_at_ms: None,
-            sequence: old.sequence + 1,
-            revoked,
-            worker: old.worker_next.clone().or_else(|| old.worker.clone()),
-            worker_next: Some(fresh_worker),
+            sequence: next_sequence(old.sequence, now),
+            revoked: old.revoked.clone(),
+            worker,
+            worker_next: Some(new_key()?),
         };
+        let mut revoked_now = Vec::new();
+        if revoke {
+            // Every fingerprint the old state held that the new one does not.
+            let kept: Vec<String> = state.known().into_iter().map(str::to_owned).collect();
+            for fp in old.known().into_iter().chain(old.previous.as_ref().map(|p| p.sha256.as_str())) {
+                if !kept.iter().any(|k| k == fp) && !revoked_now.iter().any(|r| r == fp) {
+                    revoked_now.push(fp.to_owned());
+                }
+            }
+            state.revoked.retain(|r| !revoked_now.contains(r));
+            state.revoked.extend(revoked_now.iter().cloned());
+            let max = forge_proto::messages::MAX_REVOKED_KEYS;
+            if state.revoked.len() > max {
+                state.revoked.drain(..state.revoked.len() - max);
+            }
+        }
         write_state(self.d.settings.as_ref(), &state, now).await?;
         let rotation = Rotation {
             from: old.current.sha256,
             to: state.current.sha256.clone(),
             next: state.next.sha256.clone(),
+            worker: state.worker.as_ref().map(|w| w.sha256.clone()).unwrap_or_default(),
             online,
             acknowledged,
-            forced,
+            forced: mode != RotateMode::WhenReady,
+            fresh: fresh_set,
             revoked: revoked_now,
             sequence: state.sequence,
         };
         self.apply(state, now)?;
-        tracing::info!(from = %rotation.from, to = %rotation.to, online, acknowledged, forced, "agent listener key switched");
+        tracing::info!(from = %rotation.from, to = %rotation.to, online, acknowledged, forced = rotation.forced, "agent listener key switched");
         Ok(rotation)
     }
 
@@ -692,6 +724,14 @@ impl AgentKeys {
     fn write(&self) -> std::sync::RwLockWriteGuard<'_, Loaded> {
         self.loaded.write().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// The sequence after a change of the key set: one more than before, and
+/// at least the time of the change (ms). A database restored from a backup
+/// carries an older sequence that agents would refuse; taking the clock
+/// moves the next announcement past anything they applied.
+fn next_sequence(old: u64, now: Timestamp) -> u64 {
+    old.saturating_add(1).max(u64::try_from(now.0).unwrap_or(0))
 }
 
 async fn setting(settings: &dyn SettingsRepository, key: &str) -> Result<Option<String>, AgentKeyError> {
@@ -809,7 +849,7 @@ mod tests {
         let fps: Vec<&str> = ann.keys.iter().map(|k| k.sha256.as_str()).collect();
         let listed: Vec<String> = a.keys().into_iter().take(4).map(|k| k.sha256).collect();
         assert_eq!(fps, listed);
-        assert_eq!(ann.sequence, 1);
+        assert_eq!(ann.sequence, u64::try_from(T0.0).unwrap(), "at least the time of the change");
         assert!(ann.revoked.is_empty());
     }
 
@@ -835,32 +875,73 @@ mod tests {
         f.settings.0.lock().unwrap().insert(SETTING_KEYS.into(), old.to_string());
         let (up, created) = AgentKeys::load_or_create(f.deps.clone(), T0).await.unwrap();
         assert!(!created);
-        assert_eq!(up.sequence(), 1);
+        assert_eq!(up.sequence(), u64::try_from(T0.0).unwrap());
         assert_ne!(up.worker_fingerprint(), up.current_fingerprint());
     }
 
     #[tokio::test]
-    async fn rotating_with_revoke_drops_and_announces_the_old_keys() {
+    async fn rotating_with_revoke_drops_and_announces_every_old_key() {
         let f = fixture(AgentTlsSettings::default());
         let (keys, _) = AgentKeys::load_or_create(f.deps.clone(), T0).await.unwrap();
-        let (old, old_worker, seq) = (keys.current_fingerprint(), keys.worker_fingerprint(), keys.sequence());
-        let r = keys.rotate(day(1), RotateMode::NowRevoke).await.unwrap().unwrap();
-        assert_eq!(r.revoked, [old.clone(), old_worker.clone()]);
-        assert_eq!(r.sequence, seq + 1);
+        // A plain switch keeps the previous key and bumps the sequence.
+        let seq = keys.sequence();
+        let r = keys.rotate(day(1), RotateMode::Now).await.unwrap().unwrap();
+        assert!(r.revoked.is_empty() && r.sequence > seq);
+        assert!(keys.keys().iter().any(|k| k.label == "previous"));
+        let (previous, old, old_worker, seq) =
+            (r.from.clone(), keys.current_fingerprint(), keys.worker_fingerprint(), keys.sequence());
+        let r = keys.rotate(day(2), RotateMode::NowRevoke).await.unwrap().unwrap();
+        assert_eq!(r.revoked, [old.clone(), old_worker.clone(), previous.clone()]);
+        assert!(r.sequence > seq);
         assert!(keys.keys().iter().all(|k| k.sha256 != old && k.label != "previous"), "not kept");
         let ann = forge_proto::verify_server_keys(
             &f.deps.signer.public_key(),
-            &keys.announcement("srv-1", day(1)),
+            &keys.announcement("srv-1", day(2)),
             "srv-1",
-            day(1),
+            day(2),
         )
         .unwrap();
-        assert_eq!(ann.revoked, [old, old_worker]);
-        assert_eq!(ann.sequence, seq + 1);
-        // A plain switch keeps the previous key and bumps the sequence too.
-        let r = keys.rotate(day(2), RotateMode::Now).await.unwrap().unwrap();
-        assert!(r.revoked.is_empty() && r.sequence == seq + 2);
-        assert!(keys.keys().iter().any(|k| k.label == "previous"));
+        assert_eq!(ann.revoked, [old, old_worker, previous]);
+        assert_eq!(ann.sequence, r.sequence);
+    }
+
+    #[tokio::test]
+    async fn rotating_with_fresh_keys_revokes_everything_announced_before() {
+        let f = fixture(AgentTlsSettings::default());
+        let (keys, _) = AgentKeys::load_or_create(f.deps.clone(), T0).await.unwrap();
+        let before: Vec<String> = keys.keys().into_iter().map(|k| k.sha256).collect();
+        let r = keys.rotate(day(1), RotateMode::NowFresh).await.unwrap().unwrap();
+        assert!(r.fresh);
+        assert_eq!(r.revoked.len(), before.len(), "current, next, worker and worker-next");
+        assert!(before.iter().all(|b| r.revoked.contains(b)));
+        assert!(keys.keys().iter().all(|k| !before.contains(&k.sha256)), "nothing old survives");
+        assert_eq!(served_key(&keys, day(1)), r.to);
+        assert_eq!(keys.worker_fingerprint(), r.worker);
+    }
+
+    #[tokio::test]
+    async fn a_restored_lower_sequence_moves_past_what_agents_applied() {
+        let f = fixture(AgentTlsSettings::default());
+        let (keys, _) = AgentKeys::load_or_create(f.deps.clone(), T0).await.unwrap();
+        let backup = f.settings.0.lock().unwrap()[SETTING_KEYS].clone();
+        // Agents applied announcements made after the backup.
+        keys.rotate(day(1), RotateMode::Now).await.unwrap();
+        keys.rotate(day(1), RotateMode::Now).await.unwrap();
+        let applied = keys.sequence();
+        // The database is restored; the server restarts with the old state.
+        f.settings.0.lock().unwrap().insert(SETTING_KEYS.into(), backup);
+        let (restored, _) = AgentKeys::load_or_create(f.deps.clone(), day(2)).await.unwrap();
+        assert!(restored.sequence() < applied, "an agent would refuse this as stale");
+        let r = restored.rotate(day(2), RotateMode::Now).await.unwrap().unwrap();
+        assert!(r.sequence > applied, "the next change is accepted again");
+        let ann = forge_proto::verify_server_keys(
+            &f.deps.signer.public_key(),
+            &restored.announcement("srv-1", day(2)),
+            "srv-1",
+            day(2),
+        )
+        .unwrap();
+        assert!(ann.sequence > applied);
     }
 
     #[tokio::test]

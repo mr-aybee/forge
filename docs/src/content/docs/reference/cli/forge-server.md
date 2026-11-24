@@ -467,7 +467,8 @@ never key material.
 | `list` | subcommand | | One of the three | Prints every kept key, then each agent and which of the keys it pins | `list` |
 | `rotate` | subcommand | | One of the three | Asks for a switch to the next key | `rotate` |
 | `rotate --now` | flag | off | No | Switches at once, without waiting for the grace period or acknowledgements | `rotate --now` |
-| `rotate --now --revoke` | flag | off | No | Switches at once and revokes the old agent and analytics keys: they are not kept as `previous`, agents unpin them at their next heartbeat and never pin them again from an announcement. Audited as `agent_key.revoke`. Requires `--now` | `rotate --now --revoke` |
+| `rotate --now --revoke` | flag | off | No | Switches at once and revokes every key that does not survive the switch (the old current, analytics and previous keys): they are not kept as `previous`, agents unpin them at their next heartbeat and never pin them again from an announcement. Audited as `agent_key.revoke`. Requires `--now` | `rotate --now --revoke` |
+| `rotate --now --revoke --fresh` | flag | off | No | Makes brand-new current, next and analytics keys that were never announced, revokes every old key and prints the new fingerprints. No agent has them: pin them on every node by hand. For a compromise of the key store or database. Requires `--revoke` | `rotate --now --revoke --fresh` |
 | `--config` | path | built-in defaults | No | The `forge.toml` whose database to use (or `FORGE_CONFIG`) | `--config /etc/forge/forge.toml` |
 
 ### forge-server agent-key show
@@ -518,8 +519,20 @@ once the next key has been announced for `grace_days` and every online agent
 has acknowledged it. With `--now`, it switches at once. Agents that did not
 have the next key then fail to connect until you run
 `forge-agent pins add <fingerprint>` on them. Add `--revoke` when a key may
-have leaked: the old keys are dropped instead of kept, and agents remove them
-from their pins at once.
+have leaked: every old key that does not survive the switch (old current,
+analytics and previous keys) is dropped instead of kept, and agents remove
+them from their pins at once. The `next` key, already announced, becomes
+current.
+
+`--revoke` protects against **one leaked key**. It does not help after a
+compromise of the key store or the database: the `next` key is stored right
+beside the current one, so an attacker who read one has both. Then run
+`rotate --now --revoke --fresh`: Forge makes brand-new keys that were never
+announced, revokes every old one, and prints the new fingerprints. Agents
+cannot reach the server until you pin the new keys on each node by hand,
+with `forge-agent pins add <fingerprint>` (and `--label analytics` for the
+analytics key) or `forge-agent pins fetch`, comparing the key it shows with
+the printed one.
 
 ```text
 $ forge-server --config /etc/forge/forge.toml agent-key rotate
@@ -527,7 +540,20 @@ Rotation requested: Forge switches to sha256:<next-fingerprint> once the grace p
 
 $ forge-server --config /etc/forge/forge.toml agent-key rotate --now
 Switched to sha256:<next-fingerprint> (3 of 4 agents that pin had it). A running server serves it within a minute. Agents without it: run 'forge-agent pins add <next-fingerprint>' on them.
+
+$ forge-server --config /etc/forge/forge.toml agent-key rotate --now --revoke --fresh
+Revoked sha256:<old-fingerprint>: agents unpin it at their next heartbeat.
+New keys, never announced: no agent has them. On every node run, as root:
+  forge-agent pins add <new-fingerprint>
+  forge-agent pins add <new-analytics-fingerprint> --label analytics
+or 'forge-agent pins fetch' and compare the key with sha256:<new-fingerprint>.
 ```
+
+**After restoring a backup** of the database, run
+`forge-server agent-key rotate` (or any other key change). The restored key
+state carries an older sequence than the one agents last applied, and they
+refuse older announcements. Every change sets the sequence to at least the
+current time in milliseconds, so the next announcement moves past it again.
 
 ## forge-server check-migrations
 
