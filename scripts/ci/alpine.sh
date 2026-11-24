@@ -87,7 +87,7 @@ case "$cmd" in
     # <profile>/build/<package>/<hash>/. Dependencies only: workspace crates
     # (forge-*) rebuild from source anyway. DuckDB's object files are
     # dropped; libduckdb.a stays.
-    tar --zstd -T0 -cf "$out" -C "$host_target" \
+    tar -I 'zstd -T0 -3' -cf "$out" -C "$host_target" \
       --exclude='forge-*' --exclude='libduckdb-sys/*.o' \
       PREBUILT release/build "$target"/release/build
     rm "$host_target/PREBUILT"
