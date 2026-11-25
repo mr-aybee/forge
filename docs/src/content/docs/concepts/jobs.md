@@ -46,8 +46,19 @@ stopped, and no further step runs. Cancelling a job that has already finished
 returns `409`.
 
 In the console, the **Jobs** drawer in the header lists running jobs first,
-then recent ones. Each running row has a cancel action. A job's detail shows
-its steps with durations, the error of a failed step, and its console output.
+then the rest grouped by time (just now, earlier today, yesterday, older).
+Each row shows what the job does and on which node, coloured by kind and
+status, and running rows have a cancel action. The status filters show counts.
+
+Read-only checks the console runs on its own, such as ingress status polls,
+fact collection and container lists, are hidden by default. Select **Show
+background checks** to see them; runs of the same check are folded into one
+row (`×12`). A failed check always shows, marked **check failed** in amber
+rather than as a failed action.
+
+A job's detail shows its status, a timeline of its steps with durations, the
+error of a failed step with a hint, a summary of known results (for example
+ingress status), its console output, and the raw payload and result.
 
 ## Idempotency keys
 

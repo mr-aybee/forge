@@ -87,6 +87,10 @@ export function jobTarget(j: Job, names: JobNames): JobTarget {
   return { kind: "other", label: "—" };
 }
 
+/** Container operations that only read state (mirrors the server's `CONTAINER_READ`). */
+const CONTAINER_READ = ["info", "list", "images", "inspect", "logs", "stats"];
+const op = (cmd: Rec) => s(rec(cmd.op).op) ?? s(cmd.op);
+
 function commandLabel(cmd: Rec): string {
   const type = s(cmd.type);
   switch (type) {
@@ -97,17 +101,61 @@ function commandLabel(cmd: Rec): string {
     case "service_status":
       return `Check service ${s(cmd.name) ?? ""}`.trim();
     case "container": {
-      const op = s(cmd.op);
-      if (op === "pull") return `Pull image ${s(cmd.image) ?? ""}`.trim();
-      if (op === "list" || op === "info" || op === "images") return `List containers`;
+      const o = s(cmd.op);
+      if (o === "pull") return `Pull image ${s(cmd.image) ?? ""}`.trim();
+      if (o === "list" || o === "info" || o === "images") return "List containers";
+      if (o === "logs") return "Read container logs";
+      if (o === "stats") return "Container stats";
+      if (o === "inspect") return "Inspect container";
       const id = s(cmd.id);
-      return `${verb(op, "Container")} container${id ? ` ${shortId(id)}` : ""}`;
+      return `${verb(o, "Container")} container${id ? ` ${shortId(id)}` : ""}`;
     }
     case "probe":
       return "Connectivity probe";
+    case "ingress": {
+      switch (op(cmd)) {
+        case "status":
+          return "Ingress status check";
+        case "apply":
+          return "Apply ingress config";
+        case "remove":
+          return "Remove ingress";
+        case "network_inspect":
+          return "Inspect ingress network";
+        case "network_ensure":
+          return "Set up ingress network";
+        default:
+          return "Ingress";
+      }
+    }
+    case "site": {
+      const name = s(rec(cmd.spec).name);
+      const n = name ? ` ${name}` : "";
+      switch (s(cmd.action)) {
+        case "apply":
+          return `Apply site${n}`;
+        case "remove":
+          return `Remove site${n}`;
+        case "status":
+          return `Site status check${n}`;
+        case "renew":
+          return `Renew certificate${n ? ` for${n}` : ""}`;
+        default:
+          return `Site${n}`;
+      }
+    }
+    case "package": {
+      const pkg = s(cmd.package) ?? "package";
+      const v = s(cmd.action) === "install" && s(cmd.version) ? ` ${s(cmd.version)}` : "";
+      return `${verb(s(cmd.action), "Run")} ${pkg}${v}`;
+    }
+    case "dns": {
+      const o = op(cmd);
+      return o === "zones" || o === "records" ? "List DNS records" : o ? `DNS: ${o.replace(/_/g, " ")}` : "DNS";
+    }
     case "fabric": {
-      const op = s(rec(cmd.op).op) ?? s(cmd.op);
-      return op ? `Cluster network: ${op}` : "Cluster network";
+      const o = op(cmd);
+      return o ? `Cluster network: ${o.replace(/_/g, " ")}` : "Cluster network";
     }
     case undefined:
       return "Agent command";
@@ -116,26 +164,25 @@ function commandLabel(cmd: Rec): string {
   }
 }
 
-/** "Install redis 7.4 on lab-c", "Onboard 203.0.113.10", "Ping lab-c". */
-export function jobTitle(j: Job, names: JobNames): string {
+/** What the job does, without its target: "Install redis 7.4", "Ingress status check". */
+export function jobAction(j: Job, names: JobNames): string {
   const p = rec(j.payload);
-  const target = jobTarget(j, names);
-  const on = target.kind === "node" ? ` on ${target.label}` : "";
   switch (j.kind) {
     case "package.action": {
       const pkg = s(p.package) ?? "package";
       const v = s(p.action) === "install" && s(p.version) ? ` ${s(p.version)}` : "";
-      return `${verb(s(p.action), "Run")} ${pkg}${v}${on}`;
+      return `${verb(s(p.action), "Run")} ${pkg}${v}`;
     }
     case "node.bootstrap": {
       const host = s(p.hostname) ?? s(rec(p.target).host) ?? "node";
+      const target = jobTarget(j, names);
       const into = target.kind === "cluster" ? ` into ${target.label}` : "";
       return `Onboard ${host}${into}`;
     }
     case "agent.command":
-      return `${commandLabel(rec(p.command))}${on}`;
+      return commandLabel(rec(p.command));
     case "agent.update":
-      return `Update agent${on}`;
+      return "Update agent";
     case "agent.rollout": {
       const ids = Array.isArray(p.server_ids) ? p.server_ids.length : 0;
       const to = s(p.target) ?? s(rec(j.state).target);
@@ -145,15 +192,101 @@ export function jobTitle(j: Job, names: JobNames): string {
     case "app.action": {
       const id = s(p.service_id);
       const name = (id && names.app(id)) ?? "service";
-      return `${verb(s(p.action), "Run")} ${name}${on}`;
+      return `${verb(s(p.action), "Run")} ${name}`;
     }
     case "storage.action": {
       const id = s(p.store_id);
       const name = id ? names.store(id) : undefined;
-      return `${verb(s(p.action), "Run")} object store${name ? ` ${name}` : ""}${on}`;
+      return `${verb(s(p.action), "Run")} object store${name ? ` ${name}` : ""}`;
     }
     default:
       return j.kind ? cap(j.kind.replace(/\./g, " ")) : "Job";
+  }
+}
+
+/** "Install redis 7.4 · lab-c", "Ingress status check · lab-c", "Onboard 203.0.113.10". */
+export function jobTitle(j: Job, names: JobNames): string {
+  const target = jobTarget(j, names);
+  const action = jobAction(j, names);
+  return target.kind === "node" ? `${action} · ${target.label}` : action;
+}
+
+/** Colour family of a job in lists: what it touches. */
+export type JobCategory = "ingress" | "site" | "package" | "container" | "health" | "deploy" | "agent" | "storage" | "node" | "network" | "other";
+
+export function jobCategory(j: Job): JobCategory {
+  const p = rec(j.payload);
+  switch (j.kind) {
+    case "package.action":
+      return "package";
+    case "node.bootstrap":
+      return "node";
+    case "agent.update":
+    case "agent.rollout":
+      return "agent";
+    case "app.action":
+      return "deploy";
+    case "storage.action":
+      return "storage";
+    case "agent.command":
+      break;
+    default:
+      return j.kind?.startsWith("deploy") || j.kind?.startsWith("app") ? "deploy" : "other";
+  }
+  switch (s(rec(p.command).type)) {
+    case "ingress":
+      return "ingress";
+    case "site":
+      return "site";
+    case "package":
+      return "package";
+    case "container":
+    case "docker":
+    case "stack":
+    case "swarm":
+      return "container";
+    case "ping":
+    case "collect_facts":
+    case "service_status":
+      return "health";
+    case "probe":
+    case "fabric":
+    case "dns":
+      return "network";
+    case "storage":
+      return "storage";
+    default:
+      return "agent";
+  }
+}
+
+/**
+ * Read-only checks the console runs on its own (status polls, fact
+ * collection, container lists). The API has no "background" flag, so this
+ * classifies by operation, mirroring the server's read-only actions.
+ */
+export function isBackground(j: Job): boolean {
+  if (j.kind !== "agent.command") return false;
+  const cmd = rec(rec(j.payload).command);
+  switch (s(cmd.type)) {
+    case "ping":
+    case "collect_facts":
+    case "service_status":
+    case "probe":
+    case "processes":
+    case "names":
+      return true;
+    case "container":
+      return CONTAINER_READ.includes(s(cmd.op) ?? "");
+    case "ingress":
+      return ["status", "network_inspect"].includes(op(cmd) ?? "");
+    case "site":
+      return s(cmd.action) === "status";
+    case "dns":
+    case "fabric":
+      return ["zones", "records", "status", "key"].includes(op(cmd) ?? "");
+    default:
+      return false;
   }
 }
 
