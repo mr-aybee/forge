@@ -156,7 +156,7 @@ Interactive: the installer asks each question, shows a **REVIEW** and
 installs only after you confirm.
 
 ```sh
-sudo sh get-forge.sh                          # latest stable release
+sudo sh get-forge.sh                          # the release you downloaded it from
 sudo sh get-forge.sh --version <tag>          # one release
 sudo sh get-forge.sh --file ./forge-<version>-<arch>-linux.tar.gz   # a downloaded package
 ```
@@ -333,7 +333,7 @@ The key is `RELEASE_PUBLIC_KEY`, built into Forge; the self-updater and
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `No stable release found` | The release you want is a pre-release, which is never "latest" | Pass its tag: `--version v0.1.0-rc-03` (`-Version` on Windows) |
+| `No stable release found` | You passed `--version latest` (or used a copy of `get-forge.sh` from the source tree) and only pre-releases exist; a pre-release is never "latest" | Pass its tag: `--version v0.1.0-rc-03` (`-Version` on Windows). A `get-forge.sh` downloaded from a release defaults to that release |
 | `SHA256SUMS does not carry a valid Orbyn Forge signature` | The files are not an Orbyn Forge release, or OpenSSL is older than 1.1.1 | Download from `github.com/orbyntech/forge` again; check `openssl version` |
 | `… does not match SHA256SUMS` | Damaged or incomplete download | Delete the file and download it again |
 | `This package is for aarch64; this machine is x86_64` | Wrong package | Download `forge-<version>-$(uname -m)-linux.tar.gz` |

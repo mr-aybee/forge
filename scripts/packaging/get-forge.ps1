@@ -26,6 +26,8 @@
   FORGE_RELEASE_PUBLIC_KEY (another base64url release key).
 #>
 param(
+  # The release workflow stamps the release's own tag here in the copy it
+  # publishes; the copy in the source tree defaults to latest.
   [string]$Version = "latest",
   [string]$File = "",
   [switch]$DownloadOnly,

@@ -89,7 +89,12 @@ impl Agent {
         executor: Box<dyn CommandExecutor>,
     ) -> anyhow::Result<Self> {
         let endpoint = Endpoint::parse(&config.server_url)?;
-        // Fail closed: only a missing file means "not pinned yet".
+        // Fail closed: only a missing file means "not pinned yet", and not
+        // while an enrollment's pins still wait for the root helper.
+        crate::pins::check_adopted(&paths.dir).map_err(|m| {
+            tracing::error!("{m}");
+            anyhow::anyhow!(m)
+        })?;
         let pins = crate::pins::load(&paths.pins()).map_err(|e| {
             let m = crate::pins::unreadable_message(&e, &paths.pins());
             tracing::error!(error = %e, "{m}");
