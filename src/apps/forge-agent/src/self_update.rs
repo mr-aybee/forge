@@ -148,7 +148,20 @@ pub(crate) fn write_nofollow(path: &Path, data: &[u8]) -> Result<(), String> {
         opts.mode(0o644).custom_flags(i32::try_from(rustix::fs::OFlags::NOFOLLOW.bits()).unwrap_or(0));
     }
     let mut f = opts.open(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    let written = f.write_all(data).and_then(|()| f.sync_all()).map_err(|e| format!("{}: {e}", tmp.display()));
+    // The creation mode is masked by the umask (the installer runs with a
+    // strict one), so set 0644 explicitly: the pin file must stay readable
+    // by the unprivileged agent user.
+    #[cfg(unix)]
+    let made_readable = {
+        use std::os::unix::fs::PermissionsExt;
+        f.set_permissions(std::fs::Permissions::from_mode(0o644))
+    };
+    #[cfg(not(unix))]
+    let made_readable = Ok(());
+    let written = made_readable
+        .and_then(|()| f.write_all(data))
+        .and_then(|()| f.sync_all())
+        .map_err(|e| format!("{}: {e}", tmp.display()));
     drop(f);
     let renamed = written.and_then(|()| std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display())));
     if renamed.is_err() {
@@ -950,6 +963,19 @@ mod tests {
     use super::*;
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    /// Files written for other users (the pin file) are 0644 whatever
+    /// the umask; the installer runs with a strict one.
+    #[cfg(unix)]
+    #[test]
+    fn written_files_are_world_readable() -> TestResult {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir()?;
+        let p = dir.path().join("pins.toml");
+        write_nofollow(&p, b"x")?;
+        assert_eq!(std::fs::metadata(&p)?.permissions().mode() & 0o777, 0o644);
+        Ok(())
+    }
 
     #[test]
     fn streamed_sha256_matches_the_one_shot_digest() -> TestResult {
