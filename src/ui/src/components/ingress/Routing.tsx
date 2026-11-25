@@ -432,7 +432,8 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
     else for (const e of edges) wires.push({ from, to: `edge:${e.server_id}`, tone: edgeTone(e) });
   };
   shownDomains.forEach((d, i) => domainWires(`dom:${i}`, d));
-  hiddenDomains.forEach((d) => domainWires("dom:more", d));
+  // The chip joins only the served (blue) trunk; a hidden redirect source's badge shows without a wire.
+  if (hiddenDomains.some((d) => !isRedirSrc(d))) for (const e of edges) wires.push({ from: "dom:more", to: `edge:${e.server_id}`, tone: edgeTone(e) });
   // Which domain element each redirect badge lines up with.
   const redirSrc: Record<number, string> = {};
   for (const w of wires) if (w.to.startsWith("redir:")) redirSrc[Number(w.to.slice(6))] ??= w.from;
@@ -539,7 +540,7 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
   const cellCls = "flex min-w-0 items-center";
 
   return (
-    <div ref={wrap} className="relative flex flex-col gap-1 border-b border-line px-3 py-1.5 last:border-b-0 hover:bg-panel-2/30 md:grid md:auto-rows-[28px] md:grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,1.6fr)] md:gap-x-10 md:gap-y-0">
+    <div ref={wrap} className="relative flex flex-col gap-1 border-b border-line px-3 py-1.5 last:border-b-0 hover:bg-panel-2/30 md:grid md:auto-rows-[28px] md:grid-cols-[minmax(0,1fr)_minmax(0,0.7fr)_minmax(0,0.7fr)_minmax(0,2fr)] md:gap-x-10 md:gap-y-0">
       <svg className="pointer-events-none absolute inset-0 z-0 h-full w-full overflow-visible" aria-hidden>
         <defs>
           {(["ok", "warn", "bad"] as const).map((t) => (
@@ -795,11 +796,11 @@ export function Routing({ clusterId, live }: { clusterId: string; live?: LiveRes
   const filtered = !!(needle || search.rkind || search.redge || search.rplace || search.rtls || search.rstatus);
   const pick = <K extends keyof IngressSearch>(k: K) => (e: { target: { value: string } }) => patch({ [k]: e.target.value || undefined } as Partial<IngressSearch>);
   return (
-    <div className="max-w-5xl space-y-2">
+    <div className="w-full space-y-2">
       {list.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <SearchInput value={search.rq ?? ""} onChange={(v) => patch({ rq: v || undefined })} placeholder="Domain, path, target, address…" />
-          <Select aria-label="Rule kind" value={search.rkind ?? ""} onChange={pick("rkind")}>
+          <Select className="w-auto py-1.5" aria-label="Rule kind" value={search.rkind ?? ""} onChange={pick("rkind")}>
             <option value="">Any kind</option>
             {RULE_KINDS.map((k) => (
               <option key={k.id} value={k.id}>
@@ -807,7 +808,7 @@ export function Routing({ clusterId, live }: { clusterId: string; live?: LiveRes
               </option>
             ))}
           </Select>
-          <Select aria-label="Edge node" value={search.redge ?? ""} onChange={pick("redge")}>
+          <Select className="w-auto py-1.5" aria-label="Edge node" value={search.redge ?? ""} onChange={pick("redge")}>
             <option value="">Any edge</option>
             {[...edgeOpts].map(([id, name]) => (
               <option key={id} value={id}>
@@ -815,23 +816,23 @@ export function Routing({ clusterId, live }: { clusterId: string; live?: LiveRes
               </option>
             ))}
           </Select>
-          <Select aria-label="Placement" value={search.rplace ?? ""} onChange={pick("rplace")}>
+          <Select className="w-auto py-1.5" aria-label="Placement" value={search.rplace ?? ""} onChange={pick("rplace")}>
             <option value="">Any placement</option>
             <option value="nodes">Single nodes</option>
             <option value="cluster">Cluster edge group</option>
           </Select>
-          <Select aria-label="TLS" value={search.rtls ?? ""} onChange={pick("rtls")}>
+          <Select className="w-auto py-1.5" aria-label="TLS" value={search.rtls ?? ""} onChange={pick("rtls")}>
             <option value="">TLS on or off</option>
             <option value="on">TLS on</option>
             <option value="off">TLS off</option>
           </Select>
-          <Select aria-label="Status" value={search.rstatus ?? ""} onChange={pick("rstatus")}>
+          <Select className="w-auto py-1.5" aria-label="Status" value={search.rstatus ?? ""} onChange={pick("rstatus")}>
             <option value="">Any status</option>
             <option value="healthy">Healthy</option>
             <option value="degraded">Degraded</option>
             <option value="down">Down</option>
           </Select>
-          <span className="font-mono text-[11px] text-faint tabular-nums">
+          <span className="ml-auto font-mono text-[11px] text-faint tabular-nums">
             {shown.length} of {list.length} endpoints
           </span>
           {filtered && (
@@ -847,7 +848,7 @@ export function Routing({ clusterId, live }: { clusterId: string; live?: LiveRes
         </Empty>
       ) : (
         <div className="overflow-hidden rounded-lg border border-line bg-panel">
-          <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,1.6fr)] gap-x-10 border-b border-line bg-panel-2/40 px-3 py-1.5 text-[10px] font-semibold tracking-widest text-faint uppercase md:grid">
+          <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,0.7fr)_minmax(0,0.7fr)_minmax(0,2fr)] gap-x-10 border-b border-line bg-panel-2/40 px-3 py-1.5 text-[10px] font-semibold tracking-widest text-faint uppercase md:grid">
             <span>Domain</span>
             <span>Edge</span>
             <span>Path</span>
