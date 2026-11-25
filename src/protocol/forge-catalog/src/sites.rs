@@ -934,7 +934,8 @@ impl SiteSpec {
             },
             RuleKind::Static => match r.static_root {
                 Some(s) => format!(
-                    "    {} {{\n        root {};\n        index {};\n        try_files $uri $uri/ {};\n    }}\n",
+                    "    {} {{\n        root {};\n        index {};\n        disable_symlinks if_not_owner from=$document_root;\n\
+                     \x20       if ($uri ~ \"/\\.\") {{\n            return 404;\n        }}\n        try_files $uri $uri/ {};\n    }}\n",
                     r.open,
                     s.root,
                     s.index,
@@ -1509,7 +1510,7 @@ server {\n    listen 80;\n    listen [::]:80;\n    server_name shop.example.com 
         assert_eq!(s.static_roots(), vec!["/srv/www/shop"]);
         let c = s.render(false);
         assert!(
-            c.contains("    location / {\n        root /srv/www/shop;\n        index index.html;\n        try_files $uri $uri/ /index.html;\n    }\n"),
+            c.contains("    location / {\n        root /srv/www/shop;\n        index index.html;\n        disable_symlinks if_not_owner from=$document_root;\n        if ($uri ~ \"/\\.\") {\n            return 404;\n        }\n        try_files $uri $uri/ /index.html;\n    }\n"),
             "{c}"
         );
         let plain = spec(serde_json::json!({ "kind": "static", "static_root": { "root": "/srv/www/shop" } }));

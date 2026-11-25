@@ -303,7 +303,7 @@ pub fn required_action(payload: &Value) -> Action {
             // A static directory is served by nginx (root): the endpoint flow
             // checked it is inside an approved file root on this edge; any
             // other caller needs `server.command`.
-            _ if has_static(payload.pointer("/command/spec")) && payload.get(FROM_ENDPOINT).is_none() => {
+            Some("apply") if has_static(payload.pointer("/command/spec")) && payload.get(FROM_ENDPOINT).is_none() => {
                 Action::ServerCommand
             }
             _ => Action::ProxyManage,

@@ -64,9 +64,9 @@ fn write_file(path: &str, content: &str) -> Result<(), String> {
             .open(path)
             .map_err(|e| format!("{path}: {e}"))?;
         f.set_permissions(std::fs::Permissions::from_mode(0o640)).map_err(|e| format!("{path}: {e}"))?;
-        if let Some(gid) = nginx_group() {
-            std::os::unix::fs::fchown(&f, Some(0), Some(gid)).map_err(|e| format!("{path}: {e}"))?;
-        }
+        // Without nginx's group the workers could not read the file.
+        let gid = nginx_group().ok_or("neither the www-data nor the nginx group exists; is Nginx installed?")?;
+        std::os::unix::fs::fchown(&f, Some(0), Some(gid)).map_err(|e| format!("{path}: {e}"))?;
         return f.write_all(content.as_bytes()).map_err(|e| format!("{path}: {e}"));
     }
     #[cfg(unix)]

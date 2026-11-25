@@ -38,7 +38,7 @@ pub async fn list(
     let mut visible = Vec::new();
     for j in state.store.list_jobs(&filter).await? {
         if caller.can(Action::View, job_ref(j.id)).await {
-            visible.push(j);
+            visible.push(redact_job(j));
         }
     }
     Ok(Json(visible))
@@ -46,7 +46,17 @@ pub async fn list(
 
 pub async fn get(State(state): State<AppState>, caller: Caller, Path(id): Path<JobId>) -> ApiResult<Json<Job>> {
     caller.authorize(Action::View, job_ref(id)).await?;
-    Ok(Json(state.store.get_job(id).await?))
+    Ok(Json(redact_job(state.store.get_job(id).await?)))
+}
+
+/// Basic-auth hashes of an endpoint's `agent.command` never leave the server.
+fn redact_job(mut j: Job) -> Job {
+    if let Some(spec) = j.payload.pointer_mut("/command/spec") {
+        let mut wrapper = serde_json::json!({ "spec": spec.take() });
+        crate::endpoints::redact(&mut wrapper);
+        *spec = wrapper["spec"].take();
+    }
+    j
 }
 
 /// `GET /jobs/{id}/live`: output streamed by the agent while the job's

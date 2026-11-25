@@ -786,6 +786,8 @@ pub(crate) async fn reapply_for_app(
         let spec =
             spec_of(&site).map_err(|e| DomainError::Invalid(format!("endpoint {}: {}", site.name, e.message)))?;
         let edges = current_edges(state, &site).await.map_err(|e| DomainError::Invalid(e.message))?;
+        // The edges may have changed since the endpoint was saved.
+        state.endpoints.check_static_roots(&edges, &spec).await?;
         let attach = spec.tls == forge_catalog::sites::Tls::Uploaded;
         let site_id = site.id.clone();
         let mut failed = Vec::new();
@@ -927,7 +929,9 @@ pub async fn clear_cache(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let site = load_visible(&state, &caller, ws, &id).await?;
-    let (spec, edges) = authorize_edges(&state, &caller, &site, "clear_cache").await?;
+    let (mut spec, edges) = authorize_edges(&state, &caller, &site, "clear_cache").await?;
+    // Only `apply` needs the basic-auth users; no hashes in other jobs.
+    spec.access.basic_auth = None;
     let mut results = Vec::new();
     for e in edges {
         let r = submit_and_wait(
@@ -974,7 +978,8 @@ pub async fn logs(
     axum::extract::Query(q): axum::extract::Query<LogQuery>,
 ) -> ApiResult<Json<Value>> {
     let site = load_visible(&state, &caller, ws, &id).await?;
-    let spec = spec_of(&site)?;
+    let mut spec = spec_of(&site)?;
+    spec.access.basic_auth = None;
     if !current_edges(&state, &site).await?.contains(&q.server_id) {
         return Err(ApiError::bad_request("that node is not one of this endpoint's edges"));
     }
@@ -991,6 +996,14 @@ pub async fn logs(
         Duration::from_secs(20),
     )
     .await?;
+    caller
+        .audit(
+            "site.logs_read",
+            &ws_ref(ws),
+            Some(ws),
+            json!({ "site": site.name, "server_id": q.server_id, "log": action }),
+        )
+        .await;
     Ok(Json(r))
 }
 
