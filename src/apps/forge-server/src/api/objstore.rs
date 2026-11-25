@@ -220,12 +220,17 @@ pub struct SettingsSaved {
     pub jobs: Vec<Job>,
 }
 
+/// Body of `PUT /object-stores/{id}/settings`: the full desired state.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct SettingsBody(pub SettingsUpdate);
+
 pub async fn put_settings(
     State(state): State<AppState>,
     caller: Caller,
     Ws(ws): Ws,
     Path(id): Path<ObjectStoreId>,
-    Json(req): Json<SettingsUpdate>,
+    Json(SettingsBody(req)): Json<SettingsBody>,
 ) -> ApiResult<(StatusCode, Json<SettingsSaved>)> {
     let (store, members) = authorized(&state, &caller, ws, id, Action::StorageManage).await?;
     if crate::jobs::storage::BUSY.contains(&store.status.as_str()) {
