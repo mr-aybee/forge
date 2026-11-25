@@ -204,7 +204,9 @@ pub(crate) fn stack_status(namespace: &str, services: &Value, tasks: &Value, sha
             Value::Array(tasks.as_array().into_iter().flatten().filter(|t| t["ServiceID"] == id).cloned().collect());
         let st = crate::swarm::status_from(svc, &svc_tasks);
         let mut task_list = st.tasks;
-        task_list.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        task_list.sort_by(|a, b| {
+            (b.desired_state == "running").cmp(&(a.desired_state == "running")).then(b.updated_at.cmp(&a.updated_at))
+        });
 
         let ports = svc["Endpoint"]["Ports"]
             .as_array()
@@ -511,7 +513,7 @@ mod tests {
         let api = &s.services[0];
         assert_eq!((api.name.as_str(), api.image.as_str()), ("api", "example/api:1"));
         assert_eq!((api.desired, api.running, api.tasks.len()), (2, 1, 2));
-        assert_eq!(api.tasks[0].id, "t2", "newest first");
+        assert_eq!(api.tasks[0].id, "t1", "wanted running first, then newest");
         assert_eq!(api.ports[0].published, 8080);
         assert!(api.shared);
         assert!(!s.converged());

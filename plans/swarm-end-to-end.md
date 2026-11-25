@@ -14,7 +14,7 @@ console and the API. Everything else a Swarm user expects was missing.
 
 ## Gaps
 
-| # | Gap | Plan |
+| # | Gap | Done |
 | --- | --- | --- |
 | 1 | Compose stacks on Swarm (`docker stack deploy`), redeploy, remove, per-stack view | `swarm.stack` job, stack API, console, CLI |
 | 2 | Swarm secrets and configs, versioned rotation, attached to services and stacks | For stacks (external refs resolved to the newest version); API, console, CLI. Single services: not yet (see "Not done") |
@@ -105,12 +105,55 @@ allowed with the same checks reversed (no swarm services).
   audit, convert pre-checks, addresses ordering.
 - End to end: 3 `docker:dind` nodes with the agent, a local server.
 
+## Status
+
+All nine gaps are implemented on this branch (backend, agent, API, CLI,
+console, docs, tests). Secrets and configs also work on single Swarm
+services (`swarm.secrets`, `swarm.configs`, `swarm.secret_env: files`), and
+per-task CPU/memory comes from one `TaskStats` command per node that runs the
+viewed tasks (cached 10 s).
+
+## End-to-end run (3 Docker-in-Docker nodes, CLI only)
+
+Nodes `lab-a` (manager), `lab-b`, `lab-c` as privileged Debian containers
+running dockerd 29 and the agent built from this branch, enrolled with
+`forge nodes enroll-token --cluster swarm-e2e`. Every step below used the
+`forge` CLI (one bootstrap API key was minted with the password once):
+
+- `swarm addresses`, `swarm init` (advertise address), `swarm join` ×2,
+  `swarm nodes`, `swarm labels` → 3-node swarm, leader on lab-a.
+- `swarm secrets create`, `swarm configs create`, `swarm networks shared`.
+- `stacks create` (shop: api+worker with ports, redis+seq without) →
+  policy notes for `depends_on`/`container_name`; `swarm stacks deploy` →
+  `swarm.stack` job succeeded; `swarm stacks ps` all replicas running.
+- Probe stack in another environment (`x-forge.shared`): reached
+  `forge-prod-shop_api` and `_worker` by name across nodes; `_redis` did not
+  resolve and `_seq` was unreachable; inside the stack `seq` answered by name.
+- Secret file present in the api task with the value; `docker service
+  inspect` shows only the secret reference.
+- `swarm stacks scale api 3`; `swarm secrets rotate` + `stacks update` +
+  `swarm stacks diff` + deploy → rolling update, env `RELEASE=2`, secret
+  `db_password.v2`; `swarm stacks rollback api` → `rollback_completed`, back
+  to v1; redeploy revision 2; `swarm stacks restart worker`; `swarm stats`;
+  `swarm stacks logs`.
+- `swarm drain lab-a` → 0 tasks left on lab-a, all rescheduled on lab-b/c;
+  `swarm activate`; `swarm networks ls` (ingress, stack overlays encrypted,
+  `forge-shared` attachable); `swarm secrets prune` removed `db_password.v1`.
+- `sites create` with a `swarm` target → upstreams on all three nodes
+  `:18080`; the routing mesh answered on every node.
+- `docker volume create` (local and NFS), `swarm volumes` with used-by;
+  `swarm convert --check` lists the blocking reason.
+
+DinD note: nested overlayfs fails (`failed to mount ... overlay`); the nodes
+ran dockerd with the `vfs` driver.
+
 ## Not done / owner decisions
 
-- Per-task CPU/memory (gap 7): needs `docker stats` on every node that runs
-  a task (stats are per node, not per swarm): a fan-out per view. Left for a
-  follow-up so the console does not issue N helper calls per poll.
-- Secrets on single (non-stack) services: the service editor would need a
-  secrets section; stacks cover the case today.
-- Swarm → Default with running swarm services is not automatic: Forge cannot
-  move Swarm tasks back onto pinned nodes without a placement decision.
+- The ingress edge (Nginx) was not applied in the DinD run: the nodes carry
+  no Nginx. The endpoint's resolution to every swarm node and the routing
+  mesh itself were verified.
+- The console was built and type-checked but not driven in a browser (no
+  headless browser binary on this machine).
+- Swarm → Default with running Swarm services stays a guided refusal: the
+  check names what to remove and the guide lists the manual steps.
+- Task memory reads 0 MiB in DinD (nested cgroups); real nodes report it.

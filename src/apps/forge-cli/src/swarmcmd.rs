@@ -568,8 +568,12 @@ fn ps_rows(status: &Value, all: bool) -> Vec<Value> {
             .collect();
         let mut seen = std::collections::BTreeSet::new();
 
-        for t in s["tasks"].as_array().into_iter().flatten() {
-            // Tasks come newest first: the first one per slot is current.
+        // Tasks the swarm wants running come first, then the newest of the
+        // rest; the first one per slot is the current one.
+        let mut tasks: Vec<&Value> = s["tasks"].as_array().into_iter().flatten().collect();
+        tasks.sort_by_key(|t| t["desired_state"] != "running");
+
+        for t in tasks {
             let slot = format!("{}{}", t["slot"], t["node_id"].as_str().filter(|_| t["slot"] == 0).unwrap_or(""));
             if !all && !seen.insert(slot) {
                 continue;

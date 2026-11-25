@@ -187,7 +187,7 @@ A compose stack in an environment of a Swarm cluster runs as one Docker
 stack (`docker stack deploy` on a manager), not per node.
 
 1. Open **Clusters** → your cluster → **Swarm** → **Stacks** and select
-   **Deploy stack**, or run `forge stacks edit create` with an environment
+   **Deploy stack**, or run `forge stacks create` with an environment
    of the Swarm cluster and a manager as `--node`.
 2. Paste or upload the compose file. Forge checks it with the compose policy
    and these Swarm rules:
@@ -282,7 +282,7 @@ forge swarm join swarm-eu lab-c --role worker --wait
 forge swarm labels swarm-eu lab-c --label zone=b
 printf '%s' "$DB_PASSWORD" | forge swarm secrets create swarm-eu db_password --value-file -
 forge swarm networks shared swarm-eu
-forge stacks edit create shop --environment prod --node lab-a --compose compose.yaml
+forge stacks create shop --environment prod --node lab-a --compose compose.yaml
 forge swarm stacks deploy shop --wait --yes
 forge swarm stacks ps shop
 forge swarm stacks scale shop api 3
