@@ -1,6 +1,6 @@
 ---
 title: forge swarm
-description: Manage Docker Swarm clusters from the CLI: nodes, stacks, secrets, configs, networks, volumes, services and mode conversion.
+description: Manage Docker Swarm clusters from the CLI, including nodes, stacks, secrets, configs, networks, volumes, services and mode conversion.
 sidebar:
   order: 19
 ---
