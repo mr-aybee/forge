@@ -673,6 +673,7 @@ impl SiteSpec {
             "    location / {{\n{limit}        proxy_pass http://{up};\n        proxy_http_version 1.1;\n{ws}\
              \x20       proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n\
              \x20       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        proxy_set_header X-Forwarded-Proto $scheme;\n\
+             \x20       proxy_set_header X-Forwarded-Host $host;\n\
              \x20       proxy_read_timeout 300s;\n        proxy_connect_timeout 5s;\n\
              \x20       proxy_next_upstream error timeout http_502 http_503 http_504;\n    }}\n",
             up = self.upstream_name(),
@@ -744,8 +745,15 @@ impl SiteSpec {
         ));
         if with_tls {
             let (crt, key) = self.cert_files();
+            // HTTP/2 uses the `listen ... ssl http2` form, not `http2 on;`:
+            // the App Store installs the distro package (1.18 on Debian 11 /
+            // Ubuntu 22.04, 1.20 on RHEL 9, 1.22 on Debian 12, 1.24 on
+            // Ubuntu 24.04) and `http2 on;` needs 1.25.1. On 1.25.1+ the
+            // listen flag only logs a deprecation warning and `nginx -t`
+            // still passes, so one form serves every version without
+            // plumbing the edge's Nginx version into rendering.
             out.push_str(&format!(
-                "\nserver {{\n    listen 443 ssl;\n    listen [::]:443 ssl;\n    http2 on;\n    server_name {names};\n{logs}\
+                "\nserver {{\n    listen 443 ssl http2;\n    listen [::]:443 ssl http2;\n    server_name {names};\n{logs}\
                  \x20   ssl_certificate {crt};\n    ssl_certificate_key {key};\n\
                  \x20   ssl_protocols TLSv1.2 TLSv1.3;\n    add_header Strict-Transport-Security \"max-age=31536000\" always;\n\
                  {common}{loc}}}\n",
@@ -859,8 +867,20 @@ mod tests {
         let t = SiteSpec { tls: Tls::Acme, acme_email: "ops@example.com".into(), ..s };
         t.validate().unwrap();
         let tc = t.render(true);
-        assert!(tc.contains("listen 443 ssl;") && tc.contains("/etc/letsencrypt/live/shop.example.com/fullchain.pem"));
+        assert!(
+            tc.contains("listen 443 ssl http2;") && tc.contains("/etc/letsencrypt/live/shop.example.com/fullchain.pem")
+        );
         assert!(tc.contains("return 301 https://"));
+    }
+
+    /// The TLS server must load on the distro Nginx the App Store installs
+    /// (1.18 to 1.24), where `http2 on;` is an unknown directive.
+    #[test]
+    fn tls_server_uses_portable_http2_form() {
+        let tc = SiteSpec { tls: Tls::Uploaded, cert_id: "c1".into(), ..site() }.render(true);
+        assert!(tc.contains("    listen 443 ssl http2;\n    listen [::]:443 ssl http2;\n"));
+        assert!(!tc.contains("http2 on"));
+        assert!(tc.contains("proxy_set_header X-Forwarded-Host $host;"));
     }
 
     /// Golden render (F-12): every site writes the Forge traffic log in its
@@ -884,6 +904,7 @@ server {\n    listen 80;\n    listen [::]:80;\n    server_name shop.example.com 
 \x20       proxy_set_header Upgrade $http_upgrade;\n        proxy_set_header Connection $forge_shop_upgrade;\n\
 \x20       proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n\
 \x20       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        proxy_set_header X-Forwarded-Proto $scheme;\n\
+\x20       proxy_set_header X-Forwarded-Host $host;\n\
 \x20       proxy_read_timeout 300s;\n        proxy_connect_timeout 5s;\n\
 \x20       proxy_next_upstream error timeout http_502 http_503 http_504;\n    }\n}\n";
         assert_eq!(s.render(false), expected);
