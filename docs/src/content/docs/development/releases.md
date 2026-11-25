@@ -33,15 +33,16 @@ There is no scheduled run.
 ### Runners
 
 Every job runs on a GitHub-hosted runner: `ubuntu-latest` for Linux jobs,
-`windows-latest` for the Windows tests and build. Nothing is built for
+`ubuntu-24.04-arm` for the arm64 release build and `windows-latest` for the
+Windows tests and build. Nothing is built for
 macOS. The repository is public, so these minutes are free.
 
 - **Build wrapper.** `scripts/ci/build.sh light|heavy <command>` wraps every
   compile and runs it under `nice` and `ionice`. On GitHub-hosted runners it
   takes no lock.
-- **Release builds** use `-j 4` (`FORGE_CI_BUILD_JOBS`). Each `cross`
+- **Release builds** use `-j 4` (`FORGE_CI_BUILD_JOBS`). Each Alpine build
   container is capped with
-  `CROSS_CONTAINER_OPTS="--memory=12g --memory-swap=12g"`, so a link that
+  `FORGE_CI_CONTAINER_OPTS="--memory=14g --memory-swap=14g"`, so a link that
   runs away fails the job with a clear error.
 - **Latest wins.** `ci.yml` runs cancel the older run
   of the same ref. A newer release dry run of the same tag replaces the
@@ -110,7 +111,9 @@ tag, delete it (`git push origin :refs/tags/<tag>`), fix, and tag again.
    `forge-plugin-runner` and the agents, then the `forge` CLI in a second
    `cargo build -p forge-cli` (its features stay out of the server and agent
    binaries). Linux targets (`x86_64-unknown-linux-musl`,
-   `aarch64-unknown-linux-musl`) build with `cross`; Windows
+   `aarch64-unknown-linux-musl`) build natively in a pinned Alpine container
+   (`scripts/ci/alpine.sh`), aarch64 on an ARM runner, after restoring the
+   [prebuilt DuckDB](#prebuilt-duckdb); Windows
    (`x86_64-pc-windows-msvc`) with `cargo` and `link.exe`. The release version
    is compiled in (`FORGE_BUILD_VERSION`). The job checks architecture and
    static linking, and that the x86_64 server and worker report the version.
@@ -132,6 +135,36 @@ The asset names are a public contract: `install.sh`, `install.ps1`,
 `get-forge.*`, the server's self-updater (`update.rs`) and `forge update`
 depend on them. Change them only together with those and the docs, and
 record the change in `DECISIONS.md`.
+
+### Prebuilt DuckDB
+
+Compiling DuckDB's bundled C++ (`libduckdb-sys`) takes about 20 of a Linux
+release build's 33 minutes, and a tag build cannot use caches from other
+tags. `.github/workflows/duckdb-prebuilt.yml` therefore compiles the release
+dependencies once per target and publishes them to GHCR:
+
+```text
+ghcr.io/orbyntech/forge-duckdb:<libduckdb-sys version>-<rustc version>-<target>
+```
+
+It uses the same pinned image, in-container paths (`/work`, `/cargo`,
+`/work/target/alpine`) and first cargo command as the release, so Cargo
+considers the restored DuckDB up to date. The release's **Restore the prebuilt
+DuckDB** step logs one of:
+
+- `prebuilt DuckDB restored from …`: DuckDB is not compiled;
+- `prebuilt DuckDB not found` or `mismatched`: the release compiles DuckDB
+  as before (about 20 minutes longer). It never fails the build.
+
+**Refreshing.** The workflow runs on pushes to `master` that change
+`Cargo.lock`, `rust-toolchain.toml`, `scripts/ci/alpine.sh` or the workflow,
+and by hand (**Actions** → **Prebuilt DuckDB** → **Run workflow**, about
+35 minutes). Run it after bumping `libduckdb-sys` or the image in
+`scripts/ci/alpine.sh`, before tagging. The image is pinned by digest; update
+the tag and digest together.
+
+The publishing job has `packages: write` through `GITHUB_TOKEN`; the release
+build reads with `packages: read`. Nothing else needs a secret.
 
 ### Dry run
 
