@@ -377,6 +377,7 @@ function PruneImages({ runner, onClose }: { runner: DockerRunner; onClose: () =>
             {all && <li>Every image no container uses, tagged or not. Containers created later pull them again.</li>}
           </ul>
           <p>Images used by any container, running or stopped, stay. The prune runs as a job.</p>
+          <p className="text-warn">This is host-wide: it covers every unused image on this node, including ones Forge did not pull.</p>
           <Switch checked={all} onChange={setAll} label="Also remove unused tagged images" />
         </div>
       }

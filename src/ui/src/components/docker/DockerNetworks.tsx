@@ -171,6 +171,7 @@ export function DockerNetworks({ server, runner }: { server: string; runner: Doc
           body={
             <div className="space-y-2">
               <p>Docker deletes every custom network no container is attached to.</p>
+              <p className="text-warn">This is host-wide: it covers every unused network on this node, including ones Forge did not create.</p>
               <p>Docker's own networks (bridge, host, none, ingress) and Forge's networks stay. The prune runs as a job.</p>
             </div>
           }

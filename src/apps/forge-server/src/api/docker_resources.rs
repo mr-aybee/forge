@@ -183,22 +183,115 @@ fn hide_env_values(detail: &mut Value) {
     }
 }
 
-/// `ENV TOKEN=abc` → `ENV TOKEN=***`; build arguments (`|1 NPM_TOKEN=abc
-/// /bin/sh -c …`) the same. Any `KEY=value` word is masked: a harmless one
-/// costs a little readability, a missed secret costs more.
-fn mask_assignments(cmd: &str) -> String {
-    cmd.split(' ')
-        .map(|w| match w.split_once('=') {
-            Some((k, _))
-                if k.bytes().next().is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
-                    && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') =>
-            {
-                format!("{k}=***")
+/// What a masked value is shown as.
+const MASK: &str = "***";
+
+/// Flags whose next word is a credential (`--password x`).
+const SECRET_FLAGS: &[&str] = &[
+    "--password",
+    "--passwd",
+    "--pass",
+    "--token",
+    "--auth-token",
+    "--access-token",
+    "--secret",
+    "--client-secret",
+    "--api-key",
+    "--apikey",
+    "--access-key",
+    "--secret-key",
+    "--auth",
+];
+
+/// Splits `cmd` into words and the whitespace between them (kept verbatim).
+/// A quoted run (`"a b"`, `'a b'`) or a backslash escape stays in its word.
+fn words(cmd: &str) -> Vec<(String, bool)> {
+    let mut out: Vec<(String, bool)> = Vec::new();
+    let mut quote: Option<char> = None;
+    let mut chars = cmd.chars();
+    while let Some(c) = chars.next() {
+        let space = quote.is_none() && c.is_whitespace();
+        match out.last_mut() {
+            Some((w, s)) if *s == space => w.push(c),
+            _ => out.push((c.to_string(), space)),
+        }
+        if space {
+            continue;
+        }
+        match (c, quote) {
+            ('\\', _) => {
+                if let (Some(n), Some((w, _))) = (chars.next(), out.last_mut()) {
+                    w.push(n);
+                }
             }
-            _ => w.to_owned(),
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+            ('"' | '\'', None) => quote = Some(c),
+            (q, Some(open)) if q == open => quote = None,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Whether `k` (before `=`) looks like a variable or a `--flag`.
+fn is_key(k: &str) -> bool {
+    let k = k.trim_start_matches('-');
+    k.bytes().next().is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// `ENV TOKEN=abc` → `ENV TOKEN=***`; build arguments (`|1 NPM_TOKEN=abc
+/// /bin/sh -c …`) the same, quoted values (`KEY="a b"`) whole. Words are
+/// split on any whitespace. The word after a secret flag (`--password x`)
+/// and an `Authorization:` header value (`Bearer x`) are masked too. Any
+/// `KEY=value` word is masked: a harmless one costs a little readability, a
+/// missed secret costs more.
+fn mask_assignments(cmd: &str) -> String {
+    let mut out = String::with_capacity(cmd.len());
+    let mut mask_next = false;
+    for (w, space) in words(cmd) {
+        if space {
+            out.push_str(&w);
+            continue;
+        }
+        let bare = w.trim_matches(['"', '\'']).to_ascii_lowercase();
+        if mask_next {
+            // `Authorization: Bearer x`: keep the scheme, mask what follows.
+            if matches!(bare.as_str(), "bearer" | "basic" | "token") {
+                out.push_str(&w);
+            } else {
+                out.push_str(MASK);
+                mask_next = false;
+            }
+            continue;
+        }
+        if SECRET_FLAGS.contains(&bare.as_str()) || bare == "bearer" {
+            out.push_str(&w);
+            mask_next = true;
+        } else if let Some(i) = w.to_ascii_lowercase().find("authorization:") {
+            let head = &w[..i + "authorization:".len()];
+            let rest = w[head.len()..].trim_matches(['"', '\'']);
+            if rest.is_empty() {
+                out.push_str(&w);
+                mask_next = true;
+            } else {
+                out.push_str(head);
+                out.push(' ');
+                out.push_str(MASK);
+                if let Some(q) = w.chars().last().filter(|c| *c == '"' || *c == '\'') {
+                    out.push(q);
+                }
+            }
+        } else if let Some((k, _)) = w.split_once('=')
+            && is_key(k.trim_start_matches(['"', '\'']))
+        {
+            out.push_str(k);
+            out.push('=');
+            out.push_str(MASK);
+        } else {
+            out.push_str(&w);
+        }
+    }
+    out
 }
 
 /// The request for the audit log: never credentials.
@@ -220,6 +313,42 @@ mod tests {
         assert_eq!(mask_assignments("ENV TOKEN=abc PATH=/bin"), "ENV TOKEN=*** PATH=***");
         assert_eq!(mask_assignments("|1 NPM_TOKEN=s3cret /bin/sh -c npm ci"), "|1 NPM_TOKEN=*** /bin/sh -c npm ci");
         assert_eq!(mask_assignments("RUN make --flag"), "RUN make --flag");
+        assert_eq!(mask_assignments("ENV KEY=v"), "ENV KEY=***");
+    }
+
+    #[test]
+    fn quoted_values_are_masked_whole() {
+        assert_eq!(mask_assignments(r#"ENV KEY="a b c" OTHER=x"#), "ENV KEY=*** OTHER=***");
+        assert_eq!(mask_assignments("ENV KEY='s3 cr3t'"), "ENV KEY=***");
+        assert_eq!(mask_assignments(r#"ENV KEY="a \" b""#), "ENV KEY=***");
+    }
+
+    #[test]
+    fn any_whitespace_separates_words() {
+        assert_eq!(
+            mask_assignments(
+                "ENV	TOKEN=abc
+PASS=x"
+            ),
+            "ENV	TOKEN=***
+PASS=***"
+        );
+    }
+
+    #[test]
+    fn secret_flags_and_auth_headers_are_masked() {
+        assert_eq!(mask_assignments("RUN login --password hunter2 --user bob"), "RUN login --password *** --user bob");
+        assert_eq!(mask_assignments("RUN tool --token abc"), "RUN tool --token ***");
+        assert_eq!(mask_assignments("RUN tool --api-key=abc"), "RUN tool --api-key=***");
+        assert_eq!(
+            mask_assignments("RUN curl -H Authorization: Bearer abc https://x"),
+            "RUN curl -H Authorization: Bearer *** https://x"
+        );
+        assert_eq!(
+            mask_assignments(r#"RUN curl -H "Authorization: Bearer abc" https://x"#),
+            r#"RUN curl -H "Authorization: ***" https://x"#
+        );
+        assert_eq!(mask_assignments("RUN echo bearer tok"), "RUN echo bearer ***");
         let mut history = serde_json::json!([{"created_by": "ENV KEY=v"}]);
         hide_env_values(&mut history);
         assert_eq!(history[0]["created_by"], "ENV KEY=***");

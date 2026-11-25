@@ -22,11 +22,14 @@ calling a secret URL. It works for Default and Docker Swarm clusters.
    **Create webhook**.
 2. Choose a **Signature**:
    - **GitHub**: GitHub signs each delivery (`X-Hub-Signature-256`).
-   - **GitLab**: GitLab sends the secret in `X-Gitlab-Token`.
+   - **GitLab**: GitLab sends the secret in `X-Gitlab-Token` and a unique
+     `X-Gitlab-Event-UUID`; both are required.
    - **Forge**: sign with an HMAC and a timestamp (best for any CI).
    - **None**: the URL alone. Use it only on a trusted network.
 3. Optionally set a **Tag pattern** such as `v*`. A delivery can then deploy
-   a matching image tag. Without a pattern, the tag cannot be changed.
+   a matching image tag, sent as `{"tag": "…"}` in the JSON body. Without a
+   pattern, the tag cannot be changed. A signed webhook refuses `?tag=` in
+   the URL, because the signature does not cover the query.
 4. Select **Create**. Copy the **URL** and the **Secret** now: they are shown
    only once.
 
@@ -57,10 +60,10 @@ at once.
 ```yaml
 deploy:
   script:
-    - 'curl -fsS -X POST "$FORGE_WEBHOOK_URL?tag=$CI_COMMIT_TAG" -H "X-Gitlab-Token: $FORGE_WEBHOOK_SECRET"'
+    - 'curl -fsS -X POST "$FORGE_WEBHOOK_URL" -H "X-Gitlab-Token: $FORGE_WEBHOOK_SECRET" -H "X-Gitlab-Event-UUID: $(cat /proc/sys/kernel/random/uuid)" -H "Content-Type: application/json" -d "{\"tag\":\"$CI_COMMIT_TAG\"}"'
 ```
 
-**curl** (no signature):
+**curl** (no signature; only an unsigned webhook takes `?tag=`):
 
 ```sh
 curl -fsS -X POST "https://<forge-host>/hooks/<token>?tag=v1.4.0"
@@ -73,6 +76,21 @@ poll it until `status` is `succeeded` or `failed`:
 curl -fsS "https://<forge-host>/hooks/<token>/jobs/<job-id>"
 ```
 
+## Replays
+
+Forge accepts each signed delivery once. It keeps a marker per delivery in
+its database for 30 days, so a restart does not forget it:
+
+- **GitHub**: the body signature. `X-GitHub-Delivery` is not signed, so it is
+  not used; GitHub's **Redeliver** of the same payload is refused as a replay.
+- **Forge**: the signature, which covers the timestamp. A delivery older than
+  5 minutes is refused as stale anyway.
+- **GitLab**: `X-Gitlab-Event-UUID`. GitLab signs nothing, so anyone who sees
+  one delivery's token can send new ones; prefer **Forge** or **GitHub**.
+
+A GitHub signature has no timestamp: a captured delivery becomes acceptable
+again after 30 days. Rotate the secret if one may have leaked.
+
 ## Verify
 
 - The webhook's **Deliveries** list shows the call as **accepted** with its
@@ -84,9 +102,12 @@ curl -fsS "https://<forge-host>/hooks/<token>/jobs/<job-id>"
 
 | Answer | Cause | Fix |
 | --- | --- | --- |
+| `400` | A GitLab delivery without `X-Gitlab-Event-UUID` | Send a unique id with each call |
+| `409` | The same signed delivery was already received | Send a new delivery (a new body or timestamp) |
 | `401` | Signature missing or wrong, or the timestamp is more than 5 minutes off | Sign the exact body; sync the CI clock |
 | `404` | Wrong or rotated URL | Use the current URL |
-| `422` | A tag was sent but the webhook has no pattern, or the tag does not match | Set a tag pattern, or send a matching tag |
+| `422` | A tag was sent but the webhook has no pattern, the tag does not match, or a signed webhook got `?tag=` | Set a tag pattern, send a matching tag, and put it in the JSON body |
+| `503` | Forge could not record the replay marker | Try again; check the server log and database |
 | `403` | The webhook is disabled, or its creator can no longer deploy | Enable it, or recreate it as someone who can |
 | `429` | Too many calls | Slow down; at most 10 per minute per webhook |
 
