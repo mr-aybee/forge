@@ -182,6 +182,8 @@ interface Ctx {
 }
 
 const kindTone: Record<RuleKind, string> = { proxy: "bg-accent-soft text-accent", balancer: "bg-ok-soft text-ok", redirect: "bg-warn-soft text-warn", static: "bg-panel-2 text-muted" };
+/** Whether a redirect source (`host` or a URL) names domain `d`. */
+const sameHost = (from: string | undefined, d: string) => !!from && !!d && from.replace(/^https?:\/\//, "").split("/")[0]?.toLowerCase() === d.toLowerCase();
 const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 const appRole = (r: string | undefined): Role => (r === "standby" ? "standby" : "replica");
 const isLoopback = (h: string) => h === "localhost" || h === "::1" || h.startsWith("127.");
@@ -356,6 +358,7 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
   const edges = arr<RouteEndpoint["edges"][number]>(ep.edges);
   const domains = arr<string>(ep.domains).length ? arr<string>(ep.domains) : arr<string>(site?.config.spec.domains);
   const redirects = arr<RedirectRule>(site?.config.spec.redirects);
+  const redirectOf = (d: string) => redirects.find((r) => sameHost(r.from, d));
   const rules = rulesOf({ ...ctx, edges: edges.map((e) => e.server_id) }, ep, site);
   const nodeOf = (id: string | null) => (id ? nodes.get(id) : undefined);
   const edgeOffline = (id: string) => {
@@ -397,7 +400,11 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
   };
 
   const wires: Wire[] = [];
-  for (const e of edges) wires.push({ from: "domain", to: `edge:${e.server_id}`, tone: edgeTone(e) });
+  (domains.length ? domains : [""]).forEach((d, i) => {
+    const ri = redirects.findIndex((r) => sameHost(r.from, d));
+    if (ri >= 0) wires.push({ from: `dom:${i}`, to: `redir:${ri}`, tone: "warn" });
+    else for (const e of edges) wires.push({ from: `dom:${i}`, to: `edge:${e.server_id}`, tone: edgeTone(e) });
+  });
   for (const r of rules) {
     for (const e of edges) wires.push({ from: `edge:${e.server_id}`, to: `rule:${r.key}` });
     for (const t of r.targets) {
@@ -475,25 +482,17 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
       {/* Domain */}
       <div className="min-w-0">
         <Label>Domain</Label>
-        <div className="flex min-w-0 max-w-full items-center gap-0.5">
-          <Pill id="domain" reg={reg} icon={tlsOn ? <Lock className="size-3 text-ok" /> : <Globe className="size-3" />} title={domains.join(", ")}>
-            {domains[0] ?? ep.name ?? "—"}
-          </Pill>
-          {domains[0] && <DomainLinks domain={domains[0]} tls={tlsOn} />}
+        <div className="flex min-w-0 flex-col items-start gap-1">
+          {(domains.length ? domains : [ep.name ?? "—"]).map((d, i) => (
+            // The wire starts at the right edge of the whole group (pill + icons), so it never crosses them.
+            <div key={d} ref={reg(`dom:${i}`)} className="flex min-w-0 max-w-full items-center gap-0.5">
+              <Pill id={`dp:${i}`} reg={reg} icon={tlsOn ? <Lock className="size-3 text-ok" /> : <Globe className="size-3" />} title={redirectOf(d) ? `${d}: redirects to ${redirectOf(d)?.to}` : d}>
+                {d}
+              </Pill>
+              {domains.length > 0 && <DomainLinks domain={d} tls={tlsOn} />}
+            </div>
+          ))}
         </div>
-        {domains.slice(1).map((d) => (
-          <div key={d} className="flex min-w-0 items-center gap-0.5 pl-1">
-            <span className="min-w-0 truncate font-mono text-[10.5px] text-muted" title={d}>
-              + {d}
-            </span>
-            <DomainLinks domain={d} tls={tlsOn} />
-          </div>
-        ))}
-        {redirects.map((r, i) => (
-          <div key={i} className="truncate pl-1 font-mono text-[10.5px] text-faint" title={`${r.from} → ${r.to} (${r.code})${r.keep_path ? ", keeps the path" : ""}`}>
-            {r.from} → {r.to} <span className="text-warn">{r.code}</span>
-          </div>
-        ))}
         <div className="mt-1 flex flex-wrap items-center gap-1">
           {placement && (
             <span className="min-w-0 truncate rounded bg-panel-2 px-1.5 py-0.5 text-[10.5px] text-muted" title={placement.title}>
@@ -517,6 +516,11 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
           </Pill>
         ))}
         {!edges.length && <span className="text-xs text-warn">No edge nodes</span>}
+        {redirects.map((r, i) => (
+          <Pill key={i} id={`redir:${i}`} reg={reg} icon={<CornerDownRight className="size-3" />} sub={String(r.code)} title={`${r.from} → ${r.to} (${r.code})${r.keep_path ? ", keeps the path" : ""}`}>
+            → {(r.to ?? "—").replace(/^https?:\/\//, "")}
+          </Pill>
+        ))}
       </div>
 
       {/* Path rules */}
