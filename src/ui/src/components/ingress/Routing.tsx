@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { ArrowUpRight, Globe, Layers, Lock, Network, Server } from "lucide-react";
+import { ArrowUpRight, CornerDownRight, Folder, Globe, Layers, Lock, Network, Server } from "lucide-react";
 import { type ReactNode, useCallback, useLayoutEffect, useRef, useState } from "react";
 
 import { get } from "../../api/client";
-import { useServices, useServers } from "../../api/hooks";
-import type { Service, Server as Node } from "../../api/types";
+import { useClusters, useServices, useServers } from "../../api/hooks";
+import { type RedirectRule, type RedirectTo, type RouteRule, type RuleKind, type Site, type StaticRoot, type Target, ruleKindLabel, useSites } from "../../api/ingress";
+import { nodeName, type Service, type ServiceInstance, type Server as Node } from "../../api/types";
 import { type LiveState, liveState } from "../InstanceState";
 import { Badge, Empty, ErrorNote, Skeleton } from "../ui";
 import { bytesRate as rate } from "../Traffic";
@@ -126,16 +127,154 @@ interface Wire {
   title?: string;
 }
 
+/** A node a target runs on (an upstream hop). */
+interface ViewHop {
+  key: string;
+  serverId: string | null;
+  name: string;
+  /** `ip:port`, when the server resolved it (top-level targets only). */
+  address?: string;
+  resolved: string[];
+  standby: boolean;
+  role?: Role;
+  state?: LiveState;
+  weight?: number;
+}
+/** One target of a path rule, resolved for display. */
+interface ViewTarget {
+  key: string;
+  kind: "app" | "node" | "external" | "redirect" | "static";
+  label: string;
+  sub?: string;
+  to?: { kind: "app" | "node"; id: string };
+  internal?: string | null;
+  standby: boolean;
+  hops: ViewHop[];
+  title?: string;
+}
+interface ViewRule {
+  key: string;
+  path: string;
+  match: string;
+  kind: RuleKind;
+  targets: ViewTarget[];
+}
+
+const kindTone: Record<RuleKind, "accent" | "muted" | "warn" | "ok"> = { proxy: "accent", balancer: "ok", redirect: "warn", static: "muted" };
+const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+const appRole = (r: string | undefined): Role => (r === "standby" ? "standby" : "replica");
+
+/** Rule targets the routing API doesn't expand: resolve from the node and app lists. */
+function resolveTarget(t: Target | undefined, standby: boolean, key: string, nodes: Map<string, Node>, apps: Map<string, Service>): ViewTarget | null {
+  if (!t || typeof t !== "object") return null;
+  if (t.kind === "app") {
+    const a = apps.get(t.service_id);
+    const hops = arr<ServiceInstance>(a?.instances).map((i, j) => {
+      const n = nodes.get(i.server_id);
+      return {
+        key: `${key}:${j}`,
+        serverId: i.server_id,
+        name: n ? nodeName(n) : i.server_id.slice(0, 8),
+        resolved: [],
+        standby: standby || i.role === "standby",
+        role: appRole(i.role),
+        state: liveState({ status: "deployed", state: i.state ?? null, last_error: null }, n),
+      } satisfies ViewHop;
+    });
+    return { key, kind: "app", label: a?.name ?? t.service_id.slice(0, 8), sub: `:${t.port}`, to: { kind: "app", id: t.service_id }, standby, hops };
+  }
+  if (t.kind === "node") {
+    const n = nodes.get(t.server_id);
+    return { key, kind: "node", label: n ? nodeName(n) : t.server_id.slice(0, 8), sub: `:${t.port}`, to: { kind: "node", id: t.server_id }, standby, hops: [] };
+  }
+  if (t.kind === "external") return { key, kind: "external", label: t.address ?? "—", sub: "external", standby, hops: [], title: t.address };
+  return null;
+}
+
+/** Top-level targets from the routing API (with upstream addresses, state and traffic keys). */
+function fromRouting(t: RouteTarget, key: string, nodes: Map<string, Node>, apps: Map<string, Service>, weights: Record<string, number>): ViewTarget {
+  const tt = t.target;
+  const kind = tt?.kind ?? "external";
+  const hops: ViewHop[] =
+    kind === "external"
+      ? []
+      : arr<RouteTarget["upstreams"][number]>(t.upstreams).map((u, j) => ({
+          key: `${key}:${j}`,
+          serverId: u.server_id,
+          name: u.node ?? u.address,
+          address: u.address,
+          resolved: arr<string>(u.resolved),
+          standby: !!u.standby,
+          role: roleOf(t, u, apps),
+          state: hopState(t, u, u.server_id ? nodes.get(u.server_id) : undefined),
+          weight: weights[u.address],
+        }));
+  return {
+    key,
+    kind,
+    label: kind === "external" ? (tt?.kind === "external" ? tt.address : t.label) : t.label,
+    sub: tt?.kind === "external" ? "external" : tt && "port" in tt ? `:${tt.port}` : undefined,
+    to: tt?.kind === "app" ? { kind: "app", id: tt.service_id } : tt?.kind === "node" ? { kind: "node", id: tt.server_id } : undefined,
+    internal: t.internal_name,
+    standby: !!t.standby,
+    hops,
+    title: t.internal_name ?? undefined,
+  };
+}
+
+/** Redirect / static rules end in a pseudo-target that says where requests go. */
+function terminal(kind: RuleKind, key: string, redirect?: RedirectTo, root?: StaticRoot): ViewTarget[] {
+  if (kind === "redirect")
+    return [{ key, kind: "redirect", label: redirect?.to || "—", sub: redirect?.code ? String(redirect.code) : undefined, standby: false, hops: [], title: redirect ? `${redirect.code} → ${redirect.to}${redirect.keep_path ? " (keeps the path)" : ""}` : "No destination" }];
+  if (kind === "static")
+    return [{ key, kind: "static", label: root?.root || "—", sub: root?.spa ? "SPA" : undefined, standby: false, hops: [], title: root ? `Files from ${root.root}${root.index ? ` · index ${root.index}` : ""}` : "No root directory" }];
+  return [];
+}
+
+/** The endpoint's path rules: the default `/` rule plus `spec.rules`. Old rows (no site spec) get one `/` proxy rule. */
+function rulesOf(ep: RouteEndpoint, site: Site | undefined, nodes: Map<string, Node>, apps: Map<string, Service>): ViewRule[] {
+  const spec = site?.config.spec;
+  const weights = (spec as { weights?: Record<string, number> } | undefined)?.weights ?? {};
+  const kind: RuleKind = spec?.kind ?? (arr<RouteTarget>(ep.targets).some((t) => t?.standby) ? "balancer" : "proxy");
+  const base: ViewRule = {
+    key: "r0",
+    path: "/",
+    match: "prefix",
+    kind,
+    targets:
+      kind === "redirect" || kind === "static"
+        ? terminal(kind, "r0:0", spec?.redirect, spec?.static_root)
+        : arr<RouteTarget>(ep.targets).map((t, i) => fromRouting(t, `r0:${i}`, nodes, apps, weights)),
+  };
+  const extra = arr<RouteRule>(spec?.rules).map((r, k): ViewRule => {
+    const key = `r${k + 1}`;
+    const rk: RuleKind = r?.kind ?? "proxy";
+    const targets =
+      rk === "redirect" || rk === "static"
+        ? terminal(rk, `${key}:0`, r.redirect, r.static_root)
+        : [...arr<Target>(r?.targets).map((t, i) => resolveTarget(t, false, `${key}:${i}`, nodes, apps)), ...arr<Target>(r?.standby_targets).map((t, i) => resolveTarget(t, true, `${key}:s${i}`, nodes, apps))].filter((x): x is ViewTarget => !!x);
+    return { key, path: r?.path || "/", match: r?.match_kind ?? "prefix", kind: rk, targets };
+  });
+  return [base, ...extra];
+}
+
+const targetIcon = (k: ViewTarget["kind"]) =>
+  k === "app" ? <Layers className="size-3" /> : k === "node" ? <Server className="size-3" /> : k === "redirect" ? <CornerDownRight className="size-3" /> : k === "static" ? <Folder className="size-3" /> : <Globe className="size-3" />;
+
 /** One endpoint: a slim row, with thin connectors drawn between the pills. */
-function Row({ ep, live, nodes, apps }: { ep: RouteEndpoint; live?: LiveResponse; nodes: Map<string, Node>; apps: Map<string, Service> }) {
+function Row({ ep, site, live, nodes, apps, clusterName }: { ep: RouteEndpoint; site?: Site; live?: LiveResponse; nodes: Map<string, Node>; apps: Map<string, Service>; clusterName: (id: string) => string }) {
   const wrap = useRef<HTMLDivElement>(null);
   const els = useRef(new Map<string, HTMLElement>());
-  const [paths, setPaths] = useState<{ d: string; dashed?: boolean; tone?: Tone; label?: string; title?: string; lx: number; ly: number }[]>([]);
+  const [paths, setPaths] = useState<{ d: string; dashed?: boolean; tone?: Tone }[]>([]);
   const reg = useCallback<Reg>((id) => (el) => {
     if (el) els.current.set(id, el);
     else els.current.delete(id);
   }, []);
 
+  const edges = arr<RouteEndpoint["edges"][number]>(ep.edges);
+  const domains = arr<string>(ep.domains).length ? arr<string>(ep.domains) : arr<string>(site?.config.spec.domains);
+  const redirects = arr<RedirectRule>(site?.config.spec.redirects);
+  const rules = rulesOf(ep, site, nodes, apps);
   const nodeOf = (id: string | null) => (id ? nodes.get(id) : undefined);
   const edgeOffline = (id: string) => {
     const st = nodeOf(id)?.status;
@@ -143,61 +282,48 @@ function Row({ ep, live, nodes, apps }: { ep: RouteEndpoint; live?: LiveResponse
   };
   const edgeTone = (e: RouteEndpoint["edges"][number]): Tone => {
     if (edgeOffline(e.server_id)) return "bad";
-    const st = live?.edges[e.server_id]?.state;
+    const st = live?.edges?.[e.server_id]?.state;
     if (st) return st.nginx === "running" ? "ok" : "bad";
     return e.status === "applied" ? "ok" : e.status === "failed" ? "bad" : "idle";
   };
 
   // Last minute of traffic for this endpoint, per edge (keyed by its first domain).
-  const domain = ep.domains[0] ?? "";
-  const siteOn = (edge: string): SiteTraffic | undefined => live?.edges[edge]?.state?.traffic?.[domain];
-  const wires: Wire[] = [];
-  for (const e of ep.edges) {
-    const t = siteOn(e.server_id);
-    wires.push({
-      from: "domain",
-      to: `edge:${e.server_id}`,
-      tone: edgeTone(e),
-      label: t ? rate(t.in_bps + t.out_bps) : undefined,
-      title: t ? `${e.name ?? "edge"}: ${t.rps.toFixed(2)} req/s · in ${rate(t.in_bps)} · out ${rate(t.out_bps)} (last minute)` : undefined,
-    });
-  }
-  ep.targets.forEach((t, i) => {
-    for (const e of ep.edges) wires.push({ from: `edge:${e.server_id}`, to: `target:${i}`, dashed: t.standby });
-    t.upstreams.forEach((u, j) => {
-      // Sum what every edge sent to / received from this upstream.
-      const keys = new Set([u.address, ...(u.resolved ?? [])]);
-      let sent = 0;
-      let recv = 0;
-      let reqs = 0;
-      let seen = false;
-      for (const e of ep.edges) {
-        for (const [addr, v] of Object.entries(siteOn(e.server_id)?.upstreams ?? {})) {
-          if (keys.has(addr)) {
-            seen = true;
-            sent += v.sent_bps;
-            recv += v.received_bps;
-            reqs += v.requests;
-          }
-        }
-      }
-      const anyTraffic = ep.edges.some((e) => siteOn(e.server_id));
-      wires.push({
-        from: `target:${i}`,
-        to: `up:${i}:${j}`,
-        dashed: u.standby,
-        tone: hopTone(hopState(t, u, nodeOf(u.server_id))),
-        label: seen ? rate(sent + recv) : anyTraffic ? "idle" : undefined,
-        title: seen ? `${u.node ?? u.address}: ${reqs} requests · to app ${rate(sent)} · from app ${rate(recv)} (last minute)` : undefined,
-      });
-    });
-  });
-  const key = JSON.stringify(wires.map(({ label: _l, title: _t, ...w }) => w));
-  // The figure belongs to the box a line ends at (edge or node), not the line.
-  const rateOf = (id: string) => {
-    const w = wires.find((x) => x.to === id && x.label);
-    return w?.label ? { text: w.label, title: w.title } : undefined;
+  const domain = domains[0] ?? "";
+  const siteOn = (edge: string): SiteTraffic | undefined => live?.edges?.[edge]?.state?.traffic?.[domain];
+  const anyTraffic = edges.some((e) => siteOn(e.server_id));
+  const edgeRate = (id: string) => {
+    const t = siteOn(id);
+    return t ? { text: rate(t.in_bps + t.out_bps), title: `${t.rps.toFixed(2)} req/s · in ${rate(t.in_bps)} · out ${rate(t.out_bps)} (last minute)` } : undefined;
   };
+  const hopRate = (h: ViewHop) => {
+    if (!h.address) return undefined;
+    const keys = new Set([h.address, ...h.resolved]);
+    let sent = 0;
+    let recv = 0;
+    let reqs = 0;
+    let seen = false;
+    for (const e of edges)
+      for (const [addr, v] of Object.entries(siteOn(e.server_id)?.upstreams ?? {}))
+        if (keys.has(addr)) {
+          seen = true;
+          sent += v.sent_bps;
+          recv += v.received_bps;
+          reqs += v.requests;
+        }
+    if (seen) return { text: rate(sent + recv), title: `${h.name}: ${reqs} requests · to app ${rate(sent)} · from app ${rate(recv)} (last minute)` };
+    return anyTraffic ? { text: "idle" } : undefined;
+  };
+
+  const wires: Wire[] = [];
+  for (const e of edges) wires.push({ from: "domain", to: `edge:${e.server_id}`, tone: edgeTone(e) });
+  for (const r of rules) {
+    for (const e of edges) wires.push({ from: `edge:${e.server_id}`, to: `rule:${r.key}` });
+    for (const t of r.targets) {
+      const down = t.hops.length > 0 && t.hops.every((h) => isDown(h.state));
+      wires.push({ from: `rule:${r.key}`, to: `t:${t.key}`, dashed: t.standby, tone: down ? "bad" : undefined });
+    }
+  }
+  const key = JSON.stringify(wires);
 
   useLayoutEffect(() => {
     const box = wrap.current;
@@ -216,7 +342,7 @@ function Row({ ep, live, nodes, apps }: { ep: RouteEndpoint; live?: LiveResponse
         const x2 = b.left - base.left - 4;
         const y2 = b.top + b.height / 2 - base.top;
         const c = Math.max(12, (x2 - x1) / 2);
-        next.push({ d: `M ${x1} ${y1} C ${x1 + c} ${y1}, ${x2 - c} ${y2}, ${x2} ${y2}`, dashed: w.dashed, tone: w.tone, label: w.label, title: w.title, lx: (x1 + x2) / 2, ly: (y1 + y2) / 2 });
+        next.push({ d: `M ${x1} ${y1} C ${x1 + c} ${y1}, ${x2 - c} ${y2}, ${x2} ${y2}`, dashed: w.dashed, tone: w.tone });
       }
       setPaths(next);
     };
@@ -227,13 +353,21 @@ function Row({ ep, live, nodes, apps }: { ep: RouteEndpoint; live?: LiveResponse
   }, [key]);
 
   // Endpoint health from its upstreams: degraded when some are down, down when none is up.
-  const hops = ep.targets.flatMap((t) => t.upstreams.map((u) => hopState(t, u, nodeOf(u.server_id))));
+  const hops = rules.flatMap((r) => r.targets.flatMap((t) => t.hops.map((h) => h.state)));
   const downN = hops.filter(isDown).length;
   const health: "down" | "degraded" | undefined = hops.length && downN === hops.length ? "down" : downN > 0 ? "degraded" : undefined;
   const tlsOn = !!ep.tls && ep.tls !== "off";
+  const p = site?.config.placement;
+  const placement = p
+    ? p.kind === "cluster"
+      ? { text: `${clusterName(p.cluster_id)} edge group`, title: `Cluster placement: served by every edge of ${clusterName(p.cluster_id)}'s ingress profile` }
+      : { text: arr<string>(p.server_ids).map((id) => { const n = nodes.get(id); return n ? nodeName(n) : id.slice(0, 8); }).join(", ") || "—", title: "Placed on these nodes" }
+    : ep.source === "edges"
+      ? { text: "nodes", title: "Placed on single nodes in this cluster" }
+      : undefined;
   const mid = `m-${ep.id}`;
   return (
-    <div ref={wrap} className="relative grid gap-2 border-b border-line px-3 py-2.5 last:border-b-0 hover:bg-panel-2/30 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.1fr)_minmax(0,1.3fr)] md:items-center md:gap-x-10">
+    <div ref={wrap} className="relative grid gap-2 border-b border-line px-3 py-2.5 last:border-b-0 hover:bg-panel-2/30 md:grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,1.6fr)] md:items-center md:gap-x-10">
       <svg className="pointer-events-none absolute inset-0 z-0 h-full w-full overflow-visible" aria-hidden>
         <defs>
           {(["ok", "warn", "bad"] as const).map((t) => (
@@ -242,16 +376,16 @@ function Row({ ep, live, nodes, apps }: { ep: RouteEndpoint; live?: LiveResponse
             </marker>
           ))}
         </defs>
-        {paths.map((p, i) => (
+        {paths.map((pa, i) => (
           <path
             key={i}
-            d={p.d}
+            d={pa.d}
             fill="none"
-            stroke={stroke(p.tone)}
-            strokeOpacity={p.dashed ? 0.45 : 0.7}
+            stroke={stroke(pa.tone)}
+            strokeOpacity={pa.dashed ? 0.45 : 0.7}
             strokeWidth={1.25}
-            strokeDasharray={p.dashed ? "4 3" : undefined}
-            markerEnd={`url(#${mid}-${p.tone === "bad" || p.tone === "warn" ? p.tone : "ok"})`}
+            strokeDasharray={pa.dashed ? "4 3" : undefined}
+            markerEnd={`url(#${mid}-${pa.tone === "bad" || pa.tone === "warn" ? pa.tone : "ok"})`}
           />
         ))}
       </svg>
@@ -259,89 +393,90 @@ function Row({ ep, live, nodes, apps }: { ep: RouteEndpoint; live?: LiveResponse
       {/* Domain */}
       <div className="min-w-0">
         <Label>Domain</Label>
-        <Pill id="domain" reg={reg} icon={tlsOn ? <Lock className="size-3 text-ok" /> : <Globe className="size-3" />} sub={ep.domains.length > 1 ? `+${ep.domains.length - 1}` : undefined} title={ep.domains.join(", ")}>
-          {ep.domains[0]}
+        <Pill id="domain" reg={reg} icon={tlsOn ? <Lock className="size-3 text-ok" /> : <Globe className="size-3" />} title={domains.join(", ")}>
+          {domains[0] ?? ep.name ?? "—"}
         </Pill>
-        {ep.source === "edges" && (
-          <div className="mt-1" title="Explicit edge nodes, not linked to this cluster's ingress profile. Link it from the Endpoints tab.">
-            <Badge tone="warn">explicit edges</Badge>
+        {domains.slice(1).map((d) => (
+          <div key={d} className="truncate pl-1 font-mono text-[10.5px] text-muted" title={d}>
+            + {d}
           </div>
-        )}
-        {health && (
-          <div className="mt-1" title={health === "down" ? "No upstream is reachable: every node is offline or the service isn't running" : `${downN} of ${hops.length} upstreams are offline or not running`}>
-            <Badge tone={health === "down" ? "bad" : "warn"}>{health === "down" ? "down" : `degraded · ${hops.length - downN}/${hops.length} up`}</Badge>
+        ))}
+        {redirects.map((r, i) => (
+          <div key={i} className="truncate pl-1 font-mono text-[10.5px] text-faint" title={`${r.from} → ${r.to} (${r.code})${r.keep_path ? ", keeps the path" : ""}`}>
+            {r.from} → {r.to} <span className="text-warn">{r.code}</span>
           </div>
-        )}
+        ))}
+        <div className="mt-1 flex flex-wrap items-center gap-1">
+          {placement && (
+            <span className="min-w-0 truncate rounded bg-panel-2 px-1.5 py-0.5 text-[10.5px] text-muted" title={placement.title}>
+              {placement.text}
+            </span>
+          )}
+          {health && (
+            <span title={health === "down" ? "No upstream is reachable: every node is offline or the service isn't running" : `${downN} of ${hops.length} upstreams are offline or not running`}>
+              <Badge tone={health === "down" ? "bad" : "warn"}>{health === "down" ? "down" : `degraded · ${hops.length - downN}/${hops.length} up`}</Badge>
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Edges */}
       <div className="flex min-w-0 flex-col items-start gap-1">
         <Label>Edge</Label>
-        {ep.edges.map((e) => (
-          <Pill key={e.server_id} id={`edge:${e.server_id}`} reg={reg} tone={edgeTone(e)} down={edgeOffline(e.server_id) ? "node offline" : undefined} icon={<Server className="size-3" />} to={{ kind: "node", id: e.server_id }} rate={rateOf(`edge:${e.server_id}`)}>
+        {edges.map((e) => (
+          <Pill key={e.server_id} id={`edge:${e.server_id}`} reg={reg} tone={edgeTone(e)} down={edgeOffline(e.server_id) ? "node offline" : undefined} icon={<Server className="size-3" />} to={{ kind: "node", id: e.server_id }} rate={edgeRate(e.server_id)}>
             {e.name ?? e.server_id.slice(0, 8)}
           </Pill>
         ))}
-        {!ep.edges.length && <span className="text-xs text-warn">No edge nodes</span>}
+        {!edges.length && <span className="text-xs text-warn">No edge nodes</span>}
       </div>
 
-      {/* Targets */}
+      {/* Path rules */}
       <div className="flex min-w-0 flex-col items-start gap-1">
-        <Label>Target</Label>
-        {ep.targets.map((t, i) => {
-          const tt = t.target;
-          return (
-            <div key={i} className="min-w-0 max-w-full">
-              <Pill
-                id={`target:${i}`}
-                reg={reg}
-                standby={t.standby}
-                icon={tt.kind === "app" ? <Layers className="size-3" /> : tt.kind === "node" ? <Server className="size-3" /> : <Globe className="size-3" />}
-                to={tt.kind === "app" ? { kind: "app", id: tt.service_id } : tt.kind === "node" ? { kind: "node", id: tt.server_id } : undefined}
-                sub={tt.kind === "app" ? `:${tt.port}` : undefined}
-                title={t.internal_name ?? undefined}
-              >
-                {t.label}
-              </Pill>
-              {t.internal_name && <div className="truncate pl-1 font-mono text-[10px] text-faint">{t.internal_name}</div>}
-            </div>
-          );
-        })}
-        {!ep.targets.length && <span className="text-xs text-faint">Fixed upstreams</span>}
+        <Label>Path</Label>
+        {rules.map((r) => (
+          <Pill key={r.key} id={`rule:${r.key}`} reg={reg} title={`${r.match} match · ${ruleKindLabel(r.kind)}`} sub={r.match === "prefix" ? undefined : r.match === "exact" ? "=" : "~"}>
+            <span className="font-mono">{r.path}</span>{" "}
+            <span className={`rounded px-1 text-[10px] font-medium ${kindTone[r.kind] === "accent" ? "bg-accent-soft text-accent" : kindTone[r.kind] === "ok" ? "bg-ok-soft text-ok" : kindTone[r.kind] === "warn" ? "bg-warn-soft text-warn" : "bg-panel-2 text-muted"}`}>{r.kind}</span>
+          </Pill>
+        ))}
       </div>
 
-      {/* Upstream nodes */}
+      {/* Targets → the nodes they run on */}
       <div className="flex min-w-0 flex-col items-start gap-1">
-        <Label>Runs on</Label>
-        {ep.targets.flatMap((t, i) =>
-          t.upstreams.length
-            ? t.upstreams.map((u, j) => {
-                const hs = hopState(t, u, nodeOf(u.server_id));
-                return (
-                <Pill
-                  key={`${i}:${j}`}
-                  id={`up:${i}:${j}`}
-                  reg={reg}
-                  tone={hopTone(hs)}
-                  down={hs && isDown(hs) ? downLabel(hs) : undefined}
-                  standby={u.standby}
-                  role={roleOf(t, u, apps)}
-                  icon={<Server className="size-3" />}
-                  to={u.server_id ? { kind: "node", id: u.server_id } : undefined}
-                  sub={u.address.includes(":") ? `:${u.address.split(":").pop()}` : undefined}
-                  title={`${u.address}${hs ? ` · ${hs.label}: ${hs.why}` : ""}`}
-                  rate={rateOf(`up:${i}:${j}`)}
-                >
-                  {u.node ?? u.address}
+        <Label>Target → runs on</Label>
+        {rules.map((r) => (
+          <div key={r.key} className="flex min-w-0 max-w-full flex-col items-start gap-1">
+            {r.targets.map((t) => (
+              <div key={t.key} className="flex min-w-0 max-w-full flex-wrap items-center gap-1">
+                <Pill id={`t:${t.key}`} reg={reg} standby={t.standby} icon={targetIcon(t.kind)} to={t.to} sub={t.sub} title={t.title}>
+                  {t.label}
                 </Pill>
-                );
-              })
-            : [
-                <span key={`none:${i}`} className="text-xs text-warn">
-                  {t.label}: not placed on any node
-                </span>,
-              ],
-        )}
+                {t.hops.map((h) => (
+                  <Pill
+                    key={h.key}
+                    id={`h:${h.key}`}
+                    reg={reg}
+                    tone={hopTone(h.state)}
+                    down={h.state && isDown(h.state) ? downLabel(h.state) : undefined}
+                    standby={h.standby}
+                    role={t.kind === "app" ? h.role : undefined}
+                    icon={<Server className="size-3" />}
+                    to={h.serverId ? { kind: "node", id: h.serverId } : undefined}
+                    sub={h.weight !== undefined && h.weight !== 100 ? `w${h.weight}` : undefined}
+                    title={`${h.address ?? h.name}${h.weight !== undefined ? ` · weight ${h.weight}` : ""}${h.state ? ` · ${h.state.label}: ${h.state.why}` : ""}`}
+                    rate={hopRate(h)}
+                  >
+                    {h.name}
+                  </Pill>
+                ))}
+                {t.kind === "app" && !t.hops.length && <span className="text-[11px] text-warn">not placed on any node</span>}
+                {t.internal && <span className="w-full truncate pl-1 font-mono text-[10px] text-faint" title={t.internal}>{t.internal}</span>}
+              </div>
+            ))}
+            {!r.targets.length && <span className="text-xs text-warn">No targets</span>}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -364,6 +499,11 @@ export function Routing({ clusterId, live }: { clusterId: string; live?: LiveRes
   // Placement roles for the replica/standby chips (one list query, shared with the cluster's Services page).
   const appList = useServices(undefined, clusterId).data;
   const apps = new Map((Array.isArray(appList) ? appList : []).map((a) => [a.id, a] as const));
+  // Path rules, redirects and placement come from the endpoint itself; older servers without it still render.
+  const siteList = useSites().data;
+  const sites = new Map((Array.isArray(siteList) ? siteList : []).map((s) => [s.id, s] as const));
+  const clusterList = useClusters().data;
+  const clusterName = (id: string) => (Array.isArray(clusterList) ? clusterList.find((c) => c?.id === id)?.name : undefined) ?? id.slice(0, 8);
   if (q.isLoading) return <Skeleton />;
   if (q.isError) return <ErrorNote error={q.error} />;
   const list = Array.isArray(q.data?.endpoints) ? q.data.endpoints : [];
@@ -375,19 +515,19 @@ export function Routing({ clusterId, live }: { clusterId: string; live?: LiveRes
         </Empty>
       ) : (
         <div className="overflow-hidden rounded-lg border border-line bg-panel">
-          <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.1fr)_minmax(0,1.3fr)] gap-x-10 border-b border-line bg-panel-2/40 px-3 py-1.5 text-[10px] font-semibold tracking-widest text-faint uppercase md:grid">
+          <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,1.6fr)] gap-x-10 border-b border-line bg-panel-2/40 px-3 py-1.5 text-[10px] font-semibold tracking-widest text-faint uppercase md:grid">
             <span>Domain</span>
             <span>Edge</span>
-            <span>Target</span>
-            <span>Runs on</span>
+            <span>Path</span>
+            <span>Target → runs on</span>
           </div>
           {list.map((ep) => (
-            <Row key={ep.id} ep={ep} live={live} nodes={nodes} apps={apps} />
+            <Row key={ep.id} ep={ep} site={sites.get(ep.id)} live={live} nodes={nodes} apps={apps} clusterName={clusterName} />
           ))}
         </div>
       )}
       <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] text-faint">
-        <span>Solid: active route · dashed: standby · replica / standby: the node's placement role · dimmed: node offline or service not running · rates are the last minute of traffic (refreshed every 10 s; hover for details) · names open the app or node</span>
+        <span>Solid: active route · dashed: standby · w: weight · replica / standby: the node's placement role · dimmed: node offline or service not running · rates are the last minute of traffic (refreshed every 10 s; hover for details) · names open the app or node</span>
         <Link to="/clusters/$clusterId" params={{ clusterId }} search={{ tab: "network" }} className="inline-flex items-center gap-1.5 text-accent hover:underline">
           <Network className="size-3.5" /> Cluster network
         </Link>
