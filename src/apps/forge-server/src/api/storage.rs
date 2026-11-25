@@ -52,6 +52,8 @@ use forge_core::storage::{
     BucketAccess, BucketGrant, MODE_EXTERNAL, MODE_MANAGED, ObjectStore, ObjectStoreRepository, StoreMember,
     TOPOLOGY_DISTRIBUTED, TOPOLOGY_STANDALONE,
 };
+use forge_core::storage_iam::StoreKeyRepository;
+use forge_core::storage_settings::StoreSettingsRepository;
 use forge_core::{
     Action, BucketGrantId, DomainError, EntityKind, EntityRef, EnvironmentId, ObjectStoreId, ServerId, ServiceId,
     VaultItemId, WorkspaceId,
@@ -85,6 +87,13 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/object-stores", get(list).post(install))
         .route("/object-stores/connect", post(connect))
+        .route("/object-stores/discover", get(super::objstore::discover))
+        .route("/object-stores/rustfs-env", get(super::objstore::rustfs_env))
+        .route("/object-stores/{id}/settings", get(super::objstore::get_settings).put(super::objstore::put_settings))
+        .route("/object-stores/{id}/iam", get(super::objstore::iam_view))
+        .route("/object-stores/{id}/iam/keys", post(super::objstore::iam_create))
+        .route("/object-stores/{id}/iam/keys/{access_key}", put(super::objstore::iam_set))
+        .route("/object-stores/{id}/iam/reconcile", post(super::objstore::iam_reconcile))
         .route("/object-stores/{id}", get(get_one))
         .route("/object-stores/{id}/owner", put(set_owner))
         .route("/object-stores/{id}/actions", post(action))
@@ -936,6 +945,13 @@ pub struct InstallRequest {
     #[serde(default)]
     #[schemars(with = "Option<String>")]
     pub environment_id: Option<EnvironmentId>,
+    /// S3 signing region (`RUSTFS_REGION`, D-170).
+    #[serde(default = "default_region")]
+    pub region: String,
+    /// Docker stores: container settings (D-170).
+    #[serde(default)]
+    #[schemars(with = "Option<serde_json::Value>")]
+    pub docker: Option<forge_core::storage_settings::RustfsSettings>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -1170,7 +1186,7 @@ pub async fn install(
         slug: req.slug.clone(),
         provider: req.provider.clone(),
         mode: MODE_MANAGED.into(),
-        region: "us-east-1".into(),
+        region: req.region.clone(),
         path_style: true,
         version: req.version.clone(),
         deployed_version: None,
@@ -1188,9 +1204,37 @@ pub async fn install(
         updated_at: now,
     };
 
-    // Validates provider, slug, release, ports, data paths and the layout.
+    if !forge_catalog::storage::valid_region(&store.region) || store.region.is_empty() {
+        return Err(ApiError::bad_request("region: lowercase letters, digits and -, up to 32"));
+    }
+
+    let settings = match (req.runtime.as_str(), req.docker.clone()) {
+        ("docker", Some(mut d)) => {
+            // Adoption is recorded by the adopt flow only.
+            d.adopted = false;
+
+            if distributed {
+                d.network = forge_core::storage_settings::NetworkMode::Host;
+            }
+
+            Some(d)
+        }
+        ("docker", None) => None,
+        (_, Some(_)) => return Err(ApiError::bad_request("container settings apply to the Docker runtime only")),
+        (_, None) => None,
+    };
+
+    // Another image, volume drivers or driver options reach beyond the store:
+    // administrator rights on every member node too.
+    if settings.as_ref().is_some_and(forge_core::storage_settings::RustfsSettings::reaches_host) {
+        for m in &members {
+            caller.authorize(Action::ServerManage, server_ref(m.server_id)).await?;
+        }
+    }
+
+    // Validates provider, slug, release, ports, data paths, settings and the layout.
     for m in &members {
-        spec(&store, m, &members).map_err(ApiError::bad_request)?;
+        spec(&store, m, &members, settings.as_ref()).map_err(ApiError::bad_request)?;
     }
 
     store.credential_id = vault_credential(
@@ -1209,6 +1253,10 @@ pub async fn install(
 
     for m in &members {
         state.store.put_store_member(m).await?;
+    }
+
+    if let Some(d) = &settings {
+        state.store.put_store_settings(id, d, now).await?;
     }
 
     // Members install in parallel; distributed members wait for each other.
@@ -1467,6 +1515,17 @@ pub async fn action(
     if req.action == "install" && members.iter().any(|m| m.data_paths == [forge_catalog::storage::LEGACY_DATA]) {
         return Err(ApiError::conflict(
             "an adopted App Store container is kept as it is and cannot be repaired by reinstalling",
+        ));
+    }
+
+    if req.action == "reconfigure" && store.runtime != "docker" {
+        return Err(ApiError::bad_request("reconfigure applies to Docker stores"));
+    }
+
+    let adopted = state.store.get_store_settings(store.id).await?.is_some_and(|s| s.adopted);
+    if adopted && (req.action == "install" || req.delete_data) {
+        return Err(ApiError::conflict(
+            "an adopted container is not reinstalled and its data is never deleted by Forge; change it under Settings",
         ));
     }
 
@@ -1913,6 +1972,15 @@ pub struct AdoptRequest {
     #[serde(default)]
     #[schemars(with = "Option<String>")]
     pub environment_id: Option<EnvironmentId>,
+    /// Any RustFS container on the node, by name (D-170); omit for the App
+    /// Store container.
+    #[serde(default)]
+    pub container: Option<String>,
+    /// Ports, when they cannot be read from the container (host network).
+    #[serde(default)]
+    pub s3_port: Option<u16>,
+    #[serde(default)]
+    pub console_port: Option<u16>,
 }
 
 /// Adopts the App Store `rustfs` container on a node as a managed store
@@ -1931,6 +1999,55 @@ pub async fn adopt(
     let server = state.store.get_server(req.server_id).await.map_err(|_| ApiError::not_found("server not found"))?;
     if server.workspace_id != ws {
         return Err(ApiError::not_found("server not found"));
+    }
+
+    if let Some(container) = req.container.clone().filter(|c| !c.is_empty()) {
+        // Adoption reads the container's root credential on the node: as
+        // much as reading its environment, so node administrators only.
+        caller.authorize(Action::ServerManage, server_ref(server.id)).await?;
+
+        if !crate::api::containers::valid_container_id(&container) {
+            return Err(ApiError::bad_request("container: a container name"));
+        }
+
+        if req.s3_port.is_some_and(|p| p < 1024) || req.console_port.is_some_and(|p| p < 1024) {
+            return Err(ApiError::bad_request("ports: 1024-65535"));
+        }
+
+        let known = crate::facts::node_address(&state, server.id).await?;
+        let host = req
+            .endpoint_host
+            .as_deref()
+            .map(str::trim)
+            .filter(|h| !h.is_empty())
+            .or(known.as_deref())
+            .unwrap_or(&server.hostname)
+            .to_owned();
+
+        // Root-signed admin calls go to this address: one of the node's own.
+        let own = [known.as_deref(), Some(server.hostname.as_str())];
+        if !own.contains(&Some(host.as_str())) {
+            return Err(ApiError::bad_request("endpoint host: the node's address or host name"));
+        }
+
+        let (store, member, job) = super::objstore::adopt_container(
+            &state,
+            &caller,
+            ws,
+            super::objstore::AdoptContainer {
+                server_id: server.id,
+                name,
+                container,
+                owner,
+                endpoint_host: host,
+                s3_port: req.s3_port,
+                console_port: req.console_port,
+            },
+        )
+        .await?;
+        let names = hostnames(&state).await?;
+
+        return Ok((StatusCode::ACCEPTED, Json(json!({ "store": view(&store, &[member], &names), "job": job }))));
     }
 
     let inst = state
@@ -2008,7 +2125,7 @@ pub async fn adopt(
         dedicated: None,
         observed_at: None,
     };
-    spec(&store, &member, std::slice::from_ref(&member)).map_err(ApiError::bad_request)?;
+    spec(&store, &member, std::slice::from_ref(&member), None).map_err(ApiError::bad_request)?;
     state.store.put_object_store(&store).await?;
     state.store.put_store_member(&member).await?;
     let job = submit(&state, &caller, &store, server.id, "adopt").await?;
@@ -2175,6 +2292,33 @@ pub async fn create_key(
     )
     .await?;
     tag_key_item(&state, item_id, &store, &req.bucket, &req.access).await?;
+
+    // Forge's record of the key (D-170); RustFS holds the key itself.
+    let grant = forge_core::storage_iam::KeyGrant {
+        bucket: req.bucket.clone(),
+        prefix: String::new(),
+        access: if write {
+            forge_core::storage::BucketAccess::ReadWrite
+        } else {
+            forge_core::storage::BucketAccess::Read
+        },
+    };
+    let now = state.clock.now();
+    state
+        .store
+        .put_store_key(&forge_core::storage_iam::StoreKey {
+            id: forge_core::StoreKeyId::new(),
+            store_id: store.id,
+            access_key: ak.clone(),
+            name: name.clone(),
+            grants: Some(vec![grant]),
+            vault_item_id: Some(item_id),
+            created_by: caller.principal().to_string(),
+            created_at: now,
+            updated_at: now,
+            synced_at: Some(now),
+        })
+        .await?;
     caller
         .audit(
             "storage.key.create",
@@ -2192,7 +2336,7 @@ pub async fn create_key(
     ))
 }
 
-async fn tag_key_item(
+pub(super) async fn tag_key_item(
     state: &AppState,
     id: VaultItemId,
     store: &ObjectStore,
@@ -2231,6 +2375,7 @@ pub async fn delete_key(
         state.store.delete_vault_item(item.id).await?;
     }
 
+    state.objstore_iam.forget(&store, &access_key).await?;
     caller
         .audit(
             "storage.key.revoke",
@@ -2261,11 +2406,27 @@ pub async fn rotate_key(
     let (bucket, access) = (tag("bucket:").unwrap_or_default(), tag("access:").unwrap_or_else(|| "readwrite".into()));
     let name = item.name.rsplit_once('(').map_or("app", |(_, n)| n.trim_end_matches(')')).to_owned();
     let c = client(&state, &store).await?;
+
+    // The key keeps its grants (D-170): the policy recorded for it, or the
+    // one bucket of keys issued before grants were recorded.
+    let recorded = state
+        .store
+        .list_store_keys(store.id)
+        .await?
+        .into_iter()
+        .find(|r| r.access_key == access_key)
+        .and_then(|r| r.grants);
+
+    let policy = match &recorded {
+        Some(g) => serde_json::to_value(forge_core::storage_iam::policy_for(g)).map_err(DomainError::internal)?,
+        None => forge_s3::bucket_policy(&bucket, access == "readwrite"),
+    };
+
     let (ak, sk) = c
         .add_service_account(
             &clean_key_name(&name).unwrap_or_else(|_| "app".into()),
             &format!("Forge app key for bucket {bucket}"),
-            &forge_s3::bucket_policy(&bucket, access == "readwrite"),
+            &policy,
         )
         .await
         .map_err(s3_error)?;
@@ -2308,6 +2469,7 @@ pub async fn rotate_key(
     item.rotated_at = state.clock.now();
     item.updated_at = item.rotated_at;
     state.store.put_vault_item(&item).await?;
+    state.objstore_iam.rotated(&store, &access_key, &ak).await?;
 
     // The rotation stands once the vault holds the new key; a failure to
     // retire the old key is reported (and audited) instead of hidden.

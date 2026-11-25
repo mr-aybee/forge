@@ -132,6 +132,11 @@ pub struct Services {
     pub docker_resources: Arc<crate::docker_resources::DockerResources>,
     /// Ingress endpoint checks: static roots and basic-auth users (D-169).
     pub endpoints: Arc<crate::endpoints::EndpointService>,
+    /// RustFS containers on nodes, settings after install, IAM (D-170).
+    pub objstore_discovery: Arc<crate::objstore::discovery::Discovery>,
+    pub objstore_settings: Arc<crate::objstore::settings::StoreSettingsService>,
+    pub objstore_iam: Arc<crate::objstore::iam::StoreIamService>,
+    pub objstore_adopt: Arc<crate::objstore::adopt::AdoptService>,
     /// Bucket grants: one person's access to one bucket of a store (D-108).
     pub bucket_grants: crate::bucket_grants::BucketGrants,
     /// Vault-backed header values for health checks, handed to nodes (D-111).
@@ -404,6 +409,23 @@ impl Services {
             rpc: node_rpc.clone(),
             servers: Arc::new(store.clone()),
         });
+        let objstore_discovery = Arc::new(crate::objstore::discovery::Discovery {
+            rpc: node_rpc.clone(),
+            stores: Arc::new(store.clone()),
+            settings: Arc::new(store.clone()),
+        });
+        let objstore_settings = Arc::new(crate::objstore::settings::StoreSettingsService {
+            stores: Arc::new(store.clone()),
+            settings: Arc::new(store.clone()),
+            clock: clock.clone(),
+        });
+        let objstore_adopt = Arc::new(crate::objstore::adopt::AdoptService {
+            stores: Arc::new(store.clone()),
+            settings: Arc::new(store.clone()),
+            clock: clock.clone(),
+        });
+        let objstore_iam =
+            Arc::new(crate::objstore::iam::StoreIamService { keys: Arc::new(store.clone()), clock: clock.clone() });
         let webhooks = Arc::new(crate::webhooks::WebhookService {
             repo: Arc::new(store.clone()),
             jobs: Arc::new(store.clone()),
@@ -522,6 +544,7 @@ impl Services {
             signer: signer.clone(),
             servers: Arc::new(store.clone()),
             stores: Arc::new(store.clone()),
+            settings: Arc::new(store.clone()),
             vault: Arc::new(store.clone()),
             installations: Arc::new(store.clone()),
             audit: audit.clone(),
@@ -731,6 +754,10 @@ impl Services {
             swarm,
             docker_resources,
             endpoints,
+            objstore_discovery,
+            objstore_settings,
+            objstore_iam,
+            objstore_adopt,
             registries,
             webhooks,
             access_lists,

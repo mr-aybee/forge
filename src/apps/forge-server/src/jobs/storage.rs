@@ -15,6 +15,7 @@ use forge_catalog::storage::{Runtime, StoreCredential, StoreOp, StoreReport, Sto
 use forge_core::model::AgentStatus;
 use forge_core::ports::{InstallationRepository, ServerRepository, VaultRepository};
 use forge_core::storage::{ObjectStore, ObjectStoreRepository, StoreMember, TOPOLOGY_DISTRIBUTED};
+use forge_core::storage_settings::{RustfsSettings, StoreSettingsRepository};
 use forge_core::{Action, Clock, ObjectStoreId, ServerId, VaultItemId};
 use forge_jobs::{JobHandler, StepContext, StepError};
 use forge_proto::messages::StorageAction;
@@ -31,11 +32,34 @@ const RESULT_WAIT: Duration = Duration::from_secs(50 * 60);
 const CLEANUP_WAIT: Duration = Duration::from_secs(5 * 60);
 
 /// Operations the job accepts.
-pub const ACTIONS: &[&str] = &["install", "start", "stop", "restart", "status", "uninstall", "disable", "enable"];
+pub const ACTIONS: &[&str] =
+    &["install", "start", "stop", "restart", "status", "uninstall", "disable", "enable", "reconfigure"];
 
 /// Statuses of an action in progress.
-pub const BUSY: &[&str] =
-    &["installing", "removing", "starting", "stopping", "restarting", "checking", "adopting", "disabling", "enabling"];
+pub const BUSY: &[&str] = &[
+    "installing",
+    "removing",
+    "starting",
+    "stopping",
+    "restarting",
+    "checking",
+    "adopting",
+    "disabling",
+    "enabling",
+    "reconfiguring",
+];
+
+/// What a `reconfigure` changed, so a failed recreate (the node rolls the
+/// container back) also rolls the store record back.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, Deserialize)]
+pub struct PreviousSettings {
+    pub version: String,
+    pub s3_port: u16,
+    pub console_port: Option<u16>,
+    pub region: String,
+    pub endpoint: String,
+    pub settings: Option<RustfsSettings>,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 struct Payload {
@@ -45,6 +69,9 @@ struct Payload {
     /// `uninstall` only: also delete the data paths.
     #[serde(default)]
     delete_data: bool,
+    /// `reconfigure` only: the settings before the change.
+    #[serde(default)]
+    previous: Option<PreviousSettings>,
 }
 
 #[derive(Debug)]
@@ -53,6 +80,7 @@ pub struct StorageJob {
     pub signer: Arc<CommandSigner>,
     pub servers: Arc<dyn ServerRepository>,
     pub stores: Arc<dyn ObjectStoreRepository>,
+    pub settings: Arc<dyn StoreSettingsRepository>,
     pub vault: Arc<dyn VaultRepository>,
     pub installations: Arc<dyn InstallationRepository>,
     pub audit: Arc<dyn forge_core::ports::AuditRecorder>,
@@ -78,6 +106,7 @@ pub fn busy_status(action: &str) -> &'static str {
         "adopt" => "adopting",
         "disable" => "disabling",
         "enable" => "enabling",
+        "reconfigure" => "reconfiguring",
         _ => "checking",
     }
 }
@@ -85,7 +114,12 @@ pub fn busy_status(action: &str) -> &'static str {
 /// The node-side spec for a store member. A distributed store lists every
 /// drive of every member, in member order, so all members get the identical
 /// layout.
-pub fn spec(store: &ObjectStore, member: &StoreMember, all: &[StoreMember]) -> Result<StoreSpec, String> {
+pub fn spec(
+    store: &ObjectStore,
+    member: &StoreMember,
+    all: &[StoreMember],
+    settings: Option<&RustfsSettings>,
+) -> Result<StoreSpec, String> {
     let runtime = match store.runtime.as_str() {
         "native" => Runtime::Native,
         "docker" => Runtime::Docker,
@@ -111,8 +145,11 @@ pub fn spec(store: &ObjectStore, member: &StoreMember, all: &[StoreMember]) -> R
         },
         require_mount: member.require_mount,
         // The App Store data path is allowed for the adopted container only.
-        adopted: member.data_paths == [forge_catalog::storage::LEGACY_DATA],
+        adopted: member.data_paths == [forge_catalog::storage::LEGACY_DATA] || settings.is_some_and(|s| s.adopted),
         owner: store.id.to_string(),
+        // `us-east-1` is the engine's default: left out for older agents.
+        region: if store.region == "us-east-1" { String::new() } else { store.region.clone() },
+        docker: settings.filter(|_| runtime == Runtime::Docker).cloned(),
     };
     spec.validate()?;
 
@@ -128,6 +165,16 @@ fn retry(e: impl std::fmt::Display) -> StepError {
 }
 
 impl StorageJob {
+    async fn load_spec(
+        &self,
+        store: &ObjectStore,
+        member: &StoreMember,
+        all: &[StoreMember],
+    ) -> Result<StoreSpec, StepError> {
+        let settings = self.settings.get_store_settings(store.id).await.map_err(retry)?;
+        spec(store, member, all, settings.as_ref()).map_err(StepError::Fatal)
+    }
+
     async fn load(&self, p: &Payload) -> Result<(ObjectStore, StoreMember, Vec<StoreMember>), StepError> {
         let store = self
             .stores
@@ -165,7 +212,7 @@ impl StorageJob {
             name: format!("{} (object store root)", store.name),
             username: cred.access_key,
             url: store.endpoint.clone(),
-            notes: "Root credential of the App Store RustFS container, adopted by Object Storage.".into(),
+            notes: "Root credential of an adopted RustFS container (Object Storage).".into(),
             tags: vec!["object-storage".into()],
             links: Vec::new(),
             sealed,
@@ -176,14 +223,32 @@ impl StorageJob {
         };
         self.vault.put_vault_item(&item).await.map_err(retry)?;
 
-        // The App Store no longer manages the container.
+        // The App Store no longer manages the container (its own adoption only).
+        let legacy = self.settings.get_store_settings(store.id).await.map_err(retry)?.is_none_or(|s| !s.adopted);
+
         for i in self.installations.list_installations(None).await.map_err(retry)? {
-            if i.package == "rustfs" && i.workspace_id == store.workspace_id {
+            if legacy && i.package == "rustfs" && i.workspace_id == store.workspace_id {
                 let members = self.stores.list_store_members(store.id).await.map_err(retry)?;
                 if members.iter().any(|m| m.server_id == i.server_id) {
                     self.installations.delete_installation(i.id).await.map_err(retry)?;
                 }
             }
+        }
+
+        Ok(())
+    }
+
+    async fn restore(&self, store: &mut ObjectStore, prev: &PreviousSettings) -> Result<(), StepError> {
+        store.version.clone_from(&prev.version);
+        store.s3_port = prev.s3_port;
+        store.console_port = prev.console_port;
+        store.region.clone_from(&prev.region);
+        store.endpoint.clone_from(&prev.endpoint);
+
+        // A Docker store without a settings row ran with the defaults.
+        if store.runtime == "docker" {
+            let s = prev.settings.clone().unwrap_or_default();
+            self.settings.put_store_settings(store.id, &s, self.clock.now()).await.map_err(retry)?;
         }
 
         Ok(())
@@ -214,7 +279,7 @@ impl StorageJob {
         }
 
         let (store, member, all) = self.load(&p).await?;
-        let mut spec = spec(&store, &member, &all).map_err(StepError::Fatal)?;
+        let mut spec = self.load_spec(&store, &member, &all).await?;
 
         // An agent that predates ownership markers rejects the field: retried without it.
         let legacy = ctx.state_value("legacy_agent").and_then(Value::as_bool).unwrap_or(false);
@@ -241,6 +306,7 @@ impl StorageJob {
                 StoreOp::Uninstall { spec, delete_data: p.delete_data, protect }
             }
             "adopt" => StoreOp::Adopt { spec },
+            "reconfigure" => StoreOp::Reconfigure { spec, credential: self.credential(&store).await? },
             _ => StoreOp::Status { spec },
         };
 
@@ -328,6 +394,14 @@ impl StorageJob {
                 Some(if all.len() > 1 { format!("{}: {message}", member.endpoint_host) } else { message.clone() });
             self.stores.put_object_store(&store).await.map_err(retry)?;
 
+            if p.action == "reconfigure"
+                && let Some(prev) = &p.previous
+            {
+                // The node put the previous container back: so does the record.
+                self.restore(&mut store, prev).await?;
+                self.stores.put_object_store(&store).await.map_err(retry)?;
+            }
+
             if p.action == "install" && never_ran(&store, &all) {
                 self.roll_back(ctx, &p, &store, &member, &all, &message).await?;
             }
@@ -343,6 +417,16 @@ impl StorageJob {
 
         if p.action == "adopt" {
             self.adopted(&mut store, &out).await?;
+            let env =
+                forge_catalog::storage::adopted_env(out.get("output").and_then(Value::as_str).unwrap_or_default());
+
+            if let Some(mut s) = self.settings.get_store_settings(store.id).await.map_err(retry)?
+                && s.adopted
+                && !env.is_empty()
+            {
+                s.env = env;
+                self.settings.put_store_settings(store.id, &s, now).await.map_err(retry)?;
+            }
         }
 
         member.observed_at = Some(now);
@@ -405,7 +489,7 @@ impl StorageJob {
         all: &[StoreMember],
         error: &str,
     ) -> Result<(), StepError> {
-        if let Ok(mut spec) = spec(store, member, all) {
+        if let Ok(mut spec) = self.load_spec(store, member, all).await {
             if ctx.state_value("legacy_agent").and_then(Value::as_bool).unwrap_or(false) {
                 spec.owner.clear();
             }

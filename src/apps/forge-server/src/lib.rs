@@ -50,6 +50,7 @@ pub mod net_access;
 pub mod node_rpc;
 pub mod notify_mail;
 pub mod notifying;
+pub mod objstore;
 pub mod perms;
 pub mod pins;
 pub mod public_address;

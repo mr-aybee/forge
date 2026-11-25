@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode as AxStatus};
-use axum::routing::get;
+use axum::routing::{get, post};
 use reqwest::{Method, StatusCode};
 use serde_json::json;
 
@@ -138,8 +138,8 @@ type Buckets = BTreeMap<String, BTreeMap<String, Vec<u8>>>;
 #[derive(Clone, Default)]
 struct FakeS3 {
     buckets: Arc<Mutex<Buckets>>,
-    /// RustFS service accounts: access key → name.
-    accounts: Arc<Mutex<BTreeMap<String, String>>>,
+    /// RustFS service accounts: access key → (name, policy).
+    accounts: Arc<Mutex<BTreeMap<String, (String, serde_json::Value)>>>,
 }
 
 fn signed(h: &HeaderMap) -> bool {
@@ -250,7 +250,7 @@ async fn fake_add_account(State(s): State<FakeS3>, h: HeaderMap, body: Bytes) ->
     assert!(req["policy"]["Statement"].is_array(), "a scoped policy is sent");
     let mut accts = s.accounts.lock().unwrap();
     let ak = format!("SVC{:05}", accts.len() + 1);
-    accts.insert(ak.clone(), req["name"].as_str().unwrap_or_default().to_owned());
+    accts.insert(ak.clone(), (req["name"].as_str().unwrap_or_default().to_owned(), req["policy"].clone()));
 
     (AxStatus::OK, json!({"credentials": {"accessKey": ak, "secretKey": "svcsecret-value-1"}}).to_string())
 }
@@ -262,7 +262,7 @@ async fn fake_list_accounts(State(s): State<FakeS3>, h: HeaderMap) -> (AxStatus,
 
     let accts = s.accounts.lock().unwrap();
     let list: Vec<serde_json::Value> =
-        accts.iter().map(|(k, n)| json!({"accessKey": k, "name": n, "accountStatus": "on"})).collect();
+        accts.iter().map(|(k, (n, _))| json!({"accessKey": k, "name": n, "accountStatus": "on"})).collect();
 
     (AxStatus::OK, json!({"accounts": list}).to_string())
 }
@@ -278,20 +278,70 @@ async fn fake_delete_account(State(s): State<FakeS3>, h: HeaderMap, q: Query<BTr
     }
 }
 
+async fn fake_info_account(
+    State(s): State<FakeS3>,
+    h: HeaderMap,
+    q: Query<BTreeMap<String, String>>,
+) -> (AxStatus, String) {
+    if !signed(&h) {
+        return (AxStatus::FORBIDDEN, String::new());
+    }
+
+    match s.accounts.lock().unwrap().get(q.get("accessKey").map_or("", String::as_str)) {
+        // RustFS returns the policy as pretty-printed JSON text.
+        Some((n, p)) => (
+            AxStatus::OK,
+            json!({"parentUser": "AKTEST", "accountStatus": "on", "impliedPolicy": false, "name": n,
+                   "policy": serde_json::to_string_pretty(p).unwrap()})
+            .to_string(),
+        ),
+        None => (AxStatus::NOT_FOUND, "<Error><Code>NoSuchKey</Code><Message>no</Message></Error>".into()),
+    }
+}
+
+async fn fake_update_account(
+    State(s): State<FakeS3>,
+    h: HeaderMap,
+    q: Query<BTreeMap<String, String>>,
+    body: Bytes,
+) -> AxStatus {
+    if !signed(&h) {
+        return AxStatus::FORBIDDEN;
+    }
+
+    let req: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+
+    match s.accounts.lock().unwrap().get_mut(q.get("accessKey").map_or("", String::as_str)) {
+        Some(a) => {
+            a.1 = req["newPolicy"].clone();
+            AxStatus::NO_CONTENT
+        }
+        None => AxStatus::NOT_FOUND,
+    }
+}
+
 async fn start_fake_s3() -> String {
+    start_fake_s3_with().await.0
+}
+
+/// The stand-in and its state, to change keys "directly in RustFS".
+async fn start_fake_s3_with() -> (String, FakeS3) {
+    let fake = FakeS3::default();
     let app = axum::Router::new()
         .route("/", get(fake_root))
         .route("/rustfs/admin/v3/add-service-accounts", axum::routing::put(fake_add_account))
         .route("/rustfs/admin/v3/list-service-accounts", get(fake_list_accounts))
         .route("/rustfs/admin/v3/delete-service-accounts", axum::routing::delete(fake_delete_account))
+        .route("/rustfs/admin/v3/info-service-account", get(fake_info_account))
+        .route("/rustfs/admin/v3/update-service-account", post(fake_update_account))
         .route("/{bucket}", get(fake_bucket).put(fake_bucket).delete(fake_bucket))
         .route("/{bucket}/{*key}", get(fake_object).put(fake_object).delete(fake_object))
-        .with_state(FakeS3::default());
+        .with_state(fake.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.ok() });
 
-    format!("http://{addr}")
+    (format!("http://{addr}"), fake)
 }
 
 #[tokio::test]
@@ -339,7 +389,7 @@ async fn distributed_store_spans_nodes_with_one_layout() {
     let store = forge_core::storage::ObjectStoreRepository::get_object_store(st, store_id).await.unwrap().unwrap();
     let members = forge_core::storage::ObjectStoreRepository::list_store_members(st, store_id).await.unwrap();
     let specs: Vec<_> =
-        members.iter().map(|m| forge_server::jobs::storage::spec(&store, m, &members).unwrap()).collect();
+        members.iter().map(|m| forge_server::jobs::storage::spec(&store, m, &members, None).unwrap()).collect();
     assert_eq!(specs[0].peers, specs[1].peers);
     assert_eq!(
         specs[0].peers,
@@ -456,6 +506,15 @@ async fn managed_store_on(
     endpoint: &str,
     server: forge_core::ServerId,
 ) -> forge_core::ObjectStoreId {
+    managed_store_with(h, endpoint, server, "native").await
+}
+
+async fn managed_store_with(
+    h: &crate::common::Harness,
+    endpoint: &str,
+    server: forge_core::ServerId,
+    runtime: &str,
+) -> forge_core::ObjectStoreId {
     use forge_core::storage::{ObjectStore, ObjectStoreRepository, StoreMember};
     let st = &h.app.state;
     let ws: forge_core::WorkspaceId = h.default_org.parse().unwrap();
@@ -496,7 +555,7 @@ async fn managed_store_on(
             path_style: true,
             version: "latest".into(),
             deployed_version: Some("1.0.5".into()),
-            runtime: "native".into(),
+            runtime: runtime.into(),
             topology: "standalone".into(),
             s3_port: port,
             console_port: None,
@@ -1721,4 +1780,285 @@ async fn deleting_a_bucket_revokes_its_grants_and_a_new_bucket_of_that_name_star
     assert!(
         events.iter().any(|e| e["action"] == "storage.grant.revoke" && e["details"]["user"] == "guest@example.com")
     );
+}
+
+// ------------------------------------------------------------------ D-170
+
+/// Keys live in RustFS: Forge writes policies there, reads them back, shows
+/// drift when they change in RustFS, and reconciles to RustFS's state.
+#[tokio::test]
+async fn keys_and_prefix_grants_are_kept_in_rustfs() {
+    let h = start().await;
+    let mut admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+    let srv = node(&h, "iam-1", "linux").await;
+    let (endpoint, fake) = start_fake_s3_with().await;
+    let id = managed_store_on(&h, &endpoint, srv).await;
+    let base = format!("/api/v1/object-stores/{id}/iam");
+    let grants = json!([
+        {"bucket": "media", "prefix": "uploads/", "access": "readwrite"},
+        {"bucket": "media", "prefix": "public/", "access": "read"}
+    ]);
+    let (s, _) = admin.post(&format!("{base}/keys"), json!({"name": "shop", "grants": grants})).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "IAM needs MFA");
+    step_up(&mut admin).await;
+
+    for bad in [
+        json!([]),
+        json!([{"bucket": "media", "prefix": "/x/", "access": "read"}]),
+        json!([{"bucket": "media", "prefix": "a/*", "access": "read"}]),
+    ] {
+        let (s, r) = admin.post(&format!("{base}/keys"), json!({"name": "shop", "grants": bad})).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{r}");
+    }
+
+    let (s, k) = admin.post(&format!("{base}/keys"), json!({"name": "shop", "grants": grants})).await;
+    assert_eq!(s, StatusCode::CREATED, "{k}");
+    assert!(!k.to_string().contains("svcsecret"), "the secret stays in the vault");
+    let ak = k["access_key"].as_str().unwrap().to_owned();
+
+    // The policy RustFS holds: objects under the prefix, listing limited to it.
+    let policy = fake.accounts.lock().unwrap()[&ak].1.to_string();
+    assert!(policy.contains("arn:aws:s3:::media/uploads/*") && policy.contains("arn:aws:s3:::media/public/*"));
+    assert!(policy.contains(r#""s3:prefix":["uploads/*"]"#), "{policy}");
+    assert!(!policy.contains("arn:aws:s3:::media/*"), "{policy}");
+
+    let (s, v) = admin.get(&base).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["reachable"], true);
+    assert_eq!(v["source"], "rustfs");
+    let key = |v: &serde_json::Value, ak: &str| {
+        v["keys"].as_array().unwrap().iter().find(|k| k["access_key"] == ak).cloned().unwrap()
+    };
+    assert_eq!(key(&v, &ak)["drift"], "in_sync");
+    assert_eq!(key(&v, &ak)["grants"].as_array().unwrap().len(), 2);
+    assert!(v.to_string().find("AKTEST").is_none(), "the root key is not an app key");
+
+    // Changed directly in RustFS: a wider policy, and a key Forge never made.
+    fake.accounts.lock().unwrap().get_mut(&ak).unwrap().1 = json!({"Version": "2012-10-17", "Statement": [
+        {"Effect": "Allow", "Action": ["s3:*"], "Resource": ["arn:aws:s3:::*"]}]});
+    fake.accounts
+        .lock()
+        .unwrap()
+        .insert("OUTSIDE1".into(), ("cli".into(), json!({"Version": "2012-10-17", "Statement": []})));
+    let (_, v) = admin.get(&base).await;
+    assert_eq!(key(&v, &ak)["drift"], "policy_changed");
+    assert_eq!(key(&v, &ak)["custom_policy"], true);
+    assert_eq!(key(&v, "OUTSIDE1")["drift"], "not_in_forge");
+
+    // Editing writes RustFS; it works for keys Forge did not create too.
+    let one = json!([{"bucket": "logs", "prefix": "", "access": "read"}]);
+    let (s, r) = admin.put(&format!("{base}/keys/OUTSIDE1"), json!({"grants": one})).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert!(fake.accounts.lock().unwrap()["OUTSIDE1"].1.to_string().contains("arn:aws:s3:::logs/*"));
+    let (s, _) = admin.put(&format!("{base}/keys/AKTEST"), json!({"grants": one})).await;
+    assert_eq!(s, StatusCode::CONFLICT, "never the root key");
+    let (s, _) = admin.put(&format!("{base}/keys/NOSUCH1"), json!({"grants": one})).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+
+    // Reconcile accepts RustFS: the changed policy is recorded as custom.
+    fake.accounts.lock().unwrap().remove("OUTSIDE1");
+    let (s, r) = admin.post(&format!("{base}/reconcile"), json!({})).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!((r["updated"].as_u64(), r["removed"].as_u64()), (Some(1), Some(1)), "{r}");
+    let (_, v) = admin.get(&base).await;
+    assert!(v["keys"].as_array().unwrap().iter().all(|k| k["drift"] == "in_sync"), "{v}");
+
+    // Developers cannot see or change IAM.
+    let ws = format!("workspace:{}", h.default_org);
+    let dev = user_with_role(&h, &admin, "dev-iam@example.com", "developer", &ws).await;
+    assert_eq!(dev.get(&base).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(dev.post(&format!("{base}/reconcile"), json!({})).await.0, StatusCode::FORBIDDEN);
+
+    let (_, audit) = admin.get("/api/v1/audit?limit=200").await;
+    let text = audit.to_string();
+
+    for a in ["storage.key.create", "storage.key.policy", "storage.iam.reconcile"] {
+        assert!(text.contains(a), "{a} audited");
+    }
+
+    assert!(!text.contains("svcsecret"));
+}
+
+/// RustFS down: the list comes from Forge's records, read-only.
+#[tokio::test]
+async fn an_unreachable_rustfs_shows_the_cached_keys_read_only() {
+    let h = start().await;
+    let mut admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+    step_up(&mut admin).await;
+    let srv = node(&h, "iam-2", "linux").await;
+    let (endpoint, _fake) = start_fake_s3_with().await;
+    let id = managed_store_on(&h, &endpoint, srv).await;
+    let base = format!("/api/v1/object-stores/{id}/iam");
+    let grants = json!([{"bucket": "media", "prefix": "", "access": "read"}]);
+    let (s, _) = admin.post(&format!("{base}/keys"), json!({"name": "shop", "grants": grants})).await;
+    assert_eq!(s, StatusCode::CREATED);
+
+    // Point the store at a closed port.
+    let st = &h.app.state.store;
+    let mut store = forge_core::storage::ObjectStoreRepository::get_object_store(st, id).await.unwrap().unwrap();
+    store.endpoint = "http://127.0.0.1:1".into();
+    forge_core::storage::ObjectStoreRepository::put_object_store(st, &store).await.unwrap();
+    let (s, v) = admin.get(&base).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["reachable"], false);
+    assert_eq!(v["source"], "cache");
+    assert_eq!(v["keys"][0]["drift"], "unknown");
+    assert_eq!(v["keys"][0]["grants"][0]["bucket"], "media");
+    let (s, r) = admin.post(&format!("{base}/keys"), json!({"name": "two", "grants": grants})).await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "{r}");
+    assert_eq!(r["title"], "store_unreachable");
+}
+
+/// Settings after install: validated, audited, and a failed recreate rolls
+/// the record back with the container.
+#[tokio::test]
+async fn settings_recreate_the_container_and_roll_back_on_failure() {
+    let h = start().await;
+    let mut admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+    let srv = node(&h, "set-1", "linux").await;
+    let endpoint = start_fake_s3().await;
+    let id = managed_store_with(&h, &endpoint, srv, "docker").await;
+    let st = &h.app.state.store;
+    let mut store = forge_core::storage::ObjectStoreRepository::get_object_store(st, id).await.unwrap().unwrap();
+    store.s3_port = 9000;
+    store.console_port = Some(9001);
+    forge_core::storage::ObjectStoreRepository::put_object_store(st, &store).await.unwrap();
+    let url = format!("/api/v1/object-stores/{id}/settings");
+    let (s, _) = admin.get(&url).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "settings need MFA");
+    step_up(&mut admin).await;
+    let (s, v) = admin.get(&url).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["editable"], true);
+    assert_eq!(v["docker"]["image"], "rustfs/rustfs");
+    let body = |env: serde_json::Value| {
+        json!({
+            "version": "1.0.6", "s3_port": 9100, "console_port": null, "region": "eu-west-1",
+            "docker": {"image": "rustfs/rustfs", "restart": "always", "memory_mb": 2048, "cpu_millis": 1500, "env": env}
+        })
+    };
+    let (s, r) = admin.put(&url, body(json!({"RUSTFS_SECRET_KEY": "x"}))).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "credentials cannot be overridden: {r}");
+    let (s, r) = admin.put(&url, body(json!({"RUSTFS_SERVER_DOMAINS": "s3.example.test"}))).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{r}");
+    assert_eq!(r["jobs"][0]["payload"]["action"], "reconfigure");
+    assert_eq!(r["jobs"][0]["payload"]["previous"]["s3_port"], 9000);
+    let op =
+        answer_with(&h, srv, false, "running", "RustFS did not answer; rolled back to the previous container").await;
+    assert!(op.contains("\"op\":\"reconfigure\"") && op.contains("\"memory_mb\":2048"), "{op}");
+    assert!(op.contains("RUSTFS_SERVER_DOMAINS") && !op.contains("svcsecret"), "{op}");
+
+    // The record follows the node back to the old settings.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+
+    loop {
+        let s = forge_core::storage::ObjectStoreRepository::get_object_store(st, id).await.unwrap().unwrap();
+        if s.s3_port == 9000 && s.version == "latest" {
+            assert_eq!(s.console_port, Some(9001));
+            break;
+        }
+
+        assert!(tokio::time::Instant::now() < deadline, "not rolled back: {s:?}");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    let (_, v) = admin.get(&url).await;
+    assert_eq!(v["docker"]["memory_mb"], serde_json::Value::Null, "{v}");
+    let (_, audit) = admin.get("/api/v1/audit?limit=100").await;
+    assert!(audit.to_string().contains("storage.settings.update"));
+}
+
+/// Plays the node's Docker for container `list` and `inspect` commands.
+fn fake_docker(
+    h: &crate::common::Harness,
+    server: forge_core::ServerId,
+    list: serde_json::Value,
+    inspect: serde_json::Value,
+) -> tokio::task::JoinHandle<()> {
+    use forge_proto::messages::{CommandBody, CommandResult, command_body::Command};
+    use prost::Message;
+    let hub = h.app.state.hub.clone();
+
+    tokio::spawn(async move {
+        for _ in 0..400 {
+            for cmd in hub.take(server, 4) {
+                let body = CommandBody::decode(cmd.body.as_slice()).unwrap();
+                let Some(Command::ContainerAction(a)) = body.command else { continue };
+                let out = if a.op == "list" { list.clone() } else { inspect.clone() };
+                hub.resolve(
+                    server,
+                    CommandResult {
+                        operation_id: body.operation_id,
+                        ok: true,
+                        output: out.to_string(),
+                        ..Default::default()
+                    },
+                );
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+}
+
+/// Any RustFS container is found and adopted as it is: name, image, ports
+/// and volumes come from the node; the credential is read there.
+#[tokio::test]
+async fn any_rustfs_container_is_discovered_and_adopted() {
+    let h = start().await;
+    let mut admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+    let srv = node(&h, "found-1", "linux").await;
+    let list = json!([
+        {"id": "abc123", "name": "my-rustfs", "image": "rustfs/rustfs:1.0.6", "state": "running", "status": "Up",
+         "ports": ["0.0.0.0:19000->9000/tcp"], "labels": {}},
+        {"id": "def456", "name": "web", "image": "nginx:1", "state": "running", "status": "Up", "ports": [], "labels": {}}
+    ]);
+    let inspect = json!({"image": "rustfs/rustfs:1.0.6",
+        "ports": {"9000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "19000"}]},
+        "mounts": [{"source": "/var/lib/docker/volumes/rustfs-data/_data", "destination": "/data", "mode": "z"}],
+        "networks": ["bridge"], "env_keys": ["RUSTFS_ACCESS_KEY", "RUSTFS_SECRET_KEY"]});
+    let docker = fake_docker(&h, srv, list, inspect);
+
+    // Reads need server.manage; nodes the caller may not manage are skipped.
+    let ws = format!("workspace:{}", h.default_org);
+    let guest = user_with_role(&h, &admin, "guest-found@example.com", "auditor", &ws).await;
+    let (s, r) = guest.get("/api/v1/object-stores/discover").await;
+    assert!(s == StatusCode::OK && r["containers"].as_array().unwrap().is_empty() || s == StatusCode::FORBIDDEN, "{r}");
+    let (s, r) = admin.get(&format!("/api/v1/object-stores/discover?server_id={srv}")).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["nodes"][0]["docker"], "available", "{r}");
+    assert_eq!(r["containers"].as_array().unwrap().len(), 1, "only RustFS: {r}");
+    assert_eq!(r["containers"][0]["kind"], "foreign");
+    assert_eq!(r["containers"][0]["version"], "1.0.6");
+    assert_eq!(r["containers"][0]["mounts"][0]["name"], "rustfs-data");
+
+    let adopt = json!({"name": "Found", "server_id": srv, "container": "my-rustfs"});
+    let (s, _) = admin.post("/api/v1/object-stores/adopt", adopt.clone()).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "adoption needs MFA");
+    step_up(&mut admin).await;
+    let (s, r) =
+        admin.post("/api/v1/object-stores/adopt", json!({"name": "X", "server_id": srv, "container": "nope"})).await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "{r}");
+    let elsewhere = json!({"name": "Found", "server_id": srv, "container": "my-rustfs", "endpoint_host": "192.0.2.10"});
+    let (s, r) = admin.post("/api/v1/object-stores/adopt", elsewhere).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "root-signed calls go to the node only: {r}");
+    let (s, r) = admin.post("/api/v1/object-stores/adopt", adopt.clone()).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{r}");
+    assert_eq!(r["store"]["s3_port"], 19000);
+    assert_eq!(r["store"]["version"], "1.0.6");
+    assert_eq!(r["store"]["members"][0]["data_paths"], json!(["/data"]));
+    assert_eq!(r["job"]["payload"]["action"], "adopt");
+    docker.abort();
+    let op = answer(&h, srv, true, "running").await;
+    assert!(op.contains("\"op\":\"adopt\"") && op.contains("\"container_name\":\"my-rustfs\""), "{op}");
+    assert!(op.contains("\"adopted\":true") && op.contains("rustfs-data"), "{op}");
+    let id = r["store"]["id"].as_str().unwrap();
+
+    // An adopted container is never reinstalled and its data never deleted.
+    let (s, _) = admin.post(&format!("/api/v1/object-stores/{id}/actions"), json!({"action": "install"})).await;
+    assert!(s == StatusCode::CONFLICT, "{s}");
+    let (_, v) = admin.get(&format!("/api/v1/object-stores/{id}/settings")).await;
+    assert_eq!(v["editable"], false, "an adopted container is not recreated: {v}");
+    let (_, audit) = admin.get("/api/v1/audit?limit=100").await;
+    assert!(audit.to_string().contains("storage.adopt"));
 }
