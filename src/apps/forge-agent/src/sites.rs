@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use forge_catalog::SiteSpec;
-use forge_catalog::sites::{ACME_ROOT, CUSTOM_DIR, SITES_DIR, TLS_DIR, Tls};
+use forge_catalog::sites::{ACME_ROOT, CACHE_DIR, CUSTOM_DIR, HTPASSWD_DIR, LOG_DIR, SITES_DIR, TLS_DIR, Tls};
 use http_body_util::{BodyExt, Full};
 use hyper::Request;
 use hyper::body::Bytes;
@@ -36,8 +36,39 @@ pub(crate) async fn reload(nginx: &str) -> Result<(), String> {
     }
 }
 
-/// Writes a file; certificates and keys under [`TLS_DIR`] are root-only (0600).
+/// The group nginx's workers run as (`www-data` on Debian/Ubuntu, `nginx`
+/// on RHEL-likes), from `/etc/group`.
+#[cfg(unix)]
+fn nginx_group() -> Option<u32> {
+    let groups = std::fs::read_to_string("/etc/group").ok()?;
+    ["www-data", "nginx"].iter().find_map(|name| {
+        groups.lines().find_map(|l| {
+            let mut f = l.split(':');
+            (f.next() == Some(name)).then(|| f.nth(1)?.parse().ok()).flatten()
+        })
+    })
+}
+
+/// Writes a file; certificates and keys under [`TLS_DIR`] are root-only
+/// (0600); `htpasswd` files are 0640, readable by nginx's worker group only.
 fn write_file(path: &str, content: &str) -> Result<(), String> {
+    #[cfg(unix)]
+    if path.starts_with(HTPASSWD_DIR) {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o640)
+            .open(path)
+            .map_err(|e| format!("{path}: {e}"))?;
+        f.set_permissions(std::fs::Permissions::from_mode(0o640)).map_err(|e| format!("{path}: {e}"))?;
+        if let Some(gid) = nginx_group() {
+            std::os::unix::fs::fchown(&f, Some(0), Some(gid)).map_err(|e| format!("{path}: {e}"))?;
+        }
+        return f.write_all(content.as_bytes()).map_err(|e| format!("{path}: {e}"));
+    }
     #[cfg(unix)]
     if path.starts_with(TLS_DIR) {
         use std::io::Write;
@@ -56,15 +87,27 @@ fn write_file(path: &str, content: &str) -> Result<(), String> {
     std::fs::write(path, content).map_err(|e| format!("{path}: {e}"))
 }
 
+/// The nginx binary and the directories a swap writes into.
+struct Nginx<'a> {
+    bin: &'a str,
+    dirs: &'a [&'a str],
+    /// Reload after a passing test (off in tests).
+    reload: bool,
+}
+
 /// Writes `files`, runs `nginx -t`, reloads. Restores the previous files when
-/// the test fails, so a bad custom block never takes the edge down.
+/// the test fails, so a bad custom configuration never takes the edge down.
 async fn swap(files: &[(String, Option<String>)]) -> Result<String, String> {
-    let nginx = nginx_bin()?;
-    for d in [SITES_DIR, CUSTOM_DIR, TLS_DIR] {
+    let dirs = [SITES_DIR, CUSTOM_DIR, TLS_DIR, HTPASSWD_DIR, LOG_DIR, CACHE_DIR];
+    swap_with(&Nginx { bin: nginx_bin()?, dirs: &dirs, reload: true }, files).await
+}
+
+async fn swap_with(nginx: &Nginx<'_>, files: &[(String, Option<String>)]) -> Result<String, String> {
+    for d in nginx.dirs {
         std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
     }
     #[cfg(unix)]
-    {
+    if nginx.dirs.contains(&TLS_DIR) {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(TLS_DIR, std::fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
     }
@@ -82,12 +125,61 @@ async fn swap(files: &[(String, Option<String>)]) -> Result<String, String> {
         Ok(())
     };
     apply(files)?;
-    if let Err(e) = run(nginx, &["-t"]).await {
+    if let Err(e) = run(nginx.bin, &["-t"]).await {
         apply(&previous)?;
         return Err(format!("nginx -t failed; previous configuration restored:\n{e}"));
     }
-    reload(nginx).await?;
+    if nginx.reload {
+        reload(nginx.bin).await?;
+    }
     Ok("nginx configuration test passed; reloaded".into())
+}
+
+/// The last lines (at most 1000 and 512 KiB) of one of the endpoint's own
+/// log files, and the file's size. Only the paths derived from the
+/// endpoint's validated name are read.
+async fn tail(path: &str) -> Result<Value, String> {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    const MAX: u64 = 512 * 1024;
+    let mut f = match tokio::fs::File::open(path).await {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(json!({ "path": path, "size": 0, "log": "", "missing": true }));
+        }
+        Err(e) => return Err(format!("{path}: {e}")),
+    };
+    let size = f.metadata().await.map_err(|e| format!("{path}: {e}"))?.len();
+    f.seek(std::io::SeekFrom::Start(size.saturating_sub(MAX))).await.map_err(|e| format!("{path}: {e}"))?;
+    let mut buf = Vec::new();
+    f.take(MAX).read_to_end(&mut buf).await.map_err(|e| format!("{path}: {e}"))?;
+    let text = String::from_utf8_lossy(&buf);
+    let lines: Vec<&str> = text.lines().collect();
+    // A cut-off first line is dropped when the read started mid-file.
+    let skip = usize::from(size > MAX && lines.len() > 1);
+    let from = lines.len().saturating_sub(1000).max(skip);
+    Ok(json!({ "path": path, "size": size, "log": lines[from..].join("\n") }))
+}
+
+/// Empties the endpoint's cache directory (nginx keeps serving; entries are
+/// fetched again from the upstreams).
+async fn clear_cache(dir: &str) -> Result<Value, String> {
+    let mut removed = 0u64;
+    let mut entries = match tokio::fs::read_dir(dir).await {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(json!({ "state": "cleared", "removed": 0 })),
+        Err(e) => return Err(format!("{dir}: {e}")),
+    };
+    while let Some(e) = entries.next_entry().await.map_err(|e| format!("{dir}: {e}"))? {
+        let p = e.path();
+        let kind = e.file_type().await.map_err(|e| format!("{}: {e}", p.display()))?;
+        if kind.is_dir() {
+            tokio::fs::remove_dir_all(&p).await.map_err(|e| format!("{}: {e}", p.display()))?;
+        } else {
+            tokio::fs::remove_file(&p).await.map_err(|e| format!("{}: {e}", p.display()))?;
+        }
+        removed += 1;
+    }
+    Ok(json!({ "state": "cleared", "removed": removed }))
 }
 
 /// Issues (or, with `force`, renews) the Let's Encrypt certificate over HTTP-01.
@@ -153,12 +245,14 @@ async fn site(action: &str, spec: &SiteSpec) -> Result<Value, String> {
         "apply" => {
             std::fs::create_dir_all(format!("{ACME_ROOT}/.well-known/acme-challenge")).map_err(|e| e.to_string())?;
             let custom = (spec.custom_path(), Some(spec.render_custom()));
+            let htpasswd = (spec.htpasswd_path(), spec.access.htpasswd());
             if spec.tls == Tls::Uploaded {
                 let m = spec.material.as_ref().ok_or("the uploaded certificate was not sent with the command")?;
                 let (crt, key) = spec.cert_files();
                 let log = swap(&[
                     (crt, Some(m.chain_pem.clone())),
                     (key, Some(m.key_pem.clone())),
+                    htpasswd,
                     (spec.site_path(), Some(spec.render(true))),
                     custom,
                 ])
@@ -168,7 +262,8 @@ async fn site(action: &str, spec: &SiteSpec) -> Result<Value, String> {
             let has_cert = Path::new(&format!("{}/fullchain.pem", spec.cert_dir())).exists();
             let tls = spec.tls == Tls::Acme;
             // HTTP first (serves the ACME challenge), then the certificate, then HTTPS.
-            let mut log = swap(&[(spec.site_path(), Some(spec.render(tls && has_cert))), custom.clone()]).await?;
+            let mut log =
+                swap(&[htpasswd, (spec.site_path(), Some(spec.render(tls && has_cert))), custom.clone()]).await?;
             if tls && !has_cert {
                 if !Path::new("/usr/bin/certbot").exists() {
                     return Err("TLS needs Certbot on this node (App Store → Certbot)".into());
@@ -180,7 +275,7 @@ async fn site(action: &str, spec: &SiteSpec) -> Result<Value, String> {
         }
         "remove" => {
             let (crt, key) = spec.cert_files();
-            let mut files = vec![(spec.site_path(), None), (spec.custom_path(), None)];
+            let mut files = vec![(spec.site_path(), None), (spec.custom_path(), None), (spec.htpasswd_path(), None)];
             if spec.tls == Tls::Uploaded {
                 files.extend([(crt, None), (key, None)]);
             }
@@ -203,6 +298,9 @@ async fn site(action: &str, spec: &SiteSpec) -> Result<Value, String> {
             "state": if Path::new(&spec.site_path()).exists() { "applied" } else { "missing" },
             "config": std::fs::read_to_string(spec.site_path()).ok(),
         })),
+        "clear_cache" => clear_cache(&spec.cache_path()).await,
+        "access_log" => tail(&spec.access_log_path()).await,
+        "error_log" => tail(&spec.error_log_path()).await,
         other => Err(format!("unknown site action `{other}`")),
     }
 }
@@ -369,8 +467,73 @@ pub async fn dns_action(op: &DnsOp) -> Result<Value, String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)] // reason: tests
 mod tests {
     use super::DnsOp;
+
+    /// A fake `nginx` whose `-t` fails when any written file contains `BAD`.
+    #[cfg(unix)]
+    fn fake_nginx(dir: &std::path::Path) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join("nginx");
+        let script = format!(
+            "#!/bin/sh\nif grep -rq BAD {}; then echo 'emerg: BAD' >&2; exit 1; fi\nexit 0\n",
+            dir.join("conf").display()
+        );
+        std::fs::write(&bin, script).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        bin.display().to_string()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn swap_keeps_a_passing_config_and_restores_a_failing_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = fake_nginx(tmp.path());
+        let conf = tmp.path().join("conf");
+        let conf_s = conf.display().to_string();
+        let nginx = super::Nginx { bin: &bin, dirs: &[conf_s.as_str()], reload: false };
+        let site = conf.join("site.conf").display().to_string();
+        let custom = conf.join("custom.conf").display().to_string();
+        super::swap_with(&nginx, &[(site.clone(), Some("good 1".into())), (custom.clone(), Some("c1".into()))])
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&site).unwrap(), "good 1");
+        // A failing test restores both files as they were.
+        let err =
+            super::swap_with(&nginx, &[(site.clone(), Some("good 2".into())), (custom.clone(), Some("BAD".into()))])
+                .await
+                .unwrap_err();
+        assert!(err.contains("previous configuration restored") && err.contains("BAD"), "{err}");
+        assert_eq!(std::fs::read_to_string(&site).unwrap(), "good 1");
+        assert_eq!(std::fs::read_to_string(&custom).unwrap(), "c1");
+        // A new file that fails is removed again; a removal that passes stays removed.
+        let extra = conf.join("extra.conf").display().to_string();
+        assert!(super::swap_with(&nginx, &[(extra.clone(), Some("BAD".into()))]).await.is_err());
+        assert!(!std::path::Path::new(&extra).exists());
+        super::swap_with(&nginx, &[(custom.clone(), None)]).await.unwrap();
+        assert!(!std::path::Path::new(&custom).exists());
+    }
+
+    #[tokio::test]
+    async fn tails_only_the_last_lines_and_reports_missing_logs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("x.log");
+        let body: String = (0..1500).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(&p, body).unwrap();
+        let v = super::tail(&p.display().to_string()).await.unwrap();
+        let log = v["log"].as_str().unwrap();
+        assert_eq!(log.lines().count(), 1000);
+        assert!(log.starts_with("line 500") && log.ends_with("line 1499"));
+        let missing = super::tail(&tmp.path().join("nope.log").display().to_string()).await.unwrap();
+        assert_eq!(missing["missing"], true);
+        let cache = tmp.path().join("cache");
+        std::fs::create_dir_all(cache.join("a/b")).unwrap();
+        std::fs::write(cache.join("f"), "x").unwrap();
+        let r = super::clear_cache(&cache.display().to_string()).await.unwrap();
+        assert_eq!(r["removed"], 2);
+        assert!(cache.exists() && std::fs::read_dir(&cache).unwrap().next().is_none());
+    }
 
     #[test]
     fn reads_certbot_expiry() {

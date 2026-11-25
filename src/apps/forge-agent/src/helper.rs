@@ -41,7 +41,7 @@ pub enum HelperRequest {
     },
     Site {
         action: String,
-        spec: forge_catalog::SiteSpec,
+        spec: Box<forge_catalog::SiteSpec>,
     },
     Dns {
         dns: crate::sites::DnsOp,
@@ -373,7 +373,10 @@ impl HelperRequest {
                 Ok(req)
             }
             Self::Site { action, spec } => {
-                if !matches!(action.as_str(), "apply" | "remove" | "status" | "renew") {
+                if !matches!(
+                    action.as_str(),
+                    "apply" | "remove" | "status" | "renew" | "clear_cache" | "access_log" | "error_log"
+                ) {
                     return Err(format!("rejected: unknown site action `{action}`"));
                 }
                 spec.validate().map_err(|e| format!("rejected: {e}"))?;
@@ -497,7 +500,7 @@ impl HelperRequest {
             },
             C::SiteAction(s) => Self::Site {
                 action: s.action.clone(),
-                spec: serde_json::from_str(&s.spec_json).map_err(|e| format!("invalid site: {e}"))?,
+                spec: Box::new(serde_json::from_str(&s.spec_json).map_err(|e| format!("invalid site: {e}"))?),
             },
             C::DnsAction(d) => {
                 Self::Dns { dns: serde_json::from_str(&d.op_json).map_err(|e| format!("invalid DNS operation: {e}"))? }
