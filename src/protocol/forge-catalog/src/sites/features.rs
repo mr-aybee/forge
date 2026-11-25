@@ -34,6 +34,7 @@ pub enum RuleKind {
 }
 
 impl RuleKind {
+    /// Whether this rule proxies to upstreams.
     #[must_use]
     pub fn is_proxy(&self) -> bool {
         *self == Self::Proxy
@@ -95,6 +96,7 @@ impl Default for ProxyOptions {
 }
 
 impl ProxyOptions {
+    /// Whether every option has its default value.
     #[must_use]
     pub fn is_default(&self) -> bool {
         *self == Self::default()
@@ -390,6 +392,7 @@ pub fn valid_crypt_hash(h: &str) -> bool {
         .is_some_and(|(salt, hash)| (1..=16).contains(&salt.len()) && b64(salt) && hash.len() == 86 && b64(hash))
 }
 
+/// Basic authentication on an endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BasicAuth {
@@ -429,6 +432,7 @@ pub struct AccessSpec {
 }
 
 impl AccessSpec {
+    /// Whether every option has its default value.
     #[must_use]
     pub fn is_default(&self) -> bool {
         *self == Self::default()
@@ -522,6 +526,7 @@ pub struct RedirectRule {
 }
 
 impl RedirectRule {
+    /// Whether the redirect matches a path rather than a domain.
     #[must_use]
     pub fn is_path(&self) -> bool {
         self.from.starts_with('/')

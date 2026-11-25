@@ -366,6 +366,7 @@ fn fqdn_ok(n: &str) -> bool {
 }
 
 impl DnsOp {
+    /// Checks the zone and record names before the operation runs.
     pub fn validate(&self) -> Result<(), String> {
         let zone_ok = |z: &str| if fqdn_ok(z) { Ok(()) } else { Err(format!("invalid zone `{z}` (use example.com.)")) };
 
@@ -508,6 +509,7 @@ pub async fn site_action(action: &str, spec: &SiteSpec) -> Result<Value, String>
     site(action, spec).await
 }
 
+/// Runs one DNS operation for the helper.
 pub async fn dns_action(op: &DnsOp) -> Result<Value, String> {
     dns(op).await
 }

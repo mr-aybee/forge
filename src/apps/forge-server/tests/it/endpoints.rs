@@ -2,10 +2,11 @@
 //! auth and the custom configuration check.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::{ADMIN_EMAIL, Client, Harness, PASSWORD, start};
 use forge_core::model::{AgentStatus, NodeRole, Server};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::{ADMIN_EMAIL, Client, Harness, PASSWORD, start};
 
 async fn add_node(h: &Harness, hostname: &str) -> Server {
     let n = Server {

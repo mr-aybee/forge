@@ -17,12 +17,16 @@ pub use features::{
     ProxyOptions, RedirectRule, RedirectTo, RouteRule, RuleKind, StaticRoot, valid_crypt_hash, valid_dir, valid_url,
 };
 
+/// Managed site configs on the edges.
 pub const SITES_DIR: &str = "/etc/nginx/forge/sites";
+/// Operator-edited custom config snippets on the edges.
 pub const CUSTOM_DIR: &str = "/etc/nginx/forge/custom";
+/// Webroot for ACME HTTP-01 challenges.
 pub const ACME_ROOT: &str = "/var/www/forge-acme";
 /// Uploaded certificates on the edges (root only, files 0600).
 pub const TLS_DIR: &str = "/etc/nginx/forge/tls";
 
+/// How requests are spread over upstreams.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Balance {
@@ -32,6 +36,7 @@ pub enum Balance {
     IpHash,
 }
 
+/// How an endpoint serves TLS.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Tls {
@@ -65,6 +70,7 @@ impl std::fmt::Debug for CertMaterial {
     }
 }
 
+/// One endpoint (Nginx site) as configured on its edges.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SiteSpec {
@@ -762,6 +768,7 @@ struct Route<'a> {
 }
 
 impl SiteSpec {
+    /// Checks the spec before it is rendered.
     pub fn validate(&self) -> Result<(), String> {
         if !crate::apps::valid_slug(&self.name, 60) {
             return Err("site name: lowercase letters, digits and dashes".into());
@@ -946,11 +953,13 @@ impl SiteSpec {
         o
     }
 
+    /// The managed site config file.
     #[must_use]
     pub fn site_path(&self) -> String {
         format!("{SITES_DIR}/{}.conf", self.name)
     }
 
+    /// The custom config snippet file.
     #[must_use]
     pub fn custom_path(&self) -> String {
         format!("{CUSTOM_DIR}/{}.conf", self.name)
@@ -968,16 +977,19 @@ impl SiteSpec {
         format!("{CACHE_DIR}/{}", self.name)
     }
 
+    /// The endpoint's access log.
     #[must_use]
     pub fn access_log_path(&self) -> String {
         format!("{LOG_DIR}/{}.access.log", self.name)
     }
 
+    /// The endpoint's error log.
     #[must_use]
     pub fn error_log_path(&self) -> String {
         format!("{LOG_DIR}/{}.error.log", self.name)
     }
 
+    /// The Let's Encrypt directory of the endpoint's first domain.
     #[must_use]
     pub fn cert_dir(&self) -> String {
         format!("/etc/letsencrypt/live/{}", self.domains[0].trim_start_matches("*."))

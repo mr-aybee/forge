@@ -8,9 +8,12 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Global Nginx settings file on the edges.
 pub const GLOBAL_CONF: &str = "/etc/nginx/conf.d/forge-global.conf";
+/// keepalived config file on the edges.
 pub const KEEPALIVED_CONF: &str = "/etc/keepalived/keepalived.conf";
 
+/// How many edges serve and how they share traffic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum IngressMode {
@@ -32,6 +35,7 @@ pub enum Failover {
     Dns,
 }
 
+/// An edge's role in an active-standby pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeRole {
@@ -40,6 +44,7 @@ pub enum EdgeRole {
     Backup,
 }
 
+/// One ingress edge node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Edge {
@@ -169,6 +174,7 @@ impl Default for NginxSettings {
     }
 }
 
+/// VRRP (keepalived) settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Vrrp {
@@ -181,6 +187,7 @@ pub struct Vrrp {
     pub router_id: u8,
 }
 
+/// The ingress layout of a cluster: mode, edges and failover.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IngressSpec {
@@ -224,6 +231,7 @@ fn valid_iface(s: &str) -> bool {
 }
 
 impl NginxSettings {
+    /// Checks the settings before they are rendered.
     pub fn validate(&self) -> Result<(), String> {
         if !(64..=1_000_000).contains(&self.worker_connections) {
             return Err("worker connections: 64–1000000".into());
@@ -327,6 +335,7 @@ impl NginxSettings {
 }
 
 impl IngressSpec {
+    /// Checks the spec before it is applied.
     pub fn validate(&self) -> Result<(), String> {
         self.nginx.validate()?;
 
@@ -480,6 +489,7 @@ impl IngressSpec {
 }
 
 impl ClusterProfile {
+    /// Checks the profile before it is applied.
     pub fn validate(&self) -> Result<(), String> {
         if let Some(i) = &self.ingress {
             i.validate()?;
@@ -898,6 +908,7 @@ pub struct KeepalivedNode {
 }
 
 impl IngressOp {
+    /// Checks the operation before it runs.
     pub fn validate(&self) -> Result<(), String> {
         match self {
             Self::Apply { nginx, keepalived } => {

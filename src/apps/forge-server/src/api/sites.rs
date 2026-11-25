@@ -140,6 +140,7 @@ async fn submit_and_wait(
     }
 }
 
+/// DNS settings of an endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DnsConfig {
     #[schemars(with = "String")]
@@ -176,6 +177,7 @@ pub enum Placement {
     },
 }
 
+/// Body of a create or update request.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SiteInput {
     #[serde(flatten)]
@@ -459,6 +461,7 @@ pub(crate) async fn load(state: &AppState, ws: forge_core::WorkspaceId, id: &str
         .ok_or_else(|| ApiError::not_found("site not found"))
 }
 
+/// Returns one endpoint.
 pub async fn get(
     State(state): State<AppState>,
     caller: Caller,
@@ -596,6 +599,7 @@ pub async fn preview(
     }))
 }
 
+/// Creates an endpoint.
 pub async fn create(
     State(state): State<AppState>,
     caller: Caller,
@@ -631,6 +635,7 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(redacted(site))))
 }
 
+/// Updates an endpoint.
 pub async fn update(
     State(state): State<AppState>,
     caller: Caller,
@@ -673,6 +678,7 @@ fn audit_detail(input: &SiteInput) -> Value {
     })
 }
 
+/// Deletes an endpoint.
 pub async fn delete(
     State(state): State<AppState>,
     caller: Caller,
@@ -956,6 +962,7 @@ pub(crate) async fn edges_now(state: &AppState, site: &Site) -> ApiResult<Vec<Se
     current_edges(state, site).await
 }
 
+/// Applies an endpoint's configuration to its edges.
 pub async fn apply(
     State(state): State<AppState>,
     caller: Caller,
@@ -990,6 +997,7 @@ pub async fn apply(
     Ok(Json(json!({ "edges": edges, "dns": dns })))
 }
 
+/// Removes an endpoint's configuration from its edges.
 pub async fn remove(
     State(state): State<AppState>,
     caller: Caller,
@@ -1048,6 +1056,7 @@ pub enum LogKind {
     Error,
 }
 
+/// Query of the endpoint log reader.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct LogQuery {
     /// The edge to read from (one of the endpoint's edges).
@@ -1135,6 +1144,7 @@ async fn publish_dns(state: &AppState, caller: &Caller, spec: &SiteSpec, d: &Dns
     Ok(out)
 }
 
+/// Runs a DNS operation for an endpoint.
 pub async fn dns(
     State(state): State<AppState>,
     caller: Caller,
