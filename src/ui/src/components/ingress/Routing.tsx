@@ -1,14 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { ArrowUpRight, CornerDownRight, Folder, Globe, Layers, Lock, Network, Server } from "lucide-react";
+import { ArrowUpRight, Box, CornerDownRight, ExternalLink, Folder, Globe, Layers, Lock, Network, Server } from "lucide-react";
 import { type ReactNode, useCallback, useLayoutEffect, useRef, useState } from "react";
 
 import { get } from "../../api/client";
-import { useClusters, useServices, useServers } from "../../api/hooks";
+import { type ContainerSummary, nodeAddresses, useClusters, useNodeContainers, useServices, useServers } from "../../api/hooks";
 import { type RedirectRule, type RedirectTo, type RouteRule, type RuleKind, type Site, type StaticRoot, type Target, ruleKindLabel, useSites } from "../../api/ingress";
 import { nodeName, type Service, type ServiceInstance, type Server as Node } from "../../api/types";
 import { type LiveState, liveState } from "../InstanceState";
-import { Badge, Empty, ErrorNote, Skeleton } from "../ui";
+import { Badge, CopyIcon, Empty, ErrorNote, Skeleton } from "../ui";
 import { bytesRate as rate } from "../Traffic";
 import type { LiveResponse, SiteTraffic } from "./types";
 
@@ -68,10 +68,12 @@ const hopTone = (s?: LiveState): Tone | undefined => (!s ? undefined : isDown(s)
 const downLabel = (s: LiveState) => (s.kind === "node-offline" ? "node offline" : "not running");
 const stroke = (t?: Tone) => (t === "bad" ? "var(--color-bad)" : t === "warn" ? "var(--color-warn)" : "var(--color-accent)");
 
+/** Where a pill links to. */
+type Dest = { kind: "app" | "node"; id: string } | { kind: "container"; node: string; id: string };
 type Reg = (id: string) => (el: HTMLElement | null) => void;
 
 /** A slim pill. Pills that name an app or node are links (accent, ↗). */
-function Pill({ id, reg, tone, icon, children, sub, to, standby, role, title, rate: flow, down }: { id: string; reg: Reg; tone?: Tone; icon?: ReactNode; children: ReactNode; sub?: string; to?: { kind: "app" | "node"; id: string }; standby?: boolean; /** Placement role chip (`replica` / `standby`) for app upstreams. */ role?: Role; title?: string; rate?: { text: string; title?: string }; down?: string }) {
+function Pill({ id, reg, tone, icon, children, sub, to, standby, role, title, rate: flow, down }: { id: string; reg: Reg; tone?: Tone; icon?: ReactNode; children: ReactNode; sub?: string; to?: Dest; standby?: boolean; /** Placement role chip (`replica` / `standby`) for app upstreams. */ role?: Role; title?: string; rate?: { text: string; title?: string }; down?: string }) {
   const cls = `group relative z-10 inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs ${down ? "bg-panel-2 opacity-60" : "bg-panel"} ${standby ? "border-dashed border-line" : "border-line"} ${to ? `${down ? "text-muted" : "text-accent"} transition hover:border-accent/60 hover:bg-accent-soft hover:opacity-100` : ""}`;
   const inner = (
     <>
@@ -104,6 +106,12 @@ function Pill({ id, reg, tone, icon, children, sub, to, standby, role, title, ra
         {inner}
       </Link>
     );
+  if (to?.kind === "container")
+    return (
+      <Link ref={reg(id)} to="/nodes/$nodeId/containers/$containerId" params={{ nodeId: to.node, containerId: to.id }} className={cls} title={title ?? "Open the container"}>
+        {inner}
+      </Link>
+    );
   if (to?.kind === "node")
     return (
       <Link ref={reg(id)} to="/nodes/$nodeId" params={{ nodeId: to.id }} className={cls} title={title ?? "Open the node"}>
@@ -132,7 +140,7 @@ interface ViewHop {
   key: string;
   serverId: string | null;
   name: string;
-  /** `ip:port`, when the server resolved it (top-level targets only). */
+  /** `ip:port`, when known: matches the edge's traffic counters. */
   address?: string;
   resolved: string[];
   standby: boolean;
@@ -143,11 +151,13 @@ interface ViewHop {
 /** One target of a path rule, resolved for display. */
 interface ViewTarget {
   key: string;
-  kind: "app" | "node" | "external" | "redirect" | "static";
+  kind: "app" | "node" | "container" | "external" | "redirect" | "static";
   label: string;
-  sub?: string;
-  to?: { kind: "app" | "node"; id: string };
-  internal?: string | null;
+  /** Ports: `:8080`, or published → internal for containers (`127.0.0.1:18081 → :80`). */
+  ports?: string;
+  /** A second, faint line (internal name, image, swarm tasks). */
+  detail?: string;
+  to?: Dest;
   standby: boolean;
   hops: ViewHop[];
   title?: string;
@@ -160,109 +170,181 @@ interface ViewRule {
   targets: ViewTarget[];
 }
 
-const kindTone: Record<RuleKind, "accent" | "muted" | "warn" | "ok"> = { proxy: "accent", balancer: "ok", redirect: "warn", static: "muted" };
+/** What a rule's targets are resolved against. */
+interface Ctx {
+  nodes: Map<string, Node>;
+  apps: Map<string, Service>;
+  containers: Map<string, ContainerSummary[]>;
+  /** Node id by every address it is known by. */
+  byAddr: Map<string, string>;
+  /** The endpoint's edges: a loopback upstream is on the edge itself. */
+  edges: string[];
+}
+
+const kindTone: Record<RuleKind, string> = { proxy: "bg-accent-soft text-accent", balancer: "bg-ok-soft text-ok", redirect: "bg-warn-soft text-warn", static: "bg-panel-2 text-muted" };
 const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 const appRole = (r: string | undefined): Role => (r === "standby" ? "standby" : "replica");
+const isLoopback = (h: string) => h === "localhost" || h === "::1" || h.startsWith("127.");
+const isWildcard = (h: string) => h === "" || h === "0.0.0.0" || h === "::" || h === "[::]";
+const nameOf = (ctx: Ctx, id: string) => {
+  const n = ctx.nodes.get(id);
+  return n ? nodeName(n) : id.slice(0, 8);
+};
 
-/** Rule targets the routing API doesn't expand: resolve from the node and app lists. */
-function resolveTarget(t: Target | undefined, standby: boolean, key: string, nodes: Map<string, Node>, apps: Map<string, Service>): ViewTarget | null {
+/** `host:port` / `[v6]:port` → parts; `port` is 0 when absent. */
+function splitAddr(a: string): { host: string; port: number } {
+  const m = /^\[([^\]]+)\]:(\d+)$/.exec(a) ?? /^([^:]+):(\d+)$/.exec(a);
+  return m ? { host: m[1] ?? "", port: Number(m[2]) } : { host: a, port: 0 };
+}
+
+/** A container on `node` publishing host port `port` reachable at `host` (Docker's `bind:host->container/proto`). */
+function containerAt(ctx: Ctx, node: string, host: string, port: number): { c: ContainerSummary; bind: string; inner: number } | undefined {
+  if (!port) return undefined;
+  for (const c of ctx.containers.get(node) ?? [])
+    for (const p of c.ports) {
+      const m = /^(.*):(\d+)->(\d+)\/\w+$/.exec(p);
+      if (!m || Number(m[2]) !== port) continue;
+      const bind = m[1] ?? "";
+      if (isWildcard(bind) || bind === host || (isLoopback(bind) && isLoopback(host)) || !host) return { c, bind, inner: Number(m[3]) };
+    }
+  return undefined;
+}
+
+/** A node-and-port target: the container publishing that port when there is one, else the node itself. */
+function onNode(ctx: Ctx, node: string, host: string, port: number, base: Pick<ViewTarget, "key" | "standby"> & { weight?: number; address?: string; state?: LiveState }): ViewTarget {
+  const hop: ViewHop = { key: `${base.key}:n`, serverId: node, name: nameOf(ctx, node), address: base.address, resolved: [], standby: base.standby, weight: base.weight, state: base.state };
+  const hit = containerAt(ctx, node, host, port);
+  if (hit) {
+    const swarm = hit.c.labels?.["com.docker.swarm.service.name"];
+    const tasks = swarm ? (ctx.containers.get(node) ?? []).filter((x) => x.labels?.["com.docker.swarm.service.name"] === swarm).length : 0;
+    const published = `${isWildcard(hit.bind) ? "" : hit.bind}:${port}`;
+    return {
+      ...base,
+      kind: "container",
+      label: swarm ?? hit.c.name,
+      ports: `${published} → :${hit.inner}`,
+      detail: [swarm ? `swarm service · ${tasks} task${tasks === 1 ? "" : "s"} here · ${hit.c.name}` : undefined, hit.c.image].filter(Boolean).join(" · "),
+      to: { kind: "container", node, id: hit.c.id },
+      hops: [hop],
+      title: `Container ${hit.c.name} (${hit.c.image}) on ${hop.name}: host ${published} → container :${hit.inner} · ${hit.c.state}`,
+    };
+  }
+  return { ...base, kind: "node", label: hop.name, ports: port ? `:${port}` : undefined, to: { kind: "node", id: node }, hops: [], title: `${hop.name}${port ? ` port ${port}` : ""}${base.address ? ` (${base.address})` : ""}` };
+}
+
+/** A plain `host:port` upstream (external target or a row saved before typed targets): resolved to a node and container when its host is one of ours. */
+function fromAddress(ctx: Ctx, address: string, standby: boolean, key: string, weight?: number): ViewTarget {
+  const { host, port } = splitAddr(address);
+  const node = isLoopback(host) ? ctx.edges[0] : ctx.byAddr.get(host);
+  if (node) return onNode(ctx, node, host, port, { key, standby, weight, address });
+  return { key, kind: "external", label: host || address || "—", ports: port ? `:${port}` : undefined, detail: "external", standby, hops: [], title: `${address} (outside Forge${weight !== undefined ? `, weight ${weight}` : ""})` };
+}
+
+/** A typed target (`forge_catalog::ingress::Target`). */
+function fromTarget(ctx: Ctx, t: Target | undefined, standby: boolean, key: string): ViewTarget | null {
   if (!t || typeof t !== "object") return null;
   if (t.kind === "app") {
-    const a = apps.get(t.service_id);
-    const hops = arr<ServiceInstance>(a?.instances).map((i, j) => {
-      const n = nodes.get(i.server_id);
-      return {
+    const a = ctx.apps.get(t.service_id);
+    const hops = arr<ServiceInstance>(a?.instances).map(
+      (i, j): ViewHop => ({
         key: `${key}:${j}`,
         serverId: i.server_id,
-        name: n ? nodeName(n) : i.server_id.slice(0, 8),
+        name: nameOf(ctx, i.server_id),
         resolved: [],
         standby: standby || i.role === "standby",
         role: appRole(i.role),
-        state: liveState({ status: "deployed", state: i.state ?? null, last_error: null }, n),
-      } satisfies ViewHop;
-    });
-    return { key, kind: "app", label: a?.name ?? t.service_id.slice(0, 8), sub: `:${t.port}`, to: { kind: "app", id: t.service_id }, standby, hops };
+        state: liveState({ status: "deployed", state: i.state ?? null, last_error: null }, ctx.nodes.get(i.server_id)),
+      }),
+    );
+    return { key, kind: "app", label: a?.name ?? t.service_id.slice(0, 8), ports: `:${t.port}`, to: { kind: "app", id: t.service_id }, standby, hops };
   }
-  if (t.kind === "node") {
-    const n = nodes.get(t.server_id);
-    return { key, kind: "node", label: n ? nodeName(n) : t.server_id.slice(0, 8), sub: `:${t.port}`, to: { kind: "node", id: t.server_id }, standby, hops: [] };
-  }
-  if (t.kind === "external") return { key, kind: "external", label: t.address ?? "—", sub: "external", standby, hops: [], title: t.address };
+  if (t.kind === "node") return onNode(ctx, t.server_id, "", t.port, { key, standby });
+  if (t.kind === "external") return fromAddress(ctx, t.address ?? "", standby, key);
   return null;
 }
 
-/** Top-level targets from the routing API (with upstream addresses, state and traffic keys). */
-function fromRouting(t: RouteTarget, key: string, nodes: Map<string, Node>, apps: Map<string, Service>, weights: Record<string, number>): ViewTarget {
-  const tt = t.target;
-  const kind = tt?.kind ?? "external";
-  const hops: ViewHop[] =
-    kind === "external"
-      ? []
-      : arr<RouteTarget["upstreams"][number]>(t.upstreams).map((u, j) => ({
-          key: `${key}:${j}`,
-          serverId: u.server_id,
-          name: u.node ?? u.address,
-          address: u.address,
-          resolved: arr<string>(u.resolved),
-          standby: !!u.standby,
-          role: roleOf(t, u, apps),
-          state: hopState(t, u, u.server_id ? nodes.get(u.server_id) : undefined),
-          weight: weights[u.address],
-        }));
-  return {
-    key,
-    kind,
-    label: kind === "external" ? (tt?.kind === "external" ? tt.address : t.label) : t.label,
-    sub: tt?.kind === "external" ? "external" : tt && "port" in tt ? `:${tt.port}` : undefined,
-    to: tt?.kind === "app" ? { kind: "app", id: tt.service_id } : tt?.kind === "node" ? { kind: "node", id: tt.server_id } : undefined,
-    internal: t.internal_name,
-    standby: !!t.standby,
-    hops,
-    title: t.internal_name ?? undefined,
-  };
+/** Top-level targets from the routing API: app targets carry upstream addresses, state and traffic keys. */
+function fromRouting(ctx: Ctx, t: RouteTarget, key: string, weights: Record<string, number>): ViewTarget | null {
+  const tt = t?.target;
+  if (tt?.kind !== "app") return fromTarget(ctx, tt, !!t?.standby, key);
+  const hops = arr<RouteTarget["upstreams"][number]>(t.upstreams).map(
+    (u, j): ViewHop => ({
+      key: `${key}:${j}`,
+      serverId: u.server_id,
+      name: u.node ?? u.address,
+      address: u.address,
+      resolved: arr<string>(u.resolved),
+      standby: !!u.standby,
+      role: roleOf(t, u, ctx.apps),
+      state: hopState(t, u, u.server_id ? ctx.nodes.get(u.server_id) : undefined),
+      weight: weights[u.address],
+    }),
+  );
+  return { key, kind: "app", label: t.label, ports: `:${tt.port}`, detail: t.internal_name ?? undefined, to: { kind: "app", id: tt.service_id }, standby: !!t.standby, hops, title: t.internal_name ?? undefined };
 }
 
 /** Redirect / static rules end in a pseudo-target that says where requests go. */
 function terminal(kind: RuleKind, key: string, redirect?: RedirectTo, root?: StaticRoot): ViewTarget[] {
   if (kind === "redirect")
-    return [{ key, kind: "redirect", label: redirect?.to || "—", sub: redirect?.code ? String(redirect.code) : undefined, standby: false, hops: [], title: redirect ? `${redirect.code} → ${redirect.to}${redirect.keep_path ? " (keeps the path)" : ""}` : "No destination" }];
+    return [{ key, kind: "redirect", label: redirect?.to || "—", ports: redirect?.code ? String(redirect.code) : undefined, standby: false, hops: [], title: redirect ? `${redirect.code} → ${redirect.to}${redirect.keep_path ? " (keeps the path)" : ""}` : "No destination" }];
   if (kind === "static")
-    return [{ key, kind: "static", label: root?.root || "—", sub: root?.spa ? "SPA" : undefined, standby: false, hops: [], title: root ? `Files from ${root.root}${root.index ? ` · index ${root.index}` : ""}` : "No root directory" }];
+    return [{ key, kind: "static", label: root?.root || "—", ports: root?.spa ? "SPA" : undefined, standby: false, hops: [], title: root ? `Files from ${root.root}${root.index ? ` · index ${root.index}` : ""}` : "No root directory" }];
   return [];
 }
 
-/** The endpoint's path rules: the default `/` rule plus `spec.rules`. Old rows (no site spec) get one `/` proxy rule. */
-function rulesOf(ep: RouteEndpoint, site: Site | undefined, nodes: Map<string, Node>, apps: Map<string, Service>): ViewRule[] {
+/** Typed targets when present, else the plain upstream lists (rows saved before typed targets). */
+function targetsOf(ctx: Ctx, key: string, typed: { active: Target[]; standby: Target[] }, plain: { active: string[]; standby: string[] }, weights: Record<string, number>): ViewTarget[] {
+  if (typed.active.length || typed.standby.length)
+    return [...typed.active.map((t, i) => fromTarget(ctx, t, false, `${key}:${i}`)), ...typed.standby.map((t, i) => fromTarget(ctx, t, true, `${key}:s${i}`))].filter((x): x is ViewTarget => !!x);
+  return [
+    ...plain.active.filter((a) => typeof a === "string").map((a, i) => fromAddress(ctx, a, false, `${key}:${i}`, weights[a])),
+    ...plain.standby.filter((a) => typeof a === "string").map((a, i) => fromAddress(ctx, a, true, `${key}:s${i}`)),
+  ];
+}
+
+/** The endpoint's path rules: the default `/` rule plus `spec.rules`. Old rows (no site spec) get one `/` rule from the routing API. */
+function rulesOf(ctx: Ctx, ep: RouteEndpoint, site: Site | undefined): ViewRule[] {
   const spec = site?.config.spec;
   const weights = (spec as { weights?: Record<string, number> } | undefined)?.weights ?? {};
-  const kind: RuleKind = spec?.kind ?? (arr<RouteTarget>(ep.targets).some((t) => t?.standby) ? "balancer" : "proxy");
-  const base: ViewRule = {
-    key: "r0",
-    path: "/",
-    match: "prefix",
-    kind,
-    targets:
-      kind === "redirect" || kind === "static"
-        ? terminal(kind, "r0:0", spec?.redirect, spec?.static_root)
-        : arr<RouteTarget>(ep.targets).map((t, i) => fromRouting(t, `r0:${i}`, nodes, apps, weights)),
-  };
+  const routed = arr<RouteTarget>(ep.targets);
+  const kind: RuleKind = spec?.kind ?? (routed.some((t) => t?.standby) || arr(spec?.standby).length ? "balancer" : "proxy");
+  const baseTargets =
+    kind === "redirect" || kind === "static"
+      ? terminal(kind, "r0:0", spec?.redirect, spec?.static_root)
+      : routed.length
+        ? routed.map((t, i) => fromRouting(ctx, t, `r0:${i}`, weights)).filter((x): x is ViewTarget => !!x)
+        : targetsOf(ctx, "r0", { active: arr(site?.config.targets), standby: arr(site?.config.standby_targets) }, { active: arr(spec?.upstreams), standby: arr(spec?.standby) }, weights);
   const extra = arr<RouteRule>(spec?.rules).map((r, k): ViewRule => {
     const key = `r${k + 1}`;
     const rk: RuleKind = r?.kind ?? "proxy";
     const targets =
       rk === "redirect" || rk === "static"
         ? terminal(rk, `${key}:0`, r.redirect, r.static_root)
-        : [...arr<Target>(r?.targets).map((t, i) => resolveTarget(t, false, `${key}:${i}`, nodes, apps)), ...arr<Target>(r?.standby_targets).map((t, i) => resolveTarget(t, true, `${key}:s${i}`, nodes, apps))].filter((x): x is ViewTarget => !!x);
+        : targetsOf(ctx, key, { active: arr(r?.targets), standby: arr(r?.standby_targets) }, { active: arr(r?.upstreams), standby: arr(r?.standby) }, {});
     return { key, path: r?.path || "/", match: r?.match_kind ?? "prefix", kind: rk, targets };
   });
-  return [base, ...extra];
+  return [{ key: "r0", path: "/", match: "prefix", kind, targets: baseTargets }, ...extra];
 }
 
 const targetIcon = (k: ViewTarget["kind"]) =>
-  k === "app" ? <Layers className="size-3" /> : k === "node" ? <Server className="size-3" /> : k === "redirect" ? <CornerDownRight className="size-3" /> : k === "static" ? <Folder className="size-3" /> : <Globe className="size-3" />;
+  k === "app" ? <Layers className="size-3" /> : k === "node" ? <Server className="size-3" /> : k === "container" ? <Box className="size-3" /> : k === "redirect" ? <CornerDownRight className="size-3" /> : k === "static" ? <Folder className="size-3" /> : <Globe className="size-3" />;
+
+/** A domain with open-in-new-tab and copy-URL buttons. */
+function DomainLinks({ domain, tls }: { domain: string; tls: boolean }) {
+  const url = `${tls ? "https" : "http"}://${domain}`;
+  return (
+    <span className="relative z-10 inline-flex shrink-0 items-center">
+      <a href={url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${url}`} title={`Open ${url}`} className="grid size-5 place-items-center rounded text-faint hover:bg-panel-2 hover:text-fg focus-visible:outline-2 focus-visible:outline-accent">
+        <ExternalLink className="size-3" />
+      </a>
+      <CopyIcon text={url} label={`Copy ${url}`} />
+    </span>
+  );
+}
 
 /** One endpoint: a slim row, with thin connectors drawn between the pills. */
-function Row({ ep, site, live, nodes, apps, clusterName }: { ep: RouteEndpoint; site?: Site; live?: LiveResponse; nodes: Map<string, Node>; apps: Map<string, Service>; clusterName: (id: string) => string }) {
+function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: Site; live?: LiveResponse; ctx: Ctx; clusterName: (id: string) => string }) {
+  const { nodes } = ctx;
   const wrap = useRef<HTMLDivElement>(null);
   const els = useRef(new Map<string, HTMLElement>());
   const [paths, setPaths] = useState<{ d: string; dashed?: boolean; tone?: Tone }[]>([]);
@@ -274,7 +356,7 @@ function Row({ ep, site, live, nodes, apps, clusterName }: { ep: RouteEndpoint; 
   const edges = arr<RouteEndpoint["edges"][number]>(ep.edges);
   const domains = arr<string>(ep.domains).length ? arr<string>(ep.domains) : arr<string>(site?.config.spec.domains);
   const redirects = arr<RedirectRule>(site?.config.spec.redirects);
-  const rules = rulesOf(ep, site, nodes, apps);
+  const rules = rulesOf({ ...ctx, edges: edges.map((e) => e.server_id) }, ep, site);
   const nodeOf = (id: string | null) => (id ? nodes.get(id) : undefined);
   const edgeOffline = (id: string) => {
     const st = nodeOf(id)?.status;
@@ -393,12 +475,18 @@ function Row({ ep, site, live, nodes, apps, clusterName }: { ep: RouteEndpoint; 
       {/* Domain */}
       <div className="min-w-0">
         <Label>Domain</Label>
-        <Pill id="domain" reg={reg} icon={tlsOn ? <Lock className="size-3 text-ok" /> : <Globe className="size-3" />} title={domains.join(", ")}>
-          {domains[0] ?? ep.name ?? "—"}
-        </Pill>
+        <div className="flex min-w-0 max-w-full items-center gap-0.5">
+          <Pill id="domain" reg={reg} icon={tlsOn ? <Lock className="size-3 text-ok" /> : <Globe className="size-3" />} title={domains.join(", ")}>
+            {domains[0] ?? ep.name ?? "—"}
+          </Pill>
+          {domains[0] && <DomainLinks domain={domains[0]} tls={tlsOn} />}
+        </div>
         {domains.slice(1).map((d) => (
-          <div key={d} className="truncate pl-1 font-mono text-[10.5px] text-muted" title={d}>
-            + {d}
+          <div key={d} className="flex min-w-0 items-center gap-0.5 pl-1">
+            <span className="min-w-0 truncate font-mono text-[10.5px] text-muted" title={d}>
+              + {d}
+            </span>
+            <DomainLinks domain={d} tls={tlsOn} />
           </div>
         ))}
         {redirects.map((r, i) => (
@@ -449,7 +537,7 @@ function Row({ ep, site, live, nodes, apps, clusterName }: { ep: RouteEndpoint; 
           <div key={r.key} className="flex min-w-0 max-w-full flex-col items-start gap-1">
             {r.targets.map((t) => (
               <div key={t.key} className="flex min-w-0 max-w-full flex-wrap items-center gap-1">
-                <Pill id={`t:${t.key}`} reg={reg} standby={t.standby} icon={targetIcon(t.kind)} to={t.to} sub={t.sub} title={t.title}>
+                <Pill id={`t:${t.key}`} reg={reg} standby={t.standby} icon={targetIcon(t.kind)} to={t.to} sub={t.ports} title={t.title}>
                   {t.label}
                 </Pill>
                 {t.hops.map((h) => (
@@ -471,7 +559,11 @@ function Row({ ep, site, live, nodes, apps, clusterName }: { ep: RouteEndpoint; 
                   </Pill>
                 ))}
                 {t.kind === "app" && !t.hops.length && <span className="text-[11px] text-warn">not placed on any node</span>}
-                {t.internal && <span className="w-full truncate pl-1 font-mono text-[10px] text-faint" title={t.internal}>{t.internal}</span>}
+                {t.detail && (
+                  <span className="w-full truncate pl-1 font-mono text-[10px] text-faint" title={t.detail}>
+                    {t.detail}
+                  </span>
+                )}
               </div>
             ))}
             {!r.targets.length && <span className="text-xs text-warn">No targets</span>}
@@ -504,6 +596,24 @@ export function Routing({ clusterId, live }: { clusterId: string; live?: LiveRes
   const sites = new Map((Array.isArray(siteList) ? siteList : []).map((s) => [s.id, s] as const));
   const clusterList = useClusters().data;
   const clusterName = (id: string) => (Array.isArray(clusterList) ? clusterList.find((c) => c?.id === id)?.name : undefined) ?? id.slice(0, 8);
+  // Addresses → nodes, and each involved node's containers, so `host:port` upstreams resolve to what they reach.
+  const byAddr = new Map<string, string>();
+  for (const n of nodes.values()) for (const a of nodeAddresses(n)) if (!isLoopback(a) && !byAddr.has(a)) byAddr.set(a, n.id);
+  const list0 = Array.isArray(q.data?.endpoints) ? q.data.endpoints : [];
+  const involved = new Set<string>();
+  for (const ep of list0) {
+    for (const e of arr<{ server_id: string }>(ep.edges)) involved.add(e.server_id);
+    const spec = sites.get(ep.id)?.config.spec;
+    const addrs = [...arr<string>(spec?.upstreams), ...arr<string>(spec?.standby), ...arr<RouteRule>(spec?.rules).flatMap((r) => [...arr<string>(r?.upstreams), ...arr<string>(r?.standby)])];
+    for (const a of addrs) {
+      const id = typeof a === "string" ? byAddr.get(splitAddr(a).host) : undefined;
+      if (id) involved.add(id);
+    }
+    for (const t of arr<RouteTarget>(ep.targets)) if (t?.target?.kind === "node") involved.add(t.target.server_id);
+  }
+  // Only online nodes: the list is an agent call.
+  const containers = useNodeContainers([...involved].filter((id) => nodes.get(id)?.status === "online"));
+  const ctx: Ctx = { nodes, apps, containers, byAddr, edges: [] };
   if (q.isLoading) return <Skeleton />;
   if (q.isError) return <ErrorNote error={q.error} />;
   const list = Array.isArray(q.data?.endpoints) ? q.data.endpoints : [];
@@ -522,7 +632,7 @@ export function Routing({ clusterId, live }: { clusterId: string; live?: LiveRes
             <span>Target → runs on</span>
           </div>
           {list.map((ep) => (
-            <Row key={ep.id} ep={ep} site={sites.get(ep.id)} live={live} nodes={nodes} apps={apps} clusterName={clusterName} />
+            <Row key={ep.id} ep={ep} site={sites.get(ep.id)} live={live} ctx={ctx} clusterName={clusterName} />
           ))}
         </div>
       )}

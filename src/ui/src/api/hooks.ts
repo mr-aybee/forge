@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 
 import { ApiError, api, get, post } from "./client";
 import type {
@@ -868,6 +868,40 @@ export const useContainerQuery = <T,>(server: string, op: "info" | "list" | "ima
     retry: false,
     staleTime: 10_000,
   });
+
+/**
+ * Container lists of several nodes at once (same cache as `useContainerQuery(.., "list")`),
+ * keyed by node id. A node whose list failed or is loading is simply absent. Never throws.
+ */
+export function useNodeContainers(servers: string[]): Map<string, ContainerSummary[]> {
+  const ids = [...new Set(servers.filter(Boolean))].sort();
+  const qs = useQueries({
+    queries: ids.map((id) => ({
+      queryKey: ["containers", id, "list"],
+      queryFn: () => containerCall<ContainerSummary[]>(id, { op: "list" }),
+      retry: false,
+      staleTime: 30_000,
+    })),
+  });
+  const out = new Map<string, ContainerSummary[]>();
+  qs.forEach((q, i) => {
+    const r = q.data?.status === "succeeded" ? q.data.result : undefined;
+    if (Array.isArray(r))
+      out.set(
+        ids[i] ?? "",
+        r.filter((c) => !!c && typeof c.id === "string").map((c) => ({ ...c, name: txt(c.name).replace(/^\//, ""), image: txt(c.image), ports: Array.isArray(c.ports) ? c.ports.filter((x) => typeof x === "string") : [], labels: isObj(c.labels) ? (c.labels as Record<string, string>) : null })),
+      );
+  });
+  return out;
+}
+
+/** Every address a node is known by: its primary address and each interface address (from facts). */
+export function nodeAddresses(n: { facts?: unknown } | null | undefined): string[] {
+  const f = isObj(n?.facts) ? n.facts : {};
+  const out = [txt(f.address)];
+  if (Array.isArray(f.interfaces)) for (const i of f.interfaces) if (isObj(i)) out.push(txt(i.address));
+  return out.filter(Boolean);
+}
 
 export const useContainerAction = (server: string) =>
   useAction(
