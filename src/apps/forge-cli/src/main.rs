@@ -35,6 +35,7 @@ mod queryparity;
 mod rescmd;
 mod schemacheck;
 mod silencecmd;
+mod swarmcmd;
 mod termcmd;
 mod tunnel_direct;
 mod tunnelcmd;
@@ -144,6 +145,9 @@ pub enum Cmd {
     /// Compose stacks: list, show, deploy, roll back, take down.
     #[command(subcommand)]
     Stacks(rescmd::StacksCmd),
+    /// Docker Swarm: nodes, stacks, secrets, configs, networks, volumes, services.
+    #[command(subcommand)]
+    Swarm(swarmcmd::SwarmCmd),
     /// Projects: the products whose environments hold your services.
     #[command(subcommand)]
     Projects(projectcmd::ProjectsCmd),
@@ -394,6 +398,7 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Audit(c) => cmds::audit(g, c).await,
         Cmd::Plugins(c) => cmds::plugins(g, c).await,
         Cmd::Stacks(c) => rescmd::stacks(g, c).await,
+        Cmd::Swarm(c) => swarmcmd::run(g, c).await,
         Cmd::Projects(c) => projectcmd::run(g, c).await,
         Cmd::Services(c) => rescmd::services(g, c).await,
         Cmd::Approvals(c) => admincmd::approvals(g, c).await,

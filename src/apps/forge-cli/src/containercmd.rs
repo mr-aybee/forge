@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use clap::{Args, Subcommand, ValueEnum};
-use forge_catalog::docker_ops::{DockerOp, NetworkDriver};
+use forge_catalog::docker_ops::{DockerOp, NetworkDriver, VolumeRemote};
 use reqwest::Method;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -430,12 +430,34 @@ pub enum ImageCmd {
 pub enum VolumeCmd {
     /// A volume's driver, mount point and labels.
     Inspect { node: String, name: String },
-    /// Create a named volume.
+    /// Create a named volume, optionally on an NFS or CIFS share.
     Create {
         node: String,
         name: String,
         #[arg(long = "label", value_name = "KEY=VALUE")]
         labels: Vec<String>,
+        /// NFS server IP address (with --nfs-path).
+        #[arg(long, requires = "nfs_path", conflicts_with = "cifs_server")]
+        nfs_server: Option<String>,
+        /// The NFS export, e.g. /exports/data.
+        #[arg(long)]
+        nfs_path: Option<String>,
+        /// NFS version: 3, 4, 4.1 or 4.2.
+        #[arg(long)]
+        nfs_version: Option<String>,
+        /// CIFS/SMB server (with --cifs-share).
+        #[arg(long, requires = "cifs_share")]
+        cifs_server: Option<String>,
+        #[arg(long)]
+        cifs_share: Option<String>,
+        #[arg(long)]
+        cifs_user: Option<String>,
+        /// File holding the CIFS password (`-`: standard input).
+        #[arg(long, value_name = "PATH")]
+        cifs_password_file: Option<String>,
+        /// Mount the share read-only.
+        #[arg(long)]
+        read_only: bool,
     },
     /// Remove a volume and its data.
     Remove {
@@ -579,9 +601,43 @@ async fn image(g: &Global, api: &mut Api, cmd: ImageCmd) -> Result<()> {
 async fn volume(g: &Global, api: &mut Api, cmd: VolumeCmd) -> Result<()> {
     match cmd {
         VolumeCmd::Inspect { node, name } => op(g, api, &node, DockerOp::VolumeInspect { name }, None).await,
-        VolumeCmd::Create { node, name, labels } => {
+        VolumeCmd::Create {
+            node,
+            name,
+            labels,
+            nfs_server,
+            nfs_path,
+            nfs_version,
+            cifs_server,
+            cifs_share,
+            cifs_user,
+            cifs_password_file,
+            read_only,
+        } => {
             let labels = pairs(&labels, "--label")?;
-            op(g, api, &node, DockerOp::VolumeCreate { name, labels }, None).await
+
+            let remote = match (nfs_server, cifs_server) {
+                (Some(server), _) => Some(VolumeRemote::Nfs {
+                    server,
+                    path: nfs_path.unwrap_or_default(),
+                    version: nfs_version,
+                    read_only,
+                }),
+                (None, Some(server)) => Some(VolumeRemote::Cifs {
+                    server,
+                    share: cifs_share.unwrap_or_default(),
+                    username: cifs_user,
+                    password: cifs_password_file
+                        .as_deref()
+                        .map(crate::rescmd::read_text)
+                        .transpose()?
+                        .map(|p| p.trim_end_matches(['\r', '\n']).to_owned()),
+                    read_only,
+                }),
+                (None, None) => None,
+            };
+
+            op(g, api, &node, DockerOp::VolumeCreate { name, labels, remote }, None).await
         }
         VolumeCmd::Remove { node, name, force, yes } => {
             confirm(g, yes, &format!("Remove volume {name} and its data on {node}?"))?;
