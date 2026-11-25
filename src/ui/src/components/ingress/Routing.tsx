@@ -192,6 +192,14 @@ function healthOf(rules: ViewRule[]): { health?: "down" | "degraded"; downN: num
   return { health: hops.length && downN === hops.length ? "down" : downN > 0 ? "degraded" : undefined, downN, total: hops.length };
 }
 
+/** The right-most edge of an element and its direct children (icons may overflow a truncated group). */
+function rightEdge(el: HTMLElement | undefined): DOMRect | undefined {
+  if (!el) return undefined;
+  const r = el.getBoundingClientRect();
+  const right = Math.max(r.right, ...[...el.children].map((c) => c.getBoundingClientRect().right));
+  return new DOMRect(r.left, r.top, right - r.left, r.height);
+}
+
 /** Domain pills shown before the "+N more" chip. */
 const DOMAINS_SHOWN = 3;
 const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
@@ -361,6 +369,7 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
   const els = useRef(new Map<string, HTMLElement>());
   const [paths, setPaths] = useState<{ d: string; dashed?: boolean; tone?: Tone; arrow?: boolean }[]>([]);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [redirPos, setRedirPos] = useState<Record<number, { top: number; left: number }>>({});
   const reg = useCallback<Reg>((id) => (el) => {
     if (el) els.current.set(id, el);
     else els.current.delete(id);
@@ -412,7 +421,10 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
 
   const wires: Wire[] = [];
   // Domains: first few as pills, the rest behind a "+N more" chip (one wire source for all of them).
-  const allDomains = domains.length ? domains : [ep.name ?? "—"];
+  // Primary first, then domains served here, then redirect sources: their amber wires
+  // run below the blue trunk instead of across it.
+  const isRedirSrc = (d: string) => redirects.some((r) => sameHost(r.from, d));
+  const allDomains = domains.length ? [domains[0] ?? "", ...domains.slice(1).filter((d) => !isRedirSrc(d)), ...domains.slice(1).filter(isRedirSrc)] : [ep.name ?? "—"];
   const shownDomains = moreOpen ? allDomains : allDomains.slice(0, DOMAINS_SHOWN);
   const hiddenDomains = allDomains.slice(shownDomains.length);
   const domainWires = (from: string, d: string) => {
@@ -422,6 +434,9 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
   };
   shownDomains.forEach((d, i) => domainWires(`dom:${i}`, d));
   hiddenDomains.forEach((d) => domainWires("dom:more", d));
+  // Which domain element each redirect badge lines up with.
+  const redirSrc: Record<number, string> = {};
+  for (const w of wires) if (w.to.startsWith("redir:")) redirSrc[Number(w.to.slice(6))] ??= w.from;
   for (const r of rules) {
     for (const e of edges) wires.push({ from: `edge:${e.server_id}`, to: `rule:${r.key}` });
     for (const t of r.targets) {
@@ -436,18 +451,48 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
     if (!box) return;
     const draw = () => {
       // Only side by side (md+); stacked rows read top to bottom without wires.
-      if (box.clientWidth < 720) return setPaths([]);
+      if (box.clientWidth < 720) {
+        setRedirPos({});
+        return setPaths([]);
+      }
       const base = box.getBoundingClientRect();
       const next: typeof paths = [];
       // Elbow connectors: out horizontally, one vertical trunk per column gap
       // (fan-outs share it), then horizontally in. Pixel-snapped for 1px-ish strokes.
       const snap = (v: number) => Math.round(v) + 0.5;
       const gap = (id: string) => id.split(":")[0] ?? "";
+      // Redirect badges: level with their source domain, in the edge column, unless that
+      // would cover an edge pill (then stacked below the edges).
+      const place = new Map<number, { top: number; left: number; h: number }>();
+      const col = els.current.get("edgecol")?.getBoundingClientRect();
+      const edgeBoxes = edges.map((e) => els.current.get(`edge:${e.server_id}`)?.getBoundingClientRect()).filter((r): r is DOMRect => !!r);
+      let below = Math.max(0, ...edgeBoxes.map((r) => r.bottom - base.top)) + 4;
+      const taken: number[] = [];
+      for (const [ri, src] of Object.entries(redirSrc).sort(([a], [b]) => Number(a) - Number(b))) {
+        const sr = els.current.get(src)?.getBoundingClientRect();
+        const h = els.current.get(`redir:${ri}`)?.getBoundingClientRect().height ?? 22;
+        if (!sr || !col) continue;
+        let top = sr.top + sr.height / 2 - base.top - h / 2;
+        const hits = (t: number) => edgeBoxes.some((r) => t < r.bottom - base.top && t + h > r.top - base.top) || taken.some((t2) => Math.abs(t2 - t) < h);
+        if (hits(top)) {
+          top = below;
+          below += h + 4;
+        }
+        taken.push(top);
+        place.set(Number(ri), { top: Math.round(top), left: Math.round(col.left - base.left), h });
+      }
+      setRedirPos(Object.fromEntries(place));
       const seg: { w: Wire; x1: number; y1: number; x2: number; y2: number; g: string }[] = [];
       for (const w of JSON.parse(key) as Wire[]) {
-        const a = els.current.get(w.from)?.getBoundingClientRect();
+        const a = rightEdge(els.current.get(w.from));
         const b = els.current.get(w.to)?.getBoundingClientRect();
         if (!a || !b) continue;
+        // A redirect badge is placed level with its domain (below), so its wire is straight.
+        const rp = w.to.startsWith("redir:") ? place.get(Number(w.to.slice(6))) : undefined;
+        if (rp) {
+          seg.push({ w, g: "redir", x1: a.right - base.left + 2, y1: a.top + a.height / 2 - base.top, x2: rp.left - 4, y2: rp.top + rp.h / 2 });
+          continue;
+        }
         seg.push({ w, g: gap(w.from), x1: a.right - base.left + 2, y1: a.top + a.height / 2 - base.top, x2: b.left - base.left - 4, y2: b.top + b.height / 2 - base.top });
       }
       const trunk = new Map<string, number>();
@@ -566,7 +611,7 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
       </div>
 
       {/* Edges */}
-      <div className="flex min-w-0 flex-col items-start gap-1">
+      <div ref={reg("edgecol")} className="flex min-w-0 flex-col items-start gap-1 md:self-start md:pt-px">
         <Label>Edge</Label>
         {edges.map((e) => (
           <Pill key={e.server_id} id={`edge:${e.server_id}`} reg={reg} tone={edgeTone(e)} down={edgeOffline(e.server_id) ? "node offline" : undefined} icon={<Server className="size-3" />} to={{ kind: "node", id: e.server_id }} rate={edgeRate(e.server_id)}>
@@ -575,9 +620,11 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
         ))}
         {!edges.length && <span className="text-xs text-warn">No edge nodes</span>}
         {redirects.map((r, i) => (
-          <Pill key={i} id={`redir:${i}`} reg={reg} icon={<CornerDownRight className="size-3" />} sub={String(r.code)} title={`${r.from} → ${r.to} (${r.code})${r.keep_path ? ", keeps the path" : ""}`}>
+          <div key={i} className="z-10 max-w-full" style={redirPos[i] ? { position: "absolute", top: redirPos[i].top, left: redirPos[i].left } : undefined}>
+          <Pill id={`redir:${i}`} reg={reg} icon={<CornerDownRight className="size-3" />} sub={String(r.code)} title={`${r.from} → ${r.to} (${r.code})${r.keep_path ? ", keeps the path" : ""}`}>
             → {(r.to ?? "—").replace(/^https?:\/\//, "")}
           </Pill>
+          </div>
         ))}
       </div>
 
