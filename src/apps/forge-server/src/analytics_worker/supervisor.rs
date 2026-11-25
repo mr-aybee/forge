@@ -121,6 +121,11 @@ pub struct ListenerCert {
 /// Issues the agent listener's certificates (the Forge CA).
 pub trait ListenerCerts: Send + Sync + std::fmt::Debug {
     fn issue(&self, now: Timestamp) -> Result<ListenerCert, forge_pki::PkiError>;
+    /// Changes when the key certificates are issued for changes (D-167): a
+    /// certificate issued under another generation is renewed at once.
+    fn generation(&self) -> u64 {
+        0
+    }
 }
 
 /// Wiring for [`WorkerSupervisor::new`].
@@ -145,7 +150,7 @@ pub struct WorkerSupervisor {
 /// The validity of the listener certificate the running worker serves, and
 /// its renewal (D-145).
 #[derive(Debug, Default)]
-struct ListenerCertState(Mutex<Option<(Timestamp, Timestamp)>>, Mutex<Option<Timestamp>>);
+struct ListenerCertState(Mutex<Option<(Timestamp, Timestamp, u64)>>, Mutex<Option<Timestamp>>);
 
 /// What one renewal check did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,21 +169,25 @@ const RENEW_LAST_CHANCE: i64 = 24 * 3_600_000;
 
 impl ListenerCertState {
     /// The worker (re)started with `cert`.
-    fn started(&self, cert: Option<&ListenerCert>) {
-        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = cert.map(|c| (c.not_before, c.not_after));
+    fn started(&self, cert: Option<&ListenerCert>, generation: u64) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = cert.map(|c| (c.not_before, c.not_after, generation));
     }
 
-    /// Due at two thirds of its life, like agent certificates.
-    fn due(&self, now: Timestamp) -> bool {
+    /// Due at two thirds of its life, like agent certificates, or at once
+    /// when the key changed (D-167).
+    fn due(&self, now: Timestamp, generation: u64) -> bool {
         self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .is_some_and(|(nb, na)| forge_pki::renewal_due(nb, na, now))
+            .is_some_and(|(nb, na, g)| g != generation || forge_pki::renewal_due(nb, na, now))
     }
 
     /// Less than [`RENEW_LAST_CHANCE`] left: restart the worker instead.
     fn expiring(&self, now: Timestamp) -> bool {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).is_some_and(|(_, na)| now.0 >= na.0 - RENEW_LAST_CHANCE)
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some_and(|(_, na, _)| now.0 >= na.0 - RENEW_LAST_CHANCE)
     }
 
     /// When due, issues a new certificate and hands it to `send`; records it
@@ -191,12 +200,13 @@ impl ListenerCertState {
         Fut: std::future::Future<Output = Result<(), E>>,
         E: std::fmt::Display,
     {
-        if !self.due(now) {
+        let generation = certs.generation();
+        if !self.due(now, generation) {
             return Renewal::NotDue;
         }
         let result = match certs.issue(now) {
             Ok(cert) => {
-                let validity = (cert.not_before, cert.not_after);
+                let validity = (cert.not_before, cert.not_after, generation);
                 send(cert.tls).await.map(|()| validity).map_err(|e| format!("sending it to the worker: {e}"))
             }
             Err(e) => Err(format!("issuing it: {e}")),
@@ -390,11 +400,12 @@ impl WorkerSupervisor {
         self.set(|s| s.status = WorkerStatus::Starting);
         let secret = forge_secrets::crypto::random_token::<32>();
         // A fresh listener certificate at every start (D-145).
+        let generation = config.listener_certs.as_ref().map_or(0, |c| c.generation());
         let cert = match config.listener_certs.as_ref().map(|c| c.issue(self.d.clock.now())).transpose() {
             Ok(c) => c,
             Err(e) => return Ended::Restart(RestartReason::StartFailed, Some(format!("listener certificate: {e}"))),
         };
-        self.listener_cert.started(cert.as_ref());
+        self.listener_cert.started(cert.as_ref(), generation);
         let (mut child, stdin, endpoint) = match Self::start(config, &secret, cert.as_ref().map(|c| &c.tls)).await {
             Ok(x) => x,
             Err(e) => return Ended::Restart(RestartReason::StartFailed, Some(e)),
@@ -543,7 +554,7 @@ mod tests {
     async fn the_listener_certificate_is_renewed_before_it_expires() {
         let (certs, state) = (Fake::default(), ListenerCertState::default());
         let start = Timestamp(1_800_000_000_000);
-        state.started(Some(&certs.issue(start).unwrap()));
+        state.started(Some(&certs.issue(start).unwrap()), 0);
         let sent: Mutex<Vec<String>> = Mutex::new(Vec::new());
         let ok = |tls: AgentTls| {
             sent.lock().unwrap().push(tls.cert_pem);
@@ -553,11 +564,11 @@ mod tests {
         let due = Timestamp(start.0 + 60 * DAY);
         let failed = state.renew(&certs, due, |_| async { Err::<(), _>("worker busy") }).await;
         assert!(matches!(failed, Renewal::Failed(e) if e.contains("worker busy")));
-        assert!(state.due(due) && !state.expiring(due), "still due after a failed hand-over");
+        assert!(state.due(due, 0) && !state.expiring(due), "still due after a failed hand-over");
         assert!(state.expiring(Timestamp(start.0 + 89 * DAY)), "a day before expiry: restart for a new one");
         assert_eq!(state.renew(&certs, due, ok).await, Renewal::Renewed);
         assert_eq!(sent.lock().unwrap().as_slice(), ["cert 3"]);
-        assert!(!state.due(Timestamp(due.0 + 59 * DAY)) && state.due(Timestamp(due.0 + 60 * DAY)));
+        assert!(!state.due(Timestamp(due.0 + 59 * DAY), 0) && state.due(Timestamp(due.0 + 60 * DAY), 0));
         // Each renewal is checked well before its expiry, so the worker never
         // serves an expired one however long it runs.
         let mut now = due;
@@ -567,7 +578,32 @@ mod tests {
         }
         assert_eq!(sent.lock().unwrap().len(), 11);
         // A restart starts over with the certificate handed over at start.
-        state.started(None);
-        assert!(!state.due(Timestamp(now.0 + 1_000 * DAY)), "no listener: nothing to renew");
+        state.started(None, 0);
+        assert!(!state.due(Timestamp(now.0 + 1_000 * DAY), 0), "no listener: nothing to renew");
+    }
+
+    /// D-167: after the control-plane key switches, the worker gets a
+    /// certificate for the new key at the next check, however young the
+    /// current one is.
+    #[tokio::test]
+    async fn a_new_key_is_handed_to_the_worker_at_once() {
+        #[derive(Debug, Default)]
+        struct Switching(Fake, std::sync::atomic::AtomicU64);
+        impl ListenerCerts for Switching {
+            fn issue(&self, now: Timestamp) -> Result<ListenerCert, forge_pki::PkiError> {
+                self.0.issue(now)
+            }
+            fn generation(&self) -> u64 {
+                self.1.load(std::sync::atomic::Ordering::SeqCst)
+            }
+        }
+        let (certs, state) = (Switching::default(), ListenerCertState::default());
+        let start = Timestamp(1_800_000_000_000);
+        state.started(Some(&certs.issue(start).unwrap()), certs.generation());
+        let ok = |_: AgentTls| async { Ok::<(), String>(()) };
+        assert_eq!(state.renew(&certs, Timestamp(start.0 + DAY), ok).await, Renewal::NotDue);
+        certs.1.store(1, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(state.renew(&certs, Timestamp(start.0 + DAY), ok).await, Renewal::Renewed);
+        assert_eq!(state.renew(&certs, Timestamp(start.0 + 2 * DAY), ok).await, Renewal::NotDue);
     }
 }

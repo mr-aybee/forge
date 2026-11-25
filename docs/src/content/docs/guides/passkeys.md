@@ -31,10 +31,11 @@ every endpoint and field, see [REST API](/docs/reference/rest-api/#passkeys).
 - No role or Cedar action is needed to manage your own passkeys.
 
 :::caution
-Passkeys are bound to the host of `public_url`. If you change that host (for
-example from `forge.example.com` to `ops.example.com`), every registered
-passkey stops working. Users then sign in with their password and add new
-passkeys.
+A passkey belongs to the host name you register it on: the address in your
+browser. Forge answers on any name, but a passkey made on `forge.example.com`
+is not offered on `192.0.2.10` or `ops.example.com`. There, sign in with your
+password and code, or add a passkey on that name too. Browsers offer
+passkeys only on HTTPS or `localhost`.
 :::
 
 ## Add a passkey

@@ -122,12 +122,24 @@ pub(crate) fn ensure_private_dir(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// A temporary name next to `path` that no other writer uses: the file
+/// name, the process id and 64 random bits.
+fn unique_tmp(path: &Path) -> Result<PathBuf, String> {
+    use ring::rand::SecureRandom as _;
+    let mut r = [0u8; 8];
+    ring::rand::SystemRandom::new().fill(&mut r).map_err(|_| "no randomness for a temporary name".to_owned())?;
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let suffix: String = r.iter().map(|b| format!("{b:02x}")).collect();
+    Ok(path.with_file_name(format!(".{name}.{}.{suffix}.tmp", std::process::id())))
+}
+
 /// Writes `path` through a fresh temporary file and a rename: a link at
 /// `path` or at the temporary name is replaced or refused, never followed.
+/// The temporary name is unique, so concurrent writers never share it;
+/// the last rename wins (callers that load, modify and save hold a lock).
 pub(crate) fn write_nofollow(path: &Path, data: &[u8]) -> Result<(), String> {
     use std::io::Write as _;
-    let tmp = path.with_extension("json.tmp");
-    let _ = std::fs::remove_file(&tmp);
+    let tmp = unique_tmp(path)?;
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
@@ -136,9 +148,14 @@ pub(crate) fn write_nofollow(path: &Path, data: &[u8]) -> Result<(), String> {
         opts.mode(0o644).custom_flags(i32::try_from(rustix::fs::OFlags::NOFOLLOW.bits()).unwrap_or(0));
     }
     let mut f = opts.open(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    f.write_all(data).and_then(|()| f.sync_all()).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    let written = f.write_all(data).and_then(|()| f.sync_all()).map_err(|e| format!("{}: {e}", tmp.display()));
     drop(f);
-    std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
+    let renamed = written.and_then(|()| std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display())));
+    if renamed.is_err() {
+        // Best effort: a failed write leaves no temporary file behind.
+        let _ = std::fs::remove_file(&tmp);
+    }
+    renamed
 }
 
 /// Reads up to `max` bytes of `path` without following a link at it.
@@ -828,6 +845,7 @@ pub async fn watchdog(agent_dir: PathBuf) {
 // ------------------------------------------------------------ capability
 
 /// Folder of the installed binaries.
+#[cfg(target_os = "linux")]
 const BIN_DIR: &str = "/usr/local/bin";
 
 /// What the helper sees on this host, for [`assess`]. Plain values, so the

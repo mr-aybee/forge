@@ -52,6 +52,9 @@ fn reserved(key: &str) -> ApiResult<()> {
             "analytics settings are changed with PUT /api/v1/analytics/settings (Settings → Analytics)",
         ));
     }
+    if key.starts_with(crate::agent_keys::SETTING_PREFIX) {
+        return Err(ApiError::bad_request("the agent key is managed with forge-server agent-key"));
+    }
     if key.starts_with("names.") {
         return Err(ApiError::bad_request(
             "the local name suffix is set with PUT /api/v1/names/suffix (DNS → Local names)",
@@ -71,6 +74,8 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Ws(ws): Ws) -> A
         .into_iter()
         // Internal records (who enabled automatic package patches).
         .filter(|(k, _)| !k.starts_with("packages.auto_patch_by."))
+        // The control-plane key state (sealed) and agents' pins (D-167).
+        .filter(|(k, _)| !k.starts_with(crate::agent_keys::SETTING_PREFIX))
         .map(|(k, v)| json!({ "key": k, "value": v }))
         .collect();
     Ok(Json(json!({

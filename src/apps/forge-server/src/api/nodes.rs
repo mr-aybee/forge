@@ -20,6 +20,7 @@ use crate::auth::Ws;
 use crate::error::{ApiError, ApiResult};
 use crate::install::{InstallParams, render_script};
 use crate::jobs::node_bootstrap::{BootstrapCredential, BootstrapPayload, secret_aad};
+use crate::request_origin::{NodeUrls, RequestOrigin};
 use crate::state::AppState;
 
 /// How long an unkept bootstrap credential may live in the vault.
@@ -125,6 +126,7 @@ pub async fn onboard(
     State(state): State<AppState>,
     caller: Caller,
     Ws(ws): Ws,
+    origin: RequestOrigin,
     Json(req): Json<OnboardRequest>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let scope = onboarding_scope(&state, ws, req.cluster_id).await?;
@@ -177,6 +179,9 @@ pub async fn onboard(
         hostname: req.hostname.map(|h| h.chars().take(63).collect()),
         terminal_account_sudo: account.is_some() && req.terminal_account_sudo,
         terminal_account: account,
+        // The addresses the node is told to use: the one the administrator
+        // reached Forge on (D-167), never a localhost default.
+        urls: Some(NodeUrls::from_state(&state, &origin).into()),
     };
     let job = state
         .jobs
@@ -222,7 +227,13 @@ pub struct InstallQuery {
 }
 
 /// `GET /install.sh` — the manual installer (public; contains no secrets).
-pub async fn install_script(State(state): State<AppState>, Query(q): Query<InstallQuery>) -> ApiResult<Response> {
+/// Its URLs come from the address the node fetched it from (D-167), so
+/// each network's nodes use an address they can reach.
+pub async fn install_script(
+    State(state): State<AppState>,
+    origin: RequestOrigin,
+    Query(q): Query<InstallQuery>,
+) -> ApiResult<Response> {
     let hostname =
         // An empty value is no override (the enroll call would refuse `--hostname ''`).
         q.hostname.filter(|h| {
@@ -230,11 +241,12 @@ pub async fn install_script(State(state): State<AppState>, Query(q): Query<Insta
         });
     let account = terminal_account(q.terminal_account.as_deref())?;
     let sudo = account.is_some() && matches!(q.terminal_account_sudo.as_deref(), Some("1" | "true"));
+    let urls = NodeUrls::from_state(&state, &origin);
     let body = render_script(
         &state.dist,
         &InstallParams {
-            forge_url: state.config.node_forge_url(),
-            agent_url: state.config.node_agent_url(),
+            forge_url: &urls.forge_url,
+            agent_url: &urls.agent_url,
             token: None,
             hostname: hostname.as_deref(),
             ssh_user_ca: Some(&state.ssh_ca.public_openssh()),
@@ -242,8 +254,13 @@ pub async fn install_script(State(state): State<AppState>, Query(q): Query<Insta
             terminal_account_sudo: sudo,
         },
     );
-    Ok(([(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")], body).into_response())
+    Ok(([(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")], SCRIPT_CACHE_HEADERS, body).into_response())
 }
+
+/// The installers embed the address they were fetched from: never cache
+/// them, and key any cache that ignores `no-store` on those headers.
+const SCRIPT_CACHE_HEADERS: [(header::HeaderName, &str); 2] =
+    [(header::CACHE_CONTROL, "no-store"), (header::VARY, "Host, X-Forwarded-Host, X-Forwarded-Proto")];
 
 /// Bytes read per chunk of an agent download.
 const DOWNLOAD_CHUNK: usize = 64 * 1024;
@@ -286,19 +303,26 @@ pub async fn download(
 /// `GET /install.ps1` — the Windows node installer (public, like
 /// `install.sh`; D-079). It carries no token: run it with
 /// `$env:FORGE_ENROLL_TOKEN` set.
-pub async fn install_ps1(State(state): State<AppState>) -> Response {
-    let body = crate::install::render_ps1(&state.dist, state.config.node_forge_url(), state.config.node_agent_url());
-    ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], body).into_response()
+pub async fn install_ps1(State(state): State<AppState>, origin: RequestOrigin) -> Response {
+    let urls = NodeUrls::from_state(&state, &origin);
+    let body = crate::install::render_ps1(&state.dist, &urls.forge_url, &urls.agent_url);
+    ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], SCRIPT_CACHE_HEADERS, body).into_response()
 }
 
 /// `GET /workspaces/{ws}/onboarding` — what the UI needs for the manual path.
-pub async fn onboarding_info(State(state): State<AppState>, caller: Caller, Ws(ws): Ws) -> ApiResult<Json<Value>> {
+pub async fn onboarding_info(
+    State(state): State<AppState>,
+    caller: Caller,
+    origin: RequestOrigin,
+    Ws(ws): Ws,
+) -> ApiResult<Json<Value>> {
     caller.authorize(Action::ServerEnroll, EntityRef::new(EntityKind::Workspace, ws)).await?;
-    let url = state.config.node_forge_url().trim_end_matches('/');
+    let urls = NodeUrls::from_state(&state, &origin);
+    let url = urls.forge_url.as_str();
     Ok(Json(json!({
         "agents_available": state.dist.available(),
         "install_url": format!("{url}/install.sh"),
-        "agent_url": state.config.node_agent_url(),
+        "agent_url": urls.agent_url,
         "linux": format!("curl -fsSL {url}/install.sh | sudo FORGE_ENROLL_TOKEN='<token>' sh"),
         "windows_available": state.dist.windows_available(),
         "windows": format!("$env:FORGE_ENROLL_TOKEN = '<token>'; irm {url}/install.ps1 | iex"),

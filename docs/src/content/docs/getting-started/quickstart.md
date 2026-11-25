@@ -43,7 +43,6 @@ says otherwise:
 
 | Question | Answer for this walkthrough |
 | --- | --- |
-| Public URL users open | **Enter**. The default is `http://<server-ip>:3880`. |
 | Environment | **Enter** (`development`). |
 | Operational database | **Enter** (`sqlite`, built in). |
 | Analytics database for node history | **Enter** (`duckdb`). |
@@ -61,11 +60,14 @@ The installer then shows a **REVIEW** of your answers. Answer **Enter**
 The installer reports each step as it goes, then prints a summary like this:
 
 ```text
-  Orbyn Forge 1.4.0 is installed and running.
+  Orbyn Forge <version> is installed and running.
 
   ACCESS
     Console       http://192.0.2.10:3880
-    Agents        https://192.0.2.10:3843  (nodes connect out to TCP 3843 and 3832)
+    Console       http://10.0.0.5:3880
+    Console       http://<hostname>:3880
+    · Any name or IP of this machine works; pin one later in Settings or with --public-url.
+    Agents        nodes connect to TCP 3843 and 3832 on the address they use
     Analytics     duckdb, uploads on port 3832
 
   ADMINISTRATOR
@@ -73,9 +75,17 @@ The installer reports each step as it goes, then prints a summary like this:
     Password      <generated password>
     Saved to      /var/lib/forge/initial-admin-password (root only, deleted when you change it)
 
+  RESTRICT ACCESS
+    · Every interface listens. Narrow who may connect, for example:
+      ufw allow from <node subnet> to any port 3843 proto tcp
+      [security.access] allow = ["10.0.0.0/8"] in /etc/forge/forge.toml
+
   AGENT
     This server   enrolled in cluster default as <hostname> (terminal account forge-ops)
 ```
+
+The installer asks no address. The console answers on every **Console**
+line, and on any other name or IP of the server.
 
 Copy the generated password now: the summary shows it only once. If it
 scrolled away, read it again with:
@@ -86,7 +96,7 @@ sudo cat /var/lib/forge/initial-admin-password
 
 ## 4. Sign in
 
-1. Open the **Console** address from the summary in your browser.
+1. Open a **Console** address from the summary that your computer can reach.
 2. Sign in as `admin` with the password.
 3. Open **Settings → Password & security** and choose your own password. Forge then
    deletes the saved password file.

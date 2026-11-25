@@ -21,11 +21,13 @@ use axum::routing::{delete, get, patch, post};
 use forge_core::model::{AuditEvent, AuditOutcome};
 use forge_core::{Action, EntityKind, EntityRef, UserId};
 use forge_identity::passkeys::{AssertionResponse, PasskeyError, RegistrationResponse};
+use forge_identity::webauthn::RelyingParty;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::auth::{Caller, SESSION_COOKIE, Ws, cookie, session_cookies};
 use crate::error::{ApiError, ApiResult};
+use crate::request_origin::RequestOrigin;
 use crate::state::AppState;
 
 pub fn routes() -> Router<AppState> {
@@ -66,6 +68,12 @@ async fn audit_anon(state: &AppState, actor: &str, action: &str, outcome: AuditO
     }
 }
 
+/// The relying party of this request: its host and origin (D-167). A
+/// passkey works on the name it was registered under.
+fn relying_party(origin: &RequestOrigin) -> ApiResult<RelyingParty> {
+    RelyingParty::from_public_url(&origin.origin()).map_err(|e| ApiError::bad_request(e.to_string()))
+}
+
 fn view(p: &forge_core::passkey::Passkey) -> Value {
     json!({ "id": p.id, "name": p.name, "created_at": p.created_at, "last_used_at": p.last_used_at })
 }
@@ -91,13 +99,14 @@ pub struct RegisterBegin {
 pub async fn register_begin(
     State(state): State<AppState>,
     caller: Caller,
+    origin: RequestOrigin,
     body: Option<Json<RegisterBegin>>,
 ) -> ApiResult<Json<Value>> {
     let password = body.and_then(|Json(b)| b.password);
     super::reauth::for_factor_change(&state, &caller, password.as_deref(), "auth.passkey.add").await?;
     let user = &caller.session.user;
     let me = EntityRef::new(EntityKind::User, user.id);
-    let options = state.passkeys.register_begin(user).await.map_err(err)?;
+    let options = state.passkeys.register_begin(user, &relying_party(&origin)?).await.map_err(err)?;
     caller.audit("auth.passkey.add_begin", &me, None, json!({})).await;
     Ok(Json(options))
 }
@@ -106,13 +115,14 @@ pub async fn register_begin(
 pub async fn register_finish(
     State(state): State<AppState>,
     caller: Caller,
+    origin: RequestOrigin,
     Json(req): Json<RegistrationResponse>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let user = &caller.session.user;
     if caller.via_api_key() {
         return Err(ApiError::forbidden("passkeys are added in the console"));
     }
-    match state.passkeys.register_finish(user, &req).await {
+    match state.passkeys.register_finish(user, &req, &relying_party(&origin)?).await {
         Ok(p) => {
             caller
                 .audit(
@@ -198,7 +208,7 @@ fn begin_allowed() -> bool {
 }
 
 /// Options for signing in with a passkey.
-pub async fn login_begin(State(state): State<AppState>) -> ApiResult<Json<Value>> {
+pub async fn login_begin(State(state): State<AppState>, origin: RequestOrigin) -> ApiResult<Json<Value>> {
     if !begin_allowed() {
         return Err(ApiError::new(
             StatusCode::TOO_MANY_REQUESTS,
@@ -206,7 +216,7 @@ pub async fn login_begin(State(state): State<AppState>) -> ApiResult<Json<Value>
             "too many sign-ins right now; try again",
         ));
     }
-    Ok(Json(state.passkeys.login_begin().await.map_err(err)?))
+    Ok(Json(state.passkeys.login_begin(&relying_party(&origin)?).await.map_err(err)?))
 }
 
 /// Base64url of the longest credential id the spec allows (1023 bytes).
@@ -217,6 +227,7 @@ const MAX_CREDENTIAL_ID_B64: usize = 1366;
 pub async fn login_finish(
     State(state): State<AppState>,
     crate::auth::SecureCookies(secure): crate::auth::SecureCookies,
+    origin: RequestOrigin,
     Json(req): Json<AssertionResponse>,
 ) -> ApiResult<Response> {
     let generic = || ApiError::new(StatusCode::UNAUTHORIZED, "invalid_passkey", "passkey sign-in failed; try again");
@@ -227,7 +238,7 @@ pub async fn login_finish(
     if !state.login_throttle.allowed(&key) {
         return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "throttled", "too many failed attempts; try later"));
     }
-    let (user, passkey) = match state.passkeys.login_finish(&req).await {
+    let (user, passkey) = match state.passkeys.login_finish(&req, &relying_party(&origin)?).await {
         Ok(u) => u,
         Err(e) => {
             // Only a failure after a valid challenge counts against the
@@ -267,17 +278,22 @@ pub async fn login_finish(
         json!({ "method": "passkey", "passkey": passkey }),
     )
     .await;
+    super::session::record_admin_address(&state, user.id, &origin).await;
     let ttl = state.identity.config().web_session_ttl.as_secs();
     let body = Json(json!({ "user": user, "mfa": true, "csrf_token": tokens.csrf_token })).into_response();
     Ok(with_cookies(body, session_cookies(&tokens.session_token, &tokens.csrf_token, ttl, secure)))
 }
 
 /// Options for stepping up with one of your passkeys.
-pub async fn step_up_begin(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
+pub async fn step_up_begin(
+    State(state): State<AppState>,
+    caller: Caller,
+    origin: RequestOrigin,
+) -> ApiResult<Json<Value>> {
     if caller.via_api_key() {
         return Err(ApiError::forbidden("API keys cannot be stepped up"));
     }
-    Ok(Json(state.passkeys.step_up_begin(&caller.session.user).await.map_err(err)?))
+    Ok(Json(state.passkeys.step_up_begin(&caller.session.user, &relying_party(&origin)?).await.map_err(err)?))
 }
 
 /// Steps up with a passkey: same result as a one-time code.
@@ -285,6 +301,7 @@ pub async fn step_up_finish(
     State(state): State<AppState>,
     crate::auth::SecureCookies(secure): crate::auth::SecureCookies,
     caller: Caller,
+    origin: RequestOrigin,
     headers: HeaderMap,
     Json(req): Json<AssertionResponse>,
 ) -> ApiResult<Response> {
@@ -300,7 +317,7 @@ pub async fn step_up_finish(
             "too many attempts; try again in 15 minutes",
         ));
     }
-    let passkey = match state.passkeys.step_up_finish(user, &req).await {
+    let passkey = match state.passkeys.step_up_finish(user, &req, &relying_party(&origin)?).await {
         Ok(p) => p,
         Err(e) => {
             state.login_throttle.record_failure(&key);

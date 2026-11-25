@@ -403,3 +403,38 @@ async fn a_running_worker_takes_a_renewed_listener_certificate() {
     assert_eq!(fx.sink(node).upload(&stem, body).await, Outcome::Stored);
     fx.stop.send_replace(true);
 }
+
+/// D-167: the worker's listener has its own key, never the agent hub's.
+/// An agent that pins the hub key and the announced `analytics` key
+/// uploads; one that pins only the hub key is refused by its own check.
+#[tokio::test]
+async fn uploads_reach_a_worker_with_its_own_pinned_key() {
+    let ca = Arc::new(CertificateAuthority::generate("test ca", now()).unwrap());
+    let (node, svc) = (ServerId::new(), ServiceId::new());
+    let state = tempfile::tempdir().unwrap();
+    let fx = Fixture::start(ca.clone(), state.path(), maps(node, svc), 4).await;
+    let hub = forge_pki::ControlPlaneKey::generate().unwrap();
+    let worker_key = forge_pki::ControlPlaneKey::generate().unwrap();
+    let c = ca.issue_server_certificate_for_key(&worker_key, &["forge.invalid".into()], now()).unwrap();
+    let set =
+        Request::SetAgentTls(forge_analytics_proto::config::AgentTls { cert_pem: c.cert_pem, key_pem: c.key_pem });
+    assert_eq!(fx.worker.handle(set, Vec::new()).await, Ok(Reply::Ok));
+    let csr = AgentCsr::generate("n").unwrap();
+    let cert = ca.issue_agent_certificate(&csr.csr_pem, &node.to_string(), now(), Duration::from_secs(3_600)).unwrap();
+    // This identity is the node's in the maps pushed next.
+    fx.ids.0.lock().unwrap().insert(
+        node,
+        (forge_agent::tls::mutual(ca.cert_pem(), &cert.cert_pem, &csr.key_pem).unwrap(), cert.serial_hex.clone()),
+    );
+    fx.push(maps(node, svc)).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (stem, body) = sealed(&spool(dir.path(), node), &[container_row(0, "prod/api")]);
+    let endpoint = format!("localhost:{}", fx.addr.port());
+    let pins = [hub.fingerprint().to_owned(), worker_key.fingerprint().to_owned()];
+    let both = forge_agent::tls::mutual_pinned(&pins, &endpoint, &cert.cert_pem, &csr.key_pem).unwrap();
+    let hub_only = forge_agent::tls::mutual_pinned(&pins[..1], &endpoint, &cert.cert_pem, &csr.key_pem).unwrap();
+    let refused = WorkerSink::new(&fx.url(), hub_only).unwrap().upload(&stem, body.clone()).await;
+    assert_ne!(refused, Outcome::Stored, "the hub key alone does not match the worker");
+    assert_eq!(WorkerSink::new(&fx.url(), both).unwrap().upload(&stem, body).await, Outcome::Stored);
+    fx.stop.send_replace(true);
+}

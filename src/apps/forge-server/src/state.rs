@@ -69,6 +69,8 @@ pub struct Services {
     pub jobs: Arc<JobEngine>,
     pub plugins: Arc<PluginHost>,
     pub ca: Arc<CertificateAuthority>,
+    /// The control-plane key agents pin and its rotation (D-167).
+    pub agent_keys: Arc<crate::agent_keys::AgentKeys>,
     pub signer: Arc<CommandSigner>,
     pub hub: Arc<CommandQueue>,
     pub clock: Arc<dyn Clock>,
@@ -142,6 +144,8 @@ pub struct Services {
     /// The console address used in links people follow: the runtime setting
     /// `server.public_address`, else `public_url` (D-120).
     pub public_address: forge_core::public_address::PublicAddress,
+    /// Hosts the console answers on (`server.allowed_hosts`, D-167).
+    pub allowed_hosts: forge_core::allowed_hosts::AllowedHosts,
 }
 
 impl Services {
@@ -212,7 +216,9 @@ impl Services {
             Err(e) => tracing::warn!(error = %e, "could not close stale tunnel rows"),
         }
 
-        let public_address = crate::public_address::load(&store, &config.public_url).await?;
+        let public_address =
+            crate::public_address::load(&store, config.public_url.as_deref().unwrap_or_default()).await?;
+        let allowed_hosts = crate::allowed_hosts::load(&store).await?;
 
         // Authorization: load every persisted role binding as a template link.
         let policy = Arc::new(PolicyEngine::with_clock(clock.clone())?);
@@ -231,9 +237,37 @@ impl Services {
         ));
 
         let ca = Arc::new(CertificateAuthority::load_or_create(&data.join("pki"), clock.now())?);
+        let envelope = Envelope::new(Arc::new(LocalKeyProvider::load_or_create(&data.join("keys/master.key"))?));
+        let signer = Arc::new(CommandSigner::load_or_create(&data.join("keys/command.key"))?);
+        // The control-plane key agents pin (D-167): made by `init` or on the
+        // first start after an upgrade.
+        let (agent_keys, keys_created) = crate::agent_keys::AgentKeys::load_or_create(
+            crate::agent_keys::AgentKeysDeps {
+                settings: Arc::new(store.clone()),
+                envelope: envelope.clone(),
+                ca: ca.clone(),
+                signer: signer.clone(),
+                hostnames: config.agent_hostnames.clone(),
+                policy: config.agent_tls,
+                online_window: Duration::from_secs(u64::from(config.offline_after_secs.max(30))),
+            },
+            clock.now(),
+        )
+        .await?;
+        let agent_keys = Arc::new(agent_keys);
+        if keys_created {
+            let ev = forge_core::model::AuditEvent::new(
+                "system:forge",
+                crate::agent_keys::AUDIT_KEY_CREATE,
+                forge_core::EntityRef::platform(),
+                forge_core::model::AuditOutcome::Success,
+            )
+            .with_details(serde_json::json!({ "keys": agent_keys.keys() }));
+            audit.append(ev).await?;
+        }
         let mut worker_config = worker_config;
         if let Some(w) = &mut worker_config {
-            attach_agent_listener(w, &config, &ca);
+            attach_agent_listener(w, &config, &ca, &agent_keys);
         }
         let analytics_worker =
             Arc::new(crate::analytics_worker::WorkerSupervisor::new(crate::analytics_worker::SupervisorDeps {
@@ -256,7 +290,6 @@ impl Services {
                 supervisor: analytics_worker.clone(),
             }));
 
-        let envelope = Envelope::new(Arc::new(LocalKeyProvider::load_or_create(&data.join("keys/master.key"))?));
         let identity_config = IdentityConfig {
             oidc_auto_provision: config.oidc.as_ref().is_some_and(|o| o.auto_provision),
             refresh_token_ttl: Duration::from_secs(u64::from(config.security.refresh_token_days) * 24 * 3600),
@@ -274,15 +307,20 @@ impl Services {
             Arc::new(store.clone()),
             Arc::new(store.clone()),
             clock.clone(),
-            forge_identity::webauthn::RelyingParty::from_public_url(&config.public_url)
-                .map_err(|e| anyhow::anyhow!("public_url: {e}"))?,
         );
         let oidc = match &config.oidc {
-            Some(o) => Some(Self::oidc_provider(&public_address.get(), o).await?),
+            Some(o) => {
+                // The redirect URL must be stable: OIDC needs a pinned address.
+                let pinned = public_address.pinned().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "[oidc] needs a pinned console address: set public_url in forge.toml or run `forge-server public-address set <url>`"
+                    )
+                })?;
+                Some(Self::oidc_provider(&pinned, o).await?)
+            }
             None => None,
         };
 
-        let signer = Arc::new(CommandSigner::load_or_create(&data.join("keys/command.key"))?);
         let ssh_ca = Arc::new(forge_ssh::SshUserCa::load_or_create(&data.join("keys/ssh_user_ca"))?);
         let hub = Arc::new(CommandQueue::new());
 
@@ -316,7 +354,10 @@ impl Services {
             servers: Arc::new(store.clone()),
             dist: dist.clone(),
             clock: clock.clone(),
-            download_base: config.node_forge_url().trim_end_matches('/').to_owned(),
+            download: crate::jobs::agent_update::DownloadBase {
+                node_public_url: config.node_public_url.clone(),
+                address: public_address.clone(),
+            },
             come_back: Duration::from_secs(6 * 60),
             jobs: Arc::new(store.clone()),
             facts: Arc::new(store.clone()),
@@ -482,6 +523,7 @@ impl Services {
             envelope: envelope.clone(),
             dist: dist.clone(),
             ca_fingerprint: ca.fingerprint().to_owned(),
+            agent_keys: agent_keys.clone(),
             ssh_user_ca: ssh_ca.public_openssh(),
             node_forge_url: config.node_forge_url().to_owned(),
             node_agent_url: config.node_agent_url().to_owned(),
@@ -584,7 +626,7 @@ impl Services {
             ),
             mail: Arc::new(crate::notify_mail::SmtpMailer::new(
                 crate::notifying::target_rules(&config.alerts),
-                &config.public_url,
+                &public_address.get(),
             )),
             secrets: Arc::new(crate::notifying::VaultSecrets {
                 vault: Arc::new(store.clone()),
@@ -639,6 +681,7 @@ impl Services {
             jobs,
             plugins,
             ca,
+            agent_keys,
             signer,
             hub,
             clock,
@@ -678,6 +721,7 @@ impl Services {
             sftp_host_key,
             sftp_bound: std::sync::OnceLock::new(),
             public_address,
+            allowed_hosts,
         });
         // The rollout job reaches endpoints and health through the API (#73).
         let _ = rollout_effects.set(crate::api::deployments::effects(&state));
@@ -746,13 +790,14 @@ impl Services {
 }
 
 /// Gives the worker its agent upload listener (D-142): the bind address,
-/// the CA, and certificates for the agent host names, issued at each worker
-/// start and renewed while it runs (D-145), handed over over stdin and the
-/// control socket.
+/// the CA, and certificates for the control-plane key agents pin (D-167),
+/// issued at each worker start and renewed while it runs (D-145) or when
+/// the key switches, handed over over stdin and the control socket.
 fn attach_agent_listener(
     w: &mut crate::analytics_worker::SupervisorConfig,
     config: &ServerConfig,
     ca: &Arc<CertificateAuthority>,
+    keys: &Arc<crate::agent_keys::AgentKeys>,
 ) {
     w.config.agent_listener = Some(forge_analytics_proto::config::AgentListener {
         listen: config.analytics.worker_agent_listen,
@@ -760,30 +805,7 @@ fn attach_agent_listener(
         state_dir: config.data_dir.join("analytics-worker").join("spool-ids"),
         max_uploads: config.analytics.max_uploads(),
     });
-    w.listener_certs = Some(Arc::new(CaListenerCerts { ca: ca.clone(), hostnames: config.agent_hostnames.clone() }));
-}
-
-/// The worker's listener certificates, from the Forge CA.
-struct CaListenerCerts {
-    ca: Arc<CertificateAuthority>,
-    hostnames: Vec<String>,
-}
-
-impl std::fmt::Debug for CaListenerCerts {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CaListenerCerts").field("hostnames", &self.hostnames).finish_non_exhaustive()
-    }
-}
-
-impl crate::analytics_worker::ListenerCerts for CaListenerCerts {
-    fn issue(&self, now: forge_core::Timestamp) -> Result<crate::analytics_worker::ListenerCert, forge_pki::PkiError> {
-        let c = self.ca.issue_server_certificate(&self.hostnames, now)?;
-        Ok(crate::analytics_worker::ListenerCert {
-            tls: forge_analytics_proto::config::AgentTls { cert_pem: c.cert_pem, key_pem: c.key_pem },
-            not_before: c.not_before,
-            not_after: c.not_after,
-        })
-    }
+    w.listener_certs = Some(Arc::new(crate::agent_keys::WorkerListenerCerts(keys.clone())));
 }
 
 /// Worker memory beyond DuckDB's own limit (its buffer manager does not

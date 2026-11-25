@@ -129,7 +129,7 @@
   <path class="line dash" d="M730 273 C 700 273, 700 354, 664 354"/>
   <!-- agents upload their analytics spools straight to the worker -->
   <path class="line dash" d="M730 124 C 694 124, 712 416, 644 416" marker-end="url(#arr)"/>
-  <text class="lbl" x="730" y="346">mTLS · agents dial out</text>
+  <text class="lbl" x="730" y="346">mTLS · pinned key · agents dial out</text>
   <text class="s" x="730" y="362">no inbound ports on nodes</text>
 
   <!-- footer legend -->

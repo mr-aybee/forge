@@ -25,6 +25,31 @@ message EnrollResponse {
   bytes command_public_key = 4;
   uint32 heartbeat_interval_secs = 5;
   string analytics_url = 6;  // the worker's agent listener; empty: analytics off
+  // D-167: the control-plane keys to pin (current and next). Absent from
+  // servers before D-167.
+  SignedServerKeys server_keys = 7;
+  // D-167: the worker's agent listener port; new agents dial it on the host
+  // of their own server URL. 0: use analytics_url.
+  uint32 analytics_port = 8;
+}
+
+// D-167: control-plane listener keys an agent pins (SHA-256 of the
+// SubjectPublicKeyInfo). Signed with the command key, so the node's root
+// helper can check that Forge sent them before it writes the pin file.
+message ServerKeys {
+  string server_id = 1;           // the node they are for
+  int64 issued_at_ms = 2;
+  repeated ServerKey keys = 3;    // at most 4
+}
+
+message ServerKey {
+  string sha256 = 1;              // 64 lower-case hex digits
+  string label = 2;               // "current" or "next"
+}
+
+message SignedServerKeys {
+  bytes body = 1;                 // an encoded ServerKeys
+  bytes signature = 2;            // Ed25519 by the command key over body
 }
 
 // POST /agent/v1/heartbeat (mTLS)
@@ -43,6 +68,10 @@ message Heartbeat {
   ContainerLogBatch container_logs = 9;
   // Present from agents that spool their telemetry (D-142).
   SpoolStatus spool = 10;
+  // D-167: SHA-256 fingerprints of the control-plane keys this agent has
+  // pinned (its acknowledgement of an announced next key). Empty: none, or
+  // an agent before D-167.
+  repeated string pinned_server_keys = 11;
 }
 
 enum ContainerStream {
@@ -106,6 +135,8 @@ message HeartbeatResponse {
   ContainerTelemetryConfig container_telemetry = 4;
   uint64 container_logs_ack = 5;  // seq of the stored container log batch; 0: none
   AnalyticsAgentConfig analytics = 6;
+  // D-167: the control-plane keys to pin; absent from servers before it.
+  SignedServerKeys server_keys = 7;
 }
 
 // D-142: spool, local log listener and upload target. 0 keeps a default.
@@ -114,6 +145,9 @@ message AnalyticsAgentConfig {
   SpoolTuning spool = 2;
   repeated IngestKey keys = 3;    // keys of services placed on this node, at most 4096
   ListenerTuning listener = 4;
+  // D-167: the listener port; new agents dial it on the host of their own
+  // server URL, older ones use `url`. 0: use `url`.
+  uint32 port = 5;
 }
 
 message IngestKey {

@@ -41,6 +41,7 @@ forge-ssh.workspace = true
 forge-docker.workspace = true
 http-body-util.workspace = true
 tokio.workspace = true
+sysinfo.workspace = true
 futures.workspace = true
 axum.workspace = true
 tower.workspace = true

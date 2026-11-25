@@ -16,7 +16,7 @@ async fn username_admin_signs_in_edits_profile_and_rotates_the_generated_passwor
     let api = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let agent = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mut config = test_config(dir.path());
-    config.public_url = format!("http://{}", api.local_addr().unwrap());
+    config.public_url = Some(format!("http://{}", api.local_addr().unwrap()));
     let state = Services::build(config).await.unwrap();
     // What install.sh does: save the generated password, then init.
     let saved = dir.path().join(INITIAL_PASSWORD_FILE);

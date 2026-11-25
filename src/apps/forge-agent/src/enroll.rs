@@ -31,6 +31,28 @@ impl HostFacts {
     }
 }
 
+/// Writes the pin set of a new enrollment (D-167): the key from the token
+/// and the keys the server announced, checked against its command key.
+/// Nothing when neither is known (an older server): the agent then checks
+/// the CA and host name, and pins once the server announces its keys.
+fn save_pins(paths: &StatePaths, token_key: Option<&str>, resp: &EnrollResponse) -> anyhow::Result<()> {
+    let now = forge_core::Clock::now(&forge_core::SystemClock);
+    let mut set = crate::pins::PinSet::default();
+    if let Some(key) = token_key {
+        set.add(key, crate::pins::LABEL_ENROLLMENT, now.0)?;
+    }
+    if let Some(signed) = &resp.server_keys {
+        let keys = forge_proto::verify_server_keys(&resp.command_public_key, signed, &resp.server_id, now)
+            .map_err(|e| anyhow::anyhow!("the server's key announcement is invalid: {e}"))?;
+        set.apply_verified(&keys, now.0)?;
+    }
+    if set.is_empty() {
+        return Ok(());
+    }
+    let path = paths.pins();
+    crate::pins::save(&path, &set).with_context(|| format!("writing {} (run the enrollment as root)", path.display()))
+}
+
 /// Enrolls this machine and writes its state directory.
 pub async fn enroll(
     paths: &StatePaths,
@@ -60,9 +82,15 @@ pub async fn enroll_with(
     // Only the pinned certificate is trusted and saved; extra certificates are refused.
     let ca_pem = tls::pinned_ca_pem(&downloaded, &parsed.ca_fingerprint)?;
 
-    // 2. Generate our key locally and send a CSR over verified TLS.
+    // 2. Generate our key locally and send a CSR over verified TLS: by the
+    // control-plane key the token pins (D-167), so any address of the
+    // server works; with an older token, by the CA and the host name.
     let csr = AgentCsr::generate(&facts.hostname)?;
-    let mut link = Link::new(endpoint, tls::anonymous(&ca_pem)?, timeout);
+    let enroll_tls = match &parsed.server_key_sha256 {
+        Some(key) => tls::anonymous_pinned(std::slice::from_ref(key), &endpoint.authority())?,
+        None => tls::anonymous(&ca_pem)?,
+    };
+    let mut link = Link::new(endpoint.clone(), enroll_tls, timeout);
     let req = EnrollRequest {
         token_secret: parsed.secret,
         csr_pem: csr.csr_pem,
@@ -80,6 +108,7 @@ pub async fn enroll_with(
     std::fs::create_dir_all(&paths.dir)?;
     std::fs::write(paths.ca(), &ca_pem)?;
     paths.save_credentials(&csr.key_pem, &resp.cert_pem)?;
+    save_pins(paths, parsed.server_key_sha256.as_deref(), &resp)?;
     let identity = AgentIdentity {
         server_id: resp.server_id,
         command_public_key: b64url(&resp.command_public_key),
@@ -87,7 +116,8 @@ pub async fn enroll_with(
     };
     paths.save_identity(&identity)?;
     let mut config = config;
-    config.analytics_url = Some(resp.analytics_url).filter(|u| !u.is_empty());
+    let analytics = crate::link::analytics_url(&endpoint, &resp.analytics_url, resp.analytics_port);
+    config.analytics_url = Some(analytics).filter(|u| !u.is_empty());
     paths.save_config(&config)?;
     tracing::info!(server_id = %identity.server_id, "enrolled");
     Ok(identity)

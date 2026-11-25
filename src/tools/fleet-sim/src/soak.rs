@@ -212,6 +212,7 @@ pub struct ServerSample {
 
 /// `VmRSS` of a `/proc/<pid>/status` text, in MB.
 #[allow(clippy::cast_precision_loss)] // reason: memory size for display
+#[cfg(any(target_os = "linux", test))]
 fn parse_vm_rss_mb(status: &str) -> Option<f64> {
     let line = status.lines().find(|l| l.starts_with("VmRSS:"))?;
     let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;

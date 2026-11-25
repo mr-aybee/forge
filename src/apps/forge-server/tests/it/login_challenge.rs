@@ -83,7 +83,7 @@ async fn the_challenge_can_be_turned_off() {
     config.security.login_challenge = false;
     let api = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let agent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    config.public_url = format!("http://{}", api.local_addr().unwrap());
+    config.public_url = Some(format!("http://{}", api.local_addr().unwrap()));
     let state = forge_server::state::Services::build(config).await.unwrap();
     forge_server::bootstrap::init_admin(&state, None, Some(ADMIN_EMAIL), "Admin", PASSWORD, false).await.unwrap();
     let app = forge_server::App::start_with(state, api, agent).unwrap();

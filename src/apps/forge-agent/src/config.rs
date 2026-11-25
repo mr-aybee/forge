@@ -148,6 +148,19 @@ impl StatePaths {
         self.dir.join("ca.crt")
     }
 
+    /// The control-plane keys this agent pins (D-167); see `crate::pins`.
+    #[must_use]
+    pub fn pins(&self) -> PathBuf {
+        crate::pins::path(&self.dir)
+    }
+
+    /// The last link failure caused by an unpinned server key, for
+    /// `forge-agent status`; removed once the link works again.
+    #[must_use]
+    pub fn link_error(&self) -> PathBuf {
+        self.dir.join("link-error.txt")
+    }
+
     pub fn load_config(&self) -> anyhow::Result<AgentConfig> {
         Ok(toml::from_str(&std::fs::read_to_string(self.config())?)?)
     }

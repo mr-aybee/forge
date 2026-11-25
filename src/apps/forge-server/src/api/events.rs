@@ -25,11 +25,12 @@ const MAX_LIFETIME: std::time::Duration = std::time::Duration::from_secs(12 * 36
 pub async fn subscribe(
     State(state): State<AppState>,
     caller: Caller,
+    origin: crate::request_origin::RequestOrigin,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> ApiResult<Response> {
     // Cross-site WebSocket hijacking guard: browsers always send Origin.
-    if !crate::public_address::origin_header_ok(&state.public_address, &headers) {
+    if !crate::request_origin::origin_header_ok(&state, &origin, &headers) {
         return Err(ApiError::forbidden("origin not allowed"));
     }
     Ok(ws.max_message_size(64 * 1024).on_upgrade(move |socket| stream(state, caller, socket)))

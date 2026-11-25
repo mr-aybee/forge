@@ -45,9 +45,49 @@ enum Cmd {
     Service(ServiceCmd),
     /// Prints the enrolled identity.
     Status,
+    /// The control-plane keys this node pins (D-167): `list`, `add`,
+    /// `remove` or `fetch`. Changing them needs root; the agent applies
+    /// them at its next connection attempt, without re-enrolling.
+    #[command(subcommand)]
+    Pins(PinsCmd),
     /// Allows the command kinds this release adds that were never offered
     /// before; kinds the operator removed stay removed (run by the installer).
     OfferCommands,
+}
+
+#[derive(Subcommand)]
+enum PinsCmd {
+    /// Lists the pinned keys.
+    List,
+    /// Pins a key: its SHA-256 from `forge-server agent-key show`.
+    Add {
+        sha256: String,
+        /// A name for it (default `manual`).
+        #[arg(long)]
+        label: Option<String>,
+        /// Pin it even though Forge revoked it.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Removes a pinned key.
+    Remove { sha256: String },
+    /// Connects to the control plane, shows the key it presents and pins it
+    /// after you confirm (trust on first use).
+    Fetch {
+        /// Agent endpoint to ask (default: `server_url` from agent.toml).
+        #[arg(long)]
+        server: Option<String>,
+        /// Pin without asking (scripts).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Moves an unreadable pin file aside (`pins.toml.bad-<time>`) after you
+    /// confirm, leaving no pins; then run `pins fetch`.
+    Reset {
+        /// Reset without asking (scripts).
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -220,10 +260,122 @@ fn main() -> anyhow::Result<()> {
             Cmd::Status => {
                 let id = paths.load_identity()?;
                 println!("{}", serde_json::to_string_pretty(&id)?);
+                print_pins(&paths)?;
+                if let Ok(e) = std::fs::read_to_string(paths.link_error()) {
+                    println!("link error: {}", e.trim());
+                }
             }
+            Cmd::Pins(cmd) => pins(&paths, cmd).await?,
         }
         Ok(())
     })
+}
+
+fn print_pins(paths: &StatePaths) -> anyhow::Result<()> {
+    let path = paths.pins();
+    let set = forge_agent::pins::load(&path)?;
+    if set.is_empty() {
+        println!("pinned keys: none ({}); the control plane is checked by its CA and host name", path.display());
+    }
+    for r in &set.revoked {
+        println!("revoked: sha256:{r}");
+    }
+    for p in &set.server_keys {
+        let retired = p.retired_ms.map(|r| format!("  retired {r}")).unwrap_or_default();
+        println!("sha256:{}  {}  added {}{retired}", p.sha256, p.label, p.added_ms);
+    }
+    Ok(())
+}
+
+/// Changing pins needs root where root owns the file.
+fn require_root(paths: &StatePaths) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    if forge_agent::pins::root_owned(&paths.dir) && !rustix::process::geteuid().is_root() {
+        anyhow::bail!("run this as root: the pinned keys belong to root");
+    }
+    let _ = paths;
+    Ok(())
+}
+
+/// `forge-agent pins …` (D-167). Logged; the agent picks changes up at its
+/// next connection attempt.
+async fn pins(paths: &StatePaths, cmd: PinsCmd) -> anyhow::Result<()> {
+    use forge_agent::pins::{self as p, LABEL_MANUAL};
+    use forge_core::Clock;
+    let path = paths.pins();
+    let now = forge_core::SystemClock.now().0;
+    let (fp, label, add, force) = match cmd {
+        PinsCmd::List => return print_pins(paths),
+        PinsCmd::Add { sha256, label, force } => (sha256, label.unwrap_or_else(|| LABEL_MANUAL.into()), true, force),
+        PinsCmd::Remove { sha256 } => (sha256, String::new(), false, false),
+        PinsCmd::Reset { yes } => return reset_pins(paths, yes, now),
+        PinsCmd::Fetch { server, yes } => {
+            require_root(paths)?;
+            let url = match server {
+                Some(s) => s,
+                None => paths.load_config()?.server_url,
+            };
+            let endpoint = forge_agent::link::Endpoint::parse(&url)?;
+            let fp = forge_agent::tls::presented_key(&endpoint.host, endpoint.port).await?;
+            println!("{} presents key sha256:{fp}", endpoint.authority());
+            println!("Compare it with 'forge-server agent-key show' on the server before you pin it.");
+            if !yes && !confirm("Pin this key? [y/N] ")? {
+                anyhow::bail!("not pinned");
+            }
+            (fp, LABEL_MANUAL.to_owned(), true, false)
+        }
+    };
+    require_root(paths)?;
+    // Under the pin file's lock: the root helper may apply an announcement
+    // at the same time.
+    let (changed, ()) = p::update(&path, |set| {
+        if add && set.is_revoked(&fp) {
+            eprintln!("warning: Forge revoked {fp}; a revoked key may be in an attacker's hands");
+        }
+        Ok((if add { set.add_checked(&fp, &label, now, force)? } else { set.remove(&fp)? }, ()))
+    })?;
+    let verb = if add { "pinned" } else { "removed" };
+    tracing::info!(key = %fp, changed, "control-plane key {verb} by hand");
+    println!(
+        "{} {fp}{}",
+        if changed { verb } else { "unchanged:" },
+        if changed { "; the agent uses it from its next connection attempt" } else { "" }
+    );
+    Ok(())
+}
+
+/// `forge-agent pins reset`: replaces an unreadable pin file.
+fn reset_pins(paths: &StatePaths, yes: bool, now: i64) -> anyhow::Result<()> {
+    let path = paths.pins();
+    require_root(paths)?;
+    match forge_agent::pins::load(&path) {
+        Ok(_) => {
+            println!("{} is readable; nothing to reset. Use 'forge-agent pins remove' to drop a key.", path.display());
+            return Ok(());
+        }
+        Err(e) => println!("{} cannot be used: {e}", path.display()),
+    }
+    println!("Resetting moves it aside and leaves no pinned keys until you run 'forge-agent pins fetch'.");
+    if !yes && !confirm("Reset the pin file? [y/N] ")? {
+        anyhow::bail!("not reset");
+    }
+    match forge_agent::pins::reset(&path, now)? {
+        Some(backup) => {
+            tracing::warn!(backup = %backup.display(), "unreadable pin file reset by hand");
+            println!("moved to {}; now run 'forge-agent pins fetch'", backup.display());
+        }
+        None => println!("nothing to reset"),
+    }
+    Ok(())
+}
+
+fn confirm(prompt: &str) -> anyhow::Result<bool> {
+    use std::io::Write as _;
+    print!("{prompt}");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    Ok(matches!(line.trim(), "y" | "Y" | "yes"))
 }
 
 /// Fails when a command or flag of this binary is missing from its reference

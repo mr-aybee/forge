@@ -36,6 +36,39 @@ impl Endpoint {
     }
 }
 
+impl Endpoint {
+    /// `host:port`, with brackets around an IPv6 host.
+    #[must_use]
+    pub fn authority(&self) -> String {
+        if self.host.contains(':') {
+            format!("[{}]:{}", self.host, self.port)
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
+    }
+
+    /// The analytics worker's upload URL on this endpoint's host (D-167).
+    #[must_use]
+    pub fn with_port(&self, port: u16) -> String {
+        Self { host: self.host.clone(), port }.authority_url()
+    }
+
+    fn authority_url(&self) -> String {
+        format!("https://{}", self.authority())
+    }
+}
+
+/// The upload URL a server's analytics settings name (D-167): the worker's
+/// port on the host this agent reaches Forge by, else the URL as sent
+/// (older servers, or an operator-configured `worker_agent_url`).
+#[must_use]
+pub fn analytics_url(server: &Endpoint, url: &str, port: u32) -> String {
+    match u16::try_from(port) {
+        Ok(p) if p != 0 => server.with_port(p),
+        _ => url.to_owned(),
+    }
+}
+
 /// HTTP/2 client over rustls. Not thread-safe by design: the agent owns it.
 pub struct Link {
     endpoint: Endpoint,
@@ -180,5 +213,16 @@ mod tests {
             Some(Endpoint { host: "127.0.0.1".into(), port: 7443 })
         );
         assert!(Endpoint::parse("http://cp.example").is_err());
+    }
+
+    #[test]
+    fn analytics_uploads_go_to_the_servers_own_address() {
+        let e = Endpoint::parse("https://192.0.2.10:3843").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(analytics_url(&e, "https://localhost:3832", 3832), "https://192.0.2.10:3832");
+        // An older server sends no port: the URL is used as sent.
+        assert_eq!(analytics_url(&e, "https://forge.example:3832", 0), "https://forge.example:3832");
+        let v6 = Endpoint::parse("https://[2001:db8::1]:3843").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(analytics_url(&v6, "", 3832), "https://[2001:db8::1]:3832");
+        assert_eq!(v6.authority(), "[2001:db8::1]:3843");
     }
 }

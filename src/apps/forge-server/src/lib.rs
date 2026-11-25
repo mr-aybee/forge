@@ -6,9 +6,11 @@
 
 pub mod access;
 pub mod agent_hub;
+pub mod agent_keys;
 pub mod agent_update_overview;
 pub mod agent_update_policy;
 pub mod alerting;
+pub mod allowed_hosts;
 pub mod analytics_control;
 pub mod analytics_install;
 pub mod analytics_tuning;
@@ -52,6 +54,7 @@ pub mod pins;
 pub mod public_address;
 pub mod rate_limit;
 pub mod registries;
+pub mod request_origin;
 pub mod service_ports;
 pub mod stacks;
 pub mod state;
@@ -168,6 +171,7 @@ impl App {
             tasks.push(tokio::spawn(forge_file_gateway::serve(listener, key, state.files.clone(), rx.clone())));
         }
 
+        tasks.push(tokio::spawn(tasks::agent_key_upkeep(state.clone(), rx.clone())));
         tasks.push(tokio::spawn(tasks::offline_monitor(state.clone(), rx)));
 
         Ok(Self { state, api_addr, agent_addr, sftp_addr, shutdown, tasks })

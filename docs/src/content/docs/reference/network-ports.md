@@ -89,6 +89,96 @@ iptables rules on Linux, Windows Firewall on Windows. Open them in any network
 or cloud firewall between the nodes and the server yourself (security group,
 security list).
 
+Nodes reach `3843/tcp` and `3832/tcp` on any address of the control plane:
+agents check the server's pinned key, not its name. Each node uses the
+address it installed from, so nodes on different networks can use different
+IPs of the same server.
+
+## Restrict access
+
+The listeners bind `0.0.0.0`, so they accept connections on every interface.
+Three layers decide who may connect. Narrow each to the networks that need it.
+
+### Cloud firewall
+
+In the security group or security list of the control plane, allow:
+
+| Port | Source |
+| --- | --- |
+| `3880/tcp` | Your operators' networks, and the node networks during install |
+| `3843/tcp`, `3832/tcp` | The node networks only |
+
+Deny everything else inbound.
+
+### Host firewall
+
+The installers open the three Forge ports to everyone. Replace those rules
+with ones that name the source networks. Use your own ranges in place of the
+examples `192.0.2.0/24` (nodes) and `198.51.100.0/24` (operators).
+
+**ufw** (Debian, Ubuntu):
+
+```sh
+sudo ufw delete allow 3880/tcp
+sudo ufw delete allow 3843/tcp
+sudo ufw delete allow 3832/tcp
+sudo ufw allow from 198.51.100.0/24 to any port 3880 proto tcp
+sudo ufw allow from 192.0.2.0/24 to any port 3880 proto tcp
+sudo ufw allow from 192.0.2.0/24 to any port 3843 proto tcp
+sudo ufw allow from 192.0.2.0/24 to any port 3832 proto tcp
+```
+
+**firewalld** (RHEL, Rocky, Alma, Fedora):
+
+```sh
+sudo firewall-cmd --permanent --remove-port=3880/tcp --remove-port=3843/tcp --remove-port=3832/tcp
+sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="198.51.100.0/24" port port="3880" protocol="tcp" accept'
+sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="192.0.2.0/24" port port="3880" protocol="tcp" accept'
+sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="192.0.2.0/24" port port="3843" protocol="tcp" accept'
+sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="192.0.2.0/24" port port="3832" protocol="tcp" accept'
+sudo firewall-cmd --reload
+```
+
+**iptables** (other Linux, for example Oracle Cloud images): the installer
+adds its accept rules only when the `INPUT` chain ends in a `REJECT` or `DROP`
+rule or has a `DROP` policy. Delete them and insert rules that name the
+source; the existing reject still catches everyone else.
+
+```sh
+for port in 3880 3843 3832; do
+  sudo iptables -D INPUT -p tcp -m state --state NEW --dport "$port" -j ACCEPT
+done
+sudo iptables -I INPUT 1 -p tcp -s 198.51.100.0/24 --dport 3880 -j ACCEPT
+for port in 3880 3843 3832; do
+  sudo iptables -I INPUT 1 -p tcp -s 192.0.2.0/24 --dport "$port" -j ACCEPT
+done
+sudo iptables -L INPUT -n --line-numbers
+```
+
+Repeat with `ip6tables` for IPv6, then save the rules where your
+distribution keeps them (`iptables-save > /etc/iptables/rules.v4`, or
+`/etc/sysconfig/iptables` on RHEL-likes).
+
+### Forge access lists
+
+`[security.access]` in `forge.toml` limits client addresses on `3880` after
+the firewall lets them through. It does not apply to the agent ports.
+
+```toml
+[security.access]
+allow = ["127.0.0.1", "::1", "198.51.100.0/24"]
+nodes_allow = ["192.0.2.0/24"]
+```
+
+See [Access lists and rate limits](/docs/reference/configuration/#access-lists-and-rate-limits)
+for every key. To limit which **names** the console answers on, see
+[Allowed hosts](/docs/reference/configuration/#allowed-hosts).
+
+:::caution
+Keep SSH to the control plane open while you change these rules, so a
+mistake does not lock you out.
+:::
+
 ## Related
 
 - [Configuration](/docs/reference/configuration/)

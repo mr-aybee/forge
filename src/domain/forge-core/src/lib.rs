@@ -7,6 +7,7 @@
 
 pub mod access;
 pub mod alerts;
+pub mod allowed_hosts;
 pub mod analytics;
 pub mod backoff;
 pub mod catalog;
