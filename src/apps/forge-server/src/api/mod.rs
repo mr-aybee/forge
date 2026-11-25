@@ -356,6 +356,8 @@ pub fn router(state: AppState) -> Router {
         .route("/sites/{id}", get(sites::get).put(sites::update).delete(sites::delete))
         .route("/sites/{id}/apply", post(sites::apply))
         .route("/sites/{id}/remove", post(sites::remove))
+        .route("/sites/{id}/cache/clear", post(sites::clear_cache))
+        .route("/sites/{id}/logs", get(sites::logs))
         .route("/sites/{id}/renew", post(cert_renewal::renew_now))
         .route("/servers/{id}/dns", post(sites::dns))
         .route("/catalog", get(packages::catalog))

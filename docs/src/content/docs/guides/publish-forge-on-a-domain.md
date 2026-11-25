@@ -1,13 +1,14 @@
 ---
 title: Publish Forge on a domain
-description: Reach the Forge console at a domain such as https://forge.example.com through a cluster ingress endpoint, while the direct IP address keeps working.
+description: Reach the Forge console at a domain such as https://forge.example.com through an ingress endpoint on one node or a cluster edge group, while the direct IP address keeps working.
 sidebar:
   order: 31
 ---
 
-This guide publishes the Forge console on a domain through an existing
-cluster ingress. An Nginx edge node terminates TLS and proxies plain HTTP to
-the Forge server. The direct address (`http://<forge-ip>:3880`) keeps working,
+This guide publishes the Forge console on a domain through an
+[ingress endpoint](/docs/guides/ingress/). The endpoint runs on one node with
+Nginx, often the Forge server itself, or on a cluster's edge group. Nginx
+terminates TLS and proxies plain HTTP to the Forge server. The direct address (`http://<forge-ip>:3880`) keeps working,
 and every link Forge sends, in alert emails, webhooks and approvals, uses the
 domain.
 
@@ -32,8 +33,9 @@ edge.
 
 ## Before you begin
 
-- A cluster with an [ingress profile](/docs/guides/ingress/) and at least one edge
-  node running **Nginx**. For Let's Encrypt, **Certbot** on every edge.
+- **Nginx** on the node that serves the domain, or a cluster with an
+  [ingress profile](/docs/guides/ingress/#set-up-a-cluster-edge-group). For
+  Let's Encrypt, **Certbot** on every edge.
 - A DNS record for the domain that points at the edges (yours, or
   Forge-managed through the profile).
 - The edges can reach the Forge server's API port (`api_listen`, `3880` by
@@ -55,6 +57,8 @@ edge.
    trusted_proxies = ["<edge-ip>"]
    ```
 
+   When Nginx runs on the Forge server itself, use `127.0.0.1`.
+
    ```sh
    sudo systemctl restart forge-server
    ```
@@ -64,19 +68,22 @@ edge.
    With `https`, it marks session cookies `Secure`. From any other address
    Forge ignores these headers.
 
-2. **Add the endpoint.** Open the cluster, select **Ingress**, then
-   **Endpoints** → **New endpoint**.
-   - **Name:** `forge-console`.
+2. **Add the endpoint.** Open **Ingress**, select **Endpoints**, then
+   **New endpoint**.
    - **Domains:** `forge.example.com`.
-   - **Active upstreams:** the Forge server's address as the edge reaches it,
-     for example `<forge-ip>:3880`. With typed targets, use an **Address**
-     target with the same `host:port`.
-   - **WebSockets:** on (the default). The console's live updates, terminal
-     and tunnels use WebSockets.
-   - **TLS:** **Let's Encrypt** with your email, or **Uploaded certificate**.
-     See [Choose certificates](/docs/guides/ingress/#choose-certificates).
+   - **Name:** `forge-console` (Forge suggests one from the domain).
+   - **Default route (/):** **Proxy**, with an **Address** target: the
+     Forge server as the edge reaches it. On the Forge server itself use
+     `127.0.0.1:3880`; on another edge use `<forge-ip>:3880`.
+   - Placement: **A node with Nginx** and that node, or
+     **A cluster's edge group** and the cluster.
 
-   Select **Save**, then **Apply to edges** in the endpoint's row menu.
+   Select **Create endpoint**. Then select **Edit**, open **SSL** and pick
+   **Let's Encrypt** with your email, or a certificate from the store (see
+   [Choose certificates](/docs/guides/ingress/#choose-certificates)).
+   WebSockets stay on (the default); the console's live updates, terminal
+   and tunnels use them. Select **Save**, then **Apply to edges** in the
+   endpoint's row menu.
 
    From the CLI, with `site.json`:
 
@@ -84,8 +91,8 @@ edge.
    {
      "name": "forge-console",
      "domains": ["forge.example.com"],
-     "cluster_id": "<cluster-id>",
-     "targets": [{ "kind": "external", "address": "<forge-ip>:3880" }],
+     "placement": { "kind": "nodes", "server_ids": ["<forge-node-id>"] },
+     "targets": [{ "kind": "external", "address": "127.0.0.1:3880" }],
      "tls": "acme",
      "acme_email": "<admin-email>",
      "websockets": true
@@ -149,7 +156,7 @@ edge.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `502 Bad Gateway` on the domain | The edge cannot reach `<forge-ip>:3880` | Check `api_listen` is not `127.0.0.1`, and that a firewall allows the edge |
+| `502 Bad Gateway` on the domain | The edge cannot reach the target | On the Forge server itself, target `127.0.0.1:3880`. On another edge, target `<forge-ip>:3880`, check `api_listen` is not `127.0.0.1`, and that a firewall allows the edge |
 | Terminal or live updates fail on the domain with `origin not allowed` | The edge is not in `trusted_proxies`, so Forge sees `http` while the browser uses `https` | Add the edge to `trusted_proxies` and restart, or pin the public address to exactly the origin you open |
 | `421 Misdirected Request` | The domain or address is not in **Allowed hosts** | Add it in **Settings → Server**, or run `forge-server allowed-hosts clear` on the server host and restart |
 | `value: use the origin only…` when you save | The address has a path, query or user name | Enter only `https://` and the host, with a port only when it is not 443 |
@@ -167,7 +174,7 @@ use a request's host: they use the pinned public address.
 
 ## Next steps
 
-- [Ingress](/docs/guides/ingress/): profiles, edges and certificates.
+- [Ingress](/docs/guides/ingress/): placements, edges and certificates.
 - [Configuration: public address](/docs/reference/configuration/#public-address)
   and [`trusted_proxies`](/docs/reference/configuration/#security).
 - [`forge settings public-address`](/docs/reference/cli/settings/#forge-settings-public-address-set).

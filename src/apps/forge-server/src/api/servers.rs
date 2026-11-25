@@ -318,6 +318,12 @@ pub async fn command(
     if req.command["type"] == "site" && req.command.pointer("/spec/tls").and_then(Value::as_str) == Some("uploaded") {
         return Err(ApiError::bad_request("uploaded certificates are sent by applying the endpoint, not as a command"));
     }
+    // An endpoint's logs and cache are reached through the endpoint.
+    if req.command["type"] == "site"
+        && matches!(req.command["action"].as_str(), Some("access_log" | "error_log" | "clear_cache"))
+    {
+        return Err(ApiError::bad_request("use the endpoint's Logs and Clear cache instead of a command"));
+    }
     let server = state.store.get_server(id).await.map_err(|_| ApiError::not_found("server not found"))?;
     // The job engine authorizes job.create and the command's action, and
     // re-authorizes before every step.

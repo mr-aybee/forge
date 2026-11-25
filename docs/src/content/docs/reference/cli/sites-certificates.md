@@ -86,7 +86,8 @@ unreachable.
 ### forge sites get
 
 Shows one site: its stored spec, edges, targets, DNS settings and the status
-on each edge. Needs `view` on the workspace.
+on each edge. Needs `view` on the workspace. Basic-auth users show only
+their `user`; Forge never returns password hashes.
 
 **Synopsis**
 
@@ -122,6 +123,7 @@ The table output prints the site as a key/value list. With `-o json`:
     "name": "shop",
     "config": {
       "spec": { "name": "shop", "domains": ["shop.example.com"], "upstreams": ["192.0.2.11:8080"], "tls": "acme", "…": "…" },
+      "placement": { "kind": "cluster", "cluster_id": "<cluster-id>" },
       "edges": ["<edge-node-id>"],
       "cluster_id": "<cluster-id>",
       "targets": [],
@@ -158,8 +160,9 @@ signed in; `4` permission denied; `6` no such site; `9` server unreachable.
 Creates a site from a JSON spec. The site is saved but not yet on any edge;
 run [`forge sites apply`](#forge-sites-apply) next. Needs `workspace.manage`
 on the workspace (**Admin** or **Platform admin**). A non-empty `custom`
-block also needs `server.command` on every edge, with an MFA-verified
-session.
+configuration also needs `server.command` on every edge, with an
+MFA-verified session, and a static directory needs `file.read` on every edge
+and an approved file root there.
 
 **Synopsis**
 
@@ -195,7 +198,7 @@ Exit codes: `0` created; `2` invalid spec (`invalid_body`, or the server's
 check: domains, upstreams, missing edges, a certificate that does not cover a
 domain or has expired, a DNS zone without the trailing dot, a refused custom
 directive), or a cluster without an ingress profile; `3` not signed in; `4`
-permission denied; `5` MFA needed for a custom block; `7` a site with that
+permission denied; `5` MFA needed for a custom configuration; `7` a site with that
 name exists; `9` server unreachable.
 
 **See also**: [`forge sites preview`](#forge-sites-preview),
@@ -208,7 +211,7 @@ Replaces a site's spec with the one in the file. The change takes effect on
 the edges only after [`forge sites apply`](#forge-sites-apply). Needs
 `workspace.manage` on the workspace; a non-empty `custom` block also needs
 `server.command` on every edge, with an MFA-verified session. Each update is
-audited as `site.update`, with the custom block, so the audit log keeps every
+audited as `site.update`, with the custom configuration, so the audit log keeps every
 version of it.
 
 **Synopsis**
@@ -253,7 +256,7 @@ Shape from the server's schema; not captured on a live system.
 
 Exit codes: `0` updated; `1` you did not confirm; `2` invalid spec, an
 ambiguous name, or no `--yes` where no prompt is possible; `3` not signed in;
-`4` permission denied; `5` MFA needed for a custom block; `6` no such site;
+`4` permission denied; `5` MFA needed for a custom configuration; `6` no such site;
 `9` server unreachable.
 
 **See also**: [`forge sites get`](#forge-sites-get),
@@ -264,8 +267,8 @@ ambiguous name, or no `--yes` where no prompt is possible; `3` not signed in;
 Validates a spec and prints the Nginx configuration the edges would run,
 without saving anything or contacting a node. The table output prints only
 the variant the edges will use (`http` when `tls` is `off`, else `https`) as
-plain text, then the custom block if there is one, then the resolved
-upstreams. `-o json` prints the full answer. Needs only a signed-in session.
+plain text, then the custom configuration if there is one (or the first
+refused custom line), then the resolved upstreams. `-o json` prints the full answer. Needs only a signed-in session.
 
 **Synopsis**
 
@@ -277,7 +280,7 @@ forge sites preview [OPTIONS] --file <FILE>
 
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
-| `--file <FILE>` | path, `@<path>` or `@-` | — | yes | A site spec as JSON. Only the spec fields (`name` to `custom` in the [site spec](#site-spec) table) are accepted; `edges`, `cluster_id`, `targets`, `standby_targets` and `dns` are refused | `--file site.json` |
+| `--file <FILE>` | path, `@<path>` or `@-` | — | yes | A [site spec](#site-spec) as JSON, the same body as `create`. The placement and targets are resolved as on save | `--file site.json` |
 
 **Examples**
 
@@ -316,7 +319,8 @@ With `-o json`:
     "config": "<the configuration the edges will run>",
     "http": "<the managed Nginx configuration without TLS>",
     "https": null,
-    "custom": "<the custom block include file>",
+    "custom": "<the custom configuration file>",
+    "custom_error": null,
     "edges": [],
     "upstreams": [],
     "standby": [],
@@ -333,7 +337,7 @@ Exit codes: `0` success; `2` invalid spec; `3` not signed in; `9` server
 unreachable.
 
 **See also**: [`forge sites create`](#forge-sites-create),
-[Custom blocks](/docs/guides/sites-and-dns/#custom-blocks).
+[Custom blocks](/docs/guides/ingress/#custom-configuration).
 
 ### forge sites apply
 
@@ -343,7 +347,7 @@ files, runs `nginx -t` and reloads; when the test fails, the previous files
 are restored. Each edge is an audited `agent.command` job.
 
 Needs `view` on the workspace and `proxy.manage` on every edge, with an
-MFA-verified session (**Operator** or higher). A non-empty custom block also
+MFA-verified session (**Operator** or higher). A non-empty custom configuration also
 needs `server.command` on every edge, and a site with `tls: "uploaded"`
 needs `certificate.use` on the workspace (**Admin** or **Platform admin**),
 both with MFA. Nothing changes until every check passes.
@@ -799,23 +803,43 @@ against the server's schema and exits with `2` (`invalid_body`) on a
 mismatch; see [`forge api`](/docs/reference/cli/api/). The `preview` body has no
 field schema and is checked by the server only.
 
+The spec covers the whole endpoint: its `placement`, the default rule's
+`kind`, path `rules`, `redirects`, `cache`, `gzip` and `access`, as in the
+[endpoint editor](/docs/guides/ingress/#edit-an-endpoint). Unknown fields are
+refused. Edges whose agent is older than the server refuse the newer fields
+when you apply.
+
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `name` | string | — (required) | Slug: lowercase letters, digits and dashes, starts with a letter, at most 60 characters. Unique in the workspace. `update` keeps the site's current name whatever you send, but the field must be present |
 | `domains` | list of strings | — (required) | 1 to 50 host names. The first is the primary. `*.example.com` is allowed, but not with `tls: "acme"` |
-| `upstreams` | list of strings | `[]` | Active upstreams as `host:port`. Leave it out when `targets` fill it. A site needs at least one upstream, from this list or resolved from `targets`; otherwise the server answers `400` |
+| `http_port` | integer | `80` | Port of the plain HTTP server. Must stay `80` with `tls: "acme"` |
+| `https_port` | integer | `443` | Port of the HTTPS server. Must differ from `http_port` |
+| `placement` | object | from `edges` / `cluster_id` | Where the site is served: `{"kind": "nodes", "server_ids": ["<node-id>"]}` (nodes with Nginx) or `{"kind": "cluster", "cluster_id": "<cluster-id>"}` (the cluster's ingress profile decides the edges) |
+| `kind` | enum: `proxy`, `balancer`, `redirect`, `static` | `proxy` | What the default `/` rule does |
+| `upstreams` | list of strings | `[]` | Active upstreams as `host:port`. Leave it out when `targets` fill it. A `proxy` or `balancer` site needs at least one upstream, from this list or resolved from `targets`; a `redirect` or `static` site has none |
 | `standby` | list of strings | `[]` | Standby upstreams (Nginx `backup`), used only when every active upstream is down |
 | `balance` | enum: `round_robin`, `least_conn`, `ip_hash` | `round_robin` | Load-balancing method |
+| `proxy` | object | see below | Proxy options of the default rule |
+| `redirect` | object | none | With `kind: "redirect"`: `{"to": "https://…", "code": 301, "keep_path": true}`. `code` is 301, 302, 307 or 308 |
+| `static_root` | object | none | With `kind: "static"`: `{"root": "/srv/…", "index": "index.html", "spa": false}`. `root` must be inside an approved file root on every edge |
+| `rules` | list of rules | `[]` | Up to 50 path rules, matched before `/` (see below) |
 | `tls` | enum: `off`, `acme`, `uploaded` | `off` | `acme`: Let's Encrypt over HTTP-01 (needs Certbot on the edges). `uploaded`: the certificate in `cert_id` |
 | `acme_email` | string | `""` | Contact email for Let's Encrypt. Required with `tls: "acme"` |
 | `cert_id` | id | `""` | Uploaded certificate id. Required with `tls: "uploaded"`; it must cover every domain and must not have expired |
 | `force_https` | boolean | `true` | Redirect HTTP to HTTPS when TLS is on |
+| `hsts` | boolean | `true` | Send `Strict-Transport-Security` on HTTPS |
 | `websockets` | boolean | `true` | Pass WebSocket upgrades |
 | `max_body_mb` | integer, MB | `25` | Largest request body, `1` to `10240` |
 | `rate_limit` | integer, requests/s | `0` | Requests per second per client IP. `0` is unlimited |
-| `custom` | string | `""` | Extra Nginx directives inside the `server` block, from the [supported list](/docs/guides/sites-and-dns/#custom-blocks) |
-| `cluster_id` | id | none | Serve the site from this cluster's ingress profile. The profile's edges replace `edges` |
-| `edges` | list of node ids | `[]` | Edge nodes with Nginx. Ignored when `cluster_id` is set. At least one edge is required |
+| `rate_burst` | integer, requests | `0` | Requests allowed above the rate, `0` to `100000`. `0` is twice the rate |
+| `cache` | object | none | Proxy cache: `{"key": "$scheme$request_method$host$request_uri", "extensions": [], "ttl_minutes": 60, "ignore_headers": false, "max_size_mb": 1024}` (TTL 1–525600, size 1–1048576) |
+| `gzip` | object | none | Compression: `{"level": 5, "types": ["text/css", …]}`, level 1–9, at most 50 MIME types |
+| `access` | object | none | `{"deny": [], "allow": [], "basic_auth": {"realm": "Restricted", "users": [{"user": "ops", "password": "…"}]}, "hotlink": {"referers": [], "extensions": ["jpg"]}}`. Addresses are IPs or CIDRs (500 in total). Send `{"user": "ops"}` without `password` to keep the stored password; Forge stores only a SHA-512 crypt hash and never returns it |
+| `redirects` | list | `[]` | Up to 100 `{"from": "www.example.com" or "/old", "to": "https://…", "code": 301, "keep_path": true}`. A domain `from` must be one of the site's domains |
+| `custom` | string | `""` | The custom configuration file, included inside the `server` blocks; directives from the [allowlist](/docs/guides/ingress/#custom-configuration) only |
+| `cluster_id` | id | none | Older form of `placement` with `kind: "cluster"`, still read when `placement` is absent |
+| `edges` | list of node ids | `[]` | Older form of `placement` with `kind: "nodes"`, still read when `placement` is absent. Ignored when `cluster_id` is set |
 | `targets` | list of targets | `[]` | Typed upstreams, resolved to `host:port` into `upstreams` when you save and again on every apply |
 | `standby_targets` | list of targets | `[]` | Typed standby upstreams, resolved into `standby` |
 | `dns` | object | none | Publish DNS records with PowerDNS on apply (see below) |
@@ -827,6 +851,27 @@ A target is one of:
 | `node` | `server_id` (node id), `port` (1–65535) | The node's address and the port |
 | `app` | `service_id` (service id), `port` | Every node the service runs on, at its cluster-network address |
 | `external` | `address` (`host:port`) | The address as given |
+
+A path rule:
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `path` | string | — (required) | Path or regex. Not `/`, which is the default rule |
+| `match_kind` | enum: `prefix`, `exact`, `regex` | `prefix` | `regex` is a case-sensitive PCRE |
+| `kind` | enum: `proxy`, `balancer`, `redirect`, `static` | `proxy` | What the rule does |
+| `targets`, `standby_targets`, `upstreams`, `standby`, `balance` | as above | `[]` / `round_robin` | Where a `proxy` or `balancer` rule sends requests |
+| `websockets` | boolean | `true` | Pass WebSocket upgrades |
+| `proxy`, `redirect`, `static_root` | objects | as above | Per-rule options |
+
+The `proxy` object:
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `preserve_host` | boolean | `true` | Send the client's `Host` upstream |
+| `strip_prefix` | boolean | `false` | Remove the matched prefix. Only on prefix rules ending in `/` |
+| `read_timeout_s` | integer, s | `300` | 1–3600 |
+| `connect_timeout_s` | integer, s | `5` | 1–300 |
+| `buffering` | boolean | `true` | Turn off for streaming responses |
 
 The `dns` object:
 
@@ -853,7 +898,8 @@ Encrypt:
   "tls": "acme",
   "acme_email": "ops@example.com",
   "max_body_mb": 50,
-  "cluster_id": "<cluster-id>"
+  "placement": { "kind": "cluster", "cluster_id": "<cluster-id>" },
+  "redirects": [{ "from": "/old-shop", "to": "https://shop.example.com/" }]
 }
 ```
 
@@ -866,7 +912,7 @@ and DNS:
   "domains": ["api.example.com"],
   "tls": "uploaded",
   "cert_id": "<certificate-id>",
-  "edges": ["<edge-node-id>"],
+  "placement": { "kind": "nodes", "server_ids": ["<edge-node-id>"] },
   "targets": [{ "kind": "app", "service_id": "<service-id>", "port": 8080 }],
   "dns": {
     "server_id": "<dns-node-id>",

@@ -104,8 +104,8 @@ phases add adapters (PostgreSQL, OpenBao, KMS) without touching services.
    carries a self-hosted proof-of-work challenge and is throttled per name and
    per client address (`X-Forwarded-For` is trusted only from
    `[security] trusted_proxies`). The console may also be published on a
-   domain through a cluster ingress edge that terminates TLS and proxies
-   plain HTTP (D-120). The console has no fixed address (D-167): each
+   domain through an ingress endpoint (one node with Nginx or a cluster
+   edge group) that terminates TLS and proxies plain HTTP (D-120, D-169). The console has no fixed address (D-167): each
    request's address comes from `Host`, or from the last `X-Forwarded-Host`
    and `X-Forwarded-Proto` of a trusted proxy (`RequestOrigin`), and must
    match the `server.allowed_hosts` patterns (default `*`) or gets `421`.

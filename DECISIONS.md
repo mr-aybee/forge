@@ -5827,3 +5827,55 @@ A GitHub delivery can be replayed after 30 days; rotating the secret ends
 that. GitLab mode remains the weakest (a static token); the docs recommend
 Forge or GitHub signatures. The compensating restore can race a concurrent
 console edit; that is recorded as CODE-02 in `plans/code-quality.md`.
+
+## D-169 Ingress endpoints: one list, typed features, read-only main config
+
+**Context.** Endpoints were split between cluster ingress pages and
+hand-picked edges, and anything beyond proxying (redirects, static files,
+caching, basic auth, per-path routing) had to go into the free custom block,
+which runs as root inside Nginx and is allowlisted for that reason. Operators
+asked for a full site editor in the style of hosting panels such as aaPanel,
+without giving up the allowlist or adding a raw-file mode that would let a
+config edit bypass it.
+
+**Decision.**
+- One endpoint list with an explicit placement on every endpoint:
+  `{kind: nodes, server_ids}` (nodes with Nginx) or `{kind: cluster,
+  cluster_id}` (the cluster's ingress profile decides the edges). The older
+  `edges` and `cluster_id` fields are still read when `placement` is absent,
+  so stored endpoints need no migration.
+- Typed features on `SiteSpec` instead of a raw-file mode: the default rule's
+  `kind` (proxy, balancer, redirect, static), path `rules`, `redirects`,
+  `cache`, `gzip`, `access` (allow/deny, basic auth, hotlink), ports, `hsts`
+  and `rate_burst`. Each part validates its own input, so the renderer only
+  writes checked values. The aaPanel model: the main configuration is
+  generated, shown read-only and rewritten on every apply; the custom file
+  stays the only free text, included in the `server` blocks, allowlisted,
+  `nginx -t` tested and rolled back, and gated by `server.command` (MFA) on
+  every edge. New fields are skipped when at their defaults, so endpoints
+  that use none of them reach older agents unchanged.
+- Basic auth is a form feature. Forge hashes passwords with SHA-512 crypt on
+  save, stores only the hash and never returns it (API responses drop
+  `hash`; previews use a placeholder). A user sent without a password keeps
+  the stored hash. Agents write `/etc/nginx/forge/htpasswd/<name>` mode 0640
+  for Nginx's group.
+- Static roots must sit inside an approved directory or service file root
+  (never a node or container root) on every edge, and the caller needs
+  `file.read` there. The endpoint flow marks its agent commands with
+  `from_endpoint`; a `site` command serving a static directory without that
+  marker needs `server.command`, so `POST /servers/{id}/commands` cannot
+  publish `/etc`.
+- Per-endpoint logs at `/var/log/nginx/forge/<name>.{access,error}.log` and
+  a log viewer (`GET /sites/{id}/logs`, last 1000 lines / 512 KiB,
+  `server.manage` on that edge). `POST /sites/{id}/cache/clear` empties
+  `/var/cache/nginx/forge/<name>` (`proxy.manage`).
+- No new Cedar actions: existing `workspace.manage`, `proxy.manage`,
+  `server.manage`, `server.command`, `file.read` and `certificate.use` cover
+  every operation.
+
+**Consequences.** Older agents refuse the new fields (`deny_unknown_fields`),
+so edges must be updated before an endpoint uses them; the upgrade note says
+so. Logs move from `/var/log/nginx/access.log` to per-endpoint files on the
+next apply. Moving an endpoint between placements does not clean up its old
+edges; the console warns to remove it first. Features not modelled still go
+through the allowlisted custom file.
