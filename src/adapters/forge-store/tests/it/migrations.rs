@@ -138,6 +138,7 @@ async fn the_baseline_and_later_migrations_apply_on_a_fresh_database() {
     .await
     .unwrap();
     // 149 from the baseline, + 5 tables and 4 indexes from 0002 (container
-    // platform: swarm, registries, webhooks).
-    assert_eq!(objects, 158, "tables and indexes after all migrations");
+    // platform: swarm, registries, webhooks), + 1 table and 1 index from 0003
+    // (webhook replay markers; its primary key index is internal).
+    assert_eq!(objects, 160, "tables and indexes after all migrations");
 }

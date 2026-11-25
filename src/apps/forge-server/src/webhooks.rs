@@ -67,11 +67,17 @@ pub enum Rejection {
     TagRefused,
     #[error("this delivery was already received")]
     Replayed,
+    #[error("the X-Gitlab-Event-UUID header is missing")]
+    MissingDeliveryId,
+    #[error("replay protection is unavailable; try again later")]
+    Unavailable,
 }
 
-/// How long a delivery id or signature is remembered against replays (it
-/// covers the `forge` timestamp window twice).
-const REPLAY_WINDOW: Duration = Duration::from_secs(600);
+/// How long a delivery's replay marker is kept (D-168). Stored in the
+/// database, so a restart does not forget it. A `forge` signature is stale
+/// after [`SIGNATURE_WINDOW_SECS`] anyway; a `github` signature has no
+/// timestamp, so this window is how long a captured delivery stays refused.
+pub const REPLAY_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 #[derive(Debug)]
 pub struct WebhookService {
@@ -83,8 +89,6 @@ pub struct WebhookService {
     pub limits: Limits,
     pub per_hook: Windows<WebhookId>,
     pub per_ip: Windows<std::net::IpAddr>,
-    /// Delivery ids and signatures seen recently, per webhook.
-    pub seen: Windows<(WebhookId, String)>,
 }
 
 fn aad(id: WebhookId) -> String {
@@ -267,14 +271,26 @@ impl WebhookService {
         self.per_hook.allow(&id, self.limits.per_hook, self.limits.window)
     }
 
-    /// Checks a delivery's signature and tag. `Ok(tag)` is the tag to
-    /// deploy, if the delivery chose one.
-    pub fn verify(
+    /// Points `app` back at its stored spec after a failed deploy (the
+    /// compensation for [`Self::set_tag`]).
+    pub async fn restore(&self, app: &forge_core::model::Service) -> DomainResult<()> {
+        let mut prev = app.clone();
+        prev.updated_at = self.clock.now();
+        self.services.put_service(&prev).await
+    }
+
+    /// Checks a delivery's signature, replay marker and tag. `Ok(tag)` is the
+    /// tag to deploy, if the delivery chose one.
+    ///
+    /// A signed webhook takes the tag only from the body, which the
+    /// signature covers: a `?tag=` query is not signed and is refused, so a
+    /// captured delivery cannot be replayed with another tag (D-168).
+    pub async fn verify(
         &self,
         w: &Webhook,
         headers: &SignatureHeaders<'_>,
         body: &[u8],
-        tag: Option<&str>,
+        query_tag: Option<&str>,
     ) -> Result<Option<String>, Rejection> {
         if !w.enabled {
             return Err(Rejection::Disabled);
@@ -306,21 +322,28 @@ impl WebhookService {
             if !ok {
                 return Err(Rejection::BadSignature);
             }
-            // The same signed delivery is accepted once: CI ids, else the
-            // signature (which covers the timestamp for `forge`).
+            // The same signed delivery is accepted once (D-168). GitHub: the
+            // body signature, since `X-GitHub-Delivery` is not signed and an
+            // attacker could change it. Forge: the signature, which covers the
+            // timestamp. GitLab signs nothing, so its event id is required.
             let marker = match w.signature {
-                Signature::Github => headers.github_delivery.or(headers.hub_signature_256),
-                Signature::Gitlab => headers.gitlab_event,
+                Signature::Github => headers.hub_signature_256,
                 Signature::Forge => headers.forge_signature,
+                Signature::Gitlab => Some(headers.gitlab_event.ok_or(Rejection::MissingDeliveryId)?),
                 Signature::None => None,
             };
-            if let Some(m) = marker
-                && !self.seen.allow(&(w.id, m.chars().take(200).collect()), 1, REPLAY_WINDOW)
-            {
-                return Err(Rejection::Replayed);
+            if let Some(m) = marker {
+                self.claim(w.id, m).await?;
+            }
+            if query_tag.is_some() {
+                return Err(Rejection::TagNotAllowed);
             }
         }
-        match (tag, &w.tag_pattern) {
+        let tag = match query_tag {
+            Some(t) => Some(t.to_owned()),
+            None => body_tag(body),
+        };
+        match (tag.as_deref(), &w.tag_pattern) {
             (None, _) => Ok(None),
             (Some(_), None) => Err(Rejection::TagNotAllowed),
             (Some(t), Some(p)) => {
@@ -332,6 +355,32 @@ impl WebhookService {
             }
         }
     }
+}
+
+impl WebhookService {
+    /// Claims a replay marker in the database; a store failure refuses the
+    /// delivery (fail closed).
+    async fn claim(&self, id: WebhookId, marker: &str) -> Result<(), Rejection> {
+        let now = self.clock.now();
+        let key = sha256_hex(marker.as_bytes());
+        match self.repo.claim_replay_marker(id, &key, now, now.minus(REPLAY_RETENTION)).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(Rejection::Replayed),
+            Err(e) => {
+                tracing::error!(webhook = %id, error = %e, "claiming a webhook replay marker failed");
+                Err(Rejection::Unavailable)
+            }
+        }
+    }
+}
+
+/// A JSON body's `"tag"`, if any. A body that is not JSON (or has no tag)
+/// chooses no tag; that is the expected case for plain CI pings.
+#[must_use]
+pub fn body_tag(body: &[u8]) -> Option<String> {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("tag").and_then(serde_json::Value::as_str).map(str::to_owned))
 }
 
 /// `repo[:tag]` or `repo@digest` with its tag replaced by `tag`. A `:` in a
@@ -365,5 +414,103 @@ mod tests {
             hmac_hex(b"Jefe", b"what do ya want for nothing?"),
             "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
         );
+    }
+
+    mod replay {
+        #![allow(clippy::unwrap_used)] // reason: tests
+
+        use super::*;
+        use forge_core::ports::TenancyRepository;
+        use forge_core::{ManualClock, ServiceId, Timestamp, UserId};
+        use forge_secrets::LocalKeyProvider;
+        use forge_store::Store;
+
+        const KEY: [u8; 32] = [7; 32];
+
+        async fn service(path: &std::path::Path, clock: Arc<ManualClock>) -> WebhookService {
+            let store = Arc::new(Store::open_sqlite(path).await.unwrap());
+            WebhookService {
+                repo: store.clone(),
+                jobs: store.clone(),
+                services: store,
+                envelope: Envelope::new(Arc::new(LocalKeyProvider::from_bytes(&KEY).unwrap())),
+                clock,
+                limits: Limits::default(),
+                per_hook: Windows::default(),
+                per_ip: Windows::default(),
+            }
+        }
+
+        async fn fixture(signature: Signature) -> (tempfile::TempDir, Arc<ManualClock>, WebhookService, Minted) {
+            let dir = tempfile::tempdir().unwrap();
+            let clock = Arc::new(ManualClock::new(Timestamp(1_700_000_000_000)));
+            let svc = service(&dir.path().join("forge.db"), clock.clone()).await;
+            let store = Store::open_sqlite(&dir.path().join("forge.db")).await.unwrap();
+            let ws = forge_core::model::Workspace {
+                id: WorkspaceId::new(),
+                name: "Acme".into(),
+                slug: "acme".into(),
+                created_at: Timestamp(1),
+            };
+            store.create_workspace(&ws).await.unwrap();
+            let input = WebhookInput {
+                name: "ci".into(),
+                target: WebhookTarget::Service { id: ServiceId::new() },
+                signature,
+                tag_pattern: Some("v*".into()),
+                enabled: true,
+            };
+            let minted = svc.create(ws.id, &Principal::User(UserId::new()), input).await.unwrap();
+            (dir, clock, svc, minted)
+        }
+
+        fn github(secret: &str, body: &[u8]) -> String {
+            format!("sha256={}", hmac_hex(secret.as_bytes(), body))
+        }
+
+        #[tokio::test]
+        async fn a_github_replay_is_refused_after_the_old_window_and_a_restart() {
+            let (dir, clock, svc, m) = fixture(Signature::Github).await;
+            let body = br#"{"tag":"v1"}"#;
+            let sig = github(m.secret.as_deref().unwrap(), body);
+            let h = SignatureHeaders { hub_signature_256: Some(&sig), ..Default::default() };
+            assert_eq!(svc.verify(&m.webhook, &h, body, None).await, Ok(Some("v1".into())));
+            clock.advance(Duration::from_secs(601));
+            assert_eq!(svc.verify(&m.webhook, &h, body, None).await, Err(Rejection::Replayed));
+            // A changed (unsigned) delivery id does not make it new.
+            let h2 = SignatureHeaders { github_delivery: Some("other"), ..h.clone() };
+            assert_eq!(svc.verify(&m.webhook, &h2, body, None).await, Err(Rejection::Replayed));
+            // A restart (same database, fresh service) still remembers it.
+            drop(svc);
+            let restarted = service(&dir.path().join("forge.db"), clock.clone()).await;
+            assert_eq!(restarted.verify(&m.webhook, &h, body, None).await, Err(Rejection::Replayed));
+            // Markers are forgotten after the retention window.
+            clock.advance(REPLAY_RETENTION);
+            assert_eq!(restarted.verify(&m.webhook, &h, body, None).await, Ok(Some("v1".into())));
+        }
+
+        #[tokio::test]
+        async fn a_signed_webhook_takes_the_tag_only_from_the_body() {
+            let (_dir, _clock, svc, m) = fixture(Signature::Github).await;
+            let body = br#"{"tag":"v2"}"#;
+            let sig = github(m.secret.as_deref().unwrap(), body);
+            let h = SignatureHeaders { hub_signature_256: Some(&sig), ..Default::default() };
+            assert_eq!(svc.verify(&m.webhook, &h, body, Some("v9")).await, Err(Rejection::TagNotAllowed));
+            let other = br#"{"tag":"v3"}"#;
+            let sig = github(m.secret.as_deref().unwrap(), other);
+            let h = SignatureHeaders { hub_signature_256: Some(&sig), ..Default::default() };
+            assert_eq!(svc.verify(&m.webhook, &h, other, None).await, Ok(Some("v3".into())));
+        }
+
+        #[tokio::test]
+        async fn gitlab_needs_an_event_id() {
+            let (_dir, _clock, svc, m) = fixture(Signature::Gitlab).await;
+            let secret = m.secret.clone().unwrap();
+            let h = SignatureHeaders { gitlab_token: Some(&secret), ..Default::default() };
+            assert_eq!(svc.verify(&m.webhook, &h, b"{}", None).await, Err(Rejection::MissingDeliveryId));
+            let h = SignatureHeaders { gitlab_event: Some("e-1"), ..h };
+            assert_eq!(svc.verify(&m.webhook, &h, b"{}", None).await, Ok(None));
+            assert_eq!(svc.verify(&m.webhook, &h, b"{}", None).await, Err(Rejection::Replayed));
+        }
     }
 }

@@ -93,6 +93,17 @@ async fn webhooks_deploy_as_their_creator_with_checked_signatures() {
     .await;
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "latest does not match v*");
 
+    // The query is not signed: a signed webhook refuses `?tag=`.
+    let ping = r#"{"ref":"main"}"#;
+    let (s, _) = post(
+        &h.base,
+        &format!("{path}?tag=v9.9.9"),
+        &[("x-hub-signature-256", format!("sha256={}", hmac(&secret, ping.as_bytes())))],
+        ping,
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "?tag= on a signed webhook");
+
     // A signed delivery with an allowed tag deploys the new tag.
     let good = r#"{"tag":"v2.0.1"}"#;
     let signed = vec![
@@ -122,4 +133,74 @@ async fn webhooks_deploy_as_their_creator_with_checked_signatures() {
     let (_, audit) = admin.get("/api/v1/audit?limit=300").await;
     assert!(audit.to_string().contains("webhook.deliver"), "{audit}");
     assert!(!audit.to_string().contains(&secret));
+}
+
+async fn service(admin: &Client, name: &str) -> (String, String) {
+    let (_, cl) = admin.post("/api/v1/clusters", json!({"name": format!("{name}-c")})).await;
+    let (_, p) = admin.post("/api/v1/projects", json!({"name": format!("{name}-p")})).await;
+    let (_, env) = admin
+        .post("/api/v1/environments", json!({"name": "prod", "cluster_id": cl["id"], "project_id": p["id"]}))
+        .await;
+    let (s, svc) = admin
+        .post(
+            "/api/v1/services",
+            json!({"environment_id": env["id"], "name": name, "runtime": "container", "image": "nginx:1.27"}),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CREATED, "{svc}");
+    (svc["id"].as_str().unwrap().to_owned(), env["id"].as_str().unwrap().to_owned())
+}
+
+#[tokio::test]
+async fn a_failed_webhook_deploy_keeps_the_stored_image() {
+    let h = start().await;
+    let mut admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+    // No nodes chosen: the deploy itself fails.
+    let (sid, _) = service(&admin, "web").await;
+    step_up(&mut admin).await;
+    let (s, minted) = admin
+        .post(
+            "/api/v1/webhooks",
+            json!({"name": "ci", "target": {"kind": "service", "id": sid}, "signature": "github", "tag_pattern": "v*"}),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CREATED, "{minted}");
+    let (token, secret) = (minted["token"].as_str().unwrap(), minted["secret"].as_str().unwrap());
+    let body = r#"{"tag":"v2"}"#;
+    let (s, out) = post(
+        &h.base,
+        &format!("/hooks/{token}"),
+        &[("x-hub-signature-256", format!("sha256={}", hmac(secret, body.as_bytes())))],
+        body,
+    )
+    .await;
+    assert_eq!(s, StatusCode::CONFLICT, "{out}");
+    let (_, svc) = admin.get(&format!("/api/v1/services/{sid}")).await;
+    assert_eq!(svc["spec"]["image"], "nginx:1.27", "the old image is restored: {svc}");
+}
+
+#[tokio::test]
+async fn a_gitlab_delivery_needs_its_event_id() {
+    let h = start().await;
+    let mut admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+    let (sid, _) = service(&admin, "api").await;
+    step_up(&mut admin).await;
+    let (s, minted) = admin
+        .post(
+            "/api/v1/webhooks",
+            json!({"name": "gl", "target": {"kind": "service", "id": sid}, "signature": "gitlab"}),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CREATED, "{minted}");
+    let (token, secret) = (minted["token"].as_str().unwrap(), minted["secret"].as_str().unwrap().to_owned());
+    let path = format!("/hooks/{token}");
+    let (s, out) = post(&h.base, &path, &[("x-gitlab-token", secret.clone())], "{}").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{out}");
+    let headers = [("x-gitlab-token", secret), ("x-gitlab-event-uuid", "e-1".to_owned())];
+    let (s, out) = post(&h.base, &path, &headers, "{}").await;
+    // Signature and id accepted; the deploy then fails (no nodes chosen).
+    assert_eq!(s, StatusCode::CONFLICT, "{out}");
+    let (s, out) = post(&h.base, &path, &headers, "{}").await;
+    assert_eq!(s, StatusCode::CONFLICT, "replayed: {out}");
+    assert_eq!(out["error"], "this delivery was already received");
 }

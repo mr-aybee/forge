@@ -1710,13 +1710,20 @@ image's host with `allow_push` (default `false`).
 
 `target` is `{"kind": "service", "id"}` or `{"kind": "stack", "id"}`.
 `signature` is `none`, `github` (`X-Hub-Signature-256: sha256=<hmac(body)>`),
-`gitlab` (`X-Gitlab-Token: <secret>`) or `forge` (`X-Forge-Timestamp:
+`gitlab` (`X-Gitlab-Token: <secret>` and a required, unique
+`X-Gitlab-Event-UUID`) or `forge` (`X-Forge-Timestamp:
 <unix>`, `X-Forge-Signature: sha256=<hmac("<timestamp>.<body>")>`, within 300
-seconds). A delivery's tag comes from `?tag=` or a JSON body's `"tag"`, only
-when `tag_pattern` is set (`*` matches any characters). Answers: `401` bad
+seconds). A delivery's tag comes from a JSON body's `"tag"`, only when
+`tag_pattern` is set (`*` matches any characters); `?tag=` is accepted only
+by an unsigned (`none`) webhook, since no signature covers the query. Each
+signed delivery is accepted once: its marker (the `github` or `forge`
+signature, or the GitLab event id) is kept in the database for 30 days. If
+the deploy fails after a tag change, the previous image is restored.
+Answers: `400` GitLab delivery without `X-Gitlab-Event-UUID`, `401` bad
 signature, `403` disabled or the creator can no longer deploy, `404` unknown
-URL, `422` refused tag, `429` rate limit (10 per minute per webhook, 60 per
-source address).
+URL, `409` replayed delivery, `422` refused tag (including `?tag=` on a
+signed webhook), `429` rate limit (10 per minute per webhook, 60 per
+source address), `503` the replay marker could not be recorded.
 
 ### Compose app templates
 

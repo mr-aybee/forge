@@ -147,6 +147,7 @@ export function DockerVolumes({ server, runner }: { server: string; runner: Dock
               <p>
                 Docker deletes every <b>anonymous</b> volume no container uses, with its data. Named volumes and volumes of stopped containers stay. Forge's volumes are kept.
               </p>
+              <p className="text-warn">This is host-wide: it covers every unused anonymous volume on this node, including those of containers Forge did not create.</p>
               <p className="text-warn">The data in those volumes cannot be recovered. The prune runs as a job.</p>
             </div>
           }

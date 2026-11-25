@@ -5784,3 +5784,35 @@ were registered on.
 - An existing but unusable pin file stops the agent from connecting.
 - Acknowledgements keep only this server's fingerprints, are rate-limited per
   agent and pruned for deleted nodes. The installers are `no-store`.
+
+## D-168 Deploy webhooks: signed tags only, durable replay protection
+
+**Context.** A security review of deploy webhooks (D-159) found that the
+`?tag=` query was honoured on signed webhooks although no signature covers
+it, so a captured delivery could be replayed with another tag; that replay
+markers lived in memory and were lost on restart, and a GitHub signature has
+no timestamp, so any captured delivery replayed after the 600-second window;
+that the GitHub marker preferred the unsigned `X-GitHub-Delivery`, which an
+attacker can change; and that a GitLab delivery without
+`X-Gitlab-Event-UUID` skipped the replay check altogether.
+
+**Decision.**
+- A webhook with a signature takes the tag only from the JSON body. `?tag=`
+  is refused (`422`). Unsigned webhooks cannot change the tag at all (D-159).
+- Replay markers are stored in `webhook_replay_markers` (migration 0003),
+  keyed `(webhook_id, marker)`, claimed with `INSERT … ON CONFLICT DO
+  NOTHING` through `WebhookRepository::claim_replay_marker`, and pruned after
+  30 days by the `Clock` on each claim. The marker is the SHA-256 of the
+  GitHub body signature, the Forge signature or the GitLab event id. A store
+  failure refuses the delivery (`503`, fail closed).
+- GitLab deliveries must carry `X-Gitlab-Event-UUID` (`400` otherwise).
+- A webhook tag change is compensated: the new image is saved, and when the
+  deploy fails the previous spec is put back.
+- Prune dialogs in the console state that a prune is host-wide; prune
+  semantics are unchanged.
+
+**Consequences.** GitHub's **Redeliver** of an identical payload is refused.
+A GitHub delivery can be replayed after 30 days; rotating the secret ends
+that. GitLab mode remains the weakest (a static token); the docs recommend
+Forge or GitHub signatures. The compensating restore can race a concurrent
+console edit; that is recorded as CODE-02 in `plans/code-quality.md`.

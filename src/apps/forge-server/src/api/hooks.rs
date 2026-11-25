@@ -12,7 +12,7 @@ use axum::response::{IntoResponse, Response};
 use forge_core::webhooks::{Delivery, DeliveryOutcome, Webhook, WebhookTarget};
 use forge_core::{JobId, WebhookDeliveryId};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::state::AppState;
 use crate::webhooks::{Rejection, SignatureHeaders};
@@ -55,23 +55,17 @@ async fn record(
     }
 }
 
-/// The tag a delivery asks for: `?tag=`, else a JSON body's `"tag"`.
 /// Longest tag recorded (Docker's own limit).
 const MAX_TAG: usize = 128;
 /// Longest delivery reason recorded.
 const MAX_REASON: usize = 500;
 
-/// The tag a delivery asks for: `?tag=`, else a JSON body's `"tag"`; cut
-/// before it is recorded (a longer one is refused anyway).
+/// The tag a delivery asks for, as recorded: `?tag=`, else a JSON body's
+/// `"tag"`; cut (a longer one is refused anyway). Which source is honoured
+/// is decided by [`crate::webhooks::WebhookService::verify`]: a signed
+/// webhook refuses `?tag=`.
 fn requested_tag(q: &TagQuery, body: &[u8]) -> Option<String> {
-    q.tag
-        .clone()
-        .or_else(|| {
-            serde_json::from_slice::<Value>(body)
-                .ok()
-                .and_then(|v| v.get("tag").and_then(Value::as_str).map(str::to_owned))
-        })
-        .map(|t| t.chars().take(MAX_TAG + 1).collect())
+    q.tag.clone().or_else(|| crate::webhooks::body_tag(body)).map(|t| t.chars().take(MAX_TAG + 1).collect())
 }
 
 pub async fn fire(
@@ -109,12 +103,14 @@ pub async fn fire(
         forge_signature: h("x-forge-signature"),
         forge_timestamp: h("x-forge-timestamp"),
     };
-    let tag = match state.webhooks.verify(&w, &sig, &body, tag.as_deref()) {
+    let tag = match state.webhooks.verify(&w, &sig, &body, q.tag.as_deref()).await {
         Ok(t) => t,
         Err(r) => {
             record(&state, &w, DeliveryOutcome::Rejected, &r.to_string(), None, tag, &ip_text).await;
             let status = match r {
                 Rejection::BadSignature | Rejection::Stale => StatusCode::UNAUTHORIZED,
+                Rejection::MissingDeliveryId => StatusCode::BAD_REQUEST,
+                Rejection::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
                 Rejection::Disabled => StatusCode::FORBIDDEN,
                 Rejection::Replayed => StatusCode::CONFLICT,
                 Rejection::TagNotAllowed | Rejection::TagRefused => StatusCode::UNPROCESSABLE_ENTITY,
@@ -190,20 +186,34 @@ async fn deploy(
     match w.target {
         WebhookTarget::Service { id } => {
             let app = super::services::load_own(state, id).await?;
-            if let Some(t) = tag {
-                caller.authorize(forge_core::Action::Deploy, super::services::svc_ref(id)).await?;
-                state.webhooks.set_tag(&app, t).await?;
-                caller
-                    .audit(
-                        super::services::AUDIT_UPDATE,
-                        &super::services::svc_ref(id),
-                        Some(app.workspace_id),
-                        json!({ "service": app.name, "tag": t, "via": "webhook" }),
-                    )
-                    .await;
+            let Some(t) = tag else {
+                let (_, Json(jobs)) = super::services::deploy(State(state.clone()), caller.clone(), Path(id)).await?;
+                return Ok(jobs.into_iter().map(|j| j.id).collect());
+            };
+            caller.authorize(forge_core::Action::Deploy, super::services::svc_ref(id)).await?;
+            state.webhooks.set_tag(&app, t).await?;
+            // Compensating, not atomic: the deploy reads the stored spec, so
+            // the new image is saved first; when the deploy fails, the old
+            // spec is put back so a refused delivery changes nothing.
+            match super::services::deploy(State(state.clone()), caller.clone(), Path(id)).await {
+                Ok((_, Json(jobs))) => {
+                    caller
+                        .audit(
+                            super::services::AUDIT_UPDATE,
+                            &super::services::svc_ref(id),
+                            Some(app.workspace_id),
+                            json!({ "service": app.name, "tag": t, "via": "webhook" }),
+                        )
+                        .await;
+                    Ok(jobs.into_iter().map(|j| j.id).collect())
+                }
+                Err(e) => {
+                    if let Err(r) = state.webhooks.restore(&app).await {
+                        tracing::error!(service = %id, error = %r, "restoring the image after a failed webhook deploy failed");
+                    }
+                    Err(e)
+                }
             }
-            let (_, Json(jobs)) = super::services::deploy(State(state.clone()), caller.clone(), Path(id)).await?;
-            Ok(jobs.into_iter().map(|j| j.id).collect())
         }
         WebhookTarget::Stack { id } => {
             if tag.is_some() {

@@ -25,7 +25,7 @@ import { ago, Badge, Button, Confirm, CopyButton, CopyIcon, Drawer, Empty, Error
 const SIG: Record<WebhookSignature, { label: string; tone: "ok" | "warn" | "muted"; help: string }> = {
   forge: { label: "Forge", tone: "ok", help: "HMAC of timestamp and body (X-Forge-Signature). Best for any CI." },
   github: { label: "GitHub", tone: "ok", help: "HMAC of the body in X-Hub-Signature-256, as GitHub signs deliveries." },
-  gitlab: { label: "GitLab", tone: "ok", help: "The secret in X-Gitlab-Token, as GitLab sends it." },
+  gitlab: { label: "GitLab", tone: "ok", help: "The secret in X-Gitlab-Token and a unique X-Gitlab-Event-UUID per delivery, as GitLab sends them." },
   none: { label: "None", tone: "warn", help: "The URL alone. Use it only on a trusted network." },
 };
 
@@ -281,7 +281,11 @@ function signing(sig: WebhookSignature, secretVar: string): { lines: string[]; h
         headers: ` -H "X-Hub-Signature-256: sha256=$sig"`,
       };
     case "gitlab":
-      return { lines: [], headers: ` -H "X-Gitlab-Token: $${secretVar}"` };
+      // Each delivery needs its own id: a repeated one is refused as a replay.
+      return {
+        lines: ["id=$(cat /proc/sys/kernel/random/uuid)"],
+        headers: ` -H "X-Gitlab-Token: $${secretVar}" -H "X-Gitlab-Event-UUID: $id"`,
+      };
     case "none":
       return { lines: [], headers: "" };
   }
