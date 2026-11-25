@@ -5,13 +5,14 @@ import { useJobs } from "../api/hooks";
 import type { JobStatus } from "../api/types";
 import { CancelJobButton } from "../components/CancelJob";
 import { JobDetail, TargetLink } from "../components/JobsDrawer";
-import { elapsed, isActive, jobTarget, jobTitle, useJobNames, useNow } from "../components/jobMeta";
-import { Drawer, Empty, ErrorNote, PageHeader, Panel, SearchInput, Select, Skeleton, Status, Table, Td, ago, duration, short, time } from "../components/ui";
+import { JobStatusPill, KindIcon, jobTone, toneBorder, toneText } from "../components/JobVisuals";
+import { elapsed, isActive, isBackground, jobAction, jobTarget, jobTitle, useJobNames, useNow } from "../components/jobMeta";
+import { Drawer, Empty, ErrorNote, PageHeader, Panel, SearchInput, Select, Skeleton, Table, Td, ago, duration, short, time } from "../components/ui";
 
 const STATUSES: (JobStatus | "")[] = ["", "queued", "running", "succeeded", "failed", "cancelled"];
 
 export function Jobs() {
-    const jobs = useJobs();
+  const jobs = useJobs();
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<JobStatus | "">("");
   const [open, setOpen] = useState<string>();
@@ -67,19 +68,24 @@ export function Jobs() {
               const title = jobTitle(j, names);
               return (
                 <tr key={j.id} className="cursor-pointer hover:bg-panel-2/60" onClick={() => setOpen(j.id)}>
-                  <Td className="max-w-[320px] !py-1.5">
-                    <div className="truncate font-medium" title={title}>
-                      {title}
-                    </div>
-                    <div className="truncate font-mono text-[11px] text-faint">
-                      {j.kind} · {short(j.id)}
+                  <Td className={`max-w-[360px] border-l-[3px] !py-1.5 ${toneBorder[jobTone(j)]}`}>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <KindIcon job={j} />
+                      <div className="min-w-0">
+                        <div className={`truncate ${isBackground(j) ? "text-muted" : "font-medium"}`} title={title}>
+                          {jobAction(j, names)}
+                        </div>
+                        <div className="truncate font-mono text-[11px] text-faint">
+                          {j.kind} · {short(j.id)}
+                        </div>
+                      </div>
                     </div>
                   </Td>
                   <Td className="max-w-[160px] text-muted" onClick={(e) => e.stopPropagation()}>
                     <TargetLink target={jobTarget(j, names)} />
                   </Td>
                   <Td>
-                    <Status value={j.status} />
+                    <JobStatusPill job={j} />
                   </Td>
                   <Td className="font-mono text-[11px] text-muted tabular-nums">{duration(elapsed(j, now))}</Td>
                   <Td className="font-mono text-[11px] tabular-nums">
@@ -90,7 +96,7 @@ export function Jobs() {
                   </Td>
                   <Td className="max-w-xs">
                     {j.last_error ? (
-                      <span className="block truncate font-mono text-[11px] text-bad" title={j.last_error}>
+                      <span className={`block truncate font-mono text-[11px] ${j.status === "failed" ? toneText[jobTone(j)] : "text-warn"}`} title={j.last_error}>
                         {j.last_error}
                       </span>
                     ) : (
