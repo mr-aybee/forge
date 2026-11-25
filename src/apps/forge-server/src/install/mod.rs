@@ -405,8 +405,25 @@ fi
 # Upgrades: allow the command kinds this release adds. Kinds offered before
 # and removed by the operator from `allowed_commands` stay removed (D-070).
 if [ -f /var/lib/forge-agent/agent.toml ]; then
-  as_agent /usr/local/bin/forge-agent --state-dir /var/lib/forge-agent offer-commands
+  OFFERED=$(as_agent /usr/local/bin/forge-agent --state-dir /var/lib/forge-agent offer-commands)
+  case "$OFFERED" in
+    "allowed: "*) say "command kinds this release adds, now allowed: ${{OFFERED#allowed: }}" ;;
+  esac
 fi
+
+# The agent must stay up: a unit that exits at once (bad state, a pin it
+# cannot read) would otherwise be reported as installed. Polls ~15 s.
+agent_failed() {{
+  say "$1"
+  if [ -s /var/lib/forge-agent/link-error.txt ]; then
+    say "last link error: $(cat /var/lib/forge-agent/link-error.txt)"
+  fi
+  if [ -n "$2" ]; then
+    printf '%s\n' "--- last log lines ---" >&2
+    sh -c "$2" >&2 2>/dev/null || true
+  fi
+  die "forge-agent is not running; fix the cause above and run the installer again"
+}}
 
 HELPER_CMD="/usr/local/bin/forge-agent-helper serve --agent-dir /var/lib/forge-agent"
 if [ -d /run/systemd/system ]; then
@@ -453,6 +470,19 @@ UNIT
   systemctl enable forge-agent.service >/dev/null 2>&1
   step "systemctl restart forge-agent.service"
   systemctl restart forge-agent.service
+  step "systemctl is-active forge-agent.service  # stays up for 15 s"
+  # NRestarts restarts from 0 on an explicit restart; any crash raises it.
+  i=0
+  while [ "$i" -lt 15 ]; do
+    sleep 1
+    i=$((i + 1))
+    STATE=$(systemctl is-active forge-agent.service 2>/dev/null || true)
+    RESTARTS=$(systemctl show -p NRestarts --value forge-agent.service 2>/dev/null || echo 0)
+    if [ "$STATE" != active ] || [ "${{RESTARTS:-0}}" != 0 ]; then
+      agent_failed "forge-agent.service did not stay running (state $STATE, restarts ${{RESTARTS:-0}})" \
+        "command -v journalctl >/dev/null && journalctl -u forge-agent.service -n 15 --no-pager"
+    fi
+  done
   report_identity
   say "forge-agent installed and running (systemd)"
 else
@@ -469,6 +499,15 @@ else
     nohup setsid sh -c 'while true; do runuser -u forge-agent -- /usr/local/bin/forge-agent --state-dir /var/lib/forge-agent run; sleep 5; done' \
       >>/var/log/forge-agent.log 2>&1 </dev/null &
   fi
+  step "pgrep forge-agent  # stays up for 15 s"
+  i=0
+  while [ "$i" -lt 15 ]; do
+    sleep 1
+    i=$((i + 1))
+    if ! pgrep -x -f "/usr/local/bin/forge-agent --state-dir /var/lib/forge-agent run" >/dev/null 2>&1; then
+      agent_failed "forge-agent did not stay running" "tail -n 15 /var/log/forge-agent.log"
+    fi
+  done
   report_identity
   say "forge-agent installed and running (no systemd; respawn loop)"
 fi
@@ -522,6 +561,37 @@ mod tests {
         // D-069: re-running keeps node-bound certificates, and the drop-in is
         // readable by the agent that reports it.
         assert!(s.contains("ssh-principals %u %i") && s.contains("chmod 0644 /etc/ssh/sshd_config.d/50-forge.conf"));
+    }
+
+    #[test]
+    fn the_installer_confirms_the_agent_stays_running() {
+        let s = render_script(
+            &dist(),
+            &InstallParams {
+                forge_url: "https://f",
+                agent_url: "https://f:7443",
+                token: None,
+                hostname: None,
+                ssh_user_ca: Some("ssh-ed25519 AAAAC3 ca"),
+                terminal_account: None,
+                terminal_account_sudo: false,
+            },
+        );
+        // systemd: a crash-looping unit fails the install with its journal.
+        let restart = s.find("systemctl restart forge-agent.service\n").unwrap_or(usize::MAX);
+        let check = s.find("systemctl show -p NRestarts --value forge-agent.service");
+        let ok = s.find("installed and running (systemd)");
+        assert!(matches!((check, ok), (Some(c), Some(o)) if restart < c && c < o), "checked before success");
+        assert!(s.contains("journalctl -u forge-agent.service -n 15 --no-pager"));
+        assert!(s.contains("die \"forge-agent is not running"));
+        // No systemd: the respawned process must stay up too.
+        assert!(s.contains("tail -n 15 /var/log/forge-agent.log"));
+        // offer-commands output is not echoed raw ("no new commands").
+        assert!(s.contains("OFFERED=$(as_agent"));
+        // The rendered script parses as POSIX sh where a shell is present.
+        if let Ok(out) = std::process::Command::new("sh").arg("-n").arg("-c").arg(&s).output() {
+            assert!(out.status.success(), "sh -n: {}", String::from_utf8_lossy(&out.stderr));
+        }
     }
 
     #[test]

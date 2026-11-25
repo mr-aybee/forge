@@ -166,9 +166,10 @@ line for each step and a `forge-install: <message>` line for each status.
 | 12 | `$ forge-agent-helper pin` | Runs `forge-agent-helper pin --agent-dir /var/lib/forge-agent` as root. The helper then accepts only commands signed with the key of this enrollment | After step 11, when the helper is installed |
 | 11a | `forge-install: already enrolled; updating the agent in place` | Skips enrolling and pinning | `identity.json` exists |
 | 13 | `$ trust the Forge SSH user CA (browser terminal)` | Sets up sshd for the browser terminal (see [SSH configuration](#ssh-configuration)) | `/etc/ssh/sshd_config` exists |
-| 14 | (the agent's output) | Runs `forge-agent --state-dir /var/lib/forge-agent offer-commands` as `forge-agent`: adds command names that are new in this release to `allowed_commands`. Names you removed stay removed | `/var/lib/forge-agent/agent.toml` exists |
+| 14 | `forge-install: command kinds this release adds, now allowed: <name>, …` (only when it added some) | Runs `forge-agent --state-dir /var/lib/forge-agent offer-commands` as `forge-agent`: adds command names that are new in this release to `allowed_commands`. Names you removed stay removed | `/var/lib/forge-agent/agent.toml` exists |
 | 15 | `$ systemctl restart forge-agent-helper.service` | Writes and enables `forge-agent-helper.service`, then restarts it | systemd, helper installed |
 | 16 | `$ write /etc/systemd/system/forge-agent.service`, `$ systemctl restart forge-agent.service` | Writes and enables `forge-agent.service`, then restarts it | systemd |
+| 16a | `$ systemctl is-active forge-agent.service  # stays up for 15 s` (systemd) or `$ pgrep forge-agent  # stays up for 15 s` | Checks once a second for 15 s that the agent keeps running: the unit stays `active` with `NRestarts` 0, or the agent process exists. Otherwise prints the state, the agent's last link error (`/var/lib/forge-agent/link-error.txt`) and the last 15 lines of `journalctl -u forge-agent.service` (or `/var/log/forge-agent.log`), then fails | Always |
 | 17 | `forge-install: server <server-id>` | Reports which Forge server record this machine is | `identity.json` has a `server_id` |
 | 18 | `forge-install: forge-agent installed and running (systemd)` or `forge-install: forge-agent installed and running (no systemd; respawn loop)` | Done | Always |
 
@@ -350,10 +351,10 @@ enrolled as server <server-id>
 $ forge-agent-helper pin
 pinned Forge's command key for server <server-id>
 $ trust the Forge SSH user CA (browser terminal)
-no new commands
 $ systemctl restart forge-agent-helper.service
 $ write /etc/systemd/system/forge-agent.service
 $ systemctl restart forge-agent.service
+$ systemctl is-active forge-agent.service  # stays up for 15 s
 forge-install: server <server-id>
 forge-install: forge-agent installed and running (systemd)
 ```
@@ -396,16 +397,16 @@ $ sha256sum -c  # forge-agent-helper
 $ install -m 0755 forge-agent-helper /usr/local/bin/forge-agent-helper
 forge-install: already enrolled; updating the agent in place
 $ trust the Forge SSH user CA (browser terminal)
-allowed: stack
+forge-install: command kinds this release adds, now allowed: stack
 $ systemctl restart forge-agent-helper.service
 $ write /etc/systemd/system/forge-agent.service
 $ systemctl restart forge-agent.service
+$ systemctl is-active forge-agent.service  # stays up for 15 s
 forge-install: server <server-id>
 forge-install: forge-agent installed and running (systemd)
 ```
 
-`offer-commands` prints `no new commands`, or `allowed: <name>, <name>` with
-the names it added.
+The `now allowed` line appears only when `offer-commands` added names.
 
 ## Exit codes and errors
 
@@ -424,6 +425,7 @@ Errors print `forge-install: error: <message>` to standard error.
 | `1` | `download failed: <url>` | The node cannot reach `<forge-url>`, or the build is missing | Check that the node reaches `node_public_url` |
 | `1` | `checksum mismatch for <file>` | The download does not match the checksum in the script | Fetch the script again; if it persists, check for a proxy that rewrites downloads |
 | `1` | `Error: <reason>` (from `forge-agent`) | Enrollment failed, for example a malformed, used or expired token, or the node cannot reach `<agent-url>` on TCP 3843 | Create a new token; open TCP 3843 from the node to the control plane |
+| `1` | `forge-agent is not running; fix the cause above and run the installer again` | The agent exited or restarted within 15 s of starting, for example it cannot read its state. The lines above show the unit state, the last link error and the last 15 log lines | Fix the cause the log names and run the installer again |
 | `1` | `forge-agent-helper pin: <reason>` | The helper could not pin the enrollment | See the caution in [Re-running and upgrading in place](#re-running-and-upgrading-in-place) |
 | non-zero | output of the failing command | Another command failed (`set -e`), for example `useradd` or `systemctl restart` | Read the `$` line above the error |
 

@@ -879,9 +879,10 @@ if [ "$INSTALL_AGENT" = true ]; then
     if curl -fsSL "$LOCAL_API/install.sh?terminal_account=$TERMINAL_ACCOUNT" 2>>"$AGENT_LOG" \
          | sh >>"$AGENT_LOG" 2>&1; then
       AGENT_STATE="enrolled in cluster $CLUSTER as $NODE_NAME (terminal account $TERMINAL_ACCOUNT)"
-      step "Agent" "enrolled in cluster $CLUSTER"
+      step "Agent" "enrolled in cluster $CLUSTER and running"
     else
-      AGENT_FAILED=true; AGENT_STATE="not enrolled: the node installer failed"
+      # Includes an agent that enrolled but did not stay running.
+      AGENT_FAILED=true; AGENT_STATE="failed: the node installer reported an error (see below)"
     fi
   else
     AGENT_FAILED=true; AGENT_STATE="not enrolled: could not create an enrollment token"
