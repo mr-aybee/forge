@@ -550,6 +550,41 @@ async fn bucket_grants_round_trip_and_go_with_their_store() {
     let (media, logs) = (new_store("Media"), new_store("Logs"));
     s.put_object_store(&media).await.unwrap();
     s.put_object_store(&logs).await.unwrap();
+
+    // D-170: container settings and key records round-trip and go with the store.
+    {
+        use forge_core::storage_iam::*;
+        use forge_core::storage_settings::*;
+        let settings = RustfsSettings { memory_mb: Some(1024), restart: RestartPolicy::Always, ..Default::default() };
+        s.put_store_settings(logs.id, &settings, Timestamp(5)).await.unwrap();
+        assert_eq!(s.get_store_settings(logs.id).await.unwrap(), Some(settings));
+        assert_eq!(s.get_store_settings(media.id).await.unwrap(), None);
+        let mut key = StoreKey {
+            id: StoreKeyId::new(),
+            store_id: logs.id,
+            access_key: "AKEXAMPLE".into(),
+            name: "app".into(),
+            grants: Some(vec![KeyGrant { bucket: "app".into(), prefix: "in/".into(), access: BucketAccess::Read }]),
+            vault_item_id: None,
+            created_by: "user:x".into(),
+            created_at: Timestamp(1),
+            updated_at: Timestamp(1),
+            synced_at: Some(Timestamp(1)),
+        };
+        s.put_store_key(&key).await.unwrap();
+        key.grants = None;
+        s.put_store_key(&key).await.unwrap();
+        assert_eq!(s.list_store_keys(logs.id).await.unwrap(), [key.clone()]);
+        let extra = new_store("Gone");
+        s.put_object_store(&extra).await.unwrap();
+        s.put_store_settings(extra.id, &RustfsSettings::default(), Timestamp(1)).await.unwrap();
+        s.put_store_key(&StoreKey { id: StoreKeyId::new(), store_id: extra.id, ..key.clone() }).await.unwrap();
+        s.delete_object_store(extra.id).await.unwrap();
+        assert!(s.list_store_keys(extra.id).await.unwrap().is_empty());
+        s.delete_store_key(key.id).await.unwrap();
+        assert!(s.list_store_keys(logs.id).await.unwrap().is_empty());
+    }
+
     let grant = |who: &User, on: &ObjectStore, bucket: &str, created: i64, expires: Timestamp| BucketGrant {
         id: BucketGrantId::new(),
         workspace_id: ws.id,
