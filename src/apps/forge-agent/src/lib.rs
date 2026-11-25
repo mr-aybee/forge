@@ -61,6 +61,8 @@ pub mod ssh_principals;
 pub mod stacks;
 #[cfg(unix)]
 pub mod swarm;
+#[cfg(unix)]
+pub mod swarm_stack;
 pub mod terminal_accounts;
 pub mod tls;
 pub mod tunnel;

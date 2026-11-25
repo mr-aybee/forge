@@ -224,12 +224,30 @@ pub async fn run(op: &DockerOp) -> Result<Value, String> {
         }
         DockerOp::Volumes {} => {
             let v = get("/volumes").await?;
-            Ok(json!(v["Volumes"].as_array().map(|a| a.iter().map(volume_view).collect::<Vec<_>>())))
+            let containers = get("/containers/json?all=1").await?;
+            let used = volume_users(&containers);
+            Ok(json!(v["Volumes"].as_array().map(|a| {
+                a.iter()
+                    .map(|vol| {
+                        let mut view = volume_view(vol);
+                        let name = vol["Name"].as_str().unwrap_or_default();
+                        view["used_by"] = json!(used.get(name).cloned().unwrap_or_default());
+                        view
+                    })
+                    .collect::<Vec<_>>()
+            })))
         }
         DockerOp::VolumeInspect { name } => Ok(volume_view(&get(&format!("/volumes/{}", enc(name))).await?)),
-        DockerOp::VolumeCreate { name, labels } => {
-            // Local driver, no options: options can bind host paths.
-            let body = json!({ "Name": name, "Driver": "local", "Labels": labels });
+        DockerOp::VolumeCreate { name, labels, remote } => {
+            // Local driver; the only options are a checked NFS or CIFS share
+            // (free-form options can bind host paths).
+            let mut body = json!({ "Name": name, "Driver": "local", "Labels": labels });
+
+            if let Some(r) = remote {
+                r.validate()?;
+                body["DriverOpts"] = json!(r.driver_opts());
+            }
+
             call("POST", "/volumes/create", Some(&body), None, QUICK).await.map(|v| volume_view(&v))
         }
         DockerOp::VolumeRemove { name, force } => {
@@ -389,6 +407,24 @@ pub(crate) fn image_detail(i: &Value) -> Value {
 /// One layer of an image's history.
 pub(crate) fn history_view(l: &Value) -> Value {
     json!({ "created": l["Created"], "created_by": l["CreatedBy"], "size": l["Size"], "tags": l["Tags"], "comment": l["Comment"] })
+}
+
+/// Containers (names) using each named volume; Swarm task containers
+/// count, so the list shows which services keep data on this node.
+pub(crate) fn volume_users(containers: &Value) -> std::collections::BTreeMap<String, Vec<String>> {
+    let mut out: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+
+    for c in containers.as_array().into_iter().flatten() {
+        let name = c["Names"][0].as_str().unwrap_or_default().trim_start_matches('/').to_owned();
+
+        for m in c["Mounts"].as_array().into_iter().flatten().filter(|m| m["Type"] == "volume") {
+            if let Some(v) = m["Name"].as_str() {
+                out.entry(v.to_owned()).or_default().push(name.clone());
+            }
+        }
+    }
+
+    out
 }
 
 pub(crate) fn volume_view(v: &Value) -> Value {

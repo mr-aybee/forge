@@ -39,6 +39,7 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
 
             if let Some(a) = advertise_addr {
                 body["AdvertiseAddr"] = json!(format!("{a}:{port}"));
+                set_data_path(&mut body, a);
             }
 
             if !default_addr_pool.is_empty() {
@@ -62,6 +63,7 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
 
             if let Some(a) = advertise_addr {
                 body["AdvertiseAddr"] = json!(a);
+                set_data_path(&mut body, a);
             }
 
             api("POST", "/swarm/join", Some(&body), CONSENSUS).await.map_err(|e| without_token(&e, join_token))?;
@@ -119,7 +121,8 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
             Ok(json!({ "network": name }))
         }
         SwarmOp::ServiceApply { def, registry_auth } => {
-            let spec = def.engine_spec();
+            let mut spec = def.engine_spec();
+            object_ids(&mut spec).await?;
             let auth = registry_auth.as_ref().map(|a| a.0.as_str());
 
             match owned(&def.service_id, &def.slot).await? {
@@ -191,6 +194,51 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
 
             Ok(json!({ "logs": crate::docker::demux(&bytes) }))
         }
+        SwarmOp::EnsureSharedNetwork {} => crate::swarm_stack::ensure_shared_network().await,
+        SwarmOp::Networks {} => crate::swarm_stack::networks().await,
+        SwarmOp::StackDeploy { part } => crate::swarm_stack::deploy(part).await,
+        SwarmOp::StackStatus { namespace } => crate::swarm_stack::status(namespace).await,
+        SwarmOp::StackRemove { namespace } => crate::swarm_stack::remove(namespace).await,
+        SwarmOp::StackServiceAction { namespace, service, action } => {
+            crate::swarm_stack::service_action(namespace, service, *action).await
+        }
+        SwarmOp::StackServiceLogs { namespace, service, tail } => {
+            crate::swarm_stack::service_logs(namespace, service, *tail).await
+        }
+        SwarmOp::TaskStats {} => crate::swarm_stack::task_stats().await,
+        SwarmOp::Objects { kind } => crate::swarm_stack::objects(*kind).await,
+        SwarmOp::ObjectCreate { kind, name, version, data } => {
+            crate::swarm_stack::object_create(*kind, name, *version, data).await
+        }
+        SwarmOp::ObjectRemove { kind, docker_name } => crate::swarm_stack::object_remove(*kind, docker_name).await,
+    }
+}
+
+/// Fills `SecretID` / `ConfigID` of the spec's secrets and configs from
+/// their names: Docker needs the ids, Forge knows the names.
+async fn object_ids(spec: &mut Value) -> Result<(), String> {
+    for (key, path, name_key, id_key) in
+        [("Secrets", "secrets", "SecretName", "SecretID"), ("Configs", "configs", "ConfigName", "ConfigID")]
+    {
+        let Some(list) = spec["TaskTemplate"]["ContainerSpec"][key].as_array_mut() else { continue };
+
+        for r in list.iter_mut() {
+            let name = r[name_key].as_str().unwrap_or_default().to_owned();
+            let obj = api("GET", &format!("/{path}/{name}"), None, QUICK)
+                .await?
+                .ok_or_else(|| format!("{name} does not exist in the swarm"))?;
+            r[id_key] = obj["ID"].clone();
+        }
+    }
+
+    Ok(())
+}
+
+/// Overlay (VXLAN) traffic uses the advertised address too when it is an IP
+/// address, so a swarm advertised on the mesh also carries its data there.
+fn set_data_path(body: &mut Value, advertise: &str) {
+    if advertise.parse::<std::net::IpAddr>().is_ok() {
+        body["DataPathAddr"] = json!(advertise);
     }
 }
 
