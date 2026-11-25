@@ -14,6 +14,7 @@ pub struct Envelope {
 }
 
 impl Envelope {
+    /// Creates an envelope that wraps keys with `provider`.
     #[must_use]
     pub fn new(provider: Arc<dyn KeyProvider>) -> Self {
         Self { provider }
@@ -33,6 +34,7 @@ impl Envelope {
         Ok(format!("{VERSION}.{key_id}.{}.{}.{}", b64url(&wrapped), b64url(&nonce), b64url(&buf)))
     }
 
+    /// Opens a sealed value bound to `aad`.
     pub fn open(&self, sealed: &str, aad: &str) -> Result<Vec<u8>, SecretError> {
         let parts: Vec<&str> = sealed.split('.').collect();
 

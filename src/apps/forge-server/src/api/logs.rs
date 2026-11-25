@@ -15,6 +15,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{delete, get};
 use axum::{Json, Router};
+use forge_core::analytics::Histogram;
 use forge_core::logs::{LogCursor, LogFilter, LogKey, LogLevel, LogPage, LogQuery, LogSource, LogStream};
 use forge_core::{Action, EntityKind, EntityRef, LogKeyId, Principal, ServerId, ServiceId, Timestamp};
 use serde::{Deserialize, Serialize};
@@ -24,7 +25,6 @@ use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
 use crate::logs::{AUDIT_KEY_CREATE, AUDIT_KEY_REVOKE, CreatedKey, LogsError};
 use crate::state::AppState;
-use forge_core::analytics::Histogram;
 
 /// Default and largest page.
 const DEFAULT_LIMIT: u32 = 100;

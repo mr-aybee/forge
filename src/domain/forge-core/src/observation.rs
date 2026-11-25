@@ -15,9 +15,10 @@
 //!
 //! This module is pure: types, rules and ports. No I/O.
 
+use std::fmt;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::fmt;
 
 use crate::access::EntityRef;
 use crate::clock::Timestamp;

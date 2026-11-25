@@ -2,13 +2,14 @@
 //! authorization and input validation.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use forge_agent::enroll::{HostFacts, enroll};
 use forge_agent::{AgentConfig, StatePaths};
 use forge_core::observation::*;
 use forge_core::{EntityKind, EntityRef, ServerId, Timestamp};
 use reqwest::StatusCode;
 use serde_json::json;
+
+use crate::common::*;
 
 /// Creating users needs an MFA-verified session (#13 inventory).
 async fn step_up(c: &mut Client) {

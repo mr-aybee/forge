@@ -412,9 +412,10 @@ async fn refuse(caller: &Caller, id: ServerId, workspace: Option<forge_core::Wor
 /// and whose agent reports `container_exec`, and the per-user and per-node
 /// limits, whose place is held from here on. Refusals are audited.
 async fn agent_shell_target(state: &AppState, caller: &Caller, id: ServerId) -> ApiResult<AgentTarget> {
+    use forge_core::tags::FactsRepository;
+
     use super::remote_sessions::Limits;
     use crate::container_exec::{MAX_PER_NODE, MAX_PER_USER};
-    use forge_core::tags::FactsRepository;
     caller.authorize(Action::ContainerExec, server_ref(id)).await?;
     let server = state.store.get_server(id).await.map_err(|_| ApiError::not_found("server not found"))?;
     let ws = Some(server.workspace_id);

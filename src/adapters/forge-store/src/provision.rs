@@ -4,12 +4,12 @@
 
 use std::time::Duration;
 
+use forge_core::DomainError;
 use serde::Serialize;
 use sqlx::any::AnyPoolOptions;
 use sqlx::{AnyPool, Row};
 
 use crate::{DRIVERS, unknown_versions};
-use forge_core::DomainError;
 
 /// What is already in the target database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

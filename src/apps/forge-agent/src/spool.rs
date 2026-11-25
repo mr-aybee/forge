@@ -631,9 +631,10 @@ pub fn app_log_row(key_hash: &str, body: &str, ts: i64) -> Row {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // reason: tests
 mod tests {
-    use super::*;
     use std::io::Read;
     use std::sync::atomic::AtomicBool;
+
+    use super::*;
 
     #[derive(Debug, Default)]
     struct FakeDisk {

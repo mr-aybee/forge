@@ -3,12 +3,13 @@
 //! password changes.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::{Client, PASSWORD, login_body, test_config};
 use forge_server::bootstrap::{INITIAL_PASSWORD_FILE, init_admin};
 use forge_server::{App, Services};
 use reqwest::{Method, StatusCode};
 use serde_json::json;
 use tokio::net::TcpListener;
+
+use crate::common::{Client, PASSWORD, login_body, test_config};
 
 #[tokio::test]
 async fn username_admin_signs_in_edits_profile_and_rotates_the_generated_password() {

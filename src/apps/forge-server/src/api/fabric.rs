@@ -14,7 +14,6 @@ use std::net::Ipv4Addr;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-
 use forge_catalog::fabric::{Cidr, DEFAULT_POOL, FabricSpec, Lease, allocate, suggest_subnet};
 use forge_core::model::FabricRecord;
 use forge_core::ports::{

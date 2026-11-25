@@ -3,11 +3,12 @@
 //! whole bearer session (access and refresh token).
 #![allow(clippy::unwrap_used)]
 
-use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start};
 
 #[tokio::test]
 async fn pkce_login_bearer_use_and_logout_revokes_the_session() {

@@ -1,9 +1,10 @@
 //! Analytics settings at runtime (D-136).
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 fn setting<'a>(v: &'a Value, name: &str) -> &'a Value {
     v["settings"].as_array().unwrap().iter().find(|s| s["setting"] == name).unwrap()

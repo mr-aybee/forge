@@ -3,10 +3,11 @@
 //! root on its folder that goes away with the app.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use forge_core::files::{FileRepository, RootKind, RootSpec};
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 async fn node(h: &Harness, os: &str) -> forge_core::model::Server {
     let server = forge_core::model::Server {

@@ -324,6 +324,7 @@ impl Default for Tracker {
 }
 
 impl Tracker {
+    /// Creates an empty tracker.
     #[must_use]
     pub fn new() -> Self {
         Self::default()

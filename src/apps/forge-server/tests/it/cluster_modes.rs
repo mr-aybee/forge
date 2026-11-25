@@ -2,9 +2,10 @@
 //! changed afterwards.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start};
 use reqwest::StatusCode;
 use serde_json::json;
+
+use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start};
 
 #[tokio::test]
 async fn cluster_mode_is_chosen_at_creation_and_then_fixed() {

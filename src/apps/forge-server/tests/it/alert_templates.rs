@@ -6,7 +6,6 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use crate::common::*;
 use forge_agent::enroll::{HostFacts, enroll};
 use forge_agent::{Agent, AgentConfig, StatePaths};
 use forge_core::model::{AgentStatus, Installation, NodeRole, Server};
@@ -14,6 +13,8 @@ use forge_core::ports::{InstallationRepository, ServerRepository};
 use forge_core::{InstallationId, ServerId, Timestamp, WorkspaceId};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 /// Polls `f` until it yields a value, with a deadline.
 async fn wait_for<F, Fut>(what: &str, secs: u64, mut f: F) -> Value

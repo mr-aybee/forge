@@ -810,8 +810,9 @@ mod platform {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use forge_proto::messages::ProcessAction;
+
+    use super::*;
 
     /// `/proc/<pid>/stat` handles this process holds.
     #[cfg(target_os = "linux")]

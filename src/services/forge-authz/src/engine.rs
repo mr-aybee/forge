@@ -16,6 +16,7 @@ use crate::{GUARDRAILS_SRC, ROLE_TEMPLATES_SRC, SCHEMA_SRC};
 
 const NAMESPACE: &str = "Forge";
 
+/// Errors from loading or evaluating Cedar policies.
 #[derive(Debug, Error)]
 pub enum AuthzError {
     #[error("cedar schema error: {0}")]

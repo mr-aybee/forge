@@ -4,9 +4,10 @@
 //! `/home` or another environment's app folder (security regression).
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 async fn step_up(c: &mut Client) {
     use forge_identity::totp;

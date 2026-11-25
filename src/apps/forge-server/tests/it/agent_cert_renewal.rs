@@ -4,7 +4,6 @@
 
 use std::time::Duration;
 
-use crate::common::*;
 use forge_agent::enroll::{HostFacts, enroll};
 use forge_agent::link::{Endpoint, Link};
 use forge_agent::{AgentConfig, StatePaths, tls};
@@ -14,6 +13,8 @@ use forge_pki::{AGENT_CERT_VALIDITY, AgentCsr};
 use forge_proto::messages::{Heartbeat, RenewRequest, RenewResponse};
 use prost::Message;
 use serde_json::json;
+
+use crate::common::*;
 
 struct Creds {
     key_pem: String,

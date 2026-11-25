@@ -3,12 +3,13 @@
 //! a delivery deploys as its creator.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, step_up};
 use forge_agent::AgentConfig;
 use forge_agent::StatePaths;
 use forge_agent::enroll::{HostFacts, enroll};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, step_up};
 
 fn hmac(key: &str, body: &[u8]) -> String {
     let k = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key.as_bytes());

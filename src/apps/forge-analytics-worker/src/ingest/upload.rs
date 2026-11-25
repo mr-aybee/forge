@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use bytes::Bytes;
+use forge_analytics_proto::WorkerError;
 use forge_core::analytics::FileWrite;
 use forge_core::spool::{FILE_ID_HEADER, FileName, MAX_FILE_BYTES};
 use forge_core::{Clock, ServerId};
@@ -39,7 +40,6 @@ use tokio_rustls::TlsAcceptor;
 
 use super::seen::SeenLog;
 use super::{ImportError, Ingest};
-use forge_analytics_proto::WorkerError;
 
 /// Most agent connections held at once.
 const MAX_CONNECTIONS: usize = 20_000;

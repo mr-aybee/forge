@@ -13,12 +13,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use crate::common::*;
 use forge_core::ports::{InstallationRepository, ServiceRepository};
 use forge_proto::messages::{CommandBody, CommandResult, command_body::Command};
 use prost::Message;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 async fn node(h: &Harness, hostname: &str) -> forge_core::ServerId {
     let server = forge_core::model::Server {

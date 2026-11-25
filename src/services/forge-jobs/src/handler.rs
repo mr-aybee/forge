@@ -45,6 +45,7 @@ impl StepContext {
         }
     }
 
+    /// A value saved in the job's state.
     #[must_use]
     pub fn state_value(&self, key: &str) -> Option<&Value> {
         self.state.get(key)
@@ -73,21 +74,25 @@ pub struct JobRegistry {
 }
 
 impl JobRegistry {
+    /// Creates an empty registry.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Registers a handler for its job kind.
     pub fn register(&mut self, handler: Arc<dyn JobHandler>) -> &mut Self {
         self.handlers.insert(handler.kind(), handler);
         self
     }
 
+    /// The handler for a job kind.
     #[must_use]
     pub fn get(&self, kind: &str) -> Option<Arc<dyn JobHandler>> {
         self.handlers.get(kind).cloned()
     }
 
+    /// The registered job kinds.
     pub fn kinds(&self) -> impl Iterator<Item = &&'static str> {
         self.handlers.keys()
     }

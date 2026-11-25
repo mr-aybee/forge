@@ -29,6 +29,7 @@ const ED: u8 = 0x80;
 /// Longest credential id accepted (the spec allows up to 1023 bytes).
 pub const MAX_CREDENTIAL_ID: usize = 1023;
 
+/// Errors from parsing or checking WebAuthn data.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum WebAuthnError {
     #[error("malformed passkey data: {0}")]
@@ -161,6 +162,7 @@ pub struct AuthData {
 }
 
 impl AuthData {
+    /// Parses authenticator data.
     pub fn parse(data: &[u8]) -> Result<Self, WebAuthnError> {
         if data.len() < 37 {
             return Err(WebAuthnError::Malformed("authenticator data too short".into()));

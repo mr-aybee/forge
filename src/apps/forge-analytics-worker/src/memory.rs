@@ -352,9 +352,10 @@ impl AnalyticsStore for MemoryStore {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // reason: tests
 mod tests {
-    use super::*;
     use forge_core::ServiceId;
     use forge_core::logs::{IngestContext, LogFilter, SearchLimits, parse_batch};
+
+    use super::*;
 
     #[tokio::test]
     async fn logs_are_scoped_filtered_and_paged() {

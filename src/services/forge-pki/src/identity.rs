@@ -14,6 +14,7 @@ pub struct PeerIdentity {
 }
 
 impl PeerIdentity {
+    /// Reads an identity from a DER certificate.
     pub fn from_der(der: &[u8]) -> Result<Self, PkiError> {
         let (_, cert) = X509Certificate::from_der(der).map_err(|e| PkiError::Parse(e.to_string()))?;
         let common_name = cert

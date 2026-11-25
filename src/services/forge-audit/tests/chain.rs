@@ -106,9 +106,10 @@ async fn concurrent_appends_keep_chain_linear() {
 
 #[tokio::test]
 async fn histogram_counts_outcomes_per_bucket() {
+    use std::time::Duration;
+
     use forge_core::model::AuditFilter;
     use forge_core::{ManualClock, Timestamp};
-    use std::time::Duration;
 
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open_sqlite(&dir.path().join("a.db")).await.unwrap();

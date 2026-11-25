@@ -2,9 +2,10 @@
 //! allowed hosts follow the address the client used, not one fixed name.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 /// The port of the base URL (`http://127.0.0.1:<port>`).
 fn port(base: &str) -> u16 {

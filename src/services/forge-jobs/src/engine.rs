@@ -60,6 +60,7 @@ pub struct JobEngine {
 }
 
 impl JobEngine {
+    /// Creates the job engine.
     #[must_use]
     pub fn new(
         repo: Arc<dyn JobRepository>,
@@ -73,11 +74,13 @@ impl JobEngine {
         Self { repo, authz, audit, registry, clock, config, events, wake: Notify::new(), cancels: Default::default() }
     }
 
+    /// Subscribes to job events.
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<JobEvent> {
         self.events.subscribe()
     }
 
+    /// The registered job handlers.
     #[must_use]
     pub fn registry(&self) -> &JobRegistry {
         &self.registry

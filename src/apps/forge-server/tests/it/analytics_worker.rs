@@ -10,9 +10,10 @@
 
 use std::time::{Duration, Instant};
 
-use crate::common::*;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 /// `FORGE_ANALYTICS_WORKER_BIN`, else the nearest `forge-analytics-worker`
 /// above the test executable.

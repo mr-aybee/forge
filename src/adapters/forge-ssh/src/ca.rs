@@ -134,8 +134,9 @@ fn write_private(path: &Path, data: &[u8]) -> DomainResult<()> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use super::*;
     use russh::keys::ssh_key::Certificate;
+
+    use super::*;
 
     #[test]
     fn issues_short_lived_user_certificates_for_one_login() {

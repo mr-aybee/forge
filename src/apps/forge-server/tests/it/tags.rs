@@ -1,9 +1,10 @@
 //! Tags: set, read, counts, validation, authorization and audit.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 use reqwest::{Method, StatusCode};
 use serde_json::json;
+
+use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 
 #[tokio::test]
 async fn cluster_tags_round_trip_with_validation_authz_and_audit() {

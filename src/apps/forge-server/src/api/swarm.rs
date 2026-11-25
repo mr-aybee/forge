@@ -13,7 +13,6 @@ use forge_catalog::swarm::{Availability, SwarmNode};
 use forge_core::model::{Job, NewJob};
 use forge_core::swarm::MemberRole;
 use forge_core::{Action, ClusterId, ServerId, ServiceId};
-
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 

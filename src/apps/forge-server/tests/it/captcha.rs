@@ -1,9 +1,10 @@
 //! Image CAPTCHA after failed sign-ins (T01): needed from the third attempt,
 //! per sign-in name and per address, single use.
 
-use crate::common::*;
 use reqwest::StatusCode;
 use serde_json::json;
+
+use crate::common::*;
 
 async fn start_captcha() -> Harness {
     start_configured(|c| c.security.captcha_after_failures = 2).await

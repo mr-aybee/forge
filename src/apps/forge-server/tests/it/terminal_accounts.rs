@@ -2,12 +2,13 @@
 //! console) and accounts the node reports, listed together.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use forge_agent::enroll::{HostFacts, enroll_with};
 use forge_agent::{AgentConfig, StatePaths};
 use forge_core::tags::FactsRepository;
 use reqwest::{Method, StatusCode};
 use serde_json::json;
+
+use crate::common::*;
 
 async fn enroll_node(h: &Harness, admin: &Client, account: Option<&str>) -> (String, tempfile::TempDir) {
     let (s, body) = admin.post("/api/v1/enrollment-tokens", json!({"ttl_minutes": 10})).await;

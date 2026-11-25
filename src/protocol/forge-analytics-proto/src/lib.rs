@@ -21,10 +21,11 @@ pub use messages::{PROTOCOL, Reply, Request, Response, WorkerError};
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // reason: tests
 mod tests {
-    use super::*;
     use forge_core::analytics::{AnalyticsMaps, AppKey, Placement};
     use forge_core::logs::{LogFilter, LogPage, LogQuery, SearchLimits};
     use forge_core::{ServerId, ServiceId, Timestamp};
+
+    use super::*;
 
     async fn round_trip<T>(msg: &T, blob: &[u8], limits: Limits) -> (T, Vec<u8>)
     where

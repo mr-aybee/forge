@@ -1,9 +1,10 @@
 //! API-level enforcement: authentication, CSRF, Cedar authorization, audit.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use reqwest::{Method, StatusCode};
 use serde_json::json;
+
+use crate::common::*;
 
 #[tokio::test]
 async fn version_and_capabilities_are_public() {

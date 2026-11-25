@@ -2,9 +2,10 @@
 //! MFA for command checks, fleet targets, stale writes and audit redaction.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 async fn fleet_node(h: &Harness, hostname: &str) {
     let server = forge_core::model::Server {

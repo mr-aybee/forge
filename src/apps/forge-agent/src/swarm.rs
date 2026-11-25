@@ -11,11 +11,10 @@ use std::time::Duration;
 use forge_catalog::swarm::{
     Availability, JoinTokens, SwarmNode, SwarmOp, SwarmRole, SwarmServiceStatus, SwarmStatus, SwarmTask,
 };
-use serde_json::{Value, json};
-
 use forge_catalog::swarm_service::{
     MANAGED_LABEL, SERVICE_ID_LABEL, SLOT_LABEL, SPEC_LABEL, network_name, service_name,
 };
+use serde_json::{Value, json};
 
 use crate::docker::api;
 

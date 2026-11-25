@@ -41,6 +41,7 @@ pub struct AgentCsr {
 }
 
 impl AgentCsr {
+    /// Generates a new CA for `hostname`.
     pub fn generate(hostname: &str) -> Result<Self, PkiError> {
         let key = KeyPair::generate().map_err(gen_err)?;
         let mut params = CertificateParams::new(Vec::<String>::new()).map_err(gen_err)?;
@@ -123,6 +124,7 @@ impl CertificateAuthority {
         Ok(ca)
     }
 
+    /// Loads a CA from its PEM certificate and key.
     pub fn from_pem(cert_pem: &str, key_pem: &str) -> Result<Self, PkiError> {
         let key = KeyPair::from_pem(key_pem).map_err(gen_err)?;
 

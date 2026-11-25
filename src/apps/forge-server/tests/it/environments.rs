@@ -2,9 +2,10 @@
 //! the environments of a project (D-102).
 #![allow(clippy::unwrap_used)]
 
-use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 use reqwest::{Method, StatusCode};
 use serde_json::json;
+
+use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 
 fn id(v: &serde_json::Value) -> &str {
     v["id"].as_str().unwrap()

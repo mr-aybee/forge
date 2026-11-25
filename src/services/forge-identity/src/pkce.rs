@@ -15,6 +15,7 @@ pub fn verifier_is_valid(verifier: &str) -> bool {
         && verifier.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~'))
 }
 
+/// Whether `verifier` matches the PKCE `challenge`.
 #[must_use]
 pub fn verify(verifier: &str, challenge: &str) -> bool {
     verifier_is_valid(verifier) && constant_time_eq(s256_challenge(verifier).as_bytes(), challenge.as_bytes())

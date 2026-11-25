@@ -2,9 +2,10 @@
 //! per-person scope, released keys after failures, header validation.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 
 async fn api_key(c: &Client, name: &str) -> String {
     let (s, k) = c.post("/api/v1/api-keys", json!({ "name": name })).await;

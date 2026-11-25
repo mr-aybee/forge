@@ -252,8 +252,9 @@ pub fn render_env(
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::*;
     use std::collections::BTreeMap;
+
+    use super::*;
 
     #[test]
     fn every_template_declares_its_placeholders_and_pins_images() {

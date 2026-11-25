@@ -3,7 +3,6 @@
 //! only what the node's OS supports, and never reach an offline node.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use forge_agent::enroll::{HostFacts, enroll_with};
 use forge_agent::{AgentConfig, StatePaths};
 use forge_server::App;
@@ -11,6 +10,8 @@ use forge_server::state::Services;
 use reqwest::StatusCode;
 use serde_json::json;
 use tokio::net::TcpListener;
+
+use crate::common::*;
 
 /// A server with `[security] require_mfa` as given (D-064).
 async fn start_mfa(require_mfa: bool) -> Harness {

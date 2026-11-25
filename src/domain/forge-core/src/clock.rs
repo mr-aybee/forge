@@ -1,8 +1,9 @@
 //! Time abstraction so that leases, expiry and replay windows are testable.
 
-use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
 
 /// `expires_at` of something that never expires (9999-12-31T23:59:59.999Z).
 /// A real timestamp, so every expiry comparison keeps working; small enough

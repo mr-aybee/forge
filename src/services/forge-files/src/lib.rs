@@ -51,6 +51,7 @@ pub enum Actor {
 }
 
 impl Actor {
+    /// A signed-in user or API key acting in `ctx`.
     #[must_use]
     pub fn user(principal: Principal, ctx: AuthzContext) -> Self {
         Self::User { principal, ctx }
@@ -122,6 +123,7 @@ impl std::fmt::Display for FileError {
 
 impl std::error::Error for FileError {}
 
+/// Result of a file operation.
 pub type FileResult<T> = Result<T, FileError>;
 
 /// Effective permissions on one root, for the console.
@@ -279,6 +281,7 @@ pub fn node_error(err: &str) -> FileError {
     }
 }
 
+/// File browsing and transfer on nodes, authorized per operation.
 #[derive(Debug)]
 pub struct FileService {
     repo: Arc<dyn FileRepository>,
@@ -359,6 +362,7 @@ impl Drop for SearchSlot<'_> {
 }
 
 impl FileService {
+    /// Creates the file service.
     #[must_use]
     pub fn new(
         repo: Arc<dyn FileRepository>,
@@ -1193,6 +1197,7 @@ impl FileService {
         Ok(out)
     }
 
+    /// Aborts an upload and discards what was received.
     pub async fn abort_upload(&self, actor: &Actor, id: &str) -> FileResult<()> {
         let up = self.upload(actor, id).await?;
         self.forget_gate(&up.id);
@@ -1383,6 +1388,7 @@ impl FileService {
         Ok(root)
     }
 
+    /// Deletes a file root.
     pub async fn delete_root(&self, actor: &Actor, server_id: ServerId, id: &str) -> FileResult<()> {
         let server = self.server(server_id).await?;
         self.require(actor, Action::FileAdmin, &server).await?;

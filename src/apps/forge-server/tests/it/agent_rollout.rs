@@ -4,11 +4,12 @@
 
 use std::time::Duration;
 
-use crate::common::*;
 use forge_agent::enroll::{HostFacts, enroll};
 use forge_agent::{Agent, AgentConfig, StatePaths};
 use reqwest::StatusCode;
 use serde_json::json;
+
+use crate::common::*;
 
 async fn enroll_agent(
     h: &Harness,

@@ -5,8 +5,9 @@
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use crate::common::{ADMIN_EMAIL, Client, PASSWORD};
 use serde_json::{Value, json};
+
+use crate::common::{ADMIN_EMAIL, Client, PASSWORD};
 
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()

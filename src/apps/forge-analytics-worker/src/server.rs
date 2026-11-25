@@ -199,8 +199,9 @@ where
 #[cfg(all(test, unix))]
 #[allow(clippy::unwrap_used)] // reason: tests
 mod tests {
-    use super::*;
     use forge_analytics_proto::{RESPONSE_LIMITS, Reply};
+
+    use super::*;
 
     #[tokio::test]
     async fn only_the_secret_holder_with_this_protocol_is_served() {

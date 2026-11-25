@@ -96,6 +96,7 @@ fn resource_of(fp: &str) -> Option<EntityRef> {
     Some(EntityRef { kind: kind.parse().ok()?, id: id.to_owned() })
 }
 
+/// Evaluates enabled alert rules against the latest evidence and records alarms.
 #[derive(Debug, Clone)]
 pub struct Evaluator {
     pub alerts: Arc<dyn AlertRepository>,

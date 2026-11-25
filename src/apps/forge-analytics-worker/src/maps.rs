@@ -87,8 +87,9 @@ impl Maps {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // reason: tests
 mod tests {
-    use super::*;
     use forge_core::analytics::{AppKey, NodeCert, Placement};
+
+    use super::*;
 
     #[test]
     fn indexes_and_refuses_oversized_pushes() {

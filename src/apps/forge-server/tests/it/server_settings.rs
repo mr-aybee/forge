@@ -1,9 +1,10 @@
 //! Server settings: the runtime public address (D-120).
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use reqwest::StatusCode;
 use serde_json::json;
+
+use crate::common::*;
 
 /// Platform admins set it with MFA; it is validated, audited with the old
 /// and new value, and the generic settings editor cannot bypass it. Others

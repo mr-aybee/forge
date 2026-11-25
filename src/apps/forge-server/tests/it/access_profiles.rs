@@ -1,8 +1,9 @@
 //! Access profiles and assignments over the API (D-086).
 
-use crate::common::*;
 use reqwest::{Method, StatusCode};
 use serde_json::json;
+
+use crate::common::*;
 
 async fn admin_mfa(h: &Harness) -> Client {
     let mut admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;

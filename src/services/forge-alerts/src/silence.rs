@@ -158,6 +158,7 @@ pub struct Silences {
 }
 
 impl Silences {
+    /// One silence by id.
     pub async fn get(&self, id: SilenceId) -> DomainResult<Silence> {
         self.store.get_silence(id).await?.ok_or_else(|| DomainError::NotFound("silence".into()))
     }

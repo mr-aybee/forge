@@ -79,11 +79,13 @@ pub struct AuditLog {
 }
 
 impl AuditLog {
+    /// Creates an audit log that signs entries with `signer`.
     #[must_use]
     pub fn new(repo: Arc<dyn AuditRepository>, signer: Arc<AuditSigner>, clock: Arc<dyn Clock>) -> Self {
         Self { repo, signer, clock, append_lock: Mutex::new(()) }
     }
 
+    /// A verifier for the signatures this log writes.
     #[must_use]
     pub fn verifier(&self) -> AuditVerifier {
         self.signer.verifier()

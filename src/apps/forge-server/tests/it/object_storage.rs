@@ -6,13 +6,14 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode as AxStatus};
 use axum::routing::get;
 use reqwest::{Method, StatusCode};
 use serde_json::json;
+
+use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 
 async fn step_up(admin: &mut Client) {
     use forge_identity::totp;

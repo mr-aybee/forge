@@ -64,6 +64,7 @@ pub struct OpenIdConnectProvider {
 }
 
 impl OpenIdConnectProvider {
+    /// Discovers the provider's endpoints from its issuer.
     pub async fn discover(config: OidcConfig) -> Result<Self, IdentityError> {
         let http = reqwest::Client::builder()
             // Following redirects here would enable SSRF against internal hosts.
@@ -152,6 +153,7 @@ const PENDING_TTL: Duration = Duration::from_secs(600);
 const PENDING_MAX: usize = 10_000;
 
 impl PendingLogins {
+    /// Stores a pending login under its `state`.
     pub fn insert(&self, state: String, pending: PendingLogin) -> Result<(), IdentityError> {
         let mut map = self.inner.lock().map_err(|_| IdentityError::Provider("lock poisoned".into()))?;
         map.retain(|_, (t, _)| t.elapsed() < PENDING_TTL);

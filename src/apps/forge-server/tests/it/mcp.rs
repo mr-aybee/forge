@@ -3,7 +3,6 @@
 //! `/mcp` tools that run the REST handlers, server-side modes, revocation.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use forge_server::App;
@@ -11,6 +10,8 @@ use forge_server::state::Services;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
+
+use crate::common::*;
 
 async fn start_mcp(max_mode: &str) -> Harness {
     start_mcp_pinned(max_mode, true).await

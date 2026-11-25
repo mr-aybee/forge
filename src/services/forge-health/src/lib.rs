@@ -51,6 +51,7 @@ pub struct RecordReport {
     pub refused: usize,
 }
 
+/// Records observations reported by nodes.
 #[derive(Debug, Clone)]
 pub struct ObservationRecorder {
     store: Arc<dyn ObservationStore>,
@@ -60,6 +61,7 @@ pub struct ObservationRecorder {
 }
 
 impl ObservationRecorder {
+    /// Creates an observation recorder.
     pub fn new(
         store: Arc<dyn ObservationStore>,
         placements: Arc<dyn InstancePlacements>,

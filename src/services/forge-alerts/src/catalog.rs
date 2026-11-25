@@ -414,6 +414,7 @@ pub enum Place {
 }
 
 impl Place {
+    /// The name used in specs and the API.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {

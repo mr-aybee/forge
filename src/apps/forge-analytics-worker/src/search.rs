@@ -160,8 +160,9 @@ impl Search {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use forge_core::logs::LogLevel;
+
+    use super::*;
 
     #[test]
     fn picks_readable_steps() {

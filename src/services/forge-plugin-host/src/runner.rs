@@ -11,12 +11,14 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 /// Answers host calls for one invocation.
 #[async_trait]
 pub trait HostCalls: Send + Sync {
+    /// Answers one host function call.
     async fn call(&self, function: &str, args: Value) -> Result<Value, String>;
 }
 
 /// Executes a component invocation in isolation.
 #[async_trait]
 pub trait PluginRunner: Send + Sync + std::fmt::Debug {
+    /// Runs one invocation, answering its host calls through `host`.
     async fn run(&self, req: RunRequest, host: &dyn HostCalls) -> DomainResult<RunnerMessage>;
 }
 
@@ -29,6 +31,7 @@ pub struct ProcessRunner {
 }
 
 impl ProcessRunner {
+    /// Creates a runner that spawns `binary`.
     #[must_use]
     pub fn new(binary: PathBuf) -> Self {
         Self { binary, startup_grace: Duration::from_secs(5) }

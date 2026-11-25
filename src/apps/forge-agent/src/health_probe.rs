@@ -313,9 +313,10 @@ fn status_code(answer: &[u8]) -> Option<u16> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::health_secrets::ResolvedHeader;
-    use serde_json::json;
 
     fn probe(v: serde_json::Value) -> Probe {
         serde_json::from_value(v).unwrap()

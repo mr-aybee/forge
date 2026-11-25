@@ -209,14 +209,13 @@ pub use docker_exec::serve;
 #[cfg(unix)]
 mod docker_exec {
     use std::path::Path;
+    use std::sync::atomic::{AtomicI64, Ordering};
     use std::time::Duration;
 
     use forge_proto::exec_frame::{Decoder, Frame, MAX_PAYLOAD};
     use serde_json::{Value, json};
     use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
     use tokio::net::UnixStream;
-
-    use std::sync::atomic::{AtomicI64, Ordering};
 
     use super::{ExecSpec, MAX_EXEC, SHELL, ShellCount, Slot};
     use crate::docker::{call_at, docker_error};

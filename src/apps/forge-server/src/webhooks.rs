@@ -447,11 +447,12 @@ mod tests {
     mod replay {
         #![allow(clippy::unwrap_used)] // reason: tests
 
-        use super::*;
         use forge_core::ports::TenancyRepository;
         use forge_core::{ManualClock, ServiceId, Timestamp, UserId};
         use forge_secrets::LocalKeyProvider;
         use forge_store::Store;
+
+        use super::*;
 
         const KEY: [u8; 32] = [7; 32];
 

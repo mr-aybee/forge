@@ -1,9 +1,10 @@
 //! Audit API: server-side filters, cursor pages, distinct actions and authorization.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 use reqwest::StatusCode;
 use serde_json::json;
+
+use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 
 #[tokio::test]
 async fn audit_pages_filter_and_list_actions() {

@@ -2,10 +2,11 @@
 //! endpoint and node-move authorization fixes.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::{ADMIN_EMAIL, Client, Harness, PASSWORD, start, user_with_role};
 use forge_core::model::{AgentStatus, NodeRole, Server};
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
+
+use crate::common::{ADMIN_EMAIL, Client, Harness, PASSWORD, start, user_with_role};
 
 fn node(h: &Harness, hostname: &str, status: AgentStatus) -> Server {
     Server {

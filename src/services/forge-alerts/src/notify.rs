@@ -93,6 +93,7 @@ pub enum SendOutcome {
 /// time and the answer it reads.
 #[async_trait]
 pub trait Transport: Send + Sync + std::fmt::Debug {
+    /// Sends one request.
     async fn send(&self, request: &Outbound) -> SendOutcome;
 }
 
@@ -144,6 +145,7 @@ pub trait MailTransport: Send + Sync + std::fmt::Debug {
     /// Checks one address (`ops@example.com` or `Ops <ops@example.com>`)
     /// and returns it as it is sent. `Invalid` when it is not one.
     fn mailbox(&self, raw: &str) -> DomainResult<String>;
+    /// Sends one mail.
     async fn send(&self, mail: &OutboundMail) -> SendOutcome;
 }
 
@@ -152,6 +154,7 @@ pub trait MailTransport: Send + Sync + std::fmt::Debug {
 pub trait ChannelSecrets: Send + Sync + std::fmt::Debug {
     /// Seals a URL so it can only be opened for this channel.
     fn seal_url(&self, channel: ChannelId, url: &str) -> DomainResult<String>;
+    /// Opens a URL sealed for this channel.
     fn open_url(&self, channel: ChannelId, sealed: &str) -> DomainResult<String>;
     /// The signing secret behind a vault item of this workspace.
     /// `NotFound` when the item is gone or belongs to another workspace.
@@ -161,6 +164,7 @@ pub trait ChannelSecrets: Send + Sync + std::fmt::Debug {
 /// Display names of resources, for messages people read.
 #[async_trait]
 pub trait ResourceNames: Send + Sync + std::fmt::Debug {
+    /// The display name of `resource`, if it has one.
     async fn name(&self, resource: &EntityRef) -> Option<String>;
 }
 
@@ -538,10 +542,12 @@ pub struct Notifier {
 impl Notifier {
     // ---- channels --------------------------------------------------------
 
+    /// Lists the channels of a workspace.
     pub async fn channels(&self, workspace: WorkspaceId) -> DomainResult<Vec<Channel>> {
         self.store.list_channels(workspace).await
     }
 
+    /// One channel by id.
     pub async fn channel(&self, id: ChannelId) -> DomainResult<Channel> {
         self.store.get_channel(id).await?.ok_or_else(|| DomainError::NotFound("notification channel".into()))
     }
@@ -707,6 +713,7 @@ impl Notifier {
         Ok(())
     }
 
+    /// Creates a notification channel.
     pub async fn create_channel(
         &self,
         workspace: WorkspaceId,
@@ -755,6 +762,7 @@ impl Notifier {
         Ok(channel)
     }
 
+    /// Replaces a channel's settings.
     pub async fn update_channel(&self, id: ChannelId, input: ChannelInput) -> DomainResult<Channel> {
         let old = self.channel(id).await?;
         let name = Self::check_channel(&input)?;
@@ -882,10 +890,12 @@ impl Notifier {
 
     // ---- policies --------------------------------------------------------
 
+    /// Lists the notification policies of a workspace.
     pub async fn policies(&self, workspace: WorkspaceId) -> DomainResult<Vec<NotificationPolicy>> {
         self.store.list_policies(Some(workspace)).await
     }
 
+    /// One notification policy by id.
     pub async fn policy(&self, id: NotificationPolicyId) -> DomainResult<NotificationPolicy> {
         self.store.get_policy(id).await?.ok_or_else(|| DomainError::NotFound("notification policy".into()))
     }
@@ -1024,6 +1034,7 @@ impl Notifier {
         Ok(ps.iter().map(|p| p.email_users.iter().copied().filter(|u| missing.contains(u)).collect()).collect())
     }
 
+    /// Creates a notification policy in a workspace.
     pub async fn create_policy(
         &self,
         workspace: WorkspaceId,
@@ -1060,6 +1071,7 @@ impl Notifier {
         Ok(policy)
     }
 
+    /// Replaces a notification policy's settings.
     pub async fn update_policy(
         &self,
         id: NotificationPolicyId,
@@ -1087,6 +1099,7 @@ impl Notifier {
         Ok(policy)
     }
 
+    /// Deletes a notification policy and returns it.
     pub async fn delete_policy(&self, id: NotificationPolicyId) -> DomainResult<NotificationPolicy> {
         let policy = self.policy(id).await?;
         self.store.delete_policy(id).await?;
@@ -1096,10 +1109,12 @@ impl Notifier {
 
     // ---- history ---------------------------------------------------------
 
+    /// Lists deliveries matching `filter`, at most `limit`.
     pub async fn deliveries(&self, filter: &DeliveryFilter, limit: u32) -> DomainResult<Vec<Delivery>> {
         self.store.list_deliveries(filter, limit).await
     }
 
+    /// One delivery with its attempts.
     pub async fn delivery(&self, id: DeliveryId) -> DomainResult<(Delivery, Vec<DeliveryAttempt>)> {
         let d = self.store.get_delivery(id).await?.ok_or_else(|| DomainError::NotFound("delivery".into()))?;
         let attempts = self.store.delivery_attempts(id).await?;

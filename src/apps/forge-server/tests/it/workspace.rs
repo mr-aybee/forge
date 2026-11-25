@@ -1,10 +1,11 @@
 //! One deployment is one workspace (D-016). A store with more than one fails
 //! closed instead of guessing (#13 inventory).
 
-use crate::common::*;
 use forge_core::model::Workspace;
 use forge_core::ports::TenancyRepository;
 use reqwest::StatusCode;
+
+use crate::common::*;
 
 #[tokio::test]
 async fn a_second_workspace_makes_workspace_requests_fail_closed() {

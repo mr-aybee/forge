@@ -27,11 +27,13 @@ pub struct ForgeHostFunctions {
 }
 
 impl ForgeHostFunctions {
+    /// Creates the host functions.
     #[must_use]
     pub fn new(servers: Arc<dyn ServerRepository>, authz: Arc<dyn Authorizer>) -> Self {
         Self { servers, authz }
     }
 
+    /// Binds the host functions to one invocation.
     #[must_use]
     pub fn bind(&self, invocation: Invocation) -> BoundHostFunctions {
         BoundHostFunctions { functions: self.clone(), invocation }

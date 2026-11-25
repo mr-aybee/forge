@@ -9,7 +9,6 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::common::*;
 use forge_core::alerts::{Alarm, AlarmEvent, AlarmState, AlertRepository, Severity};
 use forge_core::model::{AgentStatus, NodeRole, Server};
 use forge_core::ports::ServerRepository;
@@ -18,6 +17,8 @@ use reqwest::StatusCode;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+
+use crate::common::*;
 
 /// A loopback receiver that answers `204` and keeps every body.
 #[derive(Clone)]

@@ -47,6 +47,7 @@ pub fn cert_fingerprint(pem: &str) -> Option<String> {
     ca::pem_to_der(pem).ok().map(|der| forge_secrets::crypto::sha256_hex(&der))
 }
 
+/// Errors from certificate operations.
 #[derive(Debug, thiserror::Error)]
 pub enum PkiError {
     #[error("certificate generation failed: {0}")]

@@ -418,8 +418,9 @@ async fn execute(
 
 #[cfg(test)]
 mod tests {
-    use super::{APT_LOCK_WAIT_SECS, PACKAGE_COMMAND_TIMEOUT, TIMEOUT, command_timeout, exclusive, is_secret};
     use std::time::Duration;
+
+    use super::{APT_LOCK_WAIT_SECS, PACKAGE_COMMAND_TIMEOUT, TIMEOUT, command_timeout, exclusive, is_secret};
 
     /// A dpkg lock wait must never time out the install first (#17).
     #[test]

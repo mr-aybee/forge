@@ -607,8 +607,9 @@ pub fn mismatch_message(presented: &str, pinned: &[String], endpoint: &str) -> S
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // reason: tests
 mod tests {
-    use super::*;
     use forge_core::Timestamp;
+
+    use super::*;
 
     const DAY: i64 = 24 * 3_600_000;
 

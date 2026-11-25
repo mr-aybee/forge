@@ -350,9 +350,10 @@ impl ServerCertVerifier for PinnedLater {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::*;
     use forge_core::Timestamp;
     use forge_pki::CertificateAuthority;
+
+    use super::*;
 
     const NOW: Timestamp = Timestamp(1_800_000_000_000);
 

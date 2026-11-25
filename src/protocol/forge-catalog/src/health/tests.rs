@@ -1,5 +1,6 @@
-use super::*;
 use serde_json::json;
+
+use super::*;
 
 fn http(host: &str, allow: bool) -> Check {
     serde_json::from_value(json!({

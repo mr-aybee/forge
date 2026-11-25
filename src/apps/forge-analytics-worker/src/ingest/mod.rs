@@ -295,12 +295,14 @@ impl Ingest {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // reason: tests
 mod tests {
+    use std::time::Duration;
+
+    use forge_core::analytics::{AnalyticsMaps, AppKey};
+    use forge_proto::messages::{ContainerLabels, ContainerLogLine};
+
     use super::*;
     use crate::batcher::tests::{ready, tuning};
     use crate::memory::MemoryStore;
-    use forge_core::analytics::{AnalyticsMaps, AppKey};
-    use forge_proto::messages::{ContainerLabels, ContainerLogLine};
-    use std::time::Duration;
 
     fn ingest(analytics: Arc<Analytics>, maps: Arc<Maps>) -> Ingest {
         let rx = watch::channel(tuning()).1;

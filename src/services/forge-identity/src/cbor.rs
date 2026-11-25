@@ -14,6 +14,7 @@ pub const MAX_BYTES: usize = 16 * 1024;
 /// Most entries in one array or map.
 pub const MAX_ITEMS: usize = 64;
 
+/// A decoded CBOR value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     /// Unsigned or negative integer (CBOR major types 0 and 1).
@@ -46,6 +47,7 @@ impl Value {
         }
     }
 
+    /// The bytes of a byte string.
     #[must_use]
     pub fn as_bytes(&self) -> Option<&[u8]> {
         match self {
@@ -54,6 +56,7 @@ impl Value {
         }
     }
 
+    /// The text of a text string.
     #[must_use]
     pub fn as_text(&self) -> Option<&str> {
         match self {
@@ -62,6 +65,7 @@ impl Value {
         }
     }
 
+    /// The value of an integer.
     #[must_use]
     pub const fn as_int(&self) -> Option<i128> {
         match self {
@@ -71,6 +75,7 @@ impl Value {
     }
 }
 
+/// A CBOR decoding error.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("invalid CBOR: {0}")]
 pub struct CborError(pub &'static str);

@@ -30,6 +30,7 @@ pub const HEADER_SIGNATURE: &str = "x-forge-signature";
 /// Longest interpolated name or value in a text message, in characters.
 const MAX_TEXT_FIELD: usize = 200;
 
+/// The JSON body sent to a notification channel.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Payload {
     pub schema_version: u32,
@@ -61,6 +62,7 @@ pub struct AfterSilence {
     pub silence_id: SilenceId,
 }
 
+/// An alert event as shown in a notification payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EventView {
     #[serde(rename = "type")]
@@ -74,6 +76,7 @@ pub struct EventView {
     pub at: Timestamp,
 }
 
+/// An alarm as shown in a notification payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AlarmView {
     pub id: AlarmId,
@@ -90,12 +93,14 @@ pub struct AlarmView {
     pub acknowledged_at: Option<Timestamp>,
 }
 
+/// A rule as shown in a notification payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RuleView {
     pub id: AlertRuleId,
     pub revision: i64,
 }
 
+/// A resource as shown in a notification payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResourceView {
     pub kind: String,
@@ -107,6 +112,7 @@ pub struct ResourceView {
     pub server_id: Option<ServerId>,
 }
 
+/// An observation as shown in a notification payload.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ObservationView {
     pub subject: String,
@@ -114,6 +120,7 @@ pub struct ObservationView {
     pub value: serde_json::Value,
 }
 
+/// Console links included in a notification payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Links {
     /// The alarm in the console.

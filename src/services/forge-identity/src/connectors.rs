@@ -169,10 +169,12 @@ impl IdentityService {
         Ok(client_ok.then_some(c))
     }
 
+    /// Lists agent connections, optionally for one user.
     pub async fn list_connections(&self, user: Option<UserId>) -> Result<Vec<AgentConnection>, IdentityError> {
         Ok(self.connector_repo()?.list_connections(user).await?)
     }
 
+    /// One agent connection by id.
     pub async fn get_connection(&self, id: &str) -> Result<Option<AgentConnection>, IdentityError> {
         Ok(self.connector_repo()?.get_connection(id).await?)
     }
@@ -182,6 +184,7 @@ impl IdentityService {
         Ok(self.connector_repo()?.revoke_connection(id, self.clock.now()).await?)
     }
 
+    /// Lists registered OAuth clients.
     pub async fn list_clients(&self) -> Result<Vec<OAuthClientRecord>, IdentityError> {
         Ok(self.connector_repo()?.list_clients().await?)
     }

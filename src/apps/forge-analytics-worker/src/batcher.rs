@@ -233,11 +233,12 @@ async fn write_batch(analytics: &Analytics, queue: &Queue, batch: Vec<Pending>) 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // reason: tests
 pub(crate) mod tests {
-    use super::*;
-    use crate::memory::MemoryStore;
     use forge_core::analytics::Retention;
     use forge_core::logs::{IngestContext, parse_batch};
     use forge_core::{ServiceId, Timestamp};
+
+    use super::*;
+    use crate::memory::MemoryStore;
 
     pub(crate) fn tuning() -> Tuning {
         Tuning {

@@ -3,9 +3,10 @@
 //! covered by the lab tests (it needs a real node).
 #![allow(clippy::unwrap_used)]
 
-use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 use reqwest::StatusCode;
 use serde_json::json;
+
+use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 
 /// A WebSocket upgrade request (without completing the handshake).
 fn upgrade(c: &reqwest::Client, url: &str) -> reqwest::RequestBuilder {

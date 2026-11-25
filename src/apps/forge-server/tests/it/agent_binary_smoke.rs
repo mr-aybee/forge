@@ -12,12 +12,13 @@
 
 use std::time::{Duration, Instant};
 
-use crate::common::*;
 use forge_agent::enroll::{HostFacts, enroll};
 use forge_agent::{AgentConfig, StatePaths};
 use forge_core::model::AgentStatus;
 use reqwest::StatusCode;
 use serde_json::json;
+
+use crate::common::*;
 
 /// `FORGE_AGENT_BIN`, else the nearest `forge-agent` above the test
 /// executable: `target/<profile>/deps/it-<hash>` and the newer build-dir

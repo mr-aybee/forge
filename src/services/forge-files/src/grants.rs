@@ -6,9 +6,8 @@
 //! re-reads it (revocation and expiry take effect at once) and is authorized
 //! as its creator, so losing a role removes the access too.
 
-use std::net::IpAddr;
-
 use std::collections::HashMap;
+use std::net::IpAddr;
 
 use forge_core::files::{FileGrant, NEVER_EXPIRES, NODE_ROOT};
 use forge_core::model::AuditOutcome;

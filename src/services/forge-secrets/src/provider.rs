@@ -10,7 +10,9 @@ use crate::crypto::{random_bytes, sha256_hex};
 pub trait KeyProvider: Send + Sync + std::fmt::Debug {
     /// Id of the key currently used for wrapping.
     fn active_key_id(&self) -> &str;
+    /// Wraps a data key; returns the key id and the wrapped key.
     fn wrap(&self, dek: &[u8; 32]) -> Result<(String, Vec<u8>), SecretError>;
+    /// Unwraps a data key wrapped under `key_id`.
     fn unwrap(&self, key_id: &str, wrapped: &[u8]) -> Result<[u8; 32], SecretError>;
 }
 
@@ -28,6 +30,7 @@ impl std::fmt::Debug for LocalKeyProvider {
 }
 
 impl LocalKeyProvider {
+    /// Creates a provider from a 32-byte key.
     pub fn from_bytes(key: &[u8; 32]) -> Result<Self, SecretError> {
         let unbound = UnboundKey::new(&AES_256_GCM, key).map_err(|_| SecretError::Crypto)?;
         let key_id = format!("local-{}", &sha256_hex(key)[..12]);

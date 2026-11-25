@@ -28,6 +28,7 @@ pub const CHALLENGE_TTL: Duration = Duration::from_secs(300);
 /// Passkeys one person may register.
 pub const MAX_PASSKEYS: usize = 20;
 
+/// Errors from passkey registration and sign-in.
 #[derive(Debug, thiserror::Error)]
 pub enum PasskeyError {
     #[error("{0}")]
@@ -63,6 +64,7 @@ pub struct AssertionResponse {
     pub signature: String,
 }
 
+/// Registers passkeys and signs users in with them.
 #[derive(Debug, Clone)]
 pub struct PasskeyService {
     repo: Arc<dyn PasskeyRepository>,
@@ -101,6 +103,7 @@ fn challenge_of(client_data_json: &[u8]) -> Result<Vec<u8>, PasskeyError> {
 }
 
 impl PasskeyService {
+    /// Creates the passkey service.
     #[must_use]
     pub fn new(repo: Arc<dyn PasskeyRepository>, users: Arc<dyn UserRepository>, clock: Arc<dyn Clock>) -> Self {
         Self { repo, users, clock, rp_name: "Orbyn Forge".into() }
@@ -304,10 +307,12 @@ impl PasskeyService {
         Ok(())
     }
 
+    /// Lists a user's passkeys.
     pub async fn list(&self, user: UserId) -> Result<Vec<Passkey>, PasskeyError> {
         Ok(self.repo.list_passkeys(user).await?)
     }
 
+    /// Renames a user's passkey; `false` when there is no such passkey.
     pub async fn rename(&self, user: UserId, id: &str, name: &str) -> Result<bool, PasskeyError> {
         let name = name.trim();
         if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
@@ -317,6 +322,7 @@ impl PasskeyService {
         Ok(self.repo.rename_passkey(id, user, name).await?)
     }
 
+    /// Removes a user's passkey; `false` when there is no such passkey.
     pub async fn remove(&self, user: UserId, id: &str) -> Result<bool, PasskeyError> {
         Ok(self.repo.delete_passkey(id, user).await?)
     }
@@ -326,6 +332,7 @@ impl PasskeyService {
         Ok(self.repo.delete_user_passkeys(user).await?)
     }
 
+    /// Whether the user has any passkey.
     pub async fn has_passkeys(&self, user: UserId) -> Result<bool, PasskeyError> {
         Ok(!self.repo.list_passkeys(user).await?.is_empty())
     }

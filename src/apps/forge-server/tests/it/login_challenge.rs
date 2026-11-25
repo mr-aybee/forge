@@ -2,9 +2,10 @@
 //! single-use proof of work; failures make the next challenge harder.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 async fn challenge(h: &Harness, login: &str) -> Value {
     let (s, c) = Client::anonymous(&h.base).get(&format!("/api/v1/auth/challenge?login={login}")).await;

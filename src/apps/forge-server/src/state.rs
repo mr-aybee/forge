@@ -845,8 +845,9 @@ fn analytics_worker_config(
     config: &ServerConfig,
     tuning: crate::analytics_tuning::Tuning,
 ) -> anyhow::Result<Option<crate::analytics_worker::SupervisorConfig>> {
-    use crate::config::AnalyticsEngine;
     use forge_analytics_proto::config::{Endpoint, StoreSelection, WorkerConfig};
+
+    use crate::config::AnalyticsEngine;
 
     if config.analytics.removed_memory_limit_mb.is_some() {
         tracing::warn!(

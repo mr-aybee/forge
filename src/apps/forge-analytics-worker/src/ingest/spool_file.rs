@@ -188,10 +188,12 @@ pub fn read(bytes: &[u8], node: ServerId, now: Timestamp, maps: &Indexed) -> Res
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // reason: tests
 pub(crate) mod tests {
-    use super::*;
+    use std::io::Write;
+
     use forge_core::analytics::{AnalyticsMaps, AppKey, KeyService, Placement};
     use forge_core::spool::{AppLog, BodyFormat, ContainerLine, Counts, Labels};
-    use std::io::Write;
+
+    use super::*;
 
     /// A file as an agent writes it.
     pub(crate) fn file(node: &str, rows: &[Row]) -> Vec<u8> {

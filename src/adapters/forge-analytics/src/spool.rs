@@ -377,11 +377,13 @@ async fn attempt(sink: &dyn TableSink, ins: &Insert, retries: &[Duration]) -> Do
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // reason: tests
 mod tests {
-    use super::*;
+    use std::sync::Mutex;
+
     use forge_core::Timestamp;
     use forge_core::analytics::NodeMinute;
     use forge_core::logs::{IngestContext, parse_batch};
-    use std::sync::Mutex;
+
+    use super::*;
 
     /// Records inserts; fails a table while it is in `failing`, and drops an
     /// insert whose token it has seen (like the engine's window).

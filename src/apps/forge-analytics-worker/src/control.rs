@@ -16,13 +16,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use forge_analytics_duckdb::DuckDb;
 use forge_analytics_proto::WorkerError;
 use forge_analytics_proto::tuning::{Group, Setting, Tuning};
 use forge_analytics_proto::views::{ApplyStatus, SettingResult, Usage, WorkerReport};
 use forge_core::analytics::EngineStats;
 use tokio::sync::watch;
-
-use forge_analytics_duckdb::DuckDb;
 
 use crate::analytics::Analytics;
 use crate::batcher::LogBatcher;

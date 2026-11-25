@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use duckdb::Connection;
+use forge_analytics_proto::views::JobReport;
 use forge_core::analytics::{
     AnalyticsStore, ContainerMinute, ContainerSeries, EngineStats, FileWrite, NodeMinute, NodePoint, NodeProcessMinute,
     ProcessUsage, Resolution, Retention, SpoolFileWriter, SpoolRows, TopBy,
@@ -21,7 +22,6 @@ use crate::catalog::{Catalog, Limits};
 use crate::jobs;
 use crate::read;
 use crate::writer::{self, Cmd, Rolled, Rows, Writer, guard};
-use forge_analytics_proto::views::JobReport;
 
 /// Pooled read connections kept.
 const MAX_POOL: usize = 16;

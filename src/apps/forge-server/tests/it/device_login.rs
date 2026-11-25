@@ -2,9 +2,10 @@
 //! `forge auth login --device` and the CLI's MFA prompt use them.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 const GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 

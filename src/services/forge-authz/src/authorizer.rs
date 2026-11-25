@@ -20,11 +20,13 @@ pub struct CedarAuthorizer {
 }
 
 impl CedarAuthorizer {
+    /// Creates an authorizer over `engine` that resolves resources with `resolver`.
     #[must_use]
     pub fn new(engine: Arc<PolicyEngine>, resolver: Arc<dyn ResourceResolver>) -> Self {
         Self { engine, resolver }
     }
 
+    /// The policy engine behind this authorizer.
     #[must_use]
     pub fn engine(&self) -> &Arc<PolicyEngine> {
         &self.engine

@@ -2,9 +2,10 @@
 //! `enroll-token` helper (D-099).
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 /// An MFA-guarded call: probing a node needs `server.enroll` with MFA.
 async fn guarded(c: &Client) -> (StatusCode, Value) {

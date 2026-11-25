@@ -3,12 +3,13 @@
 //! operations become jobs. The node side runs in its root helper.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 use forge_agent::AgentConfig;
 use forge_agent::StatePaths;
 use forge_agent::enroll::{HostFacts, enroll};
 use reqwest::StatusCode;
 use serde_json::json;
+
+use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 
 #[tokio::test]
 async fn docker_resources_are_checked_guarded_and_audited() {

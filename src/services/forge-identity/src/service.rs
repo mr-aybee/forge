@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::{oidc::OidcClaims, password, pkce, totp};
 
+/// Errors from identity operations.
 #[derive(Debug, thiserror::Error)]
 pub enum IdentityError {
     #[error("invalid credentials")]
@@ -61,6 +62,7 @@ fn loopback_match(allowed: &str, uri: &str) -> bool {
         && a.path() == u.path()
 }
 
+/// Settings for the identity service.
 #[derive(Debug, Clone)]
 pub struct IdentityConfig {
     pub issuer: String,
@@ -124,6 +126,7 @@ pub struct AuthenticatedSession {
 }
 
 impl AuthenticatedSession {
+    /// The principal this session acts as.
     #[must_use]
     pub fn principal(&self) -> Principal {
         Principal::User(self.user.id)
@@ -149,6 +152,7 @@ pub struct IdentityService {
 }
 
 impl IdentityService {
+    /// Creates the identity service.
     #[must_use]
     pub fn new(
         users: Arc<dyn UserRepository>,
@@ -169,6 +173,7 @@ impl IdentityService {
         }
     }
 
+    /// The identity configuration.
     #[must_use]
     pub fn config(&self) -> &IdentityConfig {
         &self.config
@@ -369,6 +374,7 @@ impl IdentityService {
 
     // ------------------------------------------------------------ web sessions
 
+    /// Creates a web session for a user.
     pub async fn create_web_session(&self, user: UserId, mfa: bool) -> Result<WebSessionTokens, IdentityError> {
         let session_token = random_token::<32>();
         let csrf_token = random_token::<32>();
@@ -444,6 +450,7 @@ impl IdentityService {
         }
     }
 
+    /// Ends the session behind `token`.
     pub async fn logout(&self, token: &str) -> Result<(), IdentityError> {
         self.sessions.delete_session(&sha256_hex(token.as_bytes())).await?;
         Ok(())

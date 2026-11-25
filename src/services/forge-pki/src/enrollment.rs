@@ -41,6 +41,7 @@ pub fn generate(ca_fingerprint: &str, server_key_sha256: Option<&str>) -> NewEnr
     NewEnrollmentToken { secret_hash: hash_secret(&secret), display }
 }
 
+/// Hashes an enrollment secret for storage.
 #[must_use]
 pub fn hash_secret(secret: &str) -> String {
     sha256_hex(secret_part(secret).as_bytes())

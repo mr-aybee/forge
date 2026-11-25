@@ -1,9 +1,10 @@
 //! Pins: add, list, order, remove, the cap, visibility and isolation.
 #![allow(clippy::unwrap_used)] // test code
 
-use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
+
+use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 
 async fn cluster(admin: &Client, name: &str) -> String {
     let (s, c) = admin.post("/api/v1/clusters", json!({ "name": name, "description": "" })).await;

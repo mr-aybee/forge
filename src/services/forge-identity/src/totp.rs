@@ -3,7 +3,9 @@
 
 use ring::hmac;
 
+/// Length of one TOTP time step, in seconds.
 pub const STEP_SECS: i64 = 30;
+/// Digits in a TOTP code.
 pub const DIGITS: u32 = 6;
 
 /// A new 160-bit secret.

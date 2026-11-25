@@ -3,12 +3,13 @@
 //! The join itself runs on real nodes (the root helper); see the lab checks.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, step_up, user_with_role};
 use forge_agent::AgentConfig;
 use forge_agent::StatePaths;
 use forge_agent::enroll::{HostFacts, enroll};
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
+
+use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, step_up, user_with_role};
 
 async fn node(h: &crate::common::Harness, admin: &Client, name: &str, cluster: &Value) -> String {
     let (_, tok) = admin.post("/api/v1/enrollment-tokens", json!({"ttl_minutes": 10})).await;

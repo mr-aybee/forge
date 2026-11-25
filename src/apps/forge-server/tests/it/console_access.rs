@@ -1,9 +1,10 @@
 //! `GET /me/capabilities`: console navigation gates per role and scope.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 const FIELDS: [&str; 17] = [
     "fleet_view",

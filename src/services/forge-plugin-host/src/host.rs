@@ -25,6 +25,7 @@ pub struct PluginPackage {
     pub signature: String,
 }
 
+/// Settings for the plugin host.
 #[derive(Debug, Clone)]
 pub struct PluginHostConfig {
     pub artifacts_dir: PathBuf,
@@ -34,6 +35,7 @@ pub struct PluginHostConfig {
     pub fault_threshold: u32,
 }
 
+/// The result of one plugin invocation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InvokeOutcome {
     pub output: u32,
@@ -63,6 +65,7 @@ fn invalid(msg: impl Into<String>) -> DomainError {
 }
 
 impl PluginHost {
+    /// Creates the plugin host.
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
@@ -78,10 +81,12 @@ impl PluginHost {
         Self { repo, authz, audit, runner, functions, trust, clock, config, concurrency: Mutex::new(HashMap::new()) }
     }
 
+    /// Lists installed plugins.
     pub async fn list(&self) -> DomainResult<Vec<PluginRecord>> {
         self.repo.list_plugins().await
     }
 
+    /// One installed plugin by id.
     pub async fn get(&self, id: &str) -> DomainResult<PluginRecord> {
         self.repo.get_plugin(id).await?.ok_or_else(|| DomainError::NotFound(format!("plugin {id}")))
     }
@@ -125,6 +130,7 @@ impl PluginHost {
         Ok(record)
     }
 
+    /// Enables a plugin.
     pub async fn enable(&self, principal: &Principal, ctx: AuthzContext, id: &str) -> DomainResult<PluginRecord> {
         self.transition(principal, ctx, id, "plugin.enable", |r| {
             if r.state == PluginState::Enabled {
@@ -139,6 +145,7 @@ impl PluginHost {
         .await
     }
 
+    /// Disables a plugin.
     pub async fn disable(&self, principal: &Principal, ctx: AuthzContext, id: &str) -> DomainResult<PluginRecord> {
         self.transition(principal, ctx, id, "plugin.disable", |r| {
             if r.state != PluginState::Enabled {
@@ -151,6 +158,7 @@ impl PluginHost {
         .await
     }
 
+    /// Pins or unpins a plugin.
     pub async fn set_pinned(
         &self,
         principal: &Principal,
