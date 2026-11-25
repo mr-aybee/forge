@@ -22,6 +22,11 @@ address.
 - Install **Nginx** from the [App Store](/docs/guides/app-store/) on every edge
   node. For Let's Encrypt, install **Certbot** on every edge. For
   Forge-managed DNS, install **PowerDNS** on a node.
+  The App Store installs the distribution's Nginx package. Generated site
+  configs work on Nginx 1.18 and newer: HTTP/2 is turned on with
+  `listen 443 ssl http2`, which Nginx 1.25.1+ accepts with a deprecation
+  warning. Proxied requests carry `Host`, `X-Real-IP`, `X-Forwarded-For`,
+  `X-Forwarded-Proto` and `X-Forwarded-Host`.
 - Edge nodes run Linux.
 
 Open the cluster and select **Ingress** in the sidebar. The page has five
