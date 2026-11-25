@@ -161,6 +161,8 @@ interface ViewTarget {
   to?: Dest;
   standby: boolean;
   hops: ViewHop[];
+  /** `ip:port` for a target with no hops (node or external): its traffic counter key. */
+  address?: string;
   title?: string;
 }
 interface ViewRule {
@@ -249,7 +251,7 @@ function onNode(ctx: Ctx, node: string, host: string, port: number, base: Pick<V
       title: `Container ${hit.c.name} (${hit.c.image}) on ${hop.name}: host ${published} → container :${hit.inner} · ${hit.c.state}`,
     };
   }
-  return { ...base, kind: "node", label: hop.name, ports: port ? `:${port}` : undefined, to: { kind: "node", id: node }, hops: [], title: `${hop.name}${port ? ` port ${port}` : ""}${base.address ? ` (${base.address})` : ""}` };
+  return { ...base, kind: "node", label: hop.name, ports: port ? `:${port}` : undefined, to: { kind: "node", id: node }, hops: [], address: base.address, title: `${hop.name}${port ? ` port ${port}` : ""}${base.address ? ` (${base.address})` : ""}` };
 }
 
 /** A plain `host:port` upstream (external target or a row saved before typed targets): resolved to a node and container when its host is one of ours. */
@@ -257,7 +259,7 @@ function fromAddress(ctx: Ctx, address: string, standby: boolean, key: string, w
   const { host, port } = splitAddr(address);
   const node = isLoopback(host) ? ctx.edges[0] : ctx.byAddr.get(host);
   if (node) return onNode(ctx, node, host, port, { key, standby, weight, address });
-  return { key, kind: "external", label: host || address || "—", ports: port ? `:${port}` : undefined, detail: "external", standby, hops: [], title: `${address} (outside Forge${weight !== undefined ? `, weight ${weight}` : ""})` };
+  return { key, kind: "external", label: host || address || "—", ports: port ? `:${port}` : undefined, detail: "external", standby, hops: [], address, title: `${address} (outside Forge${weight !== undefined ? `, weight ${weight}` : ""})` };
 }
 
 /** A typed target (`forge_catalog::ingress::Target`). */
@@ -697,6 +699,10 @@ function TargetLine({ t, reg, rateOf }: { t: ViewTarget; reg: Reg; rateOf: (h: V
           </span>
         );
       })}
+      {!t.hops.length && t.address && (() => {
+        const r = rateOf({ key: `${t.key}:a`, serverId: null, name: t.label, address: t.address, resolved: [], standby: t.standby });
+        return r && <span title={r.title} className={`shrink-0 font-mono text-[10px] tabular-nums ${r.text === "idle" ? "text-faint" : "text-fg"}`}>{r.text}</span>;
+      })()}
       {t.standby && t.kind !== "app" && <span className="shrink-0 text-[10px] text-faint">standby</span>}
       {t.kind === "app" && !t.hops.length && <span className="shrink-0 text-[10px] text-warn">not placed</span>}
     </span>
