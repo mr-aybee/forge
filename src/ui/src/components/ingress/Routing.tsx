@@ -369,7 +369,6 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
   const els = useRef(new Map<string, HTMLElement>());
   const [paths, setPaths] = useState<{ d: string; dashed?: boolean; tone?: Tone; arrow?: boolean }[]>([]);
   const [moreOpen, setMoreOpen] = useState(false);
-  const [redirPos, setRedirPos] = useState<Record<number, { top: number; left: number }>>({});
   const reg = useCallback<Reg>((id) => (el) => {
     if (el) els.current.set(id, el);
     else els.current.delete(id);
@@ -451,49 +450,19 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
     if (!box) return;
     const draw = () => {
       // Only side by side (md+); stacked rows read top to bottom without wires.
-      if (box.clientWidth < 720) {
-        setRedirPos({});
-        return setPaths([]);
-      }
+      if (box.clientWidth < 720) return setPaths([]);
       const base = box.getBoundingClientRect();
       const next: typeof paths = [];
       // Elbow connectors: out horizontally, one vertical trunk per column gap
       // (fan-outs share it), then horizontally in. Pixel-snapped for 1px-ish strokes.
       const snap = (v: number) => Math.round(v) + 0.5;
       const gap = (id: string) => id.split(":")[0] ?? "";
-      // Redirect badges: level with their source domain, in the edge column, unless that
-      // would cover an edge pill (then stacked below the edges).
-      const place = new Map<number, { top: number; left: number; h: number }>();
-      const col = els.current.get("edgecol")?.getBoundingClientRect();
-      const edgeBoxes = edges.map((e) => els.current.get(`edge:${e.server_id}`)?.getBoundingClientRect()).filter((r): r is DOMRect => !!r);
-      let below = Math.max(0, ...edgeBoxes.map((r) => r.bottom - base.top)) + 4;
-      const taken: number[] = [];
-      for (const [ri, src] of Object.entries(redirSrc).sort(([a], [b]) => Number(a) - Number(b))) {
-        const sr = els.current.get(src)?.getBoundingClientRect();
-        const h = els.current.get(`redir:${ri}`)?.getBoundingClientRect().height ?? 22;
-        if (!sr || !col) continue;
-        let top = sr.top + sr.height / 2 - base.top - h / 2;
-        const hits = (t: number) => edgeBoxes.some((r) => t < r.bottom - base.top && t + h > r.top - base.top) || taken.some((t2) => Math.abs(t2 - t) < h);
-        if (hits(top)) {
-          top = below;
-          below += h + 4;
-        }
-        taken.push(top);
-        place.set(Number(ri), { top: Math.round(top), left: Math.round(col.left - base.left), h });
-      }
-      setRedirPos(Object.fromEntries(place));
       const seg: { w: Wire; x1: number; y1: number; x2: number; y2: number; g: string }[] = [];
       for (const w of JSON.parse(key) as Wire[]) {
         const a = rightEdge(els.current.get(w.from));
         const b = els.current.get(w.to)?.getBoundingClientRect();
         if (!a || !b) continue;
-        // A redirect badge is placed level with its domain (below), so its wire is straight.
-        const rp = w.to.startsWith("redir:") ? place.get(Number(w.to.slice(6))) : undefined;
-        if (rp) {
-          seg.push({ w, g: "redir", x1: a.right - base.left + 2, y1: a.top + a.height / 2 - base.top, x2: rp.left - 4, y2: rp.top + rp.h / 2 });
-          continue;
-        }
-        seg.push({ w, g: gap(w.from), x1: a.right - base.left + 2, y1: a.top + a.height / 2 - base.top, x2: b.left - base.left - 4, y2: b.top + b.height / 2 - base.top });
+        seg.push({ w, g: w.to.startsWith("redir:") ? "redir" : gap(w.from), x1: a.right - base.left + 2, y1: a.top + a.height / 2 - base.top, x2: b.left - base.left - 4, y2: b.top + b.height / 2 - base.top });
       }
       const trunk = new Map<string, number>();
       for (const g of new Set(seg.map((x) => x.g))) {
@@ -537,8 +506,40 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
       ? { text: "nodes", title: "Placed on single nodes in this cluster" }
       : undefined;
   const mid = `m-${ep.id}`;
+
+  // Top-line layout: row 1 holds the primary domain, edge 1, path 1 and its first target, so the
+  // main flow is one straight line. Everything else fans downward on its own row.
+  const E = Math.max(1, edges.length);
+  const ruleRow: number[] = [];
+  let next = 1;
+  for (const r of rules) {
+    ruleRow.push(next);
+    next += Math.max(1, r.targets.length);
+  }
+  const domRow: number[] = [];
+  let dn = 1;
+  for (const d of shownDomains) {
+    // Redirect sources sit below the edges, so their badge gets a free row in the edge column.
+    const row = isRedirSrc(d) ? Math.max(dn, E + 1) : dn;
+    domRow.push(row);
+    dn = row + 1;
+  }
+  const moreRow = dn;
+  const hasMore = (hiddenDomains.length > 0 || moreOpen) && allDomains.length > DOMAINS_SHOWN;
+  const metaRow = hasMore ? moreRow + 1 : moreRow;
+  const rowOf = (id: string) => (id === "dom:more" ? moreRow : (domRow[Number(id.slice(4))] ?? 1));
+  const usedEdgeRows = new Set(Array.from({ length: E }, (_, i) => i + 1));
+  const redirRow = redirects.map((_, i) => {
+    let row = redirSrc[i] ? rowOf(redirSrc[i]) : E + 1;
+    while (usedEdgeRows.has(row)) row++;
+    usedEdgeRows.add(row);
+    return row;
+  });
+  const cell = (row: number, col: number) => ({ gridRow: row, gridColumn: col });
+  const cellCls = "flex min-w-0 items-center";
+
   return (
-    <div ref={wrap} className="relative grid gap-2 border-b border-line px-3 py-2.5 last:border-b-0 hover:bg-panel-2/30 md:grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,1.6fr)] md:items-center md:gap-x-10">
+    <div ref={wrap} className="relative flex flex-col gap-1 border-b border-line px-3 py-1.5 last:border-b-0 hover:bg-panel-2/30 md:grid md:auto-rows-[28px] md:grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,1.6fr)] md:gap-x-10 md:gap-y-0">
       <svg className="pointer-events-none absolute inset-0 z-0 h-full w-full overflow-visible" aria-hidden>
         <defs>
           {(["ok", "warn", "bad"] as const).map((t) => (
@@ -567,119 +568,158 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
         ))}
       </svg>
 
-      {/* Domain */}
-      <div className="min-w-0">
-        <Label>Domain</Label>
-        <div className="flex min-w-0 flex-col items-start gap-1">
-          {shownDomains.map((d, i) => {
-            const wild = d.startsWith("*.");
-            return (
-              // The wire starts at the right edge of the whole group (pill + icons), so it never crosses them.
-              <div key={d} ref={reg(`dom:${i}`)} className="flex min-w-0 max-w-full items-center gap-0.5">
-                <Pill id={`dp:${i}`} reg={reg} icon={tlsOn ? <Lock className="size-3 text-ok" /> : <Globe className="size-3" />} sub={wild ? "wildcard" : undefined} title={redirectOf(d) ? `${d}: redirects to ${redirectOf(d)?.to}` : wild ? `${d}: every subdomain of ${d.slice(2)}` : d}>
-                  {d}
-                </Pill>
-                {domains.length > 0 && <DomainLinks domain={d} tls={tlsOn} open={!wild} />}
-              </div>
-            );
-          })}
-          {(hiddenDomains.length > 0 || moreOpen) && allDomains.length > DOMAINS_SHOWN && (
-            <button
-              type="button"
-              ref={reg("dom:more")}
-              onClick={() => setMoreOpen((o) => !o)}
-              aria-expanded={moreOpen}
-              title={allDomains.join("\n")}
-              className="relative z-10 rounded-md border border-line bg-panel px-1.5 py-0.5 text-[11px] text-muted hover:border-accent/60 hover:text-fg focus-visible:outline-2 focus-visible:outline-accent"
-            >
-              {moreOpen ? "show fewer" : `+${hiddenDomains.length} more`}
-            </button>
-          )}
+      {/* Domains */}
+      <Label>Domain</Label>
+      {shownDomains.map((d, i) => {
+        const wild = d.startsWith("*.");
+        return (
+          <div key={d} style={cell(domRow[i] ?? i + 1, 1)} className={cellCls}>
+            {/* The wire starts at the right edge of the whole group (pill + icons), so it never crosses them. */}
+            <div ref={reg(`dom:${i}`)} className="flex min-w-0 max-w-full items-center gap-0.5">
+              <Pill id={`dp:${i}`} reg={reg} icon={tlsOn ? <Lock className="size-3 text-ok" /> : <Globe className="size-3" />} sub={wild ? "wildcard" : undefined} title={redirectOf(d) ? `${d}: redirects to ${redirectOf(d)?.to}` : wild ? `${d}: every subdomain of ${d.slice(2)}` : d}>
+                {d}
+              </Pill>
+              {domains.length > 0 && <DomainLinks domain={d} tls={tlsOn} open={!wild} />}
+            </div>
+          </div>
+        );
+      })}
+      {hasMore && (
+        <div style={cell(moreRow, 1)} className={cellCls}>
+          <button
+            type="button"
+            ref={reg("dom:more")}
+            onClick={() => setMoreOpen((o) => !o)}
+            aria-expanded={moreOpen}
+            title={allDomains.join("\n")}
+            className="relative z-10 rounded-md border border-line bg-panel px-1.5 py-0.5 text-[11px] text-muted hover:border-accent/60 hover:text-fg focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            {moreOpen ? "show fewer" : `+${hiddenDomains.length} more`}
+          </button>
         </div>
-        <div className="mt-1 flex flex-wrap items-center gap-1">
+      )}
+      {(placement || health) && (
+        <div style={cell(metaRow, 1)} className={`${cellCls} gap-1`}>
           {placement && (
             <span className="min-w-0 truncate rounded bg-panel-2 px-1.5 py-0.5 text-[10.5px] text-muted" title={placement.title}>
               {placement.text}
             </span>
           )}
           {health && (
-            <span title={health === "down" ? "No upstream is reachable: every node is offline or the service isn't running" : `${downN} of ${hops.length} upstreams are offline or not running`}>
+            <span className="shrink-0" title={health === "down" ? "No upstream is reachable: every node is offline or the service isn't running" : `${downN} of ${hops.length} upstreams are offline or not running`}>
               <Badge tone={health === "down" ? "bad" : "warn"}>{health === "down" ? "down" : `degraded · ${hops.length - downN}/${hops.length} up`}</Badge>
             </span>
           )}
         </div>
-      </div>
+      )}
 
-      {/* Edges */}
-      <div ref={reg("edgecol")} className="flex min-w-0 flex-col items-start gap-1 md:self-start md:pt-px">
-        <Label>Edge</Label>
-        {edges.map((e) => (
-          <Pill key={e.server_id} id={`edge:${e.server_id}`} reg={reg} tone={edgeTone(e)} down={edgeOffline(e.server_id) ? "node offline" : undefined} icon={<Server className="size-3" />} to={{ kind: "node", id: e.server_id }} rate={edgeRate(e.server_id)}>
+      {/* Edges, then redirect badges level with their source domain */}
+      <Label>Edge</Label>
+      {edges.map((e, i) => (
+        <div key={e.server_id} style={cell(i + 1, 2)} className={cellCls}>
+          <Pill id={`edge:${e.server_id}`} reg={reg} tone={edgeTone(e)} down={edgeOffline(e.server_id) ? "node offline" : undefined} icon={<Server className="size-3" />} to={{ kind: "node", id: e.server_id }} rate={edgeRate(e.server_id)}>
             {e.name ?? e.server_id.slice(0, 8)}
           </Pill>
-        ))}
-        {!edges.length && <span className="text-xs text-warn">No edge nodes</span>}
-        {redirects.map((r, i) => (
-          <div key={i} className="z-10 max-w-full" style={redirPos[i] ? { position: "absolute", top: redirPos[i].top, left: redirPos[i].left } : undefined}>
+        </div>
+      ))}
+      {!edges.length && (
+        <div style={cell(1, 2)} className={cellCls}>
+          <span className="text-xs text-warn">No edge nodes</span>
+        </div>
+      )}
+      {redirects.map((r, i) => (
+        <div key={i} style={cell(redirRow[i] ?? E + 1, 2)} className={cellCls}>
           <Pill id={`redir:${i}`} reg={reg} icon={<CornerDownRight className="size-3" />} sub={String(r.code)} title={`${r.from} → ${r.to} (${r.code})${r.keep_path ? ", keeps the path" : ""}`}>
             → {(r.to ?? "—").replace(/^https?:\/\//, "")}
           </Pill>
-          </div>
-        ))}
-      </div>
+        </div>
+      ))}
 
-      {/* Path rules */}
-      <div className="flex min-w-0 flex-col items-start gap-1">
-        <Label>Path</Label>
-        {rules.map((r) => (
-          <Pill key={r.key} id={`rule:${r.key}`} reg={reg} title={`${r.match} match · ${ruleKindLabel(r.kind)}`} sub={r.match === "prefix" ? undefined : r.match === "exact" ? "=" : "~"}>
-            <span className="font-mono">{r.path}</span>{" "}
-            <span className={`rounded px-1 text-[10px] font-medium ${kindTone[r.kind] === "accent" ? "bg-accent-soft text-accent" : kindTone[r.kind] === "ok" ? "bg-ok-soft text-ok" : kindTone[r.kind] === "warn" ? "bg-warn-soft text-warn" : "bg-panel-2 text-muted"}`}>{r.kind}</span>
+      {/* Path rules: each on the row of its first target */}
+      <Label>Path</Label>
+      {rules.map((r, k) => (
+        <div key={r.key} style={cell(ruleRow[k] ?? 1, 3)} className={cellCls}>
+          <Pill id={`rule:${r.key}`} reg={reg} title={`${r.match} match · ${ruleKindLabel(r.kind)}`} sub={r.match === "prefix" ? undefined : r.match === "exact" ? "=" : "~"}>
+            <span className="font-mono">{r.path}</span> <span className={`rounded px-1 text-[10px] font-medium ${kindTone[r.kind]}`}>{r.kind}</span>
           </Pill>
-        ))}
-      </div>
+        </div>
+      ))}
 
-      {/* Targets → the nodes they run on */}
-      <div className="flex min-w-0 flex-col items-start gap-1">
-        <Label>Target → runs on</Label>
-        {rules.map((r) => (
-          <div key={r.key} className="flex min-w-0 max-w-full flex-col items-start gap-1">
-            {r.targets.map((t) => (
-              <div key={t.key} className="flex min-w-0 max-w-full flex-wrap items-center gap-1">
-                <Pill id={`t:${t.key}`} reg={reg} standby={t.standby} icon={targetIcon(t.kind)} to={t.to} sub={t.ports} title={t.title}>
-                  {t.label}
-                </Pill>
-                {t.hops.map((h) => (
-                  <Pill
-                    key={h.key}
-                    id={`h:${h.key}`}
-                    reg={reg}
-                    tone={hopTone(h.state)}
-                    down={h.state && isDown(h.state) ? downLabel(h.state) : undefined}
-                    standby={h.standby}
-                    role={t.kind === "app" ? h.role : undefined}
-                    icon={<Server className="size-3" />}
-                    to={h.serverId ? { kind: "node", id: h.serverId } : undefined}
-                    sub={h.weight !== undefined && h.weight !== 100 ? `w${h.weight}` : undefined}
-                    title={`${h.address ?? h.name}${h.weight !== undefined ? ` · weight ${h.weight}` : ""}${h.state ? ` · ${h.state.label}: ${h.state.why}` : ""}`}
-                    rate={hopRate(h)}
-                  >
-                    {h.name}
-                  </Pill>
-                ))}
-                {t.kind === "app" && !t.hops.length && <span className="text-[11px] text-warn">not placed on any node</span>}
-                {t.detail && (
-                  <span className="w-full truncate pl-1 font-mono text-[10px] text-faint" title={t.detail}>
-                    {t.detail}
-                  </span>
-                )}
+      {/* Targets, one line each */}
+      <Label>Target → runs on</Label>
+      {rules.flatMap((r, k) =>
+        r.targets.length
+          ? r.targets.map((t, i) => (
+              <div key={t.key} style={cell((ruleRow[k] ?? 1) + i, 4)} className={cellCls}>
+                <TargetLine t={t} reg={reg} rateOf={hopRate} />
               </div>
-            ))}
-            {!r.targets.length && <span className="text-xs text-warn">No targets</span>}
-          </div>
-        ))}
-      </div>
+            ))
+          : [
+              <div key={`${r.key}:none`} style={cell(ruleRow[k] ?? 1, 4)} className={cellCls}>
+                <span className="text-xs text-warn">No targets</span>
+              </div>,
+            ],
+      )}
     </div>
+  );
+}
+
+/** One target on one line: [icon] name  ports  · node(s) (small links) · tags. Image and details in the tooltip. */
+function TargetLine({ t, reg, rateOf }: { t: ViewTarget; reg: Reg; rateOf: (h: ViewHop) => { text: string; title?: string } | undefined }) {
+  const states = t.hops.map((h) => h.state);
+  const tone = t.hops.length ? (states.every(isDown) ? "bad" : states.some(isDown) ? "warn" : hopTone(states[0])) : undefined;
+  const title = [t.title ?? t.label, t.detail].filter(Boolean).join("\n");
+  const name = t.to ? <DestLink to={t.to} className="truncate font-medium text-accent hover:underline">{t.label}</DestLink> : <span className="truncate font-medium">{t.label}</span>;
+  return (
+    <span ref={reg(`t:${t.key}`)} title={title} className={`relative z-10 inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md border bg-panel px-2 py-0.5 text-xs ${t.standby ? "border-dashed border-line" : "border-line"}`}>
+      {tone && <span className={`size-1.5 shrink-0 rounded-full ${dot[tone]}`} />}
+      <span className="shrink-0 text-faint">{targetIcon(t.kind)}</span>
+      {name}
+      {t.ports && <span className="shrink-0 font-mono text-[10.5px] text-faint tabular-nums">{t.ports}</span>}
+      {t.hops.map((h) => {
+        const r = rateOf(h);
+        const down = h.state && isDown(h.state) ? downLabel(h.state) : undefined;
+        return (
+          <span key={h.key} className="inline-flex min-w-0 shrink items-center gap-1 text-[11px] text-muted" title={`${h.address ?? h.name}${h.weight !== undefined ? ` · weight ${h.weight}` : ""}${h.state ? ` · ${h.state.label}: ${h.state.why}` : ""}${r?.title ? ` · ${r.title}` : ""}`}>
+            <span className="text-faint">·</span>
+            {h.serverId ? (
+              <DestLink to={{ kind: "node", id: h.serverId }} className={`truncate hover:text-accent hover:underline ${down ? "line-through" : ""}`}>
+                {h.name}
+              </DestLink>
+            ) : (
+              <span className="truncate">{h.name}</span>
+            )}
+            {h.weight !== undefined && h.weight !== 100 && <span className="shrink-0 font-mono text-[10px] text-faint">w{h.weight}</span>}
+            {t.kind === "app" && h.role === "standby" && <span className="shrink-0 rounded bg-panel-2 px-1 text-[10px]">standby</span>}
+            {down && <span className="shrink-0 rounded bg-bad-soft px-1 text-[10px] font-medium text-bad">{down}</span>}
+            {r && <span className={`shrink-0 font-mono text-[10px] tabular-nums ${r.text === "idle" ? "text-faint" : "text-fg"}`}>{r.text}</span>}
+          </span>
+        );
+      })}
+      {t.standby && t.kind !== "app" && <span className="shrink-0 text-[10px] text-faint">standby</span>}
+      {t.kind === "app" && !t.hops.length && <span className="shrink-0 text-[10px] text-warn">not placed</span>}
+    </span>
+  );
+}
+
+/** A link to an app, node or container. */
+function DestLink({ to, className, children }: { to: Dest; className?: string; children: ReactNode }) {
+  if (to.kind === "app")
+    return (
+      <Link to="/services/$serviceId" params={{ serviceId: to.id }} className={className}>
+        {children}
+      </Link>
+    );
+  if (to.kind === "container")
+    return (
+      <Link to="/nodes/$nodeId/containers/$containerId" params={{ nodeId: to.node, containerId: to.id }} className={className}>
+        {children}
+      </Link>
+    );
+  return (
+    <Link to="/nodes/$nodeId" params={{ nodeId: to.id }} className={className}>
+      {children}
+    </Link>
   );
 }
 
