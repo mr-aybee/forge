@@ -36,7 +36,14 @@ export interface DockerVolume {
   labels: Record<string, string>;
   /** Created by Forge (`forge.managed=true`). */
   managed: boolean;
+  /** Containers using it; empty when the server does not say. */
+  used_by: string[];
 }
+
+/** Where a volume's data lives when it is not on the node's disk. */
+export type VolumeRemote =
+  | { type: "nfs"; server: string; path: string; version?: string; read_only: boolean }
+  | { type: "cifs"; server: string; share: string; username?: string; password?: string; read_only: boolean };
 
 export interface DockerNetwork {
   id: string;
@@ -114,7 +121,7 @@ export type DockerOp =
   | { op: "image_push"; image: string }
   | { op: "image_prune"; all: boolean }
   | { op: "volume_inspect"; name: string }
-  | { op: "volume_create"; name: string; labels: Record<string, string> }
+  | { op: "volume_create"; name: string; labels: Record<string, string>; remote?: VolumeRemote }
   | { op: "volume_remove"; name: string; force: boolean }
   | { op: "volume_prune" }
   | { op: "network_inspect"; id: string }
@@ -229,6 +236,7 @@ export function normVolume(v: unknown): DockerVolume {
     created: ms(o.created),
     labels: l,
     managed: o.managed === true || l["forge.managed"] === "true",
+    used_by: strs(o.used_by),
   };
 }
 

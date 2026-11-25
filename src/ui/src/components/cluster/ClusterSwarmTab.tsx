@@ -13,22 +13,74 @@ import {
   useLeaveSwarm,
   useRotateSwarmTokens,
   useSwarm,
+  useSwarmAddresses,
   useUpdateSwarmNode,
 } from "../../api/swarm";
 import { nodeName, type Server } from "../../api/types";
 import { errorText, useToast } from "../../app/toast";
-import { Badge, Button, Confirm, CopyIcon, Empty, ErrorNote, Field, Input, Modal, Panel, RowMenu, Select, Skeleton, Table, Td, TextArea, ago, time } from "../ui";
+import { SwarmNetworks } from "../swarm/SwarmNetworks";
+import { SwarmObjects } from "../swarm/SwarmObjects";
+import { SwarmStacks } from "../swarm/SwarmStacks";
+import { SwarmVolumes } from "../swarm/SwarmVolumes";
+import { Badge, Button, Confirm, CopyIcon, Empty, ErrorNote, Field, Input, Modal, Panel, RowMenu, Segmented, Select, Skeleton, Stat, Table, Td, TextArea, ago, time } from "../ui";
+
+type SwarmSection = "overview" | "nodes" | "stacks" | "objects" | "networks" | "volumes";
+
+/** Health at a glance: managers and workers, leader, nodes down or draining, failed joins. */
+function Health({ v, servers, onNodes }: { v: SwarmView; servers: Server[]; onNodes: () => void }) {
+  const nodes = v.nodes ?? [];
+  const managers = nodes.filter((n) => n.role === "manager");
+  const workers = nodes.filter((n) => n.role === "worker");
+  const down = nodes.filter((n) => n.state !== "ready");
+  const unavailable = nodes.filter((n) => n.availability !== "active");
+  const leader = nodes.find((n) => n.leader);
+  const failed = v.members.filter((m) => m.state === "failed");
+  const busy = v.members.filter((m) => m.state === "joining" || m.state === "leaving");
+  const byNode = new Map(v.members.filter((m) => m.node_id).map((m) => [m.node_id, m.server_id]));
+  const leaderServer = servers.find((s) => s.id === byNode.get(leader?.id));
+  const known = v.nodes !== null;
+  const healthy = known && down.length === 0 && failed.length === 0 && v.quorum.status === "ok";
+  return (
+    <div className="space-y-2">
+      {v.nodes_error && <ErrorNote error={new Error(`No manager answered: ${v.nodes_error}`)} />}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <Stat label="Health" value={!known ? "—" : healthy ? "Healthy" : "Degraded"} tone={!known ? undefined : healthy ? "ok" : "warn"} hint={v.quorum.status === "ok" ? "quorum ok" : `quorum: ${v.quorum.status}`} />
+        <Stat label="Managers" value={known ? `${managers.filter((n) => n.state === "ready").length} / ${managers.length}` : "—"} hint={`tolerates ${v.quorum.tolerates} failure${v.quorum.tolerates === 1 ? "" : "s"}`} tone={v.quorum.status === "ok" ? undefined : "warn"} onClick={onNodes} />
+        <Stat label="Workers" value={known ? `${workers.filter((n) => n.state === "ready").length} / ${workers.length}` : "—"} hint="ready / total" onClick={onNodes} />
+        <Stat label="Nodes down" value={known ? down.length : "—"} tone={down.length ? "bad" : undefined} hint={unavailable.length ? `${unavailable.length} paused or draining` : "none paused or draining"} onClick={onNodes} />
+      </div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
+        <span className="flex min-w-0 items-center gap-1">
+          <Crown className="size-3.5 text-warn" /> Leader{" "}
+          {leader ? <NodeLink server={leaderServer} fallback={leader.hostname} /> : <span className="text-faint">—</span>}
+        </span>
+        {down.length > 0 && (
+          <span className="min-w-0 truncate text-bad" title={down.map((n) => n.hostname).join(", ")}>
+            Down: {down.map((n) => n.hostname).join(", ")}
+          </span>
+        )}
+        {failed.length > 0 && <span className="text-bad">{failed.length} failed join{failed.length === 1 ? "" : "s"}: see Nodes</span>}
+        {busy.length > 0 && (
+          <span className="flex items-center gap-1">
+            <Loader2 className="size-3.5 animate-spin" /> {busy.length} node{busy.length === 1 ? "" : "s"} joining or leaving
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 const isLinux = (n: Server) => n.os.toLowerCase().includes("linux");
 const stateTone = { joined: "ok", joining: "accent", leaving: "warn", failed: "bad" } as const;
 const availTone = { active: "ok", pause: "warn", drain: "warn" } as const;
 
 /** Docker Swarm workspace of a Swarm-mode cluster: quorum, nodes and membership. */
-export function ClusterSwarmTab({ clusterId }: { clusterId: string }) {
+export function ClusterSwarmTab({ clusterId, environmentId }: { clusterId: string; environmentId?: string | null }) {
   const q = useSwarm(clusterId);
   const servers = useServers();
   const [adding, setAdding] = useState<SwarmRole | null>(null);
   const [rotating, setRotating] = useState(false);
+  const [section, setSection] = useState<SwarmSection>("overview");
 
   if (q.error) return <ErrorNote error={q.error} />;
   if (q.isLoading || !q.data) return <Skeleton rows={6} />;
@@ -54,9 +106,36 @@ export function ClusterSwarmTab({ clusterId }: { clusterId: string }) {
         </Panel>
       ) : (
         <>
-          <Overview v={v} onAdd={() => setAdding("worker")} onRotate={() => setRotating(true)} />
-          <Visualizer v={v} servers={servers.data ?? []} />
-          <Members v={v} clusterId={clusterId} servers={servers.data ?? []} />
+          <Segmented
+            label="Swarm sections"
+            value={section}
+            onChange={setSection}
+            options={[
+              { id: "overview", label: "Overview" },
+              { id: "nodes", label: "Nodes", count: v.members.length },
+              { id: "stacks", label: "Stacks" },
+              { id: "objects", label: "Secrets & configs" },
+              { id: "networks", label: "Networks" },
+              { id: "volumes", label: "Volumes" },
+            ]}
+          />
+          {section === "overview" && (
+            <>
+              <Overview v={v} onAdd={() => setAdding("worker")} onRotate={() => setRotating(true)} />
+              <Health v={v} servers={servers.data ?? []} onNodes={() => setSection("nodes")} />
+            </>
+          )}
+          {section === "nodes" && (
+            <>
+              <Overview v={v} onAdd={() => setAdding("worker")} onRotate={() => setRotating(true)} />
+              <Visualizer v={v} servers={servers.data ?? []} />
+              <Members v={v} clusterId={clusterId} servers={servers.data ?? []} />
+            </>
+          )}
+          {section === "stacks" && <SwarmStacks clusterId={clusterId} environmentId={environmentId} />}
+          {section === "objects" && <SwarmObjects clusterId={clusterId} />}
+          {section === "networks" && <SwarmNetworks clusterId={clusterId} />}
+          {section === "volumes" && <SwarmVolumes members={v.members} servers={servers.data ?? []} />}
         </>
       )}
       {adding && <AddNodeDialog v={v} clusterId={clusterId} nodes={clusterNodes} role={adding} onClose={() => setAdding(null)} />}
@@ -447,7 +526,11 @@ function AddNodeDialog({ v, clusterId, nodes, role, onClose }: { v: SwarmView; c
   const toast = useToast();
   const join = useJoinSwarm(clusterId);
   const first = !v.swarm && v.members.length === 0;
-  const [f, setF] = useState({ server_id: "", role: first ? ("manager" as SwarmRole) : role, advertise_addr: "", pools: "", autolock: false });
+  // `advertise_addr: null` means "use the best suggested address" (mesh first).
+  const [f, setF] = useState({ server_id: "", role: first ? ("manager" as SwarmRole) : role, advertise_addr: null as string | null, pools: "", autolock: false });
+  const addrs = useSwarmAddresses(clusterId, f.server_id);
+  const suggested = addrs.data ?? [];
+  const advertise = f.advertise_addr ?? suggested[0]?.address ?? "";
   const members = new Set(v.members.map((m) => m.server_id));
   const candidates = nodes.filter((n) => !members.has(n.id));
   const pools = f.pools.split(/[\s,]+/).filter(Boolean);
@@ -466,7 +549,7 @@ function AddNodeDialog({ v, clusterId, nodes, role, onClose }: { v: SwarmView; c
             {
               server_id: f.server_id,
               role: f.role,
-              advertise_addr: f.advertise_addr.trim() || undefined,
+              advertise_addr: advertise.trim() || undefined,
               ...(first ? { default_addr_pool: pools.length ? pools : undefined, autolock: f.autolock } : {}),
             },
             {
@@ -482,7 +565,7 @@ function AddNodeDialog({ v, clusterId, nodes, role, onClose }: { v: SwarmView; c
       >
         <Field label="Node" hint={candidates.length ? "Linux nodes of this cluster that are not members. Docker Engine is installed first when it is missing." : undefined}>
           {candidates.length ? (
-            <Select value={f.server_id} onChange={(e) => setF({ ...f, server_id: e.target.value })} aria-label="Node">
+            <Select value={f.server_id} onChange={(e) => setF({ ...f, server_id: e.target.value, advertise_addr: null })} aria-label="Node">
               <option value="">Choose a node…</option>
               {candidates.map((n) => (
                 <option key={n.id} value={n.id} disabled={!isLinux(n)}>
@@ -501,8 +584,35 @@ function AddNodeDialog({ v, clusterId, nodes, role, onClose }: { v: SwarmView; c
             <option value="worker">worker</option>
           </Select>
         </Field>
-        <Field label="Advertise address" hint="Optional. IP or interface other nodes reach this node on; Docker picks one when empty.">
-          <Input value={f.advertise_addr} onChange={(e) => setF({ ...f, advertise_addr: e.target.value })} placeholder="10.0.0.5 or eth1" className="font-mono" />
+        <Field
+          label="Advertise address"
+          hint={
+            addrs.error
+              ? "No suggestions from this server. IP or interface other nodes reach this node on; Docker picks one when empty."
+              : "IP or interface other nodes reach this node on. The encrypted mesh address is preferred; Docker picks one when empty."
+          }
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            <Input value={advertise} onChange={(e) => setF({ ...f, advertise_addr: e.target.value })} placeholder="192.0.2.5 or eth1" className="font-mono" />
+            {addrs.isFetching && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted" />}
+          </div>
+          {suggested.length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {suggested.map((a, i) => (
+                <button
+                  key={a.address}
+                  type="button"
+                  onClick={() => setF({ ...f, advertise_addr: a.address })}
+                  title={a.interface ? `${a.source} · ${a.interface}` : a.source}
+                  className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[11px] focus-visible:outline-2 focus-visible:outline-accent ${advertise === a.address ? "border-accent text-accent" : "border-line text-muted hover:text-fg"}`}
+                >
+                  {a.address}
+                  <span className={`rounded px-1 font-sans text-[10px] ${a.source === "mesh" ? "bg-accent-soft text-accent" : "bg-panel-2 text-faint"}`}>{a.source}</span>
+                  {i === 0 && <span className="font-sans text-[10px] text-faint">best</span>}
+                </button>
+              ))}
+            </div>
+          )}
         </Field>
         {first && (
           <>

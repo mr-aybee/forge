@@ -1,12 +1,18 @@
-import { ArrowRight, Globe, Layers, Plus, Server, X } from "lucide-react";
+import { ArrowRight, Boxes, Globe, Layers, Plus, Server, X } from "lucide-react";
+import { useState } from "react";
 
-import { useAllEnvironments } from "../../api/hooks";
-import type { Service } from "../../api/types";
+import { useAllEnvironments, useClusters } from "../../api/hooks";
+import { useStackSwarm, useSwarmStacks } from "../../api/swarm";
+import type { Cluster, Service } from "../../api/types";
 import { Input, Select } from "../ui";
 import type { Member, Target } from "./types";
 
-export function targetLabel(t: Target, members: Member[], apps: Service[] = []): string {
+type SwarmTarget = Extract<Target, { kind: "swarm" }>;
+
+export function targetLabel(t: Target, members: Member[], apps: Service[] = [], clusters: Cluster[] = []): string {
   switch (t.kind) {
+    case "swarm":
+      return `${t.service ? `${t.service} · ` : ""}swarm ${clusters.find((c) => c.id === t.cluster_id)?.name ?? t.cluster_id.slice(0, 8)}:${t.port}`;
     case "app":
       return `${apps.find((a) => a.id === t.service_id)?.name ?? `service ${t.service_id.slice(0, 8)}`}:${t.port}`;
     case "node":
@@ -26,7 +32,54 @@ const KINDS = {
   app: { label: "Service", icon: Layers, tone: "text-accent bg-accent-soft" },
   node: { label: "Node", icon: Server, tone: "text-muted bg-panel-2" },
   external: { label: "Address", icon: Globe, tone: "text-muted bg-panel-2" },
+  swarm: { label: "Swarm port", icon: Boxes, tone: "text-accent bg-accent-soft" },
 } as const;
+
+/** Picks a Swarm cluster and, optionally, a published port of a stack service there. */
+function SwarmTargetPicker({ t, swarms, onChange }: { t: SwarmTarget; swarms: Cluster[]; onChange: (t: SwarmTarget) => void }) {
+  const [stackId, setStackId] = useState("");
+  const stacks = useSwarmStacks(t.cluster_id);
+  const status = useStackSwarm(stackId);
+  const published = (status.data?.status?.services ?? []).flatMap((s) => s.ports.filter((p) => p.published).map((p) => ({ s: s.name, port: p.published as number })));
+  return (
+    <div className="flex min-w-0 flex-wrap gap-1.5 sm:flex-nowrap">
+      <Select value={t.cluster_id} onChange={(e) => onChange({ ...t, cluster_id: e.target.value, service: undefined })} aria-label="Swarm cluster">
+        {!swarms.some((c) => c.id === t.cluster_id) && <option value={t.cluster_id}>{t.cluster_id ? "Unknown cluster" : "Choose a Swarm cluster"}</option>}
+        {swarms.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.name}
+          </option>
+        ))}
+      </Select>
+      <Select value={stackId} onChange={(e) => setStackId(e.target.value)} aria-label="Stack" disabled={!t.cluster_id}>
+        <option value="">{stacks.error ? "Stacks unavailable" : "Any stack (type a port)"}</option>
+        {(stacks.data ?? []).map((s) => (
+          <option key={s.id} value={s.id}>
+            {s.environment ? `${s.environment}/` : ""}
+            {s.name}
+          </option>
+        ))}
+      </Select>
+      {stackId && (
+        <Select
+          value={t.service && published.some((p) => p.s === t.service && p.port === t.port) ? `${t.service}:${t.port}` : ""}
+          onChange={(e) => {
+            const p = published.find((x) => `${x.s}:${x.port}` === e.target.value);
+            onChange(p ? { ...t, service: p.s, port: p.port } : { ...t, service: undefined });
+          }}
+          aria-label="Published port"
+        >
+          <option value="">{status.isLoading ? "Loading…" : published.length ? "Choose a published port" : "No published ports"}</option>
+          {published.map((p) => (
+            <option key={`${p.s}:${p.port}`} value={`${p.s}:${p.port}`}>
+              {p.s} :{p.port}
+            </option>
+          ))}
+        </Select>
+      )}
+    </div>
+  );
+}
 
 const ADDR_RE = /^[A-Za-z0-9.\-[\]:]+:\d{1,5}$/;
 
@@ -53,6 +106,7 @@ export function TargetEditor({
   autoFocusPort?: boolean;
 }) {
   const environments = useAllEnvironments().data ?? [];
+  const swarms = (useClusters().data ?? []).filter((c) => c.mode === "swarm");
   const nsName = (id: string) => environments.find((n) => n.id === id)?.name ?? "";
   const byNs = new Map<string, Service[]>();
   for (const a of apps) byNs.set(a.environment_id, [...(byNs.get(a.environment_id) ?? []), a]);
@@ -62,7 +116,13 @@ export function TargetEditor({
     const app = apps.find((a) => !used.has(a.id)) ?? apps[0];
     onChange([
       ...value,
-      kind === "app" ? { kind, service_id: app?.id ?? "", port: appPort(app) } : kind === "node" ? { kind, server_id: members[0]?.id ?? "", port: 8080 } : { kind, address: "" },
+      kind === "app"
+        ? { kind, service_id: app?.id ?? "", port: appPort(app) }
+        : kind === "node"
+          ? { kind, server_id: members[0]?.id ?? "", port: 8080 }
+          : kind === "swarm"
+            ? { kind, cluster_id: swarms[0]?.id ?? "", port: 80 }
+            : { kind, address: "" },
     ]);
   };
 
@@ -80,6 +140,7 @@ export function TargetEditor({
       const m = members.find((x) => x.id === t.server_id);
       return m ? `${m.address}:${t.port}` : "unknown node";
     }
+    if (t.kind === "swarm") return swarms.some((c) => c.id === t.cluster_id) ? `every swarm node :${t.port}` : "unknown cluster";
     return t.address && !ADDR_RE.test(t.address) ? "use host:port" : "";
   };
 
@@ -97,8 +158,16 @@ export function TargetEditor({
               <button
                 key={k}
                 type="button"
-                disabled={k === "app" && !apps.length}
-                title={k === "app" && !apps.length ? "No services in this cluster" : `Add a ${K.label.toLowerCase()} target`}
+                disabled={(k === "app" && !apps.length) || (k === "swarm" && !swarms.length)}
+                title={
+                  k === "app" && !apps.length
+                    ? "No services in this cluster"
+                    : k === "swarm" && !swarms.length
+                      ? "No Swarm cluster yet"
+                      : k === "swarm"
+                        ? "Every node of a Swarm cluster on a routing-mesh port"
+                        : `Add a ${K.label.toLowerCase()} target`
+                }
                 onClick={() => add(k)}
                 className="inline-flex h-7 items-center gap-1 rounded-md border border-line px-2 text-xs text-muted transition hover:border-accent/50 hover:text-accent disabled:opacity-40"
               >
@@ -116,7 +185,7 @@ export function TargetEditor({
           {value.map((t, i) => {
             const K = KINDS[t.kind];
             const r = resolves(t);
-            const warn = r === "unknown service" || r === "unknown node" || r.startsWith("not placed") || r === "use host:port";
+            const warn = r === "unknown service" || r === "unknown node" || r === "unknown cluster" || r.startsWith("not placed") || r === "use host:port";
             return (
               <div key={i} className="flex flex-wrap items-center gap-2 px-2 py-1.5 sm:flex-nowrap">
                 <span className={`inline-flex w-[76px] shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium ${K.tone}`}>
@@ -146,6 +215,7 @@ export function TargetEditor({
                       ))}
                     </Select>
                   )}
+                  {t.kind === "swarm" && <SwarmTargetPicker t={t} swarms={swarms} onChange={(n) => set(i, n)} />}
                   {t.kind === "external" && (
                     <Input className="h-8 font-mono text-xs" placeholder="10.0.0.20:8000" value={t.address} onChange={(e) => set(i, { ...t, address: e.target.value.trim() })} aria-label="host:port" />
                   )}
