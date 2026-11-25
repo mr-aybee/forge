@@ -422,16 +422,34 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
       if (box.clientWidth < 720) return setPaths([]);
       const base = box.getBoundingClientRect();
       const next: typeof paths = [];
+      // Elbow connectors: out horizontally, one vertical trunk per column gap
+      // (fan-outs share it), then horizontally in. Pixel-snapped for 1px-ish strokes.
+      const snap = (v: number) => Math.round(v) + 0.5;
+      const gap = (id: string) => id.split(":")[0] ?? "";
+      const seg: { w: Wire; x1: number; y1: number; x2: number; y2: number; g: string }[] = [];
       for (const w of JSON.parse(key) as Wire[]) {
         const a = els.current.get(w.from)?.getBoundingClientRect();
         const b = els.current.get(w.to)?.getBoundingClientRect();
         if (!a || !b) continue;
-        const x1 = a.right - base.left + 2;
-        const y1 = a.top + a.height / 2 - base.top;
-        const x2 = b.left - base.left - 4;
-        const y2 = b.top + b.height / 2 - base.top;
-        const c = Math.max(12, (x2 - x1) / 2);
-        next.push({ d: `M ${x1} ${y1} C ${x1 + c} ${y1}, ${x2 - c} ${y2}, ${x2} ${y2}`, dashed: w.dashed, tone: w.tone });
+        seg.push({ w, g: gap(w.from), x1: a.right - base.left + 2, y1: a.top + a.height / 2 - base.top, x2: b.left - base.left - 4, y2: b.top + b.height / 2 - base.top });
+      }
+      const trunk = new Map<string, number>();
+      for (const g of new Set(seg.map((x) => x.g))) {
+        const in_ = seg.filter((x) => x.g === g);
+        trunk.set(g, snap((Math.max(...in_.map((x) => x.x1)) + Math.min(...in_.map((x) => x.x2))) / 2));
+      }
+      for (const { w, g, x1: rx1, y1: ry1, x2: rx2, y2: ry2 } of seg) {
+        const [x1, y1, x2, y2] = [snap(rx1), snap(ry1), snap(rx2), snap(ry2)];
+        const dy = y2 - y1;
+        let d: string;
+        if (Math.abs(dy) < 1) d = `M ${x1} ${y1} H ${x2}`;
+        else {
+          const tx = Math.min(Math.max(trunk.get(g) ?? (x1 + x2) / 2, x1 + 4), x2 - 4);
+          const r = Math.max(0, Math.min(4, Math.abs(dy) / 2, tx - x1, x2 - tx));
+          const sy = Math.sign(dy);
+          d = `M ${x1} ${y1} H ${tx - r} Q ${tx} ${y1} ${tx} ${y1 + sy * r} V ${y2 - sy * r} Q ${tx} ${y2} ${tx + r} ${y2} H ${x2}`;
+        }
+        next.push({ d, dashed: w.dashed, tone: w.tone });
       }
       setPaths(next);
     };
