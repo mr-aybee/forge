@@ -512,8 +512,8 @@ Other lines you can see:
 | `Firewall               opened 3880/tcp (console), 3843/tcp (agents), 3832/tcp (analytics uploads) (firewalld)` | firewalld is running (the ports are the ones in `forge.toml`) |
 | `▲ Analytics worker       not listening on 3832 yet; see journalctl …` | The worker's upload port did not open within 30 s. The install still succeeds |
 | `Analytics     off ([analytics] engine = "off")` | Analytics is off; there is no **Analytics worker** line |
-| `✔ Agent                  enrolled in cluster <cluster>` and `This server   enrolled in cluster <cluster> as <hostname> (terminal account <account>)` | `--install-agent` succeeded |
-| `▲ Agent                  not enrolled: <reason>; the server install is fine` | `--install-agent` failed. The **AGENT** section then shows **Retry by hand** commands |
+| `✔ Agent                  enrolled in cluster <cluster> and running` and `This server   enrolled in cluster <cluster> as <hostname> (terminal account <account>)` | `--install-agent` succeeded |
+| `▲ Agent                  not enrolled: could not create an enrollment token; the server install is fine` or `▲ Agent                  failed: the node installer reported an error (see below); the server install is fine` | `--install-agent` failed, including an agent that enrolled but did not stay running. The last 15 lines of the node installer follow. The **AGENT** section then shows **Retry by hand** commands |
 | `✔ Elevated tokens        allowed: elevated API tokens skip the MFA prompt` | `allow_elevated_tokens = true` in `forge.toml` |
 | `▲ Production ...` | The public URL in `forge.toml` does not start with `https://` |
 
