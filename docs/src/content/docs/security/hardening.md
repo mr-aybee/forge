@@ -218,7 +218,7 @@ enrolled still need their second factor to sign in.
 - **Custom Nginx blocks use an allowlist.** Only directives from a fixed list
   are accepted: no file paths, process settings or code. Saving or applying a
   non-empty block needs `server.command` (MFA) on every edge. See
-  [Sites and DNS](/docs/guides/sites-and-dns/#custom-blocks).
+  [Sites and DNS](/docs/guides/ingress/#custom-configuration).
 - **Uploaded certificate keys are guarded.** Deploying one needs
   `certificate.use` (administrators, MFA), and the key goes only to the edges
   of the site being applied, checked again when the job runs.

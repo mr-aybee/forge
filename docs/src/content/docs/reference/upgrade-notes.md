@@ -11,6 +11,25 @@ that can refuse settings you saved before, so you know what to check after
 you update. Forge runs migrations automatically on start, on SQLite and
 PostgreSQL alike.
 
+## Ingress endpoints: one list and a full editor
+
+Applies to every ingress endpoint (site). Existing endpoints keep working
+unchanged: their stored spec is read as before, and an endpoint that uses
+none of the new features is sent to the edges in the same form.
+
+| What | After the update |
+| --- | --- |
+| Where endpoints are listed | One list on **Ingress → Endpoints**, whatever serves them. Each endpoint has a placement: nodes with Nginx, or a cluster's edge group. Stored `edges` and `cluster_id` are still read as the placement |
+| Endpoint access and error logs | Each endpoint writes `/var/log/nginx/forge/<name>.access.log` and `/var/log/nginx/forge/<name>.error.log` from its next apply, no longer `/var/log/nginx/access.log`. The Forge traffic log is unchanged. Point any log shipper at the new files |
+| New spec fields (`kind`, `rules`, `redirects`, `cache`, `gzip`, `access`, ports, `hsts`, `rate_burst`) | Older agents refuse fields they do not know, so applying an endpoint that uses them fails on an edge that is not updated |
+| Basic authentication | A form feature with hashed passwords. `auth_basic_user_file` stays refused in the custom configuration |
+| Profile layout **Standalone** | Labelled **Single edge** in the console. The API value stays `standalone` |
+
+:::caution
+Update the agent on every edge before you use the new endpoint features.
+Then apply each endpoint once so its logs move to the new files.
+:::
+
 ## Any address: no fixed console URL, agents pin the server key
 
 - **`public_url` is optional.** An existing `forge.toml` keeps it, and it
@@ -386,9 +405,9 @@ address-wide limit, so sign-in keeps the per-account limits until you list it.
 
 Applies to sites and cluster proxy profiles that have a custom block. Nginx
 reads these blocks as root on the edge, so Forge now accepts only directives
-from the [supported list](/docs/guides/sites-and-dns/#custom-blocks). Directives
+from the [supported list](/docs/guides/ingress/#custom-configuration). Directives
 that take a file path, change the Nginx process or load code are refused,
-for example `root`, `alias`, `try_files`, `auth_basic`, `access_log`,
+for example `root`, `alias`, `try_files`, `auth_basic_user_file`, `access_log`,
 `include` and every `*_by_lua*` form. Unix sockets (`unix:`) are refused too.
 
 | What | After the update |
@@ -400,8 +419,9 @@ for example `root`, `alias`, `try_files`, `auth_basic`, `access_log`,
 :::caution
 Review custom blocks before the next apply. Open each site and each
 cluster's proxy profile, remove refused directives, and apply again as a
-user with `server.command`. Serve static files from a service instead
-of `root` or `alias`.
+user with `server.command`. Serve static files with a **Static** rule
+instead of `root` or `alias`, and use the endpoint's **Access** section for
+basic authentication.
 :::
 
 ## Compose stacks and containers: stricter host checks

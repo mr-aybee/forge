@@ -486,7 +486,7 @@ Exit codes: `0` success; `2` an ambiguous name; `3` not signed in; `4`
 permission denied; `6` no such cluster; `9` server unreachable.
 
 **See also**: [`forge sites get`](/docs/reference/cli/sites-certificates/#forge-sites-get),
-[Check routing](/docs/guides/ingress/#check-routing),
+[Check routing](/docs/guides/ingress/#check-routing-and-traffic),
 [Cluster network](/docs/guides/cluster-network/).
 
 ### forge clusters ingress get
@@ -651,7 +651,7 @@ The server checks the profile and answers a broken rule with exit `2`:
 
 | Mode | Rule |
 | --- | --- |
-| `standalone` | Exactly one edge |
+| `standalone` (**Single edge** in the console) | Exactly one edge |
 | `active_standby` | At least two edges, exactly one of them `primary` |
 | `active_active` | At least two edges |
 | every mode | No edge twice; each edge is a member of the cluster; each `public_ip` is an IP address |
@@ -711,7 +711,7 @@ server unreachable.
 
 **See also**: [`forge clusters ingress apply`](#forge-clusters-ingress-apply),
 [Ingress profile](#ingress-profile),
-[Set up the profile](/docs/guides/ingress/#set-up-the-profile).
+[Set up a cluster edge group](/docs/guides/ingress/#set-up-a-cluster-edge-group).
 
 ### forge clusters ingress apply
 
@@ -942,7 +942,7 @@ edges, see [Ingress](/docs/guides/ingress/).
 | `ingress.nginx.real_ip_from` | list of IPv4 addresses or CIDRs | `[]` | Proxies in front of the edges whose `X-Forwarded-For` is trusted |
 | `ingress.nginx.rate_limit` | integer, requests per second per client IP | `0` (off) | A global rate limit. Sites can add their own |
 | `ingress.nginx.access_log` | `combined`, `json` or `off` | `combined` | The access log format |
-| `ingress.nginx.custom` | string | `""` | Directives added at `http {}` level. Needs `server.command` (MFA) on every edge. See [Custom blocks](/docs/guides/sites-and-dns/#custom-blocks) for the allowed directives |
+| `ingress.nginx.custom` | string | `""` | Directives added at `http {}` level. Needs `server.command` (MFA) on every edge. See [Custom blocks](/docs/guides/ingress/#custom-configuration) for the allowed directives |
 | `ingress.dns` | object | none | Lets Forge keep DNS records for the endpoints on a PowerDNS node |
 | `ingress.dns.server_id` | node id | — (required in `dns`) | The PowerDNS node that holds the zones |
 | `ingress.dns.ttl` | integer, seconds, 30 to 86400 | `60` | The record TTL. Lower values fail over faster |
