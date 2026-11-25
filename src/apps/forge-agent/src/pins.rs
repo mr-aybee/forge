@@ -49,6 +49,9 @@ pub const MAX_REVOKED: usize = 32;
 pub const LOCK_FILE: &str = "pins.lock";
 /// Label of the key from the enrollment token.
 pub const LABEL_ENROLLMENT: &str = "enrollment";
+/// The pin set of an enrollment run as the agent user, staged in the state
+/// directory until the root helper adopts it ([`adopt_staged`]).
+pub const STAGED_FILE: &str = "pins.enrolled.toml";
 
 /// What can go wrong with the pin set.
 #[derive(Debug, thiserror::Error)]
@@ -332,6 +335,81 @@ pub fn root_owned(state_dir: &Path) -> bool {
     cfg!(unix) && state_dir == crate::config::StatePaths::default_dir()
 }
 
+/// The staged pin set of an enrollment in `state_dir` ([`STAGED_FILE`]).
+#[must_use]
+pub fn staged_path(state_dir: &Path) -> PathBuf {
+    state_dir.join(STAGED_FILE)
+}
+
+/// Where an enrollment writes its pin set: the pin file itself, unless it
+/// lives in the root-owned [`SYSTEM_DIR`] and the enrollment does not run
+/// as root (the installer enrolls as the agent user). The set is then
+/// staged in the state directory for `forge-agent-helper pin` to adopt.
+#[must_use]
+pub fn enrollment_target(state_dir: &Path, is_root: bool) -> PathBuf {
+    if root_owned(state_dir) && !is_root { staged_path(state_dir) } else { path(state_dir) }
+}
+
+/// What [`adopt_staged`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Adoption {
+    /// No staged set.
+    NothingStaged,
+    /// The staged set became the pin file; it holds this many keys.
+    Adopted(usize),
+    /// A pin file already existed and was kept; the staged set was dropped.
+    KeptExisting,
+}
+
+/// `forge-agent-helper pin` (root, right after a fresh enrollment, the
+/// moment it also trusts `identity.json`, D-068): turns the staged pin set
+/// at `staged` into the pin file at `system`, only when no pin file exists
+/// yet. An existing set is never replaced from the agent-writable staged
+/// file. The staged file is checked like the pin file (size, keys,
+/// fingerprints) and removed once handled; an invalid one is left in place
+/// and reported. Blocking.
+pub fn adopt_staged(staged: &Path, system: &Path) -> Result<Adoption, PinError> {
+    let shown = staged.display().to_string();
+    match std::fs::symlink_metadata(staged) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Adoption::NothingStaged),
+        Err(e) => return Err(PinError::Io(shown, e.to_string())),
+        Ok(_) => {}
+    }
+    let _lock = lock(system)?;
+    let outcome = match std::fs::symlink_metadata(system) {
+        Ok(_) => Adoption::KeptExisting,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let set = load(staged)?;
+            if !set.is_empty() {
+                save(system, &set)?;
+            }
+            Adoption::Adopted(set.server_keys.len())
+        }
+        Err(e) => return Err(PinError::Io(system.display().to_string(), e.to_string())),
+    };
+    std::fs::remove_file(staged).map_err(|e| PinError::Io(shown, e.to_string()))?;
+    Ok(outcome)
+}
+
+/// Fails when the pins of `state_dir` live in the root-owned
+/// [`SYSTEM_DIR`], that file is missing, and an enrollment's set is still
+/// staged: the agent would otherwise start without pins and fall back to
+/// the CA and host name. Blocking.
+pub fn check_adopted(state_dir: &Path) -> Result<(), String> {
+    check_adopted_at(&path(state_dir), &staged_path(state_dir), root_owned(state_dir))
+}
+
+fn check_adopted_at(system: &Path, staged: &Path, root_owned: bool) -> Result<(), String> {
+    if root_owned && !system.exists() && staged.exists() {
+        return Err(format!(
+            "the pins of this enrollment are staged in {} but {} does not exist; run 'forge-agent-helper pin' as root to adopt them",
+            staged.display(),
+            system.display()
+        ));
+    }
+    Ok(())
+}
+
 /// Reads the pin set; a missing file is an empty set. Blocking.
 pub fn load(path: &Path) -> Result<PinSet, PinError> {
     let shown = path.display().to_string();
@@ -489,6 +567,80 @@ mod tests {
 
     fn key(n: u8, label: &str) -> ServerKey {
         ServerKey { sha256: fp(n), label: label.into() }
+    }
+
+    fn staged_set(dir: &Path, n: u8) -> PathBuf {
+        let mut set = PinSet::default();
+        set.add(&fp(n), LABEL_ENROLLMENT, 1).unwrap();
+        let p = staged_path(dir);
+        save(&p, &set).unwrap();
+        p
+    }
+
+    #[test]
+    fn enrollment_as_the_agent_user_stages_the_root_owned_set() {
+        let default = crate::config::StatePaths::default_dir();
+        if cfg!(unix) {
+            assert_eq!(enrollment_target(&default, false), staged_path(&default));
+            assert_eq!(enrollment_target(&default, true), Path::new(SYSTEM_DIR).join(FILE));
+        }
+        let other = Path::new("/srv/agent-state");
+        assert_eq!(enrollment_target(other, false), other.join(FILE));
+        assert_eq!(enrollment_target(other, true), other.join(FILE));
+    }
+
+    #[test]
+    fn adopt_staged_moves_a_fresh_set_into_place() {
+        let state = tempfile::tempdir().unwrap();
+        let sys = tempfile::tempdir().unwrap();
+        let system = sys.path().join("pins").join(FILE);
+        let staged = staged_set(state.path(), 1);
+        assert_eq!(adopt_staged(&staged, &system).unwrap(), Adoption::Adopted(1));
+        assert_eq!(load(&system).unwrap().fingerprints(), vec![fp(1)]);
+        assert!(!staged.exists(), "the staged file is removed");
+        assert_eq!(adopt_staged(&staged, &system).unwrap(), Adoption::NothingStaged);
+    }
+
+    #[test]
+    fn adopt_staged_never_replaces_an_existing_set() {
+        let state = tempfile::tempdir().unwrap();
+        let sys = tempfile::tempdir().unwrap();
+        let system = sys.path().join(FILE);
+        let mut existing = PinSet::default();
+        existing.add(&fp(2), "current", 1).unwrap();
+        save(&system, &existing).unwrap();
+        let staged = staged_set(state.path(), 3);
+        assert_eq!(adopt_staged(&staged, &system).unwrap(), Adoption::KeptExisting);
+        assert_eq!(load(&system).unwrap().fingerprints(), vec![fp(2)]);
+        assert!(!staged.exists());
+    }
+
+    #[test]
+    fn adopt_staged_refuses_an_invalid_set() {
+        let state = tempfile::tempdir().unwrap();
+        let sys = tempfile::tempdir().unwrap();
+        let system = sys.path().join(FILE);
+        let staged = staged_path(state.path());
+        std::fs::write(&staged, "[[server_keys]]\nsha256 = \"nothex\"\nlabel = \"x\"\nadded_ms = 1\n").unwrap();
+        assert!(matches!(adopt_staged(&staged, &system), Err(PinError::Parse(..))));
+        assert!(!system.exists(), "nothing is pinned from an invalid set");
+        let too_many: String = (0..=u8::try_from(MAX_PINS).unwrap())
+            .map(|i| format!("[[server_keys]]\nsha256 = \"{}\"\nlabel = \"x\"\nadded_ms = 1\n", fp(i)))
+            .collect();
+        std::fs::write(&staged, too_many).unwrap();
+        assert!(matches!(adopt_staged(&staged, &system), Err(PinError::Parse(..))));
+        assert!(!system.exists());
+    }
+
+    #[test]
+    fn the_agent_refuses_to_start_with_unadopted_pins() {
+        let state = tempfile::tempdir().unwrap();
+        let system = state.path().join("system").join(FILE);
+        let staged = staged_set(state.path(), 4);
+        assert!(check_adopted_at(&system, &staged, true).unwrap_err().contains("forge-agent-helper pin"));
+        assert!(check_adopted_at(&system, &staged, false).is_ok(), "not root-owned: the staged file is ignored");
+        adopt_staged(&staged, &system).unwrap();
+        assert!(check_adopted_at(&system, &staged, true).is_ok());
     }
 
     #[test]

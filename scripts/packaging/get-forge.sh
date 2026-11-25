@@ -8,8 +8,9 @@
 #   sudo sh get-forge.sh --version latest -- --yes --public-url https://forge.example.com
 #
 # Options (everything else, or everything after --, goes to install.sh):
-#   --version TAG     vX.Y.Z, vX.Y.Z-rc-NN or latest (default latest: the
-#                     newest stable release; pre-releases need their tag)
+#   --version TAG     vX.Y.Z, vX.Y.Z-rc-NN or latest (default: the release
+#                     this copy was published with; a copy from the source
+#                     tree defaults to latest, the newest stable release)
 #   --file ARCHIVE    install from a package on disk; SHA256SUMS and
 #                     SHA256SUMS.sig must be in the same folder
 #   --download-only   verify and unpack into the current folder; do not install
@@ -36,7 +37,10 @@ PINNED_KEY="6yf7l7jBEw6u446vqWAgt7P7bqEuaY5tpbYnWPHBmbg"
 BASE="${FORGE_RELEASES_URL:-https://github.com/orbyntech/forge/releases}"
 KEY="${FORGE_RELEASE_PUBLIC_KEY:-$PINNED_KEY}"
 
-VERSION=latest
+# The release workflow stamps the release's own tag here in the get-forge.sh
+# it publishes, so a copy downloaded from a pre-release installs that release.
+DEFAULT_VERSION=latest
+VERSION="$DEFAULT_VERSION"
 FILE=""
 MODE=install
 VERIFY_DIR=""
@@ -44,6 +48,8 @@ VERIFY_DIR=""
 die() { printf '\n  x %s\n\n' "$*" >&2; exit 1; }
 say() { printf '  + %-22s %s\n' "$1" "$2"; }
 
+# As given, for the "run as root" hint.
+GIVEN_ARGS="$*"
 ARGS_FILE="$(mktemp)"
 trap 'rm -f "$ARGS_FILE"' EXIT
 # install.sh options are kept in order; quoted one per line for `set --`.
@@ -70,7 +76,15 @@ case "$TAG" in *[!A-Za-z0-9.+_-]*) die "bad version $VERSION" ;; esac
 [ "$KEY" = "$PINNED_KEY" ] || printf '  ! %-22s %s\n' "Release key" "FORGE_RELEASE_PUBLIC_KEY overrides the Orbyn Forge key" >&2
 
 # ------------------------------------------------------------------ tools
-need_root() { [ "$(id -u)" = 0 ] || die "Run as root: sudo sh $0 …"; }
+need_root() {
+  [ "$(id -u)" = 0 ] && return 0
+  # Piped (curl … | sh) $0 is the shell, not a file to run again.
+  if [ -f "$0" ] && [ "${0##*/}" != sh ] && [ "${0##*/}" != dash ] && [ "${0##*/}" != bash ]; then
+    die "Run as root: sudo sh $0 $GIVEN_ARGS"
+  fi
+  if [ "$TAG" = latest ]; then from="$BASE/latest/download"; else from="$BASE/download/$TAG"; fi
+  die "Run as root: curl -fsSL $from/get-forge.sh | sudo sh -s --${GIVEN_ARGS:+ $GIVEN_ARGS}"
+}
 pkg_install() { # pkg_install <package>: only as root, only with a known manager
   [ "$(id -u)" = 0 ] || return 1
   if command -v apt-get >/dev/null 2>&1; then

@@ -444,6 +444,13 @@ recover a node that missed a rotation, or to set up a node by hand.
 
 **Where the pins live:**
 
+When `forge-agent enroll` runs as `forge-agent` for the default state
+directory (as the installer runs it), it writes the set to
+`/var/lib/forge-agent/pins.enrolled.toml` instead, and
+[`forge-agent-helper pin`](/docs/reference/cli/forge-agent-helper/#forge-agent-helper-pin)
+adopts it as root. Until then the agent refuses to start and says so: it does
+not fall back to checking the CA and host name.
+
 | Platform | File | Owner |
 | --- | --- | --- |
 | Linux, default state directory | `/var/lib/forge-agent-pins/pins.toml` | `root`, readable by `forge-agent`, which cannot change it. The root helper applies signed announcements |

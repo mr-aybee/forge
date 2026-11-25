@@ -179,6 +179,13 @@ Pins Forge's command key and this node's id from the agent's
 `identity.json` into `/var/lib/forge-agent-helper/pin.json`, with
 `source: installer`. It replaces an existing pin.
 
+It also adopts the control-plane key pins of that enrollment. The installer
+enrolls as the `forge-agent` user, which cannot write the root-owned
+`/var/lib/forge-agent-pins/pins.toml`, so enrollment stages the set in
+`/var/lib/forge-agent/pins.enrolled.toml`. `pin` checks the staged file (at
+most 8 keys, valid fingerprints), makes it the pin file when none exists yet
+and removes it. It never replaces an existing pin file from the staged one.
+
 **Who runs it:** the installer, as root, right after a fresh enrollment. You
 run it as root after you re-enroll a node by hand (see
 [`forge-agent enroll`](/docs/reference/cli/forge-agent/#forge-agent-enroll)).

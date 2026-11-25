@@ -5785,6 +5785,17 @@ were registered on.
 - Acknowledgements keep only this server's fingerprints, are rate-limited per
   agent and pruned for deleted nodes. The installers are `no-store`.
 
+**Amendment (enrollment as the agent user).** The installer enrolls as
+`forge-agent`, which cannot write the root-owned pin file. Enrollment then
+stages its set in `pins.enrolled.toml` in the state directory, and
+`forge-agent-helper pin` (root, right after enrollment, the same moment it
+trusts `identity.json` per D-068) adopts it only when no pin file exists yet,
+after checking it like the pin file. The agent user never changes an existing
+set. The agent refuses to start while a staged set waits and the pin file is
+missing, rather than start unpinned. The release workflow stamps each
+release's tag into its `get-forge.sh` and `get-forge.ps1` as the default
+version, so a copy downloaded from a pre-release installs that pre-release.
+
 ## D-168 Deploy webhooks: signed tags only, durable replay protection
 
 **Context.** A security review of deploy webhooks (D-159) found that the

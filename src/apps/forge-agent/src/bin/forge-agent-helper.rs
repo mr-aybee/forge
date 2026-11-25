@@ -71,6 +71,25 @@ async fn server_pins(pin: Option<helper_trust::Pin>, keys: String) -> HelperResp
     }
 }
 
+/// `pin`: adopts the control-plane key pins the enrollment staged as the
+/// agent user (D-167), only when no root-owned pin file exists yet.
+fn adopt_enrollment_pins(agent_dir: &std::path::Path) {
+    use forge_agent::pins;
+    if !pins::root_owned(agent_dir) {
+        return;
+    }
+    let system = std::path::Path::new(pins::SYSTEM_DIR).join(pins::FILE);
+    match pins::adopt_staged(&pins::staged_path(agent_dir), &system) {
+        Ok(pins::Adoption::Adopted(n)) => println!("pinned {n} control-plane key(s) in {}", system.display()),
+        Ok(pins::Adoption::KeptExisting) => println!("kept the existing pin file {}", system.display()),
+        Ok(pins::Adoption::NothingStaged) => {}
+        Err(e) => {
+            eprintln!("forge-agent-helper pin: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 /// The agent state directory (`serve --agent-dir`).
 fn agent_dir() -> std::path::PathBuf {
     AGENT_DIR.get().cloned().unwrap_or_else(|| std::path::PathBuf::from("/var/lib/forge-agent"))
@@ -548,6 +567,7 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        adopt_enrollment_pins(std::path::Path::new(&dir));
         return;
     }
     if args.get(1).map(String::as_str) == Some("serve") {

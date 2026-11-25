@@ -33,6 +33,8 @@ impl HostFacts {
 
 /// Writes the pin set of a new enrollment (D-167): the key from the token
 /// and the keys the server announced, checked against its command key.
+/// Run as the agent user for the default state directory (the installer),
+/// the set is staged for `forge-agent-helper pin` to adopt as root.
 /// Nothing when neither is known (an older server): the agent then checks
 /// the CA and host name, and pins once the server announces its keys.
 fn save_pins(paths: &StatePaths, token_key: Option<&str>, resp: &EnrollResponse) -> anyhow::Result<()> {
@@ -49,8 +51,21 @@ fn save_pins(paths: &StatePaths, token_key: Option<&str>, resp: &EnrollResponse)
     if set.is_empty() {
         return Ok(());
     }
-    let path = paths.pins();
-    crate::pins::save(&path, &set).with_context(|| format!("writing {} (run the enrollment as root)", path.display()))
+    let path = crate::pins::enrollment_target(&paths.dir, running_as_root());
+    crate::pins::save(&path, &set).with_context(|| format!("writing {}", path.display()))
+}
+
+/// Whether this process runs as root (always false off Unix, where the pins
+/// never live in the root-owned folder).
+fn running_as_root() -> bool {
+    #[cfg(unix)]
+    {
+        rustix::process::geteuid().is_root()
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
 }
 
 /// Enrolls this machine and writes its state directory.

@@ -282,11 +282,17 @@ jobs:
       - name: Packages
         env:
           VERSION: ${{ needs.version.outputs.version }}
+          TAG: ${{ needs.version.outputs.tag }}
         run: |
           bash scripts/packaging/package.sh bin assets "$VERSION"
           # The bootstrap installers: download, verify and run install.sh/.ps1.
-          install -m 0755 scripts/packaging/get-forge.sh assets/get-forge.sh
-          cp scripts/packaging/get-forge.ps1 assets/get-forge.ps1
+          # Each defaults to this release's own tag, so the copy downloaded
+          # from a pre-release installs that pre-release (--version overrides).
+          sed "s/^DEFAULT_VERSION=latest\$/DEFAULT_VERSION=$TAG/" scripts/packaging/get-forge.sh > assets/get-forge.sh
+          chmod 0755 assets/get-forge.sh
+          sed "s/^  \[string\]\$Version = \"latest\",\$/  [string]\$Version = \"$TAG\",/" scripts/packaging/get-forge.ps1 > assets/get-forge.ps1
+          grep -qx "DEFAULT_VERSION=$TAG" assets/get-forge.sh || { echo "::error::get-forge.sh was not stamped with $TAG"; exit 1; }
+          grep -qxF "  [string]\$Version = \"$TAG\"," assets/get-forge.ps1 || { echo "::error::get-forge.ps1 was not stamped with $TAG"; exit 1; }
       - name: Check the packages
         env:
           VERSION: ${{ needs.version.outputs.version }}
