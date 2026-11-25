@@ -25,6 +25,7 @@ mod installations;
 mod jobs;
 mod log_keys;
 mod notifications;
+mod object_store_iam;
 mod object_stores;
 mod observations;
 mod passkeys;

@@ -6,6 +6,7 @@
 //! directions and sent with `UNSIGNED-PAYLOAD`, which every supported
 //! provider accepts. Errors never contain the secret key or a signature.
 
+mod iam;
 mod sigv4;
 mod xml;
 

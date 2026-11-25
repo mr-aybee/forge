@@ -2207,7 +2207,15 @@ buckets in the bucket list. A grant opens no other endpoint in this section.
 | GET | `/object-stores/{id}/buckets/{bucket}/object?key=` | `storage.data`, or a live bucket grant for this bucket (`read` or `readwrite`) — streamed download, `Content-Disposition: attachment`. Audited as `storage.object.download` |
 | PUT | `/object-stores/{id}/buckets/{bucket}/object?key=` | `storage.data`, or a live `readwrite` bucket grant for this bucket — raw body, `Content-Length` required (`411`), max 5 GiB (`413`), `Content-Type` passed through → `201 {bucket, key, size}`. Audited as `storage.object.upload` |
 | DELETE | `/object-stores/{id}/buckets/{bucket}/object?key=` | `storage.data`, or a live `readwrite` bucket grant for this bucket → `204`. Audited as `storage.object.delete` |
-| POST | `/object-stores/adopt` | `storage.manage` (MFA) on the node — adopt the App Store `rustfs` container as a managed standalone store. Body below → `202 {store, job}`. With `environment_id`, also `deploy` on that environment |
+| POST | `/object-stores/adopt` | `storage.manage` (MFA) on the node — adopt the App Store `rustfs` container, or with `container` any RustFS container on the node, as a managed standalone store. With `container`, also `server.manage` on the node. Body below → `202 {store, job}`. With `environment_id`, also `deploy` on that environment. Audited as `storage.adopt` |
+| GET | `/object-stores/discover?server_id=` | `server.manage` — scans Linux nodes for RustFS containers. Without `server_id`: every node of the workspace on which you hold `server.manage` (others are skipped silently), at most 200. With `server_id`: that node only (`404` unknown node, `403` without `server.manage`). Response below. Read-only, not audited |
+| GET | `/object-stores/rustfs-env` | Signed in → `{keys: [string]}`, the engine variables a Docker store may set (see [Docker settings](#docker-settings)) |
+| GET | `/object-stores/{id}/settings` | `storage.manage` (MFA) → the [settings object](#store-settings) |
+| PUT | `/object-stores/{id}/settings` | `storage.manage` (MFA) — change release, ports, region and container settings. Body below → `202 {store: <settings object>, jobs: [Job]}`, one `storage.action` job per member. `409` while the store is busy or when it is not editable. Audited as `storage.settings.update` |
+| GET | `/object-stores/{id}/iam` | `storage.manage` (MFA) — managed RustFS stores only. The access keys as RustFS holds them, compared with Forge's records. Response below |
+| POST | `/object-stores/{id}/iam/keys` | `storage.manage` (MFA) — create a key in RustFS with a policy for its grants. Body `{name, grants}` → `201 {access_key, name, grants, vault_item_id, record_id}`. The secret goes to the vault only. Audited as `storage.key.create` |
+| PUT | `/object-stores/{id}/iam/keys/{access_key}` | `storage.manage` (MFA) — replace a key's policy in RustFS with one for `grants`. Works for keys created outside Forge too. Body `{grants}` → `200 {access_key, grants}`. `409` for the root key. Audited as `storage.key.policy` |
+| POST | `/object-stores/{id}/iam/reconcile` | `storage.manage` (MFA) — accept what RustFS holds: Forge's records are refreshed to RustFS's state. Body `{}` → `200 {imported, updated, removed}` (counts of records). Audited as `storage.iam.reconcile` |
 | GET | `/object-stores/{id}/keys` | `storage.data` — managed RustFS stores only → `[Key]`, the service accounts of the store's root user. When you reach the store only through its environment: only the keys attached to services of that environment |
 | POST | `/object-stores/{id}/keys` | `storage.manage` (MFA) — managed RustFS stores only. Issue an access key limited to one bucket. Body below → `201 {access_key, name, bucket, access, vault_item_id}`. The secret is sealed in the vault and never returned |
 | POST | `/object-stores/{id}/keys/{access_key}/rotate` | `storage.manage` (MFA) — Forge-issued keys only. Creates a new key with the same bucket and access, tests it, updates the same vault item, then deletes the old key → `200 {access_key, bucket, access, vault_item_id}` with the new access key |
@@ -2226,7 +2234,8 @@ beyond it they return `429 busy`. Audit actions: `storage.install`, `storage.con
 `storage.disconnect`, `storage.adopt`, `storage.owner.set`, `storage.start`, `storage.stop`, `storage.restart`, `storage.uninstall`,
 `storage.bucket.create`, `storage.bucket.delete`, `storage.object.upload`, `storage.object.download`,
 `storage.object.delete`, `storage.key.create`, `storage.key.rotate`, `storage.key.revoke`,
-`storage.grant.create`, `storage.grant.revoke`.
+`storage.grant.create`, `storage.grant.revoke`, `storage.settings.update`,
+`storage.key.policy`, `storage.iam.reconcile`.
 Attaching a bucket to a service is audited on the service:
 `service.storage.attach`, `service.storage.detach`.
 
@@ -2252,6 +2261,8 @@ the request needed) in the details.
 | `require_mount` | bool | `false` | Refuse install and start unless every data path is a mount point |
 | `s3_port` | number | `9000` | 1024 or higher; the same on every member, which also replicate over it |
 | `console_port` | number | none | RustFS console, different from `s3_port`; omitted means the console is off |
+| `region` | string | `us-east-1` | S3 signing region, set as `RUSTFS_REGION`. Lowercase letters, digits and `-`, up to 32 |
+| `docker` | object | none | Container settings, `runtime: docker` only. See [Docker settings](#docker-settings) |
 | `environment_id` | string | none | The environment the store belongs to. Must be in your workspace (`404 environment not found`) and needs `deploy` on it. Omitted means a shared store |
 
 One `storage.action` install job starts per member, in parallel. Response:
@@ -2284,7 +2295,9 @@ Errors: `400` validation, `403 step_up_required`, `403` without `deploy` on
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `name` | string | required | Display name, 1–80 characters |
-| `server_id` | string | required | Node with the App Store `rustfs` installation |
+| `server_id` | string | required | Node with the App Store `rustfs` installation, or with the container named in `container` |
+| `container` | string | none | Name of a RustFS container on the node, as discovery lists it. Omitted: the App Store `rustfs` container |
+| `s3_port`, `console_port` | number | read from the container | Override when discovery cannot read the ports (host network). `s3_port` falls back to `9000` |
 | `endpoint_host` | string | the address the node's agent connects from | Host the control plane reaches the node on. Falls back to the hostname for a node that never connected |
 | `environment_id` | string | none | The environment the store belongs to. Must be in your workspace (`404 environment not found`) and needs `deploy` on it. Omitted means a shared store |
 
@@ -2298,10 +2311,214 @@ in the job output. An adopted store refuses `install` (repair); `uninstall`
 removes the container `forge-rustfs` and `/etc/forge/pkgs/rustfs.env` and
 keeps the data.
 
+With `container`, Forge reads the container on the node first (image, ports,
+mounts, network). Each data mount becomes a drive: a bind mount keeps its host
+path, a named volume stays a named volume. The store gets runtime `docker`,
+topology `standalone` and the container's name, network and release. The
+`adopt` job reads the root credential from the container's environment on the
+node and seals it in the vault; it is never in the response or the job
+output. A container that sets no credential uses the engine default
+`rustfsadmin`, and the job log warns you to change it. An adopted container is
+never reinstalled (`install` is refused), its settings cannot be edited, and
+Forge never deletes it or its data: `uninstall` (with or without
+`delete_data`) leaves the container running and only removes the store from
+Forge. Engine variables read from the container that fail validation are
+dropped.
+
+Adopting with `container` also needs `server.manage` on the node, because the
+job reads the root credential there. `endpoint_host` must then be the node's
+own address or host name (`400` otherwise), because Forge sends root-signed
+admin calls to it.
+
+Errors with `container`: `400` the container has no data mount, `404 no
+RustFS container named <name> on this node`, `409 that container already
+belongs to an object store`, `409` another store on the node uses the port,
+`409 cannot read the node's containers: <reason>` when Docker on the node
+cannot be read.
+
 Errors: `400` name or endpoint host, `403 step_up_required`, `403` without
 `deploy` on `environment_id`, `404` server not found, `environment not found` or
 `no App Store RustFS installation on this node`, `409` already adopted,
 or another store on the node uses the slug `rustfs` or the S3 port.
+
+**Discovery response** (`GET /object-stores/discover`):
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `nodes` | array | `[{server_id, hostname, docker, error}]`, one per scanned node. `docker`: `available`, `not_installed`, `unreachable` (the node or Docker did not answer) or `unsupported_os` (Windows). `error`: string or `null` |
+| `containers` | array | One per RustFS container: image `rustfs/rustfs` (any registry, any tag) or the label `org.orbyn.forge.objstore` |
+
+Container fields:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `server_id`, `hostname` | string | The node |
+| `id`, `name` | string | Docker container id and name |
+| `image`, `version` | string | For example `rustfs/rustfs:1.0.6` and `1.0.6` |
+| `state`, `status` | string | As Docker reports them, for example `running` and `Up 3 hours` |
+| `ports` | array of string | Published ports, for example `0.0.0.0:9000->9000/tcp` |
+| `mounts` | array | `[{type, source, destination, name}]`; `type` is `bind` or `volume`, `name` the volume name or `null` |
+| `network` | string | `bridge`, `host` or another network name |
+| `forge_label` | string \| null | The value of the Forge label (the store slug) |
+| `store_id` | string \| null | The Forge store that runs this container |
+| `kind` | string | `managed` (a Forge store owns it), `orphaned` (Forge label, no store) or `foreign` (created outside Forge) |
+
+Discovery runs `docker ps` and `docker inspect` on the node. It never reads
+environment values, so no credential leaves the node.
+
+```sh
+curl -sS -b cookies.txt https://<forge-host>/api/v1/object-stores/discover?server_id=<server-id>
+```
+
+#### Docker settings
+
+The `docker` object of the install body and of the settings object. Every
+field is optional.
+
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `image` | string | `rustfs/rustfs` | Image repository without a tag, `[registry[:port]/]name[/name…]`, lowercase. The tag is the store's `version` |
+| `container_name` | string | `forge-objstore-<slug>` | `[A-Za-z0-9][A-Za-z0-9_.-]{0,63}`. Fixed after install |
+| `restart` | string | `unless-stopped` | `unless-stopped`, `always`, `on-failure` or `no` |
+| `network` | string | `bridge` | `bridge` (published ports) or `host`. Distributed stores always use `host`. Fixed after install |
+| `memory_mb` | number \| null | `null` (no limit) | 256 to 1048576 |
+| `cpu_millis` | number \| null | `null` (no limit) | Thousandths of a CPU, 100 to 256000; `1500` is 1.5 CPUs |
+| `env` | object | `{}` | Up to 16 extra engine variables. Values: 1–512 visible characters without quotes, `$`, `` ` `` or `\` |
+| `volumes` | array | every data path a bind mount | One entry per data path, in order. `{"kind": "bind", "host_path"?}` or `{"kind": "named", "name", "driver"?, "options"?}`. A named volume is created when missing (`driver` default `local`, up to 16 `options`). Fixed after install |
+
+Allowed `env` keys: `RUSTFS_SERVER_DOMAINS`, `RUSTFS_CORS_ALLOWED_ORIGINS`,
+`RUSTFS_CONSOLE_CORS_ALLOWED_ORIGINS`, `RUSTFS_OBS_LOGGER_LEVEL`,
+`RUSTFS_OBS_ENVIRONMENT`,
+`RUSTFS_COMPRESSION_ENABLED`, `RUSTFS_STORAGE_CLASS_STANDARD`,
+`RUSTFS_STORAGE_CLASS_RRS`, `RUSTFS_SCANNER_SPEED`.
+Credential, listen address, volume and console variables can never be set
+(`400`). Telemetry endpoints and TLS paths are not allowed either.
+
+An `image` other than `rustfs/rustfs`, or a named volume with a `driver` or
+`options`, also needs `server.manage` on every member node (install and
+settings), because they change what runs as root there. A bind `host_path`
+of a new install follows the data-path rules: an absolute path outside
+system directories.
+
+```json
+{
+  "name": "Media", "slug": "media", "runtime": "docker", "server_id": "<server-id>",
+  "data_path": "/srv/objstore/media", "s3_port": 9000, "region": "us-east-1",
+  "docker": {
+    "restart": "always", "memory_mb": 2048, "cpu_millis": 1500,
+    "env": {"RUSTFS_SERVER_DOMAINS": "s3.example.test"},
+    "volumes": [{"kind": "named", "name": "media-d1"}]
+  }
+}
+```
+
+Forge never deletes a named volume. Uninstall with `delete_data` deletes only
+bind paths that carry the store's ownership marker.
+
+#### Store settings
+
+**Settings object** (`GET /object-stores/{id}/settings`):
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `store_id` | string | |
+| `runtime` | string | `native` or `docker` |
+| `editable` | bool | `false` for connected stores, adopted containers (the App Store one and any other), and stores without members |
+| `reason` | string | Why the settings cannot change; present only when `editable` is `false` |
+| `version` | string | `latest` or an exact release |
+| `s3_port`, `console_port` | number, number \| null | |
+| `region` | string | |
+| `docker` | object \| null | The [Docker settings](#docker-settings); `null` for native stores |
+
+**Settings body** (`PUT /object-stores/{id}/settings`): the full desired
+state.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `version` | string | `latest` or an exact release such as `1.0.6` |
+| `s3_port` | number | 1024 or higher, free of other stores on every member |
+| `console_port` | number \| null | `null` turns the console off; different from `s3_port` |
+| `region` | string | Lowercase letters, digits and `-`, up to 32 |
+| `docker` | object | Docker stores only (`400` on a native store). `container_name`, `network` and `volumes` cannot change and are ignored. Omitted: container settings unchanged |
+
+For a Docker store, the job pulls the new image first, renames the running
+container to `<name>-forge-previous` and stops it, starts the new container on
+the same data and waits up to 90 seconds for health. On failure it removes the
+new container, restores the previous container and env file, and the job
+fails with the reason; Forge restores the store record too. On success the
+previous container is removed. If creating a named volume fails, the job rolls back the same way.
+For a native store the install runs again in
+place. Data is kept either way.
+
+```sh
+curl -sS -b cookies.txt -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
+  -X PUT https://<forge-host>/api/v1/object-stores/<store-id>/settings \
+  -d '{"version": "1.0.6", "s3_port": 9000, "console_port": null, "region": "us-east-1",
+       "docker": {"image": "rustfs/rustfs", "restart": "always", "memory_mb": 4096, "env": {}}}'
+```
+
+| Status | When |
+| --- | --- |
+| `202` | Saved; jobs started |
+| `400` | Invalid release, port, region or Docker setting; `docker` on a native store |
+| `403 step_up_required` | The session is not MFA-verified |
+| `403` | `server.manage` missing on a member node for a custom image or a volume driver |
+| `409` | The store is busy, not editable (for example an adopted container), or another store on a member uses the port |
+
+#### Access keys in RustFS IAM
+
+RustFS's IAM is the source of truth for a managed RustFS store's access keys.
+Forge keeps one record per key it knows (`object_store_keys`) as a cache and
+audit trail.
+
+**Grant** (in `grants` arrays, 1–32 per key):
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `bucket` | string | Existing bucket |
+| `prefix` | string | `""` (default) for the whole bucket, or up to 512 characters of letters, digits and `/ _ . - ! ( )` ending with `/` (`uploads/`). No leading `/`, no `//`, no `.` or `..` segments, no `*` |
+| `access` | string | `read` or `readwrite` |
+
+A grant becomes these policy statements: `s3:GetBucketLocation` and
+`s3:ListBucketMultipartUploads` on `arn:aws:s3:::<bucket>`; `s3:ListBucket`
+on `arn:aws:s3:::<bucket>`, with a `StringLike` condition `s3:prefix` =
+`<prefix>*` when the grant has a prefix; and `s3:GetObject` on
+`arn:aws:s3:::<bucket>/<prefix>*`, plus `s3:PutObject`, `s3:DeleteObject`,
+`s3:AbortMultipartUpload` and `s3:ListMultipartUploadParts` for
+`readwrite`.
+
+**IAM view** (`GET /object-stores/{id}/iam`):
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `reachable` | bool | Whether RustFS answered |
+| `error` | string \| null | Why it did not |
+| `source` | string | `rustfs`, or `cache` when RustFS is unreachable |
+| `keys` | array | See below. The root key is never listed |
+
+Key fields: `access_key`, `name`, `description`, `status` (`on`, `off` or
+`null`), `grants` (array), `custom_policy` (bool: RustFS holds a policy that
+cannot be shown as grants), `managed_by_forge` (bool), `record_id` and
+`vault_item_id` (string or `null`), and `drift`:
+
+| `drift` | Meaning |
+| --- | --- |
+| `in_sync` | RustFS holds the policy Forge last wrote or read |
+| `policy_changed` | The policy was changed in RustFS |
+| `missing_in_rustfs` | Forge has a record; the key is gone from RustFS |
+| `not_in_forge` | RustFS has a key Forge has no record of |
+| `unknown` | RustFS is unreachable; the cached record is shown |
+
+IAM errors:
+
+| Status | When |
+| --- | --- |
+| `400` | Invalid name, bucket, prefix, `access` or too many grants |
+| `403 step_up_required` | The session is not MFA-verified |
+| `404` | Store or key not found |
+| `409` | Not a managed RustFS store; changing the root key's policy |
+| `502 store_refused` | RustFS answered and refused the call |
+| `503 store_unreachable` | RustFS cannot be reached, so keys cannot change now |
 
 **Owner body** (`PUT /object-stores/{id}/owner`):
 

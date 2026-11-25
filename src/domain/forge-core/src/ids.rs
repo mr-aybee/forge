@@ -95,6 +95,8 @@ typed_id!(
     TunnelGrantId,
     /// Bucket grant identifier: one person's access to one bucket (D-108).
     BucketGrantId,
+    /// Forge's record of one RustFS access key it manages (cache and audit trail).
+    StoreKeyId,
     /// Authorization profile (a named, versioned set of actions; D-086).
     PermissionProfileId,
     /// One assignment of an authorization profile at a scope (D-086).

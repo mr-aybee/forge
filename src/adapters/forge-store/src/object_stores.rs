@@ -171,6 +171,15 @@ impl ObjectStoreRepository for Store {
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
+
+        for table in ["object_store_keys", "object_store_settings"] {
+            sqlx::query(&format!("DELETE FROM {table} WHERE store_id = $1"))
+                .bind(id.to_string())
+                .execute(&mut *tx)
+                .await
+                .map_err(db_err)?;
+        }
+
         sqlx::query("DELETE FROM object_store_members WHERE store_id = $1")
             .bind(id.to_string())
             .execute(&mut *tx)

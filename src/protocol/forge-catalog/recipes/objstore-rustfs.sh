@@ -16,6 +16,11 @@ UNIT="forge-objstore-$SLUG"
 # An adopted App Store container keeps its name, data and credential.
 ADOPTED="${FORGE_OS_ADOPTED:-0}"
 [ "$ADOPTED" != 1 ] || UNIT="forge-rustfs"
+# Docker: the container name from the store's settings (D-170).
+[ -z "${FORGE_OS_CONTAINER:-}" ] || UNIT="$FORGE_OS_CONTAINER"
+# Paths as the engine sees them (named volumes are mounted inside only).
+CONTAINER_DATA="${FORGE_OS_CONTAINER_DATA:-$DATA_ALL}"
+ENV_ALLOWLIST="${FORGE_OS_ENV_ALLOWLIST:-}"
 LEGACY_ENV="/etc/forge/pkgs/rustfs.env"
 BASE="/opt/forge/objstore/$SLUG"
 ENVF="/etc/forge/objstore/$SLUG.env"
@@ -152,13 +157,17 @@ check_distinct_disks() {
 
 # Docker standalone publishes ports; distributed members use the host
 # network so the addresses in RUSTFS_VOLUMES are the members' own.
-docker_hostnet() { [ "$RUNTIME" = docker ] && [ -n "$VOLUMES" ]; }
+docker_hostnet() {
+  [ "$RUNTIME" = docker ] || return 1
+  [ -z "$VOLUMES" ] || return 0
+  printf '%s\n' "${FORGE_OS_RUN_ARGS:-}" | grep -qx host
+}
 
 # The env file holds the credential: root-only, read by systemd or Docker.
 write_env() {
   install -d -m 0700 /etc/forge/objstore
   # Data paths are mounted at the same path inside a container.
-  _vol="$DATA_ALL"; [ -z "$VOLUMES" ] || _vol="$VOLUMES"
+  _vol="$CONTAINER_DATA"; [ -z "$VOLUMES" ] || _vol="$VOLUMES"
   umask 077
   {
     echo "RUSTFS_ACCESS_KEY=$FORGE_OS_ACCESS_KEY"
@@ -176,6 +185,9 @@ write_env() {
       echo "RUSTFS_CONSOLE_ENABLE=false"
     fi
     echo "RUSTFS_CHECK_UPDATE=false"
+    [ -z "${FORGE_OS_REGION:-}" ] || echo "RUSTFS_REGION=$FORGE_OS_REGION"
+    # Allow-listed extra variables, validated by the control plane and the node.
+    [ -z "${FORGE_OS_EXTRA_ENV:-}" ] || printf '%s\n' "$FORGE_OS_EXTRA_ENV"
   } > "$ENVF.tmp"
   umask 022
   if [ "$RUNTIME" = native ] || docker_hostnet; then
@@ -324,24 +336,46 @@ native_install() {
 }
 
 # ---------------------------------------------------------------- docker
+# Named volumes the store uses, created when missing. Each line of
+# FORGE_OS_VOLUME_CREATE is `[--driver d] [--opt k=v ...] name`, validated
+# tokens without spaces or quotes.
+ensure_volumes() {
+  [ -n "${FORGE_OS_VOLUME_CREATE:-}" ] || return 0
+  set -f
+  # A here-document, not a pipeline: a failure returns from this shell.
+  while IFS= read -r _line; do
+    [ -n "$_line" ] || continue
+    _name="${_line##* }"
+    docker volume inspect "$_name" >/dev/null 2>&1 && continue
+    # shellcheck disable=SC2086
+    docker volume create $_line >/dev/null || { set +f; log "cannot create volume $_name"; return 1; }
+    log "created volume $_name"
+  done <<EOF_VOLUMES
+$FORGE_OS_VOLUME_CREATE
+EOF_VOLUMES
+  set +f
+}
+
+# docker run with the arguments the control plane rendered (one per line,
+# passed without word splitting or globbing).
+run_container() {
+  _old_ifs="$IFS"; IFS='
+'
+  set -f
+  # shellcheck disable=SC2086
+  set -- $FORGE_OS_RUN_ARGS
+  IFS="$_old_ifs"; set +f
+  docker run -d --name "$UNIT" --env-file "$ENVF" "$@" "$_img" >/dev/null
+}
+
 docker_install() {
   need_docker
-  _img="rustfs/rustfs:$REL"
+  _img="${FORGE_OS_IMAGE:-rustfs/rustfs:$REL}"
   log "pulling $_img"
   docker pull -q "$_img" >/dev/null || die "cannot pull $_img"
+  ensure_volumes || die "cannot create the store's volumes"
   docker rm -f "$UNIT" >/dev/null 2>&1 || true
-  if docker_hostnet; then
-    _net="--network host"
-  else
-    _net="-p $S3_PORT:9000"
-    [ -z "$CONSOLE_PORT" ] || _net="$_net -p $CONSOLE_PORT:9001"
-  fi
-  _mounts=""
-  for _d in $DATA_ALL; do _mounts="$_mounts -v $_d:$_d"; done
-  # shellcheck disable=SC2086
-  docker run -d --name "$UNIT" --restart unless-stopped --env-file "$ENVF" \
-    $_net $_mounts \
-    --label org.orbyn.forge.objstore="$SLUG" "$_img" >/dev/null
+  run_container || die "cannot start the container $UNIT from $_img"
   install -d -m 0755 "$BASE"
   docker image inspect -f '{{index .RepoDigests 0}}' "$_img" 2>/dev/null > "$BASE/image" || true
   printf '%s\n' "$REL" > "$BASE/release"
@@ -436,8 +470,58 @@ os_install_store() {
   log "RustFS $SLUG answers on port $S3_PORT"
 }
 
+# Recreates the container with new settings, keeping the data. The old
+# container is renamed and stopped, not removed, until the new one answers;
+# when it does not, the new one is removed and the old one comes back.
+os_reconfigure() {
+  need_docker
+  docker inspect "$UNIT" >/dev/null 2>&1 || die "the container $UNIT does not exist on this node"
+  _img="${FORGE_OS_IMAGE:-rustfs/rustfs:$REL}"
+  # Pull first: a missing image never takes the store down.
+  log "pulling $_img"
+  docker pull -q "$_img" >/dev/null || die "cannot pull $_img; the store was not changed"
+  _prev="$UNIT-forge-previous"
+  docker rm -f "$_prev" >/dev/null 2>&1 || true
+  _old_img="$(docker inspect -f '{{.Config.Image}}' "$UNIT" 2>/dev/null || echo unknown)"
+  _envbak=""
+  if [ -f "$ENVF" ]; then _envbak="$ENVF.forge-previous"; cp -p "$ENVF" "$_envbak"; fi
+  docker stop -t 30 "$UNIT" >/dev/null 2>&1 || true
+  docker rename "$UNIT" "$_prev" || die "cannot set the old container aside"
+  rollback() {
+    log "the new container did not come up; restoring the previous one ($_old_img)"
+    docker rm -f "$UNIT" >/dev/null 2>&1 || true
+    [ -z "$_envbak" ] || mv -f "$_envbak" "$ENVF"
+    docker rename "$_prev" "$UNIT" && docker start "$UNIT" >/dev/null
+    die "$1; rolled back to the previous container"
+  }
+  write_env
+  ensure_volumes || rollback "cannot create the store's volumes"
+  run_container || rollback "cannot start $_img"
+  fw_open "$S3_PORT"
+  [ -z "$CONSOLE_PORT" ] || fw_open "$CONSOLE_PORT"
+  ID="RustFS"
+  # A failed health check rolls back instead of dying.
+  _start="$(date +%s)"
+  until curl -sk -o /dev/null -m 3 "http://127.0.0.1:$S3_PORT/health"; do
+    _n="$(engine_restarts)"; case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
+    if [ "$_n" -ge 3 ] || [ $(( $(date +%s) - _start )) -ge 90 ]; then
+      engine_log
+      rollback "RustFS did not answer on port $S3_PORT"
+    fi
+    sleep 1
+  done
+  docker rm -f "$_prev" >/dev/null 2>&1 || true
+  rm -f "$_envbak"
+  install -d -m 0755 "$BASE"
+  printf '%s\n' "$REL" > "$BASE/release"
+  log "recreated $UNIT from $_img (was $_old_img); data kept"
+}
+
 os_uninstall_store() {
-  if [ "$RUNTIME" = docker ]; then
+  if [ "$RUNTIME" = docker ] && [ "$ADOPTED" = 1 ] && [ "$UNIT" != forge-rustfs ]; then
+    # A container Forge adopted but did not create stays as it is.
+    log "kept the adopted container $UNIT; Forge no longer manages it"
+  elif [ "$RUNTIME" = docker ]; then
     command -v docker >/dev/null 2>&1 && docker rm -f "$UNIT" >/dev/null 2>&1 || true
     # The adopted App Store container's settings (its credential is in the vault).
     [ "$ADOPTED" != 1 ] || rm -f "$LEGACY_ENV"
@@ -478,7 +562,37 @@ os_lifecycle() {
 # Takes over the App Store container in place: it keeps running untouched,
 # and its credential is reported once (the agent takes the line out of the
 # output and the control plane seals it in the vault).
+# Any RustFS container (D-170): the root credential is read from the
+# container's own environment on the node and reported once, like the App
+# Store's; allow-listed engine settings are reported for the store record.
+os_adopt_container() {
+  need_docker
+  docker inspect "$UNIT" >/dev/null 2>&1 || die "there is no container $UNIT on this node"
+  _envs="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$UNIT")"
+  _ak="$(printf '%s\n' "$_envs" | sed -n 's/^RUSTFS_ACCESS_KEY=//p' | tail -1)"
+  _sk="$(printf '%s\n' "$_envs" | sed -n 's/^RUSTFS_SECRET_KEY=//p' | tail -1)"
+  if [ -z "$_ak" ] && [ -z "$_sk" ]; then
+    log "warning: $UNIT sets no credential; it uses the engine's default, change it after adoption"
+    _ak=rustfsadmin; _sk=rustfsadmin
+  fi
+  [ -n "$_ak" ] && [ -n "$_sk" ] || die "the container's credential is incomplete"
+  case "$_ak$_sk" in *[!A-Za-z0-9]*) die "the container's keys have characters Forge does not store (letters and digits only)" ;; esac
+  [ "$(running_state)" = running ] || docker start "$UNIT" >/dev/null
+  ID="RustFS"
+  wait_http "http://127.0.0.1:$S3_PORT/health" 60
+  printf 'forge: objstore-credential: {"access_key":"%s","secret_key":"%s"}\n' "$_ak" "$_sk"
+  _json=""
+  for _k in $ENV_ALLOWLIST; do
+    _v="$(printf '%s\n' "$_envs" | sed -n "s/^$_k=//p" | tail -1)"
+    [ -n "$_v" ] || continue
+    _json="$_json${_json:+,}$(json_str "$_k"):$(json_str "$_v")"
+  done
+  printf 'forge: objstore-adopted-env: {%s}\n' "$_json"
+  log "adopted $UNIT"
+}
+
 os_adopt() {
+  if [ -n "${FORGE_OS_CONTAINER:-}" ] && [ "$UNIT" != forge-rustfs ]; then os_adopt_container; return; fi
   need_docker
   docker inspect "$UNIT" >/dev/null 2>&1 || die "there is no App Store RustFS container ($UNIT) on this node"
   [ -f "$LEGACY_ENV" ] || die "the App Store RustFS settings ($LEGACY_ENV) are missing"
@@ -496,6 +610,7 @@ os_adopt() {
 
 case "$FORGE_ACTION" in
   adopt) os_adopt ;;
+  reconfigure) os_reconfigure ;;
   install)
     [ "$ADOPTED" != 1 ] || die "an adopted App Store container is kept as it is; it cannot be reinstalled"
     os_install_store ;;

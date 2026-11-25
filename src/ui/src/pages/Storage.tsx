@@ -7,6 +7,7 @@ import { isAdopted, storeBusy, useObjectStores, useStoreAction } from "../api/st
 import { errorText, useToast } from "../app/toast";
 import type { ObjectStore } from "../api/types";
 import { AdoptStoreDialog, ConnectStoreDialog, InstallStoreDialog, RemoveStoreDialog, providerLabel } from "../components/storage/StoreDialogs";
+import { FoundOnNodes } from "../components/storage/FoundOnNodes";
 import { ChangeEnvironmentDialog, StoreOwner } from "../components/storage/StoreOwner";
 import { Badge, Button, Confirm, Empty, ErrorNote, PageHeader, Panel, RowMenu, type RowAction, SearchInput, Skeleton, Status, Table, Td, bytes, useRowMenu } from "../components/ui";
 
@@ -263,6 +264,7 @@ export function Storage() {
         )}
         {rm.menu}
       </Panel>
+      {!missing && <FoundOnNodes />}
       <InstallStoreDialog open={installing} onOpenChange={setInstalling} />
       <RemoveStoreDialog store={removing} onOpenChange={(o) => !o && setRemoving(null)} />
       <Confirm

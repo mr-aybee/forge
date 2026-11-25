@@ -341,6 +341,14 @@
     "POST /api/v1/stacks/from-template": "forge stacks from-template"
   },
   "api": {
+    "GET /api/v1/object-stores/discover": "Object Storage → Found on nodes; `forge api call` for scripts",
+    "GET /api/v1/object-stores/rustfs-env": "the install wizard's variable list; `forge api call` for scripts",
+    "GET /api/v1/object-stores/{id}/settings": "Object Storage → store → Settings; `forge api call` for scripts",
+    "PUT /api/v1/object-stores/{id}/settings": "Object Storage → store → Settings; `forge api call` for scripts",
+    "GET /api/v1/object-stores/{id}/iam": "Object Storage → store → Access keys; `forge api call` for scripts",
+    "POST /api/v1/object-stores/{id}/iam/keys": "Object Storage → store → Access keys (Create key); `forge api call` for scripts",
+    "PUT /api/v1/object-stores/{id}/iam/keys/{access_key}": "Object Storage → store → Access keys (Edit grants); `forge api call` for scripts",
+    "POST /api/v1/object-stores/{id}/iam/reconcile": "Object Storage → store → Access keys (Reconcile); `forge api call` for scripts",
     "POST /api/v1/sites/{id}/cache/clear": "the endpoint editor (Performance → Clear cache); `forge api call` for scripts",
     "GET /api/v1/sites/{id}/logs": "the endpoint editor (Logs); `forge api call` for scripts",
     "PUT /api/v1/server/allowed-hosts": "Settings → Server, or `forge-server allowed-hosts set` on the host; `forge api call` for scripts",

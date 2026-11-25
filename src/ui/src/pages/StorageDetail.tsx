@@ -1,5 +1,5 @@
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
-import { Activity, ArrowLeft, Database, HardDrive, KeyRound, Layers, Loader2, Play, Plus, RefreshCw, RotateCw, Square, Trash2, Unplug, Wrench } from "lucide-react";
+import { Activity, ArrowLeft, Settings2, Database, HardDrive, KeyRound, Layers, Loader2, Play, Plus, RefreshCw, RotateCw, Square, Trash2, Unplug, Wrench } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { ApiError } from "../api/client";
@@ -11,6 +11,7 @@ import { AccessKeys } from "../components/storage/AccessKeys";
 import { BucketGrants, grantAccessLabel } from "../components/storage/BucketGrants";
 import { ObjectExplorer } from "../components/storage/ObjectExplorer";
 import { providerLabel } from "../components/storage/StoreDialogs";
+import { StoreSettingsDialog } from "../components/storage/StoreSettings";
 import { ChangeEnvironmentDialog, StoreOwner } from "../components/storage/StoreOwner";
 import { type ActionTone, Badge, Button, actionHover, Confirm, CopyButton, Drawer, Empty, ErrorNote, Field, IconButton, Input, Modal, Panel, Skeleton, Status, Table, Td, ago, time, toMs } from "../components/ui";
 import { AdoptedBadge, CapacityCell, ModeBadge } from "./Storage";
@@ -71,6 +72,7 @@ function Detail({ s }: { s: ObjectStore }) {
   const [jobId, setJobId] = useState<string | null>(null);
   const [bucket, setBucket] = useState<string | null>(null);
   const [assigning, setAssigning] = useState(false);
+  const [settings, setSettings] = useState(false);
   // Through bucket grants only: what the person may do differs per bucket.
   const mine = useMyBucketGrants(s.by_grant);
   const held = (mine.data ?? []).filter((g) => g.store_id === s.id);
@@ -236,6 +238,9 @@ function Detail({ s }: { s: ObjectStore }) {
                   {a.label}
                 </Button>
               ))}
+              <Button title={busyWhy ?? (adopted ? "Adopted stores keep the container they were created with" : "Release, ports, region and Docker options")} disabled={busy} onClick={() => setSettings(true)}>
+                <Settings2 className="size-4" /> Settings
+              </Button>
               <Button variant="danger" title={busyWhy ?? (adopted ? "Remove the forge-rustfs container; data and credential are kept" : "Remove the service; data and credential are kept")} disabled={busy || act.isPending} onClick={() => setConfirm("uninstall")}>
                 {pending === "uninstall" ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
                 Uninstall
@@ -346,6 +351,7 @@ function Detail({ s }: { s: ObjectStore }) {
       {!s.limited && <BucketGrants s={s} />}
 
       {assigning && <ChangeEnvironmentDialog store={s} onClose={() => setAssigning(false)} />}
+      {managed && <StoreSettingsDialog s={s} open={settings} onOpenChange={setSettings} />}
       <Confirm
         open={!!confirm}
         onOpenChange={(o) => !o && setConfirm(null)}

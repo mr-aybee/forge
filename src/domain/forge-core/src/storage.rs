@@ -130,7 +130,7 @@ pub trait ObjectStoreRepository: Send + Sync + std::fmt::Debug {
 }
 
 /// What a key or a grant may do in its bucket.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BucketAccess {
     /// List and download objects.

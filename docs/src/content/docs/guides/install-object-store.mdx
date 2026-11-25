@@ -68,6 +68,9 @@ on a non-production node first.
 3. Select the **Node**. Offline nodes are listed but disabled. Windows nodes must be x86_64.
 4. Choose the **Runtime**: **Native** (release binary as a system service) or
    **Docker** (container, Linux only). For a Windows node the console fixes it to **Native**.
+   Forge checks Docker on the node first. When Docker is not installed, cannot
+   be reached or the OS is not supported, **Docker** cannot be chosen and the
+   reason is shown.
 5. Enter the **Release**: `latest` or an exact RustFS release such as `1.0.5`.
 6. Enter the **Data path**, for example `/srv/objstore/media` or
    `D:\objstore\media`. No other store may use it.
@@ -76,7 +79,13 @@ on a non-production node first.
    is not mounted.
 8. Set the **S3 port** (default `9000`) and, if you want the RustFS console, a **Console port**. Set an **Endpoint host**
    if the control plane reaches the node by
-   another name or address than its hostname.
+   another name or address than its hostname. Change the **Region** (default
+   `us-east-1`) if your S3 clients sign for another region.
+   For the **Docker** runtime, optionally set the container options: image,
+   container name, restart policy, network, memory and CPU limits, extra
+   RustFS variables, and per data path a host directory or a Docker named
+   volume. See [Docker settings](/docs/reference/rest-api/#docker-settings)
+   for every option and the variables you may set.
 9. Optional: in **Environment**, choose the environment the store belongs to.
    Leave it on **Shared (no environment)** for a shared store. See
    [Assign a store to an environment](#assign-a-store-to-an-environment) for
@@ -94,7 +103,13 @@ POST /api/v1/object-stores
 ```
 
 Add `"environment_id": "<environment-id>"` to assign the store to an environment.
-The response is `202` with the store and its jobs.
+The response is `202` with the store and its jobs. Add `"region"` and a
+`"docker"` object for the region and container options.
+
+:::note
+Forge never deletes a Docker named volume, also not with **Delete data**.
+Remove it yourself with `docker volume rm <name>` when you no longer need it.
+:::
 
 ## Install a distributed (HA) store
 
@@ -202,6 +217,7 @@ buttons start `storage.action` jobs and open the job log:
 | **Start**, **Stop**, **Restart** | Controls the service. **Stop** and **Restart** ask for confirmation because S3 clients lose access. |
 | **Refresh status** | Checks the service, health endpoint and capacity on the node. |
 | **Repair** | Runs the install again for the requested release. Data and the root credential are kept. Disabled for an [adopted](/docs/guides/adopt-app-store-rustfs/) store. |
+| **Settings** | Changes the release, ports, region and container options. See [Change object store settings](/docs/guides/object-store-settings/). |
 | **Uninstall** | Removes the service and firewall rules. |
 
 :::caution
@@ -396,6 +412,7 @@ store directly, so choose one of its environments.
 - [Browse buckets and objects](/docs/guides/browse-objects/)
 - [Attach a bucket to a service](/docs/guides/attach-bucket-to-service/)
 - [Issue object store access keys](/docs/guides/object-store-access-keys/) for your services
-- [Adopt an App Store RustFS container](/docs/guides/adopt-app-store-rustfs/)
+- [Change object store settings](/docs/guides/object-store-settings/)
+- [Adopt a RustFS container](/docs/guides/adopt-app-store-rustfs/)
 - [Connect S3 storage](/docs/guides/connect-s3-storage/)
 - [REST API: object storage](/docs/reference/rest-api/#object-storage)

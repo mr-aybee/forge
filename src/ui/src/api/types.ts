@@ -625,6 +625,10 @@ export interface StoreInstall {
   members: StoreInstallMember[];
   /** The environment the store belongs to; omit for a shared store. */
   environment_id?: string;
+  /** `[a-z0-9-]`, default us-east-1. */
+  region?: string;
+  /** Runtime docker only. */
+  docker?: StoreDocker;
 }
 
 export interface StoreConnect {
@@ -648,6 +652,11 @@ export interface StoreAdopt {
   endpoint_host?: string;
   /** The environment the store belongs to; omit for a shared store. */
   environment_id?: string;
+  /** Adopt this RustFS container; omitted = the App Store container. */
+  container?: string;
+  /** Overrides when the ports cannot be read (host network). */
+  s3_port?: number;
+  console_port?: number;
 }
 
 export type KeyAccess = "read" | "readwrite";
@@ -1124,4 +1133,126 @@ export interface ContainerInspect {
   network_ips?: { name: string; ip: string }[];
   /** Only with `reveal_env: true`. */
   env?: ContainerEnv[];
+}
+
+// ------------------------------------------------------------------ object store discovery, Docker options, settings, IAM
+
+export type DockerAvailability = "available" | "not_installed" | "unreachable" | "unsupported_os";
+
+/** A node scanned for RustFS containers. */
+export interface DiscoverNode {
+  server_id: string;
+  hostname: string;
+  docker: DockerAvailability | string;
+  error?: string | null;
+}
+
+export interface DiscoverMount {
+  type: "bind" | "volume" | string;
+  source?: string | null;
+  destination?: string | null;
+  name?: string | null;
+}
+
+export type DiscoveredKind = "managed" | "orphaned" | "foreign";
+
+/** A RustFS container found on a node: run by a store (managed), left by Forge (orphaned), or created elsewhere (foreign). */
+export interface DiscoveredContainer {
+  server_id: string;
+  hostname: string;
+  id: string;
+  name: string;
+  image: string;
+  version?: string | null;
+  state?: string | null;
+  status?: string | null;
+  ports: string[];
+  mounts: DiscoverMount[];
+  network?: string | null;
+  forge_label?: string | null;
+  store_id?: string | null;
+  kind: DiscoveredKind;
+}
+
+export interface Discovery {
+  nodes: DiscoverNode[];
+  containers: DiscoveredContainer[];
+}
+
+export type DockerRestart = "unless-stopped" | "always" | "on-failure" | "no";
+
+export type DockerVolume = { kind: "bind" } | { kind: "named"; name: string; driver?: string; options?: Record<string, string> };
+
+/** Docker options of a managed RustFS store (runtime docker only). */
+export interface StoreDocker {
+  image?: string;
+  container_name?: string;
+  restart?: DockerRestart;
+  network?: "bridge" | "host";
+  memory_mb?: number | null;
+  /** 1000 = one CPU. */
+  cpu_millis?: number | null;
+  env?: Record<string, string>;
+  volumes?: DockerVolume[];
+}
+
+export interface StoreSettings {
+  store_id: string;
+  runtime: string;
+  editable: boolean;
+  version: string;
+  s3_port: number | null;
+  console_port: number | null;
+  region: string;
+  docker: StoreDocker | null;
+}
+
+export interface StoreSettingsUpdate {
+  version: string;
+  s3_port: number;
+  console_port: number | null;
+  region: string;
+  docker?: Pick<StoreDocker, "image" | "restart" | "memory_mb" | "cpu_millis" | "env">;
+}
+
+export interface IamGrant {
+  bucket: string;
+  prefix: string;
+  access: KeyAccess;
+}
+
+export type IamDrift = "in_sync" | "policy_changed" | "missing_in_rustfs" | "not_in_forge" | "unknown";
+
+export interface IamKey {
+  access_key: string;
+  name: string | null;
+  description: string | null;
+  status: string | null;
+  grants: IamGrant[];
+  custom_policy: boolean;
+  managed_by_forge: boolean;
+  record_id: string | null;
+  vault_item_id: string | null;
+  drift: IamDrift;
+}
+
+export interface StoreIam {
+  reachable: boolean;
+  error: string | null;
+  source: "rustfs" | "cache";
+  keys: IamKey[];
+}
+
+export interface IamKeyIssued {
+  access_key: string;
+  name?: string;
+  grants?: IamGrant[];
+  vault_item_id?: string;
+  record_id?: string;
+}
+
+export interface IamReconcile {
+  imported: number;
+  updated: number;
+  removed: number;
 }
