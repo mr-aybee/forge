@@ -18,6 +18,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use forge_core::storage_settings::{DriveVolume, ENV_ALLOWLIST, NetworkMode, RustfsSettings, safe_host_path};
 use serde::{Deserialize, Serialize};
 
 /// Providers Forge manages.
@@ -81,6 +82,14 @@ pub struct StoreSpec {
     /// for agents that predate markers (the field is then left out).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub owner: String,
+    /// S3 signing region (`RUSTFS_REGION`); empty for the engine's default.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub region: String,
+    /// Docker stores: container settings (D-170). With `adopted`, the
+    /// container to adopt (`container_name`) and its mounts. Left out for
+    /// defaults, so agents that predate it keep working.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docker: Option<RustfsSettings>,
 }
 
 /// The App Store's RustFS container, which a store can adopt.
@@ -140,6 +149,13 @@ pub enum StoreOp {
     Adopt {
         spec: StoreSpec,
     },
+    /// Recreates a Docker store's container with new settings, keeping its
+    /// data: the old container is kept aside until the new one answers its
+    /// health check, and is restored when it does not (D-170).
+    Reconfigure {
+        spec: StoreSpec,
+        credential: StoreCredential,
+    },
 }
 
 impl StoreOp {
@@ -152,7 +168,8 @@ impl StoreOp {
             | Self::Restart { spec }
             | Self::Status { spec }
             | Self::Uninstall { spec, .. }
-            | Self::Adopt { spec } => spec,
+            | Self::Adopt { spec }
+            | Self::Reconfigure { spec, .. } => spec,
         }
     }
 
@@ -166,6 +183,7 @@ impl StoreOp {
             Self::Status { .. } => "status",
             Self::Uninstall { .. } => "uninstall",
             Self::Adopt { .. } => "adopt",
+            Self::Reconfigure { .. } => "reconfigure",
         }
     }
 
@@ -177,6 +195,9 @@ impl StoreOp {
             Self::Install { spec, .. } if spec.adopted => {
                 return Err("an adopted App Store container is kept as it is; it cannot be reinstalled".into());
             }
+            Self::Reconfigure { spec, .. } if spec.runtime != Runtime::Docker || spec.legacy_adopted() => {
+                return Err("only Docker stores Forge runs can be reconfigured".into());
+            }
             _ => {}
         }
 
@@ -187,7 +208,7 @@ impl StoreOp {
                 }
             }
         }
-        if let Self::Install { credential, .. } = self {
+        if let Self::Install { credential, .. } | Self::Reconfigure { credential, .. } = self {
             credential.validate()?;
         }
 
@@ -211,7 +232,9 @@ impl StoreOp {
             ("FORGE_OS_CONSOLE_PORT".to_owned(), s.console_port.map(|p| p.to_string()).unwrap_or_default()),
             // Windows (standalone) uses the first path; Linux paths have no spaces.
             ("FORGE_OS_DATA".to_owned(), s.data_paths.first().cloned().unwrap_or_default()),
-            ("FORGE_OS_DATA_ALL".to_owned(), s.data_paths.join(" ")),
+            ("FORGE_OS_DATA_ALL".to_owned(), s.host_paths().join(" ")),
+            ("FORGE_OS_CONTAINER_DATA".to_owned(), s.data_paths.join(" ")),
+            ("FORGE_OS_REGION".to_owned(), s.region.clone()),
             ("FORGE_OS_VOLUMES".to_owned(), s.peers.join(" ")),
             ("FORGE_OS_REQUIRE_MOUNT".to_owned(), if s.require_mount { "1" } else { "0" }.to_owned()),
             ("FORGE_OS_ADOPTED".to_owned(), if s.adopted { "1" } else { "0" }.to_owned()),
@@ -224,7 +247,18 @@ impl StoreOp {
         if let Self::Uninstall { protect, .. } = self {
             env.insert("FORGE_OS_PROTECT".to_owned(), protect.join("|"));
         }
-        if let Self::Install { credential, .. } = self {
+
+        if s.runtime == Runtime::Docker {
+            env.insert("FORGE_OS_CONTAINER".to_owned(), s.unit());
+            env.insert("FORGE_OS_IMAGE".to_owned(), s.image());
+            env.insert("FORGE_OS_RUN_ARGS".to_owned(), s.docker_run_args().join("\n"));
+            env.insert("FORGE_OS_VOLUME_CREATE".to_owned(), s.volume_create_lines().join("\n"));
+            let extra = s.docker.as_ref().map(|d| d.env.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>());
+            env.insert("FORGE_OS_EXTRA_ENV".to_owned(), extra.unwrap_or_default().join("\n"));
+            env.insert("FORGE_OS_ENV_ALLOWLIST".to_owned(), ENV_ALLOWLIST.join(" "));
+        }
+
+        if let Self::Install { credential, .. } | Self::Reconfigure { credential, .. } = self {
             env.insert("FORGE_OS_ACCESS_KEY".to_owned(), credential.access_key.clone());
             env.insert("FORGE_OS_SECRET_KEY".to_owned(), credential.secret_key.clone());
         }
@@ -275,6 +309,12 @@ pub fn parse_peer(peer: &str, port: u16) -> Result<(&str, &str), String> {
     valid_data_path(path)?;
 
     Ok((host, path))
+}
+
+/// Regions: empty or `[a-z0-9-]{1,32}`.
+#[must_use]
+pub fn valid_region(s: &str) -> bool {
+    s.len() <= 32 && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 /// Instance names: `[a-z][a-z0-9-]{0,30}`, no trailing dash.
@@ -391,10 +431,54 @@ impl StoreSpec {
             return Err(format!("1 to {MAX_DRIVES_PER_NODE} data paths per node"));
         }
 
+        if !valid_region(&self.region) {
+            return Err("region: lowercase letters, digits and -, up to 32".into());
+        }
+
+        if let Some(d) = &self.docker {
+            if self.runtime != Runtime::Docker {
+                return Err("container settings apply to Docker stores only".into());
+            }
+
+            d.validate(self.data_paths.len()).map_err(|e| e.to_string())?;
+
+            // Bind sources Forge creates follow the data path rules (no
+            // system directories); an adopted container's are kept as found.
+            if !self.adopted {
+                for v in &d.volumes {
+                    if let DriveVolume::Bind { host_path } = v
+                        && !host_path.is_empty()
+                    {
+                        valid_data_path(host_path)?;
+                    }
+                }
+            }
+
+            if !self.peers.is_empty() && d.network != NetworkMode::Host {
+                return Err("a distributed Docker store uses the host network".into());
+            }
+        }
+
         if self.adopted {
-            // Exactly the App Store container's layout.
-            if self.runtime != Runtime::Docker || self.data_paths != [LEGACY_DATA] || !self.peers.is_empty() {
-                return Err(format!("an adopted store is the {LEGACY_CONTAINER} container with data in {LEGACY_DATA}"));
+            if self.legacy_adopted() {
+                // Exactly the App Store container's layout.
+                if self.runtime != Runtime::Docker || self.data_paths != [LEGACY_DATA] || !self.peers.is_empty() {
+                    return Err(format!(
+                        "an adopted store is the {LEGACY_CONTAINER} container with data in {LEGACY_DATA}"
+                    ));
+                }
+
+                return Ok(());
+            }
+
+            // Any RustFS container: its mount points as they are. Forge never
+            // creates or deletes these paths.
+            if self.runtime != Runtime::Docker || !self.peers.is_empty() {
+                return Err("an adopted container is a standalone Docker store".into());
+            }
+
+            if let Some(p) = self.data_paths.iter().find(|p| !safe_host_path(p)) {
+                return Err(format!("mount point `{p}`: an absolute path"));
             }
 
             return Ok(());
@@ -452,10 +536,113 @@ impl StoreSpec {
         Ok(())
     }
 
+    /// The App Store container adopted in place (no container settings).
+    #[must_use]
+    pub fn legacy_adopted(&self) -> bool {
+        self.adopted && self.docker.as_ref().is_none_or(|d| d.container_name.is_empty())
+    }
+
     /// Service or container name on the node.
     #[must_use]
     pub fn unit(&self) -> String {
-        if self.adopted { LEGACY_CONTAINER.to_owned() } else { format!("forge-objstore-{}", self.slug) }
+        if self.legacy_adopted() {
+            return LEGACY_CONTAINER.to_owned();
+        }
+
+        match &self.docker {
+            Some(d) if !d.container_name.is_empty() => d.container_name.clone(),
+            _ => format!("forge-objstore-{}", self.slug),
+        }
+    }
+
+    fn settings(&self) -> RustfsSettings {
+        self.docker.clone().unwrap_or_default()
+    }
+
+    /// The image reference: repository and release.
+    #[must_use]
+    pub fn image(&self) -> String {
+        format!("{}:{}", self.settings().image, self.version)
+    }
+
+    /// Host directories the store's data lives in (bind mounts and native
+    /// data paths). Named volumes have none: Docker owns their storage.
+    #[must_use]
+    pub fn host_paths(&self) -> Vec<String> {
+        let d = self.settings();
+        self.data_paths
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| match d.volumes.get(i) {
+                Some(DriveVolume::Named { .. }) => None,
+                Some(DriveVolume::Bind { host_path }) if !host_path.is_empty() => Some(host_path.clone()),
+                _ => Some(p.clone()),
+            })
+            .collect()
+    }
+
+    /// Arguments of `docker run` between the name and the image, one per
+    /// entry (the node passes them without word splitting).
+    #[must_use]
+    pub fn docker_run_args(&self) -> Vec<String> {
+        let d = self.settings();
+        let mut a = vec!["--restart".to_owned(), d.restart.as_str().to_owned()];
+
+        if d.network == NetworkMode::Host || !self.peers.is_empty() {
+            a.extend(["--network".to_owned(), "host".to_owned()]);
+        } else {
+            a.extend(["-p".to_owned(), format!("{}:9000", self.s3_port)]);
+
+            if let Some(c) = self.console_port {
+                a.extend(["-p".to_owned(), format!("{c}:9001")]);
+            }
+        }
+
+        if let Some(m) = d.memory_mb {
+            a.extend(["--memory".to_owned(), format!("{m}m")]);
+        }
+
+        if let Some(c) = d.cpu_millis {
+            a.extend(["--cpus".to_owned(), format!("{}.{:03}", c / 1000, c % 1000)]);
+        }
+
+        for (i, p) in self.data_paths.iter().enumerate() {
+            let source = match d.volumes.get(i) {
+                Some(DriveVolume::Named { name, .. }) => name.clone(),
+                Some(DriveVolume::Bind { host_path }) if !host_path.is_empty() => host_path.clone(),
+                _ => p.clone(),
+            };
+
+            a.extend(["-v".to_owned(), format!("{source}:{p}")]);
+        }
+
+        a.extend(["--label".to_owned(), format!("org.orbyn.forge.objstore={}", self.slug)]);
+
+        a
+    }
+
+    /// One line per named volume: `docker volume create` arguments, the
+    /// volume name last. Tokens never contain spaces (validated).
+    #[must_use]
+    pub fn volume_create_lines(&self) -> Vec<String> {
+        self.settings()
+            .volumes
+            .iter()
+            .filter_map(|v| match v {
+                DriveVolume::Named { name, driver, options } => {
+                    let mut line = Vec::new();
+
+                    if !driver.is_empty() {
+                        line.push(format!("--driver {driver}"));
+                    }
+
+                    line.extend(options.iter().map(|(k, val)| format!("--opt {k}={val}")));
+                    line.push(name.clone());
+                    Some(line.join(" "))
+                }
+                DriveVolume::Bind { .. } => None,
+            })
+            .collect()
     }
 }
 
@@ -493,6 +680,30 @@ pub const REPORT_PREFIX: &str = "forge: objstore: ";
 /// Marker of the credential line `adopt` prints. The agent removes that line
 /// from the output it returns, so it never reaches job history.
 pub const CREDENTIAL_PREFIX: &str = "forge: objstore-credential: ";
+
+/// Marker of the line `adopt` prints with the adopted container's
+/// allow-listed engine variables (never credentials).
+pub const ADOPTED_ENV_PREFIX: &str = "forge: objstore-adopted-env: ";
+
+/// The allow-listed engine variables an adopted container reported.
+#[must_use]
+pub fn adopted_env(output: &str) -> BTreeMap<String, String> {
+    output
+        .lines()
+        .rev()
+        .find_map(|l| l.trim().strip_prefix(ADOPTED_ENV_PREFIX))
+        .and_then(|j| serde_json::from_str::<BTreeMap<String, String>>(j).ok())
+        // No line (or an unreadable one) means no extra variables to keep:
+        // the store then runs with the engine defaults, which is safe.
+        .unwrap_or_default()
+        .into_iter()
+        // Only values that pass the same checks as an operator's.
+        .filter(|(k, v)| {
+            let one = RustfsSettings { env: BTreeMap::from([(k.clone(), v.clone())]), ..RustfsSettings::default() };
+            one.validate(0).is_ok()
+        })
+        .collect()
+}
 
 /// Takes the adopted credential out of a script's output: returns it and the
 /// output without that line.
@@ -771,6 +982,8 @@ wait_store 900
             require_mount: false,
             adopted: false,
             owner: String::new(),
+            region: String::new(),
+            docker: None,
         }
     }
 
@@ -893,5 +1106,139 @@ wait_store 900
         assert!(!rest.contains("s3cr3t") && rest.contains("forge: objstore: "));
         let (none, _) = take_credential("forge: objstore-credential: {\"access_key\":\"a b\",\"secret_key\":\"x\"}\n");
         assert!(none.is_none(), "malformed keys are dropped");
+    }
+
+    fn docker_spec() -> StoreSpec {
+        use forge_core::storage_settings::RestartPolicy;
+        StoreSpec {
+            runtime: Runtime::Docker,
+            data_paths: vec!["/srv/objstore/d0".into(), "/data/d1".into()],
+            docker: Some(RustfsSettings {
+                restart: RestartPolicy::Always,
+                memory_mb: Some(2048),
+                cpu_millis: Some(1500),
+                env: BTreeMap::from([("RUSTFS_SERVER_DOMAINS".into(), "s3.example.test".into())]),
+                volumes: vec![
+                    DriveVolume::Bind { host_path: String::new() },
+                    DriveVolume::Named {
+                        name: "media-d1".into(),
+                        driver: "local".into(),
+                        options: BTreeMap::from([("type".into(), "none".into())]),
+                    },
+                ],
+                ..RustfsSettings::default()
+            }),
+            region: "eu-west-1".into(),
+            ..spec()
+        }
+    }
+
+    #[test]
+    fn renders_docker_run_arguments_for_bind_and_named_volumes() {
+        let s = docker_spec();
+        assert!(s.validate().is_ok(), "{:?}", s.validate());
+        let args = s.docker_run_args().join(" ");
+        assert_eq!(
+            args,
+            "--restart always -p 9000:9000 -p 9001:9001 --memory 2048m --cpus 1.500 \
+             -v /srv/objstore/d0:/srv/objstore/d0 -v media-d1:/data/d1 --label org.orbyn.forge.objstore=media"
+        );
+        assert_eq!(s.volume_create_lines(), ["--driver local --opt type=none media-d1"]);
+        assert_eq!(s.host_paths(), ["/srv/objstore/d0"], "named volumes have no host path");
+        let env = StoreOp::Status { spec: s.clone() }.env();
+        assert_eq!(env["FORGE_OS_DATA_ALL"], "/srv/objstore/d0");
+        assert_eq!(env["FORGE_OS_CONTAINER_DATA"], "/srv/objstore/d0 /data/d1");
+        assert_eq!(env["FORGE_OS_IMAGE"], "rustfs/rustfs:latest");
+        assert_eq!(env["FORGE_OS_EXTRA_ENV"], "RUSTFS_SERVER_DOMAINS=s3.example.test");
+        assert_eq!(env["FORGE_OS_REGION"], "eu-west-1");
+
+        // Host network: no published ports.
+        let mut host = s.clone();
+        if let Some(d) = host.docker.as_mut() {
+            d.network = NetworkMode::Host;
+        }
+
+        assert!(host.docker_run_args().join(" ").contains("--network host"));
+        assert!(!host.docker_run_args().join(" ").contains("-p "));
+
+        // Defaults keep the old container layout.
+        let plain = StoreSpec { runtime: Runtime::Docker, ..spec() };
+        assert_eq!(
+            plain.docker_run_args().join(" "),
+            "--restart unless-stopped -p 9000:9000 -p 9001:9001 -v /srv/objstore/media:/srv/objstore/media \
+             --label org.orbyn.forge.objstore=media"
+        );
+        assert!(!serde_json::to_string(&plain).unwrap().contains("\"docker\":"), "older agents never see the field");
+    }
+
+    #[test]
+    fn container_settings_are_validated_in_the_spec() {
+        let mut bad = docker_spec();
+        if let Some(d) = bad.docker.as_mut() {
+            d.env.insert("RUSTFS_SECRET_KEY".into(), "x".into());
+        }
+
+        assert!(bad.validate().is_err(), "credential variables cannot be overridden");
+        assert!(StoreSpec { runtime: Runtime::Native, ..docker_spec() }.validate().is_err());
+        assert!(StoreSpec { region: "EU West".into(), ..docker_spec() }.validate().is_err());
+        let mut host = docker_spec();
+        if let Some(d) = host.docker.as_mut() {
+            d.volumes[0] = DriveVolume::Bind { host_path: "/etc".into() };
+        }
+
+        assert!(host.validate().is_err(), "bind sources follow the data path rules");
+        assert!(docker_spec().docker.unwrap().reaches_host(), "driver options need node administrators");
+        assert!(!RustfsSettings::default().reaches_host());
+        let cred = StoreCredential { access_key: "forgeadmin".into(), secret_key: "s3cr3tvalue1".into() };
+        assert!(StoreOp::Reconfigure { spec: docker_spec(), credential: cred.clone() }.validate().is_ok());
+        assert!(StoreOp::Reconfigure { spec: spec(), credential: cred }.validate().is_err(), "Docker only");
+    }
+
+    #[test]
+    fn any_rustfs_container_can_be_adopted_as_it_is() {
+        let adopted = StoreSpec {
+            runtime: Runtime::Docker,
+            adopted: true,
+            data_paths: vec!["/data".into()],
+            docker: Some(RustfsSettings {
+                container_name: "my-rustfs".into(),
+                volumes: vec![DriveVolume::Named {
+                    name: "rustfs-data".into(),
+                    driver: String::new(),
+                    options: BTreeMap::new(),
+                }],
+                ..RustfsSettings::default()
+            }),
+            ..spec()
+        };
+        assert!(adopted.validate().is_ok(), "{:?}", adopted.validate());
+        assert_eq!(adopted.unit(), "my-rustfs");
+        assert!(!adopted.legacy_adopted());
+        assert!(StoreOp::Adopt { spec: adopted.clone() }.validate().is_ok());
+        assert!(StoreSpec { data_paths: vec!["/data/../etc".into()], ..adopted.clone() }.validate().is_err());
+        let out = "forge: objstore-adopted-env: {\"RUSTFS_SERVER_DOMAINS\":\"s3.example.test\",\"RUSTFS_SECRET_KEY\":\"x\"}\n";
+        let env = adopted_env(out);
+        assert_eq!(env.len(), 1, "only allow-listed variables are kept");
+    }
+
+    /// The rendered arguments reach `docker run` one by one: a value is never
+    /// split or globbed by the shell.
+    #[cfg(unix)]
+    #[test]
+    fn run_container_passes_arguments_without_splitting() {
+        let start = RUSTFS_SH.find("run_container() {").unwrap();
+        let end = start + RUSTFS_SH[start..].find("\n}\n").unwrap() + 3;
+        let script = format!(
+            "docker() {{ for a in \"$@\"; do printf '[%s]' \"$a\" >&2; done; echo >&2; }}\nUNIT=u; ENVF=/e; _img=i:1\n{}\nrun_container\n",
+            &RUSTFS_SH[start..end]
+        );
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&script)
+            .env("FORGE_OS_RUN_ARGS", "--label\nx=*\n-v\na:/b")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(text.trim(), "[run][-d][--name][u][--env-file][/e][--label][x=*][-v][a:/b][i:1]", "{text}");
     }
 }

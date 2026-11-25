@@ -31,6 +31,8 @@ pub mod silences;
 pub mod spool;
 pub mod stacks;
 pub mod storage;
+pub mod storage_iam;
+pub mod storage_settings;
 pub mod swarm;
 pub mod tags;
 pub mod tunnels;
