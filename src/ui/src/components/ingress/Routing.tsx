@@ -1,14 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { ArrowUpRight, Box, CornerDownRight, ExternalLink, Folder, Globe, Layers, Lock, Network, Server } from "lucide-react";
 import { type ReactNode, useCallback, useLayoutEffect, useRef, useState } from "react";
 
 import { get } from "../../api/client";
 import { type ContainerSummary, nodeAddresses, useClusters, useNodeContainers, useServices, useServers } from "../../api/hooks";
-import { type RedirectRule, type RedirectTo, type RouteRule, type RuleKind, type Site, type StaticRoot, type Target, ruleKindLabel, useSites } from "../../api/ingress";
+import { type RedirectRule, type RedirectTo, type RouteRule, type RuleKind, type Site, type StaticRoot, type Target, RULE_KINDS, ruleKindLabel, useSites } from "../../api/ingress";
 import { nodeName, type Service, type ServiceInstance, type Server as Node } from "../../api/types";
+import type { IngressSearch } from "../../app/router";
 import { type LiveState, liveState } from "../InstanceState";
-import { Badge, CopyIcon, Empty, ErrorNote, Skeleton } from "../ui";
+import { Badge, CopyIcon, Empty, ErrorNote, SearchInput, Select, Skeleton } from "../ui";
 import { bytesRate as rate } from "../Traffic";
 import type { LiveResponse, SiteTraffic } from "./types";
 
@@ -184,6 +185,15 @@ interface Ctx {
 const kindTone: Record<RuleKind, string> = { proxy: "bg-accent-soft text-accent", balancer: "bg-ok-soft text-ok", redirect: "bg-warn-soft text-warn", static: "bg-panel-2 text-muted" };
 /** Whether a redirect source (`host` or a URL) names domain `d`. */
 const sameHost = (from: string | undefined, d: string) => !!from && !!d && from.replace(/^https?:\/\//, "").split("/")[0]?.toLowerCase() === d.toLowerCase();
+/** Endpoint health from its upstreams: degraded when some are down, down when none is up. */
+function healthOf(rules: ViewRule[]): { health?: "down" | "degraded"; downN: number; total: number } {
+  const hops = rules.flatMap((r) => r.targets.flatMap((t) => t.hops.map((h) => h.state)));
+  const downN = hops.filter(isDown).length;
+  return { health: hops.length && downN === hops.length ? "down" : downN > 0 ? "degraded" : undefined, downN, total: hops.length };
+}
+
+/** Domain pills shown before the "+N more" chip. */
+const DOMAINS_SHOWN = 3;
 const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 const appRole = (r: string | undefined): Role => (r === "standby" ? "standby" : "replica");
 const isLoopback = (h: string) => h === "localhost" || h === "::1" || h.startsWith("127.");
@@ -332,13 +342,13 @@ const targetIcon = (k: ViewTarget["kind"]) =>
   k === "app" ? <Layers className="size-3" /> : k === "node" ? <Server className="size-3" /> : k === "container" ? <Box className="size-3" /> : k === "redirect" ? <CornerDownRight className="size-3" /> : k === "static" ? <Folder className="size-3" /> : <Globe className="size-3" />;
 
 /** A domain with open-in-new-tab and copy-URL buttons. */
-function DomainLinks({ domain, tls }: { domain: string; tls: boolean }) {
+function DomainLinks({ domain, tls, open = true }: { domain: string; tls: boolean; /** False for wildcards: nothing to open. */ open?: boolean }) {
   const url = `${tls ? "https" : "http"}://${domain}`;
   return (
     <span className="relative z-10 inline-flex shrink-0 items-center">
-      <a href={url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${url}`} title={`Open ${url}`} className="grid size-5 place-items-center rounded text-faint hover:bg-panel-2 hover:text-fg focus-visible:outline-2 focus-visible:outline-accent">
+      {open && (<a href={url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${url}`} title={`Open ${url}`} className="grid size-5 place-items-center rounded text-faint hover:bg-panel-2 hover:text-fg focus-visible:outline-2 focus-visible:outline-accent">
         <ExternalLink className="size-3" />
-      </a>
+      </a>)}
       <CopyIcon text={url} label={`Copy ${url}`} />
     </span>
   );
@@ -349,7 +359,8 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
   const { nodes } = ctx;
   const wrap = useRef<HTMLDivElement>(null);
   const els = useRef(new Map<string, HTMLElement>());
-  const [paths, setPaths] = useState<{ d: string; dashed?: boolean; tone?: Tone }[]>([]);
+  const [paths, setPaths] = useState<{ d: string; dashed?: boolean; tone?: Tone; arrow?: boolean }[]>([]);
+  const [moreOpen, setMoreOpen] = useState(false);
   const reg = useCallback<Reg>((id) => (el) => {
     if (el) els.current.set(id, el);
     else els.current.delete(id);
@@ -400,11 +411,17 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
   };
 
   const wires: Wire[] = [];
-  (domains.length ? domains : [""]).forEach((d, i) => {
+  // Domains: first few as pills, the rest behind a "+N more" chip (one wire source for all of them).
+  const allDomains = domains.length ? domains : [ep.name ?? "—"];
+  const shownDomains = moreOpen ? allDomains : allDomains.slice(0, DOMAINS_SHOWN);
+  const hiddenDomains = allDomains.slice(shownDomains.length);
+  const domainWires = (from: string, d: string) => {
     const ri = redirects.findIndex((r) => sameHost(r.from, d));
-    if (ri >= 0) wires.push({ from: `dom:${i}`, to: `redir:${ri}`, tone: "warn" });
-    else for (const e of edges) wires.push({ from: `dom:${i}`, to: `edge:${e.server_id}`, tone: edgeTone(e) });
-  });
+    if (ri >= 0) wires.push({ from, to: `redir:${ri}`, tone: "warn" });
+    else for (const e of edges) wires.push({ from, to: `edge:${e.server_id}`, tone: edgeTone(e) });
+  };
+  shownDomains.forEach((d, i) => domainWires(`dom:${i}`, d));
+  hiddenDomains.forEach((d) => domainWires("dom:more", d));
   for (const r of rules) {
     for (const e of edges) wires.push({ from: `edge:${e.server_id}`, to: `rule:${r.key}` });
     for (const t of r.targets) {
@@ -438,18 +455,21 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
         const in_ = seg.filter((x) => x.g === g);
         trunk.set(g, snap((Math.max(...in_.map((x) => x.x1)) + Math.min(...in_.map((x) => x.x2))) / 2));
       }
+      // Each wire = a source leg (out to the trunk, along it) + a target leg (trunk → target, with
+      // the arrow). Target legs are shared: many sources into one target draw one arrow (a bracket).
+      const legs = new Set<string>();
       for (const { w, g, x1: rx1, y1: ry1, x2: rx2, y2: ry2 } of seg) {
         const [x1, y1, x2, y2] = [snap(rx1), snap(ry1), snap(rx2), snap(ry2)];
         const dy = y2 - y1;
-        let d: string;
-        if (Math.abs(dy) < 1) d = `M ${x1} ${y1} H ${x2}`;
-        else {
-          const tx = Math.min(Math.max(trunk.get(g) ?? (x1 + x2) / 2, x1 + 4), x2 - 4);
-          const r = Math.max(0, Math.min(4, Math.abs(dy) / 2, tx - x1, x2 - tx));
-          const sy = Math.sign(dy);
-          d = `M ${x1} ${y1} H ${tx - r} Q ${tx} ${y1} ${tx} ${y1 + sy * r} V ${y2 - sy * r} Q ${tx} ${y2} ${tx + r} ${y2} H ${x2}`;
-        }
-        next.push({ d, dashed: w.dashed, tone: w.tone });
+        const tx = Math.min(Math.max(trunk.get(g) ?? (x1 + x2) / 2, x1 + 4), x2 - 4);
+        const r = Math.max(0, Math.min(4, Math.abs(dy) / 2, tx - x1, x2 - tx));
+        const sy = Math.sign(dy);
+        const src = Math.abs(dy) < 1 ? `M ${x1} ${y1} H ${tx}` : `M ${x1} ${y1} H ${tx - r} Q ${tx} ${y1} ${tx} ${y1 + sy * r} V ${y2 - sy * r} Q ${tx} ${y2} ${tx + r} ${y2}`;
+        next.push({ d: src, dashed: w.dashed, tone: w.tone, arrow: false });
+        const leg = `${w.to}|${w.tone ?? ""}|${w.dashed ? 1 : 0}`;
+        if (legs.has(leg)) continue;
+        legs.add(leg);
+        next.push({ d: `M ${tx} ${y2} H ${x2}`, dashed: w.dashed, tone: w.tone, arrow: true });
       }
       setPaths(next);
     };
@@ -460,9 +480,8 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
   }, [key]);
 
   // Endpoint health from its upstreams: degraded when some are down, down when none is up.
-  const hops = rules.flatMap((r) => r.targets.flatMap((t) => t.hops.map((h) => h.state)));
-  const downN = hops.filter(isDown).length;
-  const health: "down" | "degraded" | undefined = hops.length && downN === hops.length ? "down" : downN > 0 ? "degraded" : undefined;
+  const { health, downN, total } = healthOf(rules);
+  const hops = { length: total };
   const tlsOn = !!ep.tls && ep.tls !== "off";
   const p = site?.config.placement;
   const placement = p
@@ -483,17 +502,23 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
             </marker>
           ))}
         </defs>
-        {paths.map((pa, i) => (
-          <path
-            key={i}
-            d={pa.d}
-            fill="none"
-            stroke={stroke(pa.tone)}
-            strokeOpacity={pa.dashed ? 0.45 : 0.7}
-            strokeWidth={1.25}
-            strokeDasharray={pa.dashed ? "4 3" : undefined}
-            markerEnd={`url(#${mid}-${pa.tone === "bad" || pa.tone === "warn" ? pa.tone : "ok"})`}
-          />
+        {/* Opacity on the group, so overlapping legs of a shared trunk don't darken. */}
+        {([false, true] as const).map((dashed) => (
+          <g key={String(dashed)} opacity={dashed ? 0.45 : 0.7}>
+            {paths
+              .filter((pa) => !!pa.dashed === dashed)
+              .map((pa, i) => (
+                <path
+                  key={i}
+                  d={pa.d}
+                  fill="none"
+                  stroke={stroke(pa.tone)}
+                  strokeWidth={1.25}
+                  strokeDasharray={dashed ? "4 3" : undefined}
+                  markerEnd={pa.arrow ? `url(#${mid}-${pa.tone === "bad" || pa.tone === "warn" ? pa.tone : "ok"})` : undefined}
+                />
+              ))}
+          </g>
         ))}
       </svg>
 
@@ -501,15 +526,30 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
       <div className="min-w-0">
         <Label>Domain</Label>
         <div className="flex min-w-0 flex-col items-start gap-1">
-          {(domains.length ? domains : [ep.name ?? "—"]).map((d, i) => (
-            // The wire starts at the right edge of the whole group (pill + icons), so it never crosses them.
-            <div key={d} ref={reg(`dom:${i}`)} className="flex min-w-0 max-w-full items-center gap-0.5">
-              <Pill id={`dp:${i}`} reg={reg} icon={tlsOn ? <Lock className="size-3 text-ok" /> : <Globe className="size-3" />} title={redirectOf(d) ? `${d}: redirects to ${redirectOf(d)?.to}` : d}>
-                {d}
-              </Pill>
-              {domains.length > 0 && <DomainLinks domain={d} tls={tlsOn} />}
-            </div>
-          ))}
+          {shownDomains.map((d, i) => {
+            const wild = d.startsWith("*.");
+            return (
+              // The wire starts at the right edge of the whole group (pill + icons), so it never crosses them.
+              <div key={d} ref={reg(`dom:${i}`)} className="flex min-w-0 max-w-full items-center gap-0.5">
+                <Pill id={`dp:${i}`} reg={reg} icon={tlsOn ? <Lock className="size-3 text-ok" /> : <Globe className="size-3" />} sub={wild ? "wildcard" : undefined} title={redirectOf(d) ? `${d}: redirects to ${redirectOf(d)?.to}` : wild ? `${d}: every subdomain of ${d.slice(2)}` : d}>
+                  {d}
+                </Pill>
+                {domains.length > 0 && <DomainLinks domain={d} tls={tlsOn} open={!wild} />}
+              </div>
+            );
+          })}
+          {(hiddenDomains.length > 0 || moreOpen) && allDomains.length > DOMAINS_SHOWN && (
+            <button
+              type="button"
+              ref={reg("dom:more")}
+              onClick={() => setMoreOpen((o) => !o)}
+              aria-expanded={moreOpen}
+              title={allDomains.join("\n")}
+              className="relative z-10 rounded-md border border-line bg-panel px-1.5 py-0.5 text-[11px] text-muted hover:border-accent/60 hover:text-fg focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              {moreOpen ? "show fewer" : `+${hiddenDomains.length} more`}
+            </button>
+          )}
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-1">
           {placement && (
@@ -603,6 +643,9 @@ const Label = ({ children }: { children: ReactNode }) => <div className="mb-0.5 
  * target → the nodes Nginx forwards to. App and node names are links.
  */
 export function Routing({ clusterId, live }: { clusterId: string; live?: LiveResponse }) {
+  const search = useSearch({ from: "/ingress" });
+  const navigate = useNavigate();
+  const patch = (p: Partial<IngressSearch>) => void navigate({ from: "/ingress", to: "/ingress", search: (s) => ({ ...s, ...p }), replace: true });
   const q = useQuery({
     queryKey: ["cluster-routing", clusterId],
     queryFn: () => get<{ endpoints: RouteEndpoint[] }>(`/api/v1/clusters/${clusterId}/routing`),
@@ -639,8 +682,78 @@ export function Routing({ clusterId, live }: { clusterId: string; live?: LiveRes
   if (q.isLoading) return <Skeleton />;
   if (q.isError) return <ErrorNote error={q.error} />;
   const list = Array.isArray(q.data?.endpoints) ? q.data.endpoints : [];
+  // Filters (kept in the URL): matched against what each row shows.
+  const edgeOpts = new Map<string, string>();
+  for (const ep of list) for (const e of arr<RouteEndpoint["edges"][number]>(ep.edges)) edgeOpts.set(e.server_id, e.name ?? e.server_id.slice(0, 8));
+  const needle = (search.rq ?? "").trim().toLowerCase();
+  const shown = list.filter((ep) => {
+    const site = sites.get(ep.id);
+    const edges = arr<RouteEndpoint["edges"][number]>(ep.edges);
+    const rules = rulesOf({ ...ctx, edges: edges.map((e) => e.server_id) }, ep, site);
+    if (search.rkind && !rules.some((r) => r.kind === search.rkind)) return false;
+    if (search.redge && !edges.some((e) => e.server_id === search.redge)) return false;
+    if (search.rplace && (site?.config.placement.kind ?? (ep.source === "profile" ? "cluster" : "nodes")) !== search.rplace) return false;
+    const tls = !!ep.tls && ep.tls !== "off";
+    if (search.rtls && (search.rtls === "on") !== tls) return false;
+    if (search.rstatus && (healthOf(rules).health ?? "healthy") !== search.rstatus) return false;
+    if (!needle) return true;
+    const hay = [
+      ep.name,
+      ...arr<string>(ep.domains),
+      ...arr<RedirectRule>(site?.config.spec.redirects).flatMap((r) => [r?.from, r?.to]),
+      ...rules.flatMap((r) => [r.path, ...r.targets.flatMap((t) => [t.label, t.ports, t.detail, t.title, ...t.hops.flatMap((h) => [h.name, h.address])])]),
+    ];
+    return hay.some((x) => typeof x === "string" && x.toLowerCase().includes(needle));
+  });
+  const filtered = !!(needle || search.rkind || search.redge || search.rplace || search.rtls || search.rstatus);
+  const pick = <K extends keyof IngressSearch>(k: K) => (e: { target: { value: string } }) => patch({ [k]: e.target.value || undefined } as Partial<IngressSearch>);
   return (
     <div className="max-w-5xl space-y-2">
+      {list.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <SearchInput value={search.rq ?? ""} onChange={(v) => patch({ rq: v || undefined })} placeholder="Domain, path, target, address…" />
+          <Select aria-label="Rule kind" value={search.rkind ?? ""} onChange={pick("rkind")}>
+            <option value="">Any kind</option>
+            {RULE_KINDS.map((k) => (
+              <option key={k.id} value={k.id}>
+                {k.label}
+              </option>
+            ))}
+          </Select>
+          <Select aria-label="Edge node" value={search.redge ?? ""} onChange={pick("redge")}>
+            <option value="">Any edge</option>
+            {[...edgeOpts].map(([id, name]) => (
+              <option key={id} value={id}>
+                {name}
+              </option>
+            ))}
+          </Select>
+          <Select aria-label="Placement" value={search.rplace ?? ""} onChange={pick("rplace")}>
+            <option value="">Any placement</option>
+            <option value="nodes">Single nodes</option>
+            <option value="cluster">Cluster edge group</option>
+          </Select>
+          <Select aria-label="TLS" value={search.rtls ?? ""} onChange={pick("rtls")}>
+            <option value="">TLS on or off</option>
+            <option value="on">TLS on</option>
+            <option value="off">TLS off</option>
+          </Select>
+          <Select aria-label="Status" value={search.rstatus ?? ""} onChange={pick("rstatus")}>
+            <option value="">Any status</option>
+            <option value="healthy">Healthy</option>
+            <option value="degraded">Degraded</option>
+            <option value="down">Down</option>
+          </Select>
+          <span className="font-mono text-[11px] text-faint tabular-nums">
+            {shown.length} of {list.length} endpoints
+          </span>
+          {filtered && (
+            <button type="button" className="text-accent hover:underline focus-visible:outline-2 focus-visible:outline-accent" onClick={() => patch({ rq: undefined, rkind: undefined, redge: undefined, rplace: undefined, rtls: undefined, rstatus: undefined })}>
+              Clear filters
+            </button>
+          )}
+        </div>
+      )}
       {list.length === 0 ? (
         <Empty icon={<Globe className="size-5" />} title="No endpoints yet">
           Add an endpoint in the Endpoints tab; its route shows up here.
@@ -653,7 +766,15 @@ export function Routing({ clusterId, live }: { clusterId: string; live?: LiveRes
             <span>Path</span>
             <span>Target → runs on</span>
           </div>
-          {list.map((ep) => (
+          {shown.length === 0 && (
+            <div className="px-3 py-6 text-center text-xs text-muted">
+              No endpoint matches these filters.{" "}
+              <button type="button" className="text-accent hover:underline" onClick={() => patch({ rq: undefined, rkind: undefined, redge: undefined, rplace: undefined, rtls: undefined, rstatus: undefined })}>
+                Clear filters
+              </button>
+            </div>
+          )}
+          {shown.map((ep) => (
             <Row key={ep.id} ep={ep} site={sites.get(ep.id)} live={live} ctx={ctx} clusterName={clusterName} />
           ))}
         </div>

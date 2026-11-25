@@ -65,11 +65,31 @@ export const INGRESS_VIEWS = ["list", "cluster"] as const;
 export interface IngressSearch {
   cluster?: string;
   view?: (typeof INGRESS_VIEWS)[number];
+  /** Routing tab filters: text, rule kind, edge node id, placement, TLS, status. */
+  rq?: string;
+  rkind?: (typeof ROUTE_KINDS)[number];
+  redge?: string;
+  rplace?: (typeof ROUTE_PLACES)[number];
+  rtls?: (typeof ROUTE_TLS)[number];
+  rstatus?: (typeof ROUTE_STATUS)[number];
 }
+export const ROUTE_KINDS = ["proxy", "balancer", "redirect", "static"] as const;
+export const ROUTE_PLACES = ["nodes", "cluster"] as const;
+export const ROUTE_TLS = ["on", "off"] as const;
+export const ROUTE_STATUS = ["healthy", "degraded", "down"] as const;
 const ingress = createRoute({
   getParentRoute: parent,
   path: "/ingress",
-  validateSearch: (s: Record<string, unknown>): IngressSearch => ({ cluster: optStr(s.cluster), view: optOneOf(s.view, INGRESS_VIEWS) }),
+  validateSearch: (s: Record<string, unknown>): IngressSearch => ({
+    cluster: optStr(s.cluster),
+    view: optOneOf(s.view, INGRESS_VIEWS),
+    rq: optStr(s.rq),
+    rkind: optOneOf(s.rkind, ROUTE_KINDS),
+    redge: optStr(s.redge),
+    rplace: optOneOf(s.rplace, ROUTE_PLACES),
+    rtls: optOneOf(s.rtls, ROUTE_TLS),
+    rstatus: optOneOf(s.rstatus, ROUTE_STATUS),
+  }),
   component: lazyRouteComponent(() => import("../pages/Ingress"), "Ingress"),
 });
 const dns = createRoute({ getParentRoute: parent, path: "/dns", component: lazyRouteComponent(() => import("../pages/Dns"), "Dns") });
