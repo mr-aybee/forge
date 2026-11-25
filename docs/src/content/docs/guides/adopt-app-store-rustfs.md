@@ -1,6 +1,6 @@
 ---
-title: Adopt an App Store RustFS container
-description: Turn a RustFS container installed from the App Store into a managed object store without recreating it or moving its data.
+title: Adopt a RustFS container
+description: Turn a RustFS container that already runs on a node, from the App Store or created outside Forge, into a managed object store without recreating it or moving its data.
 sidebar:
   order: 11
 ---
@@ -11,6 +11,9 @@ standalone object store, with the Object Explorer, lifecycle buttons and
 [access keys](/docs/guides/object-store-access-keys/). The container, its data and
 its credential stay the same. For the model, see
 [Adoption](/docs/concepts/object-storage/#adoption).
+
+To adopt a RustFS container that you created yourself, see
+[Adopt any RustFS container](#adopt-any-rustfs-container).
 
 ## Before you begin
 
@@ -79,6 +82,51 @@ the container, waits for its health endpoint and reports the key once.
 To change or clear the store's environment later, see
 [Assign a store to an environment](/docs/guides/install-object-store/#assign-a-store-to-an-environment).
 
+## Adopt any RustFS container
+
+Forge finds every RustFS container on your Linux nodes: image
+`rustfs/rustfs` from any registry with any tag, or a container with Forge's
+label `org.orbyn.forge.objstore`.
+
+Before you begin, you also need `server.manage` on the node, because the scan
+runs `docker` commands there and adoption reads the root credential. Forge scans only the nodes you may manage. The
+container must keep its data on a bind mount or a named volume.
+
+1. Open **Object Storage**. The **Found on nodes** section lists the
+   containers and, per node, whether Docker is available. Select
+   **Scan again** to refresh it.
+2. Each container shows its kind: **managed** (a Forge store runs it),
+   **orphaned** (Forge's label but no store, for example after the store
+   record was removed) or **foreign** (created outside Forge). Adopt an
+   orphaned or foreign container.
+3. Enter a **Name** and, optionally, an endpoint host and environment, then
+   adopt. The endpoint host must be the node's own address or host name
+   (`400` otherwise). On a container with the host network, Forge cannot read the ports;
+   enter the S3 port and console port.
+
+With the REST API, list the containers, then adopt one by name:
+
+```sh
+curl -sS -b cookies.txt https://<forge-host>/api/v1/object-stores/discover
+curl -sS -b cookies.txt -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
+  -X POST https://<forge-host>/api/v1/object-stores/adopt \
+  -d '{"name": "Media", "server_id": "<server-id>", "container": "<container-name>"}'
+```
+
+What changes:
+
+| Item | After adoption |
+| --- | --- |
+| Container | Same container, name, network and mounts. Forge does not recreate it |
+| Data | Stays where it is. Each data mount becomes a drive of the store; a named volume stays a named volume |
+| Root key | Read from the container's environment on the node and sealed in the vault. The agent strips it from the job output. A container that sets no credential uses the engine default `rustfsadmin`; the job log warns you, and you should change it |
+| Store | Standalone, runtime `docker` |
+
+An adopted container keeps the configuration it was found with: it is never
+reinstalled and its settings cannot be edited. Removing the store keeps the
+container running and its data in place; Forge only forgets it. Engine
+variables that fail Forge's validation are dropped from the store's record.
+
 ## Verify
 
 - The store shows status `running` and the **Adopted** badge on **Object Storage**.
@@ -123,6 +171,10 @@ if you want to reach the kept data again with that key.
 | Job fails waiting for the health endpoint | The container does not start or answer on the S3 port | On the node, run `docker logs forge-rustfs` and `curl -fsS http://127.0.0.1:<s3-port>/health` |
 | Store status `failed` after an `install` action through the API | Repair is refused for adopted stores | Select **Refresh status** to update the status |
 | `403 step_up_required` | Your session is not MFA-verified | Confirm your authenticator code, then retry |
+| A node shows Docker `not_installed`, `unreachable` or `unsupported_os` | Docker is missing, the node or Docker does not answer, or the node runs Windows | Install Docker Engine from the App Store, bring the node online, or use a Linux node |
+| `400` with `the container has no data mount` | The container keeps its data inside its own filesystem | Recreate it with a bind mount or named volume, or install a new store |
+| `409` with `that container already belongs to an object store` | A store already runs it | Use that store |
+| Job log warns `sets no credential` | The container uses the engine's default credential | Change the root credential in RustFS and update the vault item |
 | `404` with `environment not found` | The environment you chose does not exist in this workspace | Choose an existing environment, or leave the store shared |
 | `403` although you have `storage.manage` on the node | You chose an environment where you lack `deploy` | Ask for a role with `deploy` on it, or adopt the store as shared and assign it later |
 

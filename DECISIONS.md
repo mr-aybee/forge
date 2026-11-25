@@ -5879,3 +5879,63 @@ so. Logs move from `/var/log/nginx/access.log` to per-endpoint files on the
 next apply. Moving an endpoint between placements does not clean up its old
 edges; the console warns to remove it first. Features not modelled still go
 through the allowlisted custom file.
+
+## D-170 Object stores: Docker settings, discovery and adoption of any RustFS container, keys kept in RustFS IAM
+
+**Context.** Docker stores ran with fixed container settings, so operators
+could not set limits, a restart policy, named volumes or engine variables, and
+could not change release, ports or region after install. Only the App Store
+`rustfs` container could be adopted, although operators often run RustFS
+containers they created themselves. Access keys were limited to one whole
+bucket, and Forge's view of them could disagree with RustFS when someone
+changed keys in the RustFS console.
+
+**Decision.**
+- Docker stores take container settings (`RustfsSettings`: image, name,
+  restart policy, network, memory and CPU limits, extra variables, a bind
+  path or named volume per drive), stored in `object_store_settings`
+  (migration 0004). Extra variables come from an allowlist; credentials,
+  listen addresses, volumes and the console switch can never be set.
+  Distributed stores always use the host network. Stores take an S3 region.
+- `PUT /object-stores/{id}/settings` changes release, ports, region and
+  container settings. Docker: pull first, keep the old container stopped as
+  `<name>-forge-previous`, start the new one, wait up to 90 s for health,
+  and on failure restore the old container and env file; the store record is
+  restored from the job's `previous` (explicit compensation). Native stores
+  re-run the install in place. Container name, network and volumes are fixed.
+- Discovery (`GET /object-stores/discover`) lists RustFS containers (image
+  `rustfs/rustfs` or label `org.orbyn.forge.objstore`) and Docker presence
+  per node, on nodes the caller holds `server.manage` on. It reads no
+  environment values. Any such container can be adopted; the root credential
+  is read on the node, reported once on a line the agent strips, and sealed
+  in the vault. A container without a credential uses `rustfsadmin` and the
+  job warns. Adopting needs `server.manage` on the node too, and
+  `endpoint_host` must be the node's own address, since root-signed admin
+  calls go there. Adopted variables that fail validation are dropped.
+  Adopted containers are not editable and never reinstalled; removing the
+  store only forgets the container, which keeps running with its data. Forge
+  never deletes named volumes.
+- After security review: the env allowlist excludes `RUSTFS_OBS_ENDPOINT`
+  (telemetry egress) and `RUSTFS_TLS_PATH` (arbitrary paths). A custom image
+  or a volume driver/options also needs `server.manage` on every member.
+  New bind host paths follow the data-path rules. A failed volume creation
+  during reconfigure rolls back.
+- RustFS IAM is the source of truth for access keys. A key holds up to 32
+  grants (bucket or prefix, `read`/`readwrite`) rendered as its inline
+  policy; a prefix grant is object actions on `bucket/prefix*` plus
+  `s3:ListBucket` with `StringLike s3:prefix "prefix*"`. `object_store_keys`
+  is a cache and audit trail. Drift is reported per key (`in_sync`,
+  `policy_changed`, `missing_in_rustfs`, `not_in_forge`, `unknown`);
+  reconcile accepts RustFS's state. While RustFS is unreachable the cached list
+  is read-only and writes return `503 store_unreachable`.
+- No new Cedar actions. `storage.manage` (MFA) covers settings, adoption and
+  IAM; `server.manage` is reused for discovery (it runs `docker` on the node),
+  container adoption, custom images and volume drivers.
+
+**Consequences.** Operators can tune and upgrade Docker stores in place with
+an automatic rollback, and bring existing RustFS containers under Forge
+without moving data. Changes made directly in RustFS are visible and are never
+silently overwritten, but Forge cannot change keys while RustFS is down.
+Bucket grants for people (D-108) are unchanged: they stay Forge-level and never
+issue S3 credentials. Named volumes left after an uninstall must be removed by
+hand.

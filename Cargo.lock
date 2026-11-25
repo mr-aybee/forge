@@ -2323,6 +2323,7 @@ dependencies = [
 name = "forge-catalog"
 version = "0.0.1"
 dependencies = [
+ "forge-core",
  "serde",
  "serde_json",
 ]
@@ -2542,7 +2543,9 @@ dependencies = [
 name = "forge-s3"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "bytes",
+ "forge-core",
  "hex",
  "quick-xml",
  "reqwest",

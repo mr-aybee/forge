@@ -301,7 +301,49 @@ new secret. For a switch without downtime, issue a second key, move the
 service and revoke the first. **Revoking** deletes the key at the store
 and its vault item.
 
+### RustFS IAM is the source of truth
+
+The keys live in the store's own IAM. A key can hold several grants, each
+for a whole bucket or for one prefix of it (`uploads/`), `read` or
+`readwrite`. Forge turns the grants into the key's inline policy and reads it
+back to show it. Forge keeps a record per key in `object_store_keys`, but only
+as a cache and an audit trail: when someone changes a key in the RustFS
+console or with `mc`, RustFS wins.
+
+Comparing the two shows **drift** per key: `in_sync`, `policy_changed`
+(the policy was edited in RustFS), `missing_in_rustfs` (the key was deleted
+there), `not_in_forge` (created outside Forge) or `unknown` (RustFS cannot be
+reached). **Reconcile** accepts what RustFS holds and refreshes Forge's
+records to match; it never writes to RustFS. A policy that does not have the
+shape Forge writes is shown as a custom policy; editing the key's grants
+replaces it. While RustFS is unreachable, Forge shows the cached list read-only
+and refuses changes (`503 store_unreachable`), because it cannot change what
+it cannot reach.
+
+Keys are for services. [Bucket grants](#bucket-grants) for people are a
+separate, Forge-level mechanism: they never issue an S3 credential, and they
+are not affected by keys or drift.
+
 To issue one, see [Issue object store access keys](/docs/guides/object-store-access-keys/).
+
+## Container settings
+
+A Docker store runs as one container per member. You choose its image,
+name, restart policy, network, memory and CPU limits, extra RustFS variables
+from an allowlist, and for each data path a host directory or a Docker named
+volume. Credentials, listen addresses, volumes and the console switch stay
+Forge's, so a variable can never override them. Distributed stores always use
+the host network so that members reach each other on the S3 port.
+
+Changing settings later recreates the container: Forge pulls the image
+first, keeps the old container stopped as `<name>-forge-previous`, and puts it
+back with its env file if the new one is not healthy within 90 seconds. A
+native store re-runs its install in place. Container name, network and volumes
+cannot change after install. See
+[Change object store settings](/docs/guides/object-store-settings/).
+
+Forge never deletes a named volume. **Delete data** only touches bind paths
+that carry the store's ownership marker.
 
 ## Buckets attached to services
 
@@ -478,6 +520,17 @@ To grant access, see
 
 ## Adoption
 
+Forge can adopt any RustFS container on a Linux node. Discovery lists every
+container with the `rustfs/rustfs` image or Forge's label, and whether Docker
+is available on each node you may manage (`server.manage`). It reads no
+environment values. Adopting a container keeps it as it is: Forge reads its
+ports, mounts and network, and the `adopt` job reads the root credential from
+the container's environment on the node, reports it once on a line the agent
+strips, and seals it in the vault. Adoption needs `server.manage` on the node,
+and the endpoint host must be the node's own address. An adopted container
+keeps the configuration it was found with: it is never reinstalled or edited,
+and removing the store leaves it running with its data.
+
 The App Store `rustfs` package runs RustFS as the Docker container
 `forge-rustfs` with its data in `/var/lib/forge/pkgs/rustfs`. **Adoption**
 turns that container into a managed standalone store without recreating it:
@@ -487,7 +540,7 @@ root key and removes the App Store's installation record. The agent takes the
 key out of the job output and streams no live log for that job, so it never
 reaches job history. Adoption is Linux and standalone Docker only, an adopted
 store cannot be reinstalled or repaired, and adoption cannot be undone. See
-[Adopt an App Store RustFS container](/docs/guides/adopt-app-store-rustfs/).
+[Adopt a RustFS container](/docs/guides/adopt-app-store-rustfs/).
 
 ## What uninstall keeps
 
@@ -521,7 +574,8 @@ endpoints is not yet supported.
 ## Not yet supported
 
 - Adding nodes or pools to a distributed store, and converting a standalone store to distributed.
-- Access keys for connected stores, keys for several buckets, and custom key policies.
+- Access keys for connected stores, and writing custom key policies. Forge
+  shows a custom policy that RustFS holds; editing the key's grants replaces it.
 - Attaching a bucket of a connected store to a service.
 - A store owned by several environments, and a store owned by a service
   directly. See [Ownership](#ownership).

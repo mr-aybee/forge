@@ -1,6 +1,6 @@
 ---
 title: Issue object store access keys
-description: Give a service its own access key to one bucket of a managed RustFS store, read-only or read-write, and rotate or revoke it.
+description: Give a service its own access key to buckets or prefixes of a managed RustFS store, read-only or read-write, and rotate, revoke or reconcile keys.
 sidebar:
   order: 14
 ---
@@ -159,6 +159,57 @@ it, then revoke the old key.
 
 You can rotate only keys that Forge issued. Other keys return `404`.
 
+## Grant several buckets or a prefix
+
+A key can hold up to 32 grants. Each grant opens a whole bucket, or one prefix
+of it, with `read` or `readwrite`. The key's policy lives in RustFS, which is
+the source of truth; see
+[RustFS IAM is the source of truth](/docs/concepts/object-storage/#rustfs-iam-is-the-source-of-truth).
+
+1. In **Access keys**, select **Create key** for a new key, or open a key's
+   **⋯** menu and select **Edit grants…**. Editing works for keys created
+   outside Forge too.
+2. Add a grant per bucket. For a prefix, enter it ending with `/`, for
+   example `uploads/`.
+3. Save. Forge writes the policy to RustFS.
+
+With the REST API:
+
+```sh
+curl -sS -b cookies.txt -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
+  -X POST https://<forge-host>/api/v1/object-stores/<store-id>/iam/keys \
+  -d '{"name": "uploader", "grants": [{"bucket": "<bucket>", "prefix": "uploads/", "access": "readwrite"}]}'
+```
+
+A prefix grant allows object actions on `arn:aws:s3:::<bucket>/uploads/*`
+and `s3:ListBucket` on the bucket only for keys that start with `uploads/`.
+Change the grants of an existing key with
+`PUT /api/v1/object-stores/<store-id>/iam/keys/<access-key>` and
+`{"grants": [...]}`.
+
+## Find and resolve drift
+
+The key list compares RustFS with Forge's records. The **Drift** column shows:
+
+| Drift | Meaning | What to do |
+| --- | --- | --- |
+| `in_sync` | Both agree | Nothing |
+| `policy_changed` | Someone changed the policy in RustFS | Reconcile to accept it, or edit the grants to overwrite it |
+| `missing_in_rustfs` | The key was deleted in RustFS | Reconcile to drop the record |
+| `not_in_forge` | The key was created outside Forge | Reconcile to record it |
+| `unknown` | RustFS cannot be reached | Wait; the list is read-only until it answers |
+
+Select **Reconcile** to accept what RustFS holds. Forge updates its records
+and changes nothing in RustFS. With the REST API:
+
+```sh
+curl -sS -b cookies.txt https://<forge-host>/api/v1/object-stores/<store-id>/iam
+curl -sS -b cookies.txt -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
+  -X POST https://<forge-host>/api/v1/object-stores/<store-id>/iam/reconcile -d '{}'
+```
+
+The reconcile response counts the records: `{"imported": 1, "updated": 0, "removed": 0}`.
+
 ## Revoke a key
 
 Open the key's **⋯** menu in **Access keys** (or right-click its row), select **Revoke**, then confirm.
@@ -215,6 +266,9 @@ and object management. It lives in the vault as `<store name> (object store root
 | `InvalidAccessKeyId` for a few seconds right after you issue or rotate a key on a distributed store | The new key has not reached every member yet | Wait a few seconds and retry. If it persists, check the store status for `degraded` members |
 | `AccessDenied` on `aws s3 ls` without a bucket | The key has no `s3:ListAllMyBuckets` | Address the bucket directly: `s3 ls s3://<bucket>/` |
 | `403 step_up_required` | Your session is not MFA-verified | Confirm your authenticator code, then retry |
+| `503 store_unreachable` when you create or edit a key | RustFS cannot be reached; the list shows the cached keys read-only | Check that the store is `running` and reachable from the control plane, then retry |
+| `502 store_refused` | RustFS refused the call, for example an invalid policy | Read the message; check the bucket and prefix |
+| `400` on a prefix | The prefix starts with `/`, contains `..` or `*`, or does not end with `/` | Use path segments ending with `/`, such as `uploads/` |
 | `403` when revealing the secret | Only platform administrators can use the vault | Ask a platform administrator to reveal the secret and hand it over |
 
 ## Next steps
