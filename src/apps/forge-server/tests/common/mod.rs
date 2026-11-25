@@ -62,6 +62,13 @@ pub fn test_config(dir: &std::path::Path) -> ServerConfig {
             worker_agent_listen: std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
             ..Default::default()
         },
+        // Alert evaluation and notification passes run often, so tests
+        // wait for an alarm or a message in well under a second per pass.
+        alerts: forge_server::config::AlertSettings {
+            evaluate_interval_ms: 500,
+            deliver_interval_ms: 250,
+            ..Default::default()
+        },
         ..ServerConfig::default()
     }
 }
@@ -225,4 +232,13 @@ pub async fn wait_job(c: &Client, id: &str, timeout: Duration) -> Value {
         assert!(tokio::time::Instant::now() < deadline, "job {id} did not finish: {job}");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+/// How long a negative check ("nothing more is sent") waits: four alert
+/// evaluation passes, and so at least as many notification passes, under
+/// the harness' configuration. Nothing can be polled for here, since the
+/// check is that no state appears.
+pub fn quiet_period(h: &Harness) -> Duration {
+    let a = &h.app.state.config.alerts;
+    Duration::from_millis(4 * a.evaluate_interval_ms.max(a.deliver_interval_ms))
 }

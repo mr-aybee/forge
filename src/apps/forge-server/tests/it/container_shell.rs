@@ -261,10 +261,14 @@ async fn ssh_is_used_only_with_an_explicit_login() {
 }
 
 /// An agent that never answers (too old to know the command): a clear
-/// error within the 15-second limit.
+/// error once the open limit (`container_shell_open_secs`, here 2 s) ends.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_that_does_not_answer_gets_an_update_hint() {
-    let h = start_with(|c| c.security.require_mfa = false).await;
+    let h = start_with(|c| {
+        c.security.require_mfa = false;
+        c.container_shell_open_secs = 2;
+    })
+    .await;
     let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
     let token = api_key(&admin).await;
     let (node, _agent) = node(&h, &admin, FakeHelper::default()).await;
@@ -273,6 +277,7 @@ async fn an_agent_that_does_not_answer_gets_an_update_hint() {
     let e = status(&mut ws, &mut Vec::new()).await;
     assert_eq!(e["type"], "error", "{e}");
     assert!(e["message"].as_str().unwrap().contains("update the agent"), "{e}");
-    assert!(started.elapsed() < Duration::from_secs(19), "{:?}", started.elapsed());
+    let took = started.elapsed();
+    assert!(took >= Duration::from_secs(2) && took < Duration::from_secs(6), "{took:?}");
     h.app.stop().await;
 }

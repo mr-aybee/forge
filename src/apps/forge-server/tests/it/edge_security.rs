@@ -373,10 +373,18 @@ async fn removing_the_profile_releases_the_edge_role() {
     let path = format!("/api/v1/servers/{}", edge.id);
     assert_eq!(admin.call(Method::PATCH, &path, Some(mv.clone())).await.0, StatusCode::CONFLICT, "still the edge");
 
-    // The edge is offline: its removal does not succeed and it keeps the role.
+    // The edge is offline: its removal does not succeed and it keeps the
+    // role. The answer comes at once (not after the 120 s an online edge
+    // gets), with the job pending until the edge reconnects.
+    let asked = std::time::Instant::now();
     let (s, r) = admin.post(&format!("/api/v1/clusters/{cid}/profile/remove"), json!({})).await;
+    assert!(asked.elapsed() < std::time::Duration::from_secs(10), "{:?}", asked.elapsed());
     assert_eq!(s, StatusCode::OK, "{r}");
-    assert_ne!(r["edges"][edge.id.to_string()]["status"], "removed", "{r}");
+    let answer = &r["edges"][edge.id.to_string()];
+    assert_eq!(answer["status"], "pending", "{r}");
+    let job = answer["job_id"].as_str().unwrap();
+    let (_, j) = admin.get(&format!("/api/v1/jobs/{job}")).await;
+    assert!(matches!(j["status"].as_str(), Some("queued" | "running")), "the job waits for the edge: {j}");
     let (_, p) = admin.get(&format!("/api/v1/clusters/{cid}/profile")).await;
     assert_eq!(p["profile"]["ingress"]["edges"][0]["server_id"], edge.id.to_string(), "{p}");
     assert_eq!(admin.call(Method::PATCH, &path, Some(mv.clone())).await.0, StatusCode::CONFLICT);

@@ -106,8 +106,7 @@ pub fn package_version() -> ApiResult<&'static str> {
 /// info`), signed for `principal`; a node whose agent is not polling this
 /// server right now is not asked.
 async fn probe(state: &AppState, server: &Server, principal: &str) -> Engine {
-    let hold = Duration::from_secs(u64::from(state.config.heartbeat_hold_secs));
-    if !state.hub.polled_within(server.id, hold * 2 + Duration::from_secs(10)) {
+    if !crate::agent_hub::linked(state, server.id) {
         return Engine::Unknown;
     }
     let command = Command::ContainerAction(ContainerAction { op: "info".into(), ..ContainerAction::default() });
