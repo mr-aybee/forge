@@ -14,6 +14,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 
 import { useServers, useInstallations } from "../../api/hooks";
@@ -27,6 +28,7 @@ import {
   useUpdateSite,
 } from "../../api/ingress";
 import { errorText, useToast } from "../../app/toast";
+import { FormPage, TILE, type TileTone } from "../FormPage";
 import {
   Badge,
   Button,
@@ -35,7 +37,6 @@ import {
   Field,
   IconButton,
   Input,
-  Modal,
   Select,
   Skeleton,
   Status,
@@ -81,6 +82,22 @@ const SECTIONS: { id: SectionId; label: string; icon: typeof Globe }[] = [
   { id: "placement", label: "Placement", icon: Server },
 ];
 
+const SECTION_TONE: Record<SectionId, TileTone> = {
+  domains: "sky",
+  routing: "indigo",
+  performance: "orange",
+  access: "pink",
+  ssl: "teal",
+  redirects: "violet",
+  config: "accent",
+  logs: "warn",
+  placement: "ok",
+};
+
+function EndpointCrumb() {
+  return <Link to="/ingress">Ingress</Link>;
+}
+
 /** The full endpoint editor for a saved endpoint, looked up by id so it follows the list. */
 export function EndpointEditor({
   siteId,
@@ -93,7 +110,7 @@ export function EndpointEditor({
   const site = sites.data?.find((s) => s.id === siteId);
   if (!site) {
     return (
-      <Modal open onOpenChange={(o) => !o && onClose()} title="Endpoint">
+      <FormPage back={<EndpointCrumb />} current="Endpoint" title="Endpoint">
         {sites.error ? (
           <ErrorNote error={sites.error} />
         ) : sites.isLoading ? (
@@ -101,7 +118,7 @@ export function EndpointEditor({
         ) : (
           <p className="text-xs text-muted">This endpoint no longer exists.</p>
         )}
-      </Modal>
+      </FormPage>
     );
   }
   return <Editor key={site.id} site={site} onClose={onClose} />;
@@ -188,37 +205,8 @@ function Editor({ site, onClose }: { site: Site; onClose: () => void }) {
     placement: <PlacementSection f={f} set={set} site={site} />,
   };
 
-  return (
-    <Modal
-      open
-      onOpenChange={(o) => !o && (dirty ? setDiscard(true) : onClose())}
-      title={`Endpoint · ${site.name}`}
-      description={f.spec.domains[0] ?? undefined}
-      width={1080}
-      fill
-    >
-      <div className="flex h-[70vh] min-h-0 flex-col sm:flex-row">
-        <nav
-          aria-label="Endpoint sections"
-          className="flex shrink-0 gap-0.5 overflow-x-auto border-b border-line pb-1 sm:w-44 sm:flex-col sm:overflow-visible sm:border-r sm:border-b-0 sm:pr-2 sm:pb-0"
-        >
-          {SECTIONS.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              type="button"
-              aria-current={section === id ? "page" : undefined}
-              onClick={() => setSection(id)}
-              className={`flex shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] focus-visible:outline-2 focus-visible:outline-accent ${section === id ? "bg-accent-soft text-accent" : "text-muted hover:bg-panel-2 hover:text-fg"}`}
-            >
-              <Icon className="size-3.5 shrink-0" /> {label}
-            </button>
-          ))}
-        </nav>
-        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto py-2 sm:py-0 sm:pl-4">
-          {body[section]}
-        </div>
-      </div>
-      <div className="mt-3 flex shrink-0 flex-wrap items-center gap-2 border-t border-line pt-3">
+  const footer = (
+    <>
         <span className="min-w-0 flex-1 truncate text-xs" title={problems[0]}>
           {problems.length ? (
             <span className="text-warn">{problems[0]}</span>
@@ -263,6 +251,41 @@ function Editor({ site, onClose }: { site: Site; onClose: () => void }) {
         >
           {update.isPending && <Loader2 className="size-4 animate-spin" />} Save
         </Button>
+      </>
+  );
+
+  return (
+    <FormPage
+      back={<EndpointCrumb />}
+      current={site.name}
+      title={`Endpoint · ${site.name}`}
+      description={f.spec.domains[0] ?? undefined}
+      footer={footer}
+    >
+      <div className="grid min-w-0 gap-4 min-[721px]:grid-cols-[11rem_minmax(0,1fr)]">
+        <nav
+          aria-label="Endpoint sections"
+          className="min-w-0 min-[721px]:sticky min-[721px]:top-0 min-[721px]:self-start"
+        >
+          <ol className="flex gap-1 overflow-x-auto min-[721px]:flex-col">
+            {SECTIONS.map(({ id, label, icon: Icon }) => (
+              <li key={id} className="shrink-0">
+                <button
+                  type="button"
+                  aria-current={section === id ? "page" : undefined}
+                  onClick={() => setSection(id)}
+                  className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs focus-visible:outline-2 focus-visible:outline-accent ${section === id ? "bg-accent-soft text-accent" : "text-muted hover:bg-panel-2 hover:text-fg"}`}
+                >
+                  <span className={`grid size-5 shrink-0 place-items-center rounded ${TILE[SECTION_TONE[id]]}`}>
+                    <Icon className="size-3" />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{label}</span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        </nav>
+        <div className="min-w-0 rounded-lg border border-line bg-panel px-4 py-4">{body[section]}</div>
       </div>
       {discard && (
         <Confirm
@@ -274,7 +297,7 @@ function Editor({ site, onClose }: { site: Site; onClose: () => void }) {
           onConfirm={onClose}
         />
       )}
-    </Modal>
+    </FormPage>
   );
 }
 

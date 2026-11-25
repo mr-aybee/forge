@@ -163,7 +163,8 @@ every edge; **Delete** removes the endpoint from Forge.
 
 ## Edit an endpoint
 
-Select **Edit** in the endpoint's row menu. The editor has these sections:
+Select **Edit** in the endpoint's row menu. The editor opens as its own page
+(`/ingress/endpoints/<endpoint-id>`), with the sections listed on the left:
 
 | Section | What you set |
 | --- | --- |

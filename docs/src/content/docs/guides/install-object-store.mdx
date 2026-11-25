@@ -59,8 +59,11 @@ on a non-production node first.
 
 ## Install a standalone store
 
-1. Open **Object Storage** and select **Install RustFS**. Choose the topology
-   **Standalone** (one node) and select **Next**. For a highly available store,
+1. Open **Object Storage** and select **Install RustFS**. The install form
+   opens as its own page (`/storage/install`), with its sections listed on
+   the left and a **What will be created** summary on the right (container or
+   service name, ports, data paths and the S3 endpoint URL). Under
+   **Topology**, choose **Single node**. For a highly available store,
    see [Install a distributed (HA) store](#install-a-distributed-ha-store).
 2. Enter a **Name** for the store. The **Instance name** (slug) defaults from it, for example
    `media`. The slug must match `[a-z][a-z0-9-]{0,30}` and be unique on the
@@ -81,18 +84,20 @@ on a non-production node first.
    if the control plane reaches the node by
    another name or address than its hostname. Change the **Region** (default
    `us-east-1`) if your S3 clients sign for another region.
-   For the **Docker** runtime, optionally set the container options: image,
-   container name, restart policy, network, memory and CPU limits, extra
-   RustFS variables, and per data path a host directory or a Docker named
-   volume. See [Docker settings](/docs/reference/rest-api/#docker-settings)
+   For the **Docker** runtime, the **Docker** section asks per drive for a
+   **Host path** or a **Named volume**. Image, container name, restart
+   policy, network, memory and CPU limits and extra RustFS variables are
+   under **Advanced**. See [Docker settings](/docs/reference/rest-api/#docker-settings)
    for every option and the variables you may set.
 9. Optional: in **Environment**, choose the environment the store belongs to.
    Leave it on **Shared (no environment)** for a shared store. See
    [Assign a store to an environment](#assign-a-store-to-an-environment) for
    what this changes.
-10. Select **Review**, check the node, data path, ports and runtime, then select
-    **Install**. Forge creates a root credential in the vault and starts a
-    `storage.action` job. The dialog shows the job steps and live output.
+10. Check the summary, then select **Install**. Problems are shown beside
+    the field they concern, and the section list marks the sections that
+    need attention. Forge creates a root credential in the vault and starts
+    a `storage.action` job. The page then shows the job steps and live
+    output, with **Open store** to go to the new store.
 
 The same request through the API:
 
@@ -124,7 +129,7 @@ for how it works and what counts as a failure domain.
 - At least 2 Linux nodes, at most 32. Windows nodes cannot join.
 - The same number of drives (data paths) on every node, at least 4 drives in
   total, at most 16 per node and 64 in total. Fewer than 4 drives is refused
-  in the wizard and by the API.
+  in the install form and by the API.
 - The **node** is the failure unit. Several drives of one node may share a
   disk; Forge allows that and notes it in the job log. Drives of different
   nodes on one NAS fail together, so avoid that.
@@ -136,8 +141,8 @@ for how it works and what counts as a failure domain.
 
 ### Steps
 
-1. Open **Object Storage**, select **Install RustFS**, choose the topology
-   **Distributed (HA)** and select **Next**.
+1. Open **Object Storage**, select **Install RustFS** and, under
+   **Topology**, choose **Distributed (HA)**.
 2. Enter the **Name**, **Instance name**, **Release**, **Runtime**, **S3 port**
    and optional **Console port**. The ports are the same on every node.
 3. Under **Nodes and drives**, set **Drives per node**.
@@ -148,7 +153,7 @@ for how it works and what counts as a failure domain.
 5. Turn on **Require a dedicated mount** if each drive is a separate volume.
 6. Optional: in **Environment**, choose the environment the store belongs to.
    Leave it on **Shared (no environment)** for a shared store.
-7. Select **Review**, check the nodes, drives and endpoints, then select
+7. Check the nodes, drives and endpoints in the summary, then select
    **Install**. Forge starts one `storage.action` job per node. They run in
    parallel, and each node waits up to 15 minutes for the others before it
    reports healthy. While a node waits, its job output says every 30 seconds
@@ -165,7 +170,7 @@ When the drives of a node share a device, the node's job log shows a warning
 such as `warning: /srv/objstore/<store>/disk2 shares a device with
 /srv/objstore/<store>/disk1 on <node>: fault tolerance is per node`. Forge then
 sets `RUSTFS_UNSAFE_BYPASS_DISK_CHECK=true` in that member's settings so that
-RustFS accepts the layout. The **Review** step cannot see devices on the
+RustFS accepts the layout. The install form cannot see devices on the
 nodes, so the warning appears only in the job log.
 
 :::caution

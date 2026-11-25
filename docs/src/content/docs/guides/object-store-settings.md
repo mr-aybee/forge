@@ -17,7 +17,7 @@ not become healthy.
   session (see [MFA](/docs/guides/mfa/)).
 - The store is a managed RustFS store and no action is running on it.
   Connected stores and adopted containers have no editable
-  settings; the dialog shows the reason.
+  settings; the settings page shows the reason.
 - A new port is 1024 or higher and free on every member node. The console
   port differs from the S3 port.
 - For a new release on Docker, the node can pull the image.
@@ -31,12 +31,16 @@ the store's endpoint, so update the clients that use it.
 
 ## Steps
 
-1. Open **Object Storage**, then the store, and select **Settings**.
+1. Open **Object Storage**, then the store, and select **Settings**. The
+   settings open as their own page (`/storage/<store-id>/settings`); the
+   **Changes** panel on the right lists every change as you make it.
 2. Change the **Release**, **S3 port**, **Console port** or **Region**.
 3. For a Docker store, change the image, restart policy, memory and CPU
    limits or extra RustFS variables. The container name, network and volumes
    are fixed after install and cannot be changed here.
-4. Save. Forge starts one `storage.action` job per member node.
+4. Select **Save and apply**. A confirmation names the nodes that restart
+   and what happens. Confirm, and Forge starts one `storage.action` job per
+   member node; the page then shows the jobs live.
 
 With the REST API, send the full desired state:
 
