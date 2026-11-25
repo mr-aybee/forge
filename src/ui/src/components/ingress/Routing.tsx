@@ -393,9 +393,26 @@ function Row({ ep, site, live, ctx, clusterName }: { ep: RouteEndpoint; site?: S
     return e.status === "applied" ? "ok" : e.status === "failed" ? "bad" : "idle";
   };
 
-  // Last minute of traffic for this endpoint, per edge (keyed by its first domain).
-  const domain = domains[0] ?? "";
-  const siteOn = (edge: string): SiteTraffic | undefined => live?.edges?.[edge]?.state?.traffic?.[domain];
+  // Last minute of traffic for this endpoint, per edge: the sum over all its domains.
+  const siteOn = (edge: string): SiteTraffic | undefined => {
+    const per = live?.edges?.[edge]?.state?.traffic;
+    const hits = domains.map((d) => per?.[d]).filter((t): t is SiteTraffic => !!t);
+    if (!hits.length) return undefined;
+    const sum: SiteTraffic = { requests: 0, rps: 0, in_bps: 0, out_bps: 0, upstreams: {} };
+    for (const t of hits) {
+      sum.requests += t.requests;
+      sum.rps += t.rps;
+      sum.in_bps += t.in_bps;
+      sum.out_bps += t.out_bps;
+      for (const [addr, u] of Object.entries(t.upstreams ?? {})) {
+        const acc = (sum.upstreams[addr] ??= { requests: 0, sent_bps: 0, received_bps: 0 });
+        acc.requests += u.requests;
+        acc.sent_bps += u.sent_bps;
+        acc.received_bps += u.received_bps;
+      }
+    }
+    return sum;
+  };
   const anyTraffic = edges.some((e) => siteOn(e.server_id));
   const edgeRate = (id: string) => {
     const t = siteOn(id);
