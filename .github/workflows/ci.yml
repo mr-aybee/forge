@@ -116,9 +116,10 @@ jobs:
   rust-windows:
     name: Rust (Windows)
     needs: plan
-    # Windows-only code lives in the agent. Disabled: CI covers Linux only.
-    # Windows is tested on a local Windows machine first, then re-enabled here.
-    if: false
+    # Windows ships again (server, agent, worker, CLI). Not a required check
+    # yet: the suite's first Windows runs decide when it becomes one.
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    timeout-minutes: 120
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

@@ -11,7 +11,7 @@ name: Release
 # signed and verified, and the result is kept as the `release-assets`
 # artifact for review, but nothing is published.
 #
-# Each release publishes self-contained packages for Linux (Windows is paused), the raw binaries the self-updater
+# Each release publishes self-contained packages for Linux and Windows, the raw binaries the self-updater
 # downloads, the `forge` CLI per platform (forge-cli-<target>[.exe]), the
 # bootstrap installers (get-forge.sh, get-forge.ps1), SHA256SUMS and its
 # Ed25519 signature. Asset names are a public contract: install.sh,
@@ -161,9 +161,9 @@ jobs:
         # Both Linux targets build in the `cross` images: their musl GCC
         # toolchains compile DuckDB's bundled C++ (musl-tools on the host has
         # no C++ compiler). The server, agent and their services ship for
-        # Linux only (x86_64, aarch64); Windows builds the `forge` CLI only
-        # (`cli_only`). No macOS builds.
-        include: ${{ fromJSON('[{"target":"x86_64-unknown-linux-musl","os":"linux","exe":"","file":"x86-64","cli_only":false},{"target":"aarch64-unknown-linux-musl","os":"linux","exe":"","file":"ARM aarch64","cli_only":false},{"target":"x86_64-pc-windows-msvc","os":"windows","exe":".exe","file":"","cli_only":true}]') }}
+        # Linux (x86_64, aarch64) and Windows (x86_64): server, agent, plugin
+        # runner, analytics worker and the `forge` CLI. No macOS builds.
+        include: ${{ fromJSON('[{"target":"x86_64-unknown-linux-musl","os":"linux","exe":"","file":"x86-64","cli_only":false},{"target":"aarch64-unknown-linux-musl","os":"linux","exe":"","file":"ARM aarch64","cli_only":false},{"target":"x86_64-pc-windows-msvc","os":"windows","exe":".exe","file":"","cli_only":false}]') }}
     runs-on: ${{ matrix.os == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
@@ -240,6 +240,8 @@ jobs:
             aarch64-unknown-linux-musl)
               cp "$src/forge-agent" out/forge-agent-linux-aarch64
               cp "$src/forge-agent-helper" out/forge-agent-helper-linux-aarch64 ;;
+            x86_64-pc-windows-msvc)
+              cp "$src/forge-agent.exe" out/forge-agent-windows-x86_64.exe ;;
           esac
           if [ "${{ matrix.os }}" = linux ]; then
             for f in out/*; do
@@ -252,7 +254,7 @@ jobs:
           # The native binaries start, and the server reports the release
           # version (the self-updater compares it; the worker reports its
           # Cargo version).
-          if [ "$t" = x86_64-unknown-linux-musl ]; then
+          if [ "$t" = x86_64-unknown-linux-musl ] || [ "$t" = x86_64-pc-windows-msvc ]; then
             got=$("out/forge-server-$t$x" --version)
             echo "$got"
             case "$got" in *" $VERSION") ;; *) echo "::error::forge-server reports '$got', expected version $VERSION (is FORGE_BUILD_VERSION passed through Cross.toml?)"; exit 1 ;; esac
