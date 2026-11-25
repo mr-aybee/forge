@@ -2,7 +2,7 @@
 
 Branch `feat/swarm-end-to-end`. Builds on D-154 (cluster modes), D-156
 (strategies on Swarm) and D-157 (typed Docker operations). Decision record:
-D-170.
+D-171.
 
 ## Where Swarm stood
 

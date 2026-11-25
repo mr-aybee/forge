@@ -511,6 +511,15 @@ pub enum Target {
     App { service_id: String, port: u16 },
     /// Any `host:port`.
     External { address: String },
+    /// A port published on a Docker Swarm's routing mesh (a stack service or
+    /// a Swarm service): every node of the cluster's swarm answers on it
+    /// (D-171). `service` names what publishes it, for display.
+    Swarm {
+        cluster_id: String,
+        port: u16,
+        #[serde(default)]
+        service: Option<String>,
+    },
 }
 
 impl Target {
@@ -527,6 +536,7 @@ impl Target {
                 Ok(if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") })
             }
             Self::App { service_id, .. } => Err(format!("service {service_id} is resolved from its placements")),
+            Self::Swarm { cluster_id, .. } => Err(format!("swarm {cluster_id} is resolved from its nodes")),
             Self::External { address } => Ok(address.clone()),
         }
     }

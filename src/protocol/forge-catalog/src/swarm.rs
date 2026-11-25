@@ -183,6 +183,90 @@ pub enum SwarmOp {
         #[serde(default = "default_tail")]
         tail: u32,
     },
+    /// Creates the swarm's shared, attachable, encrypted overlay
+    /// ([`crate::swarm_stack::SHARED_NETWORK`]) when it is missing.
+    EnsureSharedNetwork {},
+    /// The swarm's networks with subnets and attached services.
+    Networks {},
+    /// `docker stack deploy` of a checked stack (D-171).
+    StackDeploy {
+        part: Box<crate::swarm_stack::SwarmStackPart>,
+    },
+    /// The services and tasks of a stack namespace.
+    StackStatus {
+        namespace: String,
+    },
+    /// `docker stack rm`.
+    StackRemove {
+        namespace: String,
+    },
+    /// Scale, restart or roll back one service of a stack.
+    StackServiceAction {
+        namespace: String,
+        service: String,
+        action: StackServiceAction,
+    },
+    /// The last lines of one stack service's logs (all tasks).
+    StackServiceLogs {
+        namespace: String,
+        service: String,
+        #[serde(default = "default_tail")]
+        tail: u32,
+    },
+    /// CPU and memory of every Swarm task container on this node (any
+    /// node, not only managers).
+    TaskStats {},
+    /// The swarm's secrets or configs (never their values).
+    Objects {
+        kind: crate::swarm_stack::ObjectKind,
+    },
+    /// Creates version `version` of a Forge secret or config.
+    ObjectCreate {
+        kind: crate::swarm_stack::ObjectKind,
+        name: String,
+        version: u32,
+        data: ObjectData,
+    },
+    /// Removes one version (by its Docker name) that Forge made.
+    ObjectRemove {
+        kind: crate::swarm_stack::ObjectKind,
+        docker_name: String,
+    },
+}
+
+/// What [`SwarmOp::StackServiceAction`] does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StackServiceAction {
+    Scale {
+        replicas: u32,
+    },
+    /// Replaces every task (`--force`), following the update config.
+    Restart,
+    /// Back to the service's previous spec.
+    Rollback,
+}
+
+/// A secret or config value, base64-encoded: never printed.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ObjectData(pub String);
+
+impl std::fmt::Debug for ObjectData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ObjectData(***)")
+    }
+}
+
+/// `<name>.v<N>` made by Forge.
+fn docker_object_ok(n: &str) -> bool {
+    n.rsplit_once(".v").is_some_and(|(name, v)| {
+        crate::swarm_stack::object_name_ok(name) && !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
+fn namespace_ok(ns: &str) -> bool {
+    crate::stacks::valid_project(ns)
 }
 
 const fn default_tail() -> u32 {
@@ -329,7 +413,59 @@ impl SwarmOp {
 
                 def.validate()
             }
-            Self::Status {} | Self::Leave { .. } | Self::JoinTokens {} | Self::Nodes {} => Ok(()),
+            Self::StackDeploy { part } => part.prepare().map(|_| ()),
+            Self::StackServiceAction { namespace, service, action } => {
+                if !namespace_ok(namespace) || !crate::stacks::valid_service_name(service) {
+                    return Err("invalid stack or service name".into());
+                }
+
+                match action {
+                    StackServiceAction::Scale { replicas } if *replicas > 1000 => Err("at most 1000 replicas".into()),
+                    _ => Ok(()),
+                }
+            }
+            Self::StackServiceLogs { namespace, service, tail } => {
+                if !namespace_ok(namespace) || !crate::stacks::valid_service_name(service) {
+                    return Err("invalid stack or service name".into());
+                }
+
+                if *tail > 10_000 { Err("at most 10000 log lines".into()) } else { Ok(()) }
+            }
+            Self::StackStatus { namespace } | Self::StackRemove { namespace } => {
+                if namespace_ok(namespace) {
+                    Ok(())
+                } else {
+                    Err("invalid stack namespace".into())
+                }
+            }
+            Self::ObjectCreate { name, version, data, .. } => {
+                if !crate::swarm_stack::object_name_ok(name) {
+                    return Err("names use a-z, 0-9, `_` and `-` (up to 51)".into());
+                }
+
+                if *version == 0 {
+                    return Err("versions start at 1".into());
+                }
+
+                let ok = data.0.len() <= crate::swarm_stack::MAX_OBJECT_BYTES * 4 / 3 + 4
+                    && data.0.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='));
+                if ok { Ok(()) } else { Err("the value must be base64 and at most 500 KiB".into()) }
+            }
+            Self::ObjectRemove { docker_name, .. } => {
+                if docker_object_ok(docker_name) {
+                    Ok(())
+                } else {
+                    Err("only versions Forge made can be removed".into())
+                }
+            }
+            Self::Status {}
+            | Self::Leave { .. }
+            | Self::JoinTokens {}
+            | Self::Nodes {}
+            | Self::EnsureSharedNetwork {}
+            | Self::TaskStats {}
+            | Self::Networks {}
+            | Self::Objects { .. } => Ok(()),
         }
     }
 }
@@ -403,6 +539,39 @@ pub struct SwarmServiceStatus {
     pub update_message: String,
     pub image: String,
     pub tasks: Vec<SwarmTask>,
+}
+
+/// Resources of one Swarm task container on a node, sampled now.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TaskStat {
+    pub task_id: String,
+    /// Docker service name.
+    pub service: String,
+    /// Percent of one CPU (100 = one core busy).
+    pub cpu_percent: f64,
+    pub memory_bytes: u64,
+    /// The container's memory limit (0: none).
+    pub memory_limit: u64,
+}
+
+/// A network as a manager sees it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmNetwork {
+    pub id: String,
+    pub name: String,
+    /// `overlay`, `bridge`, …
+    pub driver: String,
+    /// `swarm` or `local`.
+    pub scope: String,
+    pub subnets: Vec<String>,
+    pub encrypted: bool,
+    pub attachable: bool,
+    /// The routing-mesh network.
+    pub ingress: bool,
+    /// Made by Forge (environment networks, the shared network, stack networks).
+    pub managed: bool,
+    /// Swarm services attached to it (Docker names).
+    pub services: Vec<String>,
 }
 
 /// One node as a manager sees it.
