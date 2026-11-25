@@ -33,6 +33,8 @@ export interface ServiceEditorProps {
   serviceId?: string;
   /** The environment's cluster runs Docker Swarm: containers only, with the Swarm section. */
   swarm?: boolean;
+  /** The service's environment; the Swarm section lists its cluster's secrets and configs. */
+  environmentId?: string;
 }
 
 /**
@@ -41,7 +43,7 @@ export interface ServiceEditorProps {
  * always-open section cards. Shared by **New service** and the service's
  * **Configuration** tab; the page owns the form object and the action bar.
  */
-export function ServiceEditor({ value, onChange, mode, basics, basicsState, facts, serviceId, swarm = false }: ServiceEditorProps) {
+export function ServiceEditor({ value, onChange, mode, basics, basicsState, facts, serviceId, swarm = false, environmentId }: ServiceEditorProps) {
   const catalog = useCatalog();
   const packages = catalog.data?.packages ?? [];
   const runtimes = packages.filter((p) => p.category === "runtimes");
@@ -86,7 +88,7 @@ export function ServiceEditor({ value, onChange, mode, basics, basicsState, fact
       case "health":
         return { node: <HealthSection value={value} set={set} serviceId={serviceId} /> };
       case "swarm":
-        return { node: value.swarm ? <SwarmSection value={value.swarm} serviceName={value.name ?? ""} onChange={(w) => set({ swarm: w })} /> : null };
+        return { node: value.swarm ? <SwarmSection value={value.swarm} serviceName={value.name ?? ""} environmentId={environmentId} onChange={(w) => set({ swarm: w })} /> : null };
       case "advanced":
         return {
           // Keyed on the view so the YAML text starts from the current form each time it opens.

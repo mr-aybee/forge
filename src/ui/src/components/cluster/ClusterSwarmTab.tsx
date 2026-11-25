@@ -17,6 +17,7 @@ import {
   useUpdateSwarmNode,
 } from "../../api/swarm";
 import { nodeName, type Server } from "../../api/types";
+import type { SwarmSection } from "../../app/router";
 import { errorText, useToast } from "../../app/toast";
 import { SwarmNetworks } from "../swarm/SwarmNetworks";
 import { SwarmObjects } from "../swarm/SwarmObjects";
@@ -24,7 +25,6 @@ import { SwarmStacks } from "../swarm/SwarmStacks";
 import { SwarmVolumes } from "../swarm/SwarmVolumes";
 import { Badge, Button, Confirm, CopyIcon, Empty, ErrorNote, Field, Input, Modal, Panel, RowMenu, Segmented, Select, Skeleton, Stat, Table, Td, TextArea, ago, time } from "../ui";
 
-type SwarmSection = "overview" | "nodes" | "stacks" | "objects" | "networks" | "volumes";
 
 /** Health at a glance: managers and workers, leader, nodes down or draining, failed joins. */
 function Health({ v, servers, onNodes }: { v: SwarmView; servers: Server[]; onNodes: () => void }) {
@@ -75,12 +75,11 @@ const stateTone = { joined: "ok", joining: "accent", leaving: "warn", failed: "b
 const availTone = { active: "ok", pause: "warn", drain: "warn" } as const;
 
 /** Docker Swarm workspace of a Swarm-mode cluster: quorum, nodes and membership. */
-export function ClusterSwarmTab({ clusterId, environmentId }: { clusterId: string; environmentId?: string | null }) {
+export function ClusterSwarmTab({ clusterId, environmentId, section, onSection: setSection }: { clusterId: string; environmentId?: string | null; section: SwarmSection; onSection: (s: SwarmSection) => void }) {
   const q = useSwarm(clusterId);
   const servers = useServers();
   const [adding, setAdding] = useState<SwarmRole | null>(null);
   const [rotating, setRotating] = useState(false);
-  const [section, setSection] = useState<SwarmSection>("overview");
 
   if (q.error) return <ErrorNote error={q.error} />;
   if (q.isLoading || !q.data) return <Skeleton rows={6} />;

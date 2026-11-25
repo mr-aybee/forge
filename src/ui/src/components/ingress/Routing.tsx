@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { ArrowUpRight, Globe, Layers, Lock, Network, Server } from "lucide-react";
+import { ArrowUpRight, Boxes, Globe, Layers, Lock, Network, Server } from "lucide-react";
 import { type ReactNode, useCallback, useLayoutEffect, useRef, useState } from "react";
 
 import { get } from "../../api/client";
@@ -34,7 +34,7 @@ const roleOf = (t: RouteTarget, u: Hop, apps: Map<string, Service>): Role | unde
   return u.standby ? "standby" : "replica";
 };
 interface RouteTarget {
-  target: { kind: "app"; service_id: string; port: number } | { kind: "node"; server_id: string; port: number } | { kind: "external"; address: string };
+  target: { kind: "app"; service_id: string; port: number } | { kind: "node"; server_id: string; port: number } | { kind: "external"; address: string } | { kind: "swarm"; cluster_id: string; port: number; service?: string };
   label: string;
   internal_name: string | null;
   standby: boolean;
@@ -58,7 +58,7 @@ const dot: Record<Tone, string> = { ok: "bg-ok", bad: "bg-bad", warn: "bg-warn",
  * state the node last reported for the placement. External targets: unknown.
  */
 const hopState = (t: RouteTarget, u: Hop, node: Node | undefined): LiveState | undefined => {
-  if (t.target.kind === "external") return undefined;
+  if (t.target.kind === "external" || t.target.kind === "swarm") return undefined;
   if (t.target.kind === "node") return node && (node.status === "offline" || node.status === "revoked") ? liveState({ status: "deployed", state: null, last_error: null }, node) : undefined;
   return liveState({ status: "deployed", state: u.state ?? null, last_error: null }, node);
 };
@@ -296,12 +296,12 @@ function Row({ ep, live, nodes, apps }: { ep: RouteEndpoint; live?: LiveResponse
                 id={`target:${i}`}
                 reg={reg}
                 standby={t.standby}
-                icon={tt.kind === "app" ? <Layers className="size-3" /> : tt.kind === "node" ? <Server className="size-3" /> : <Globe className="size-3" />}
+                icon={tt.kind === "app" ? <Layers className="size-3" /> : tt.kind === "node" ? <Server className="size-3" /> : tt.kind === "swarm" ? <Boxes className="size-3" /> : <Globe className="size-3" />}
                 to={tt.kind === "app" ? { kind: "app", id: tt.service_id } : tt.kind === "node" ? { kind: "node", id: tt.server_id } : undefined}
                 sub={tt.kind === "app" ? `:${tt.port}` : undefined}
                 title={t.internal_name ?? undefined}
               >
-                {t.label}
+                {tt.kind === "swarm" ? `${tt.service || "routing mesh"} (swarm :${tt.port})` : t.label}
               </Pill>
               {t.internal_name && <div className="truncate pl-1 font-mono text-[10px] text-faint">{t.internal_name}</div>}
             </div>

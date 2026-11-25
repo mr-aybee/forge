@@ -5,16 +5,19 @@ import { useState } from "react";
 import {
   type SwarmStackRef,
   type SwarmStackService,
+  type SwarmTaskStat,
   useDeploySwarmStack,
   useRemoveSwarmStack,
   useStackServiceAction,
   useStackServiceLogs,
   useStackSwarm,
   useSwarmStacks,
+  useSwarmTaskStats,
 } from "../../api/swarm";
 import { errorText, useToast } from "../../app/toast";
 import { Badge, Button, Confirm, CopyButton, Drawer, Empty, ErrorNote, Field, Input, Modal, Panel, RowMenu, Select, Skeleton, ago, time, toMs } from "../ui";
 import { useJobFollow } from "./jobFollow";
+import { TaskUsage, runningNodes } from "./TaskUsage";
 
 /** Stacks deployed into the swarm, each with its live services. */
 export function SwarmStacks({ clusterId, environmentId }: { clusterId: string; environmentId?: string | null }) {
@@ -125,6 +128,7 @@ function StackStatus({ id }: { id: string }) {
   const act = useStackServiceAction(id);
   const toast = useToast();
   const [dialog, setDialog] = useState<Dialog>(null);
+  const stats = useSwarmTaskStats(q.data?.cluster_id ?? "", (q.data?.status?.services ?? []).flatMap((s) => runningNodes(s.tasks)));
 
   if (q.error) return <Pad><ErrorNote error={q.error} /></Pad>;
   if (q.isLoading || !q.data) return <Pad><Skeleton rows={2} /></Pad>;
@@ -172,7 +176,7 @@ function StackStatus({ id }: { id: string }) {
             </thead>
             <tbody className="divide-y divide-line">
               {services.map((svc) => (
-                <ServiceRow key={svc.docker_name} svc={svc} busy={act.isPending && act.variables?.service === svc.name} onMenu={(k) => (k === "restart" || k === "rollback" ? run(svc, k) : setDialog({ kind: k, svc }))} />
+                <ServiceRow key={svc.docker_name} svc={svc} stats={stats.data} busy={act.isPending && act.variables?.service === svc.name} onMenu={(k) => (k === "restart" || k === "rollback" ? run(svc, k) : setDialog({ kind: k, svc }))} />
               ))}
             </tbody>
           </table>
@@ -186,7 +190,7 @@ function StackStatus({ id }: { id: string }) {
 
 const Pad = ({ children }: { children: React.ReactNode }) => <div className="border-t border-line px-3 py-2">{children}</div>;
 
-function ServiceRow({ svc, busy, onMenu }: { svc: SwarmStackService; busy: boolean; onMenu: (k: "scale" | "restart" | "rollback" | "logs") => void }) {
+function ServiceRow({ svc, stats, busy, onMenu }: { svc: SwarmStackService; stats?: Map<string, SwarmTaskStat>; busy: boolean; onMenu: (k: "scale" | "restart" | "rollback" | "logs") => void }) {
   const healthy = svc.running >= svc.desired && svc.desired > 0;
   const failed = svc.tasks.filter((t) => t.error).slice(0, 3);
   const global = svc.mode === "global";
@@ -219,6 +223,7 @@ function ServiceRow({ svc, busy, onMenu }: { svc: SwarmStackService; busy: boole
         <span className={healthy ? "text-ok" : svc.running === 0 ? "text-bad" : "text-warn"}>
           {svc.running}/{svc.desired}
         </span>
+        <TaskUsage tasks={svc.tasks} stats={stats} />
       </td>
       <td className="py-1.5 pr-3 font-mono text-[11px]">
         {svc.ports.length

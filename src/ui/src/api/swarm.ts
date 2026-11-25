@@ -99,6 +99,7 @@ export const swarmKeys = {
   addresses: (cluster: string, server: string) => ["swarm", cluster, "addresses", server] as const,
   convert: (cluster: string, to: ClusterMode) => ["swarm", "convert", cluster, to] as const,
   stack: (id: string) => ["swarm", "stack", id] as const,
+  taskStats: (cluster: string, nodes: string) => ["swarm", cluster, "task-stats", nodes] as const,
   stackLogs: (id: string, service: string, tail: number) => ["swarm", "stack", id, "logs", service, tail] as const,
 };
 
@@ -241,9 +242,41 @@ export interface SwarmSettings {
   restart: { condition: SwarmRestartCondition; max_attempts: number; delay_secs: number };
   update: { parallelism: number; delay_secs: number; order: SwarmUpdateOrder; failure_action: SwarmFailureAction; monitor_secs: number; max_failure_ratio: number };
   publish: SwarmPublishMode;
+  /** Swarm secrets mounted as files. */
+  secrets: FileRef[];
+  /** Swarm configs mounted as files. */
+  configs: FileRef[];
+  /** How secret variables reach the task: `env` (visible in inspect) or `files` (`<KEY>_FILE=/run/secrets/<KEY>`). */
+  secret_env: SecretEnvMode;
 }
 
+export type SecretEnvMode = "env" | "files";
+
+/** A secret or config mounted into the task. */
+export interface FileRef {
+  name: string;
+  /** Empty: secrets at `/run/secrets/<name>`, configs at `/<name>`. */
+  target?: string;
+  uid: string;
+  gid: string;
+  /** File mode as a number (0o444 = 292). */
+  mode: number;
+}
+
+export const defaultFileRef = (name = ""): FileRef => ({ name, target: "", uid: "0", gid: "0", mode: 0o444 });
+
+function normFileRef(v: unknown): FileRef | null {
+  const o = rec(v);
+  const name = str(o.name);
+  if (!name) return null;
+  return { name, target: typeof o.target === "string" ? o.target : "", uid: str(o.uid) ?? "0", gid: str(o.gid) ?? "0", mode: num(o.mode) ?? 0o444 };
+}
+
+/** Defaults for a NEW Swarm service: secret variables as files. */
 export const defaultSwarmSettings = (): SwarmSettings => ({
+  secrets: [],
+  configs: [],
+  secret_env: "files",
   name: "",
   mode: "replicated",
   replicas: 1,
@@ -284,6 +317,10 @@ export function normSwarmSettings(v: unknown): SwarmSettings {
       max_failure_ratio: num(u.max_failure_ratio) ?? 0,
     },
     publish: oneOf(o.publish, ["ingress", "host"] as const, d.publish),
+    secrets: arr(o.secrets).map(normFileRef).filter((x): x is FileRef => x !== null),
+    configs: arr(o.configs).map(normFileRef).filter((x): x is FileRef => x !== null),
+    // Stored services without the field keep the server's default, `env`.
+    secret_env: oneOf(o.secret_env, ["env", "files"] as const, "env"),
   };
 }
 
@@ -755,6 +792,35 @@ export type StackServiceAction = { kind: "scale"; replicas: number } | { kind: "
 
 export const useStackServiceAction = (id: string) =>
   useAction(({ service, ...b }: StackServiceAction & { service: string }) => post<void>(`${stackBase(id)}/services/${enc(service)}`, b), [swarmKeys.stack(id)]);
+
+/** CPU and memory of one running task. */
+export interface SwarmTaskStat {
+  task_id: string;
+  service: string;
+  cpu_percent?: number;
+  memory_bytes?: number;
+  memory_limit?: number;
+}
+
+const normTaskStat = (v: unknown): SwarmTaskStat | null => {
+  const o = rec(v);
+  const task_id = str(o.task_id);
+  return task_id ? { task_id, service: str(o.service) ?? "", cpu_percent: num(o.cpu_percent), memory_bytes: num(o.memory_bytes), memory_limit: num(o.memory_limit) } : null;
+};
+
+/** Per-task CPU and memory on the given Docker nodes, keyed by task id; polls every 15 s while enabled. */
+export const useSwarmTaskStats = (cluster: string, nodeIds: string[], enabled = true) => {
+  const nodes = [...new Set(nodeIds.filter(Boolean))].sort();
+  return useQuery({
+    queryKey: swarmKeys.taskStats(cluster, nodes.join(",")),
+    queryFn: () =>
+      listOf(`${base(cluster)}/task-stats?nodes=${nodes.map(enc).join(",")}`, normTaskStat).then((l) => new Map(l.map((s) => [s.task_id, s]))),
+    enabled: enabled && !!cluster && nodes.length > 0,
+    retry: false,
+    staleTime: 10_000,
+    refetchInterval: 15_000,
+  });
+};
 
 /** The last `tail` lines of one service; fetched on demand. */
 export const useStackServiceLogs = (id: string, service: string, tail: number) =>

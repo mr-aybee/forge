@@ -6,7 +6,7 @@ import { Boxes, Container, Gauge, Network, Pencil, Plus, Server, UserMinus } fro
 import { useState } from "react";
 
 import { useServices, useAssignServer, useClusters, useOnboardingNodes, useServers } from "../api/hooks";
-import type { ClusterTab } from "../app/router";
+import type { ClusterTab, SwarmSection } from "../app/router";
 import { ClusterContainersTab } from "../components/cluster/ClusterContainersTab";
 import { ClusterNetworkTab } from "../components/cluster/ClusterNetworkTab";
 import { ClusterSwarmTab } from "../components/cluster/ClusterSwarmTab";
@@ -23,7 +23,9 @@ import { ClusterForm } from "./Clusters";
 export function ClusterDetail() {
   const { clusterId } = useParams({ strict: false }) as { clusterId: string };
   const navigate = useNavigate();
-  const { tab = "overview" } = useSearch({ from: "/clusters/$clusterId" });
+  const { tab = "overview", section = "overview" } = useSearch({ from: "/clusters/$clusterId" });
+  const setSection = (sec: SwarmSection) =>
+    void navigate({ to: "/clusters/$clusterId", params: { clusterId }, search: { tab: "swarm", section: sec === "overview" ? undefined : sec }, replace: true });
   const setTab = (t: string) =>
     void navigate({ to: "/clusters/$clusterId", params: { clusterId }, search: { tab: t === "overview" ? undefined : (t as ClusterTab) }, replace: true });
   const services = useServices(undefined, clusterId);
@@ -154,7 +156,7 @@ export function ClusterDetail() {
         </Tabs.Content>
         {cluster.mode === "swarm" && (
           <Tabs.Content value="swarm">
-            <ClusterSwarmTab clusterId={clusterId} environmentId={cluster.environment_id} />
+            <ClusterSwarmTab clusterId={clusterId} environmentId={cluster.environment_id} section={section} onSection={setSection} />
           </Tabs.Content>
         )}
         <Tabs.Content value="overview">
