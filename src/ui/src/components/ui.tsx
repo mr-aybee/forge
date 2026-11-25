@@ -2,7 +2,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { useBlocker } from "@tanstack/react-router";
 import { Check, ChevronLeft, ChevronRight, Copy, LayoutGrid, List, ListTree, Loader2, Lock, type LucideIcon, MoreHorizontal, Rows3, Search, X } from "lucide-react";
-import { useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type TdHTMLAttributes } from "react";
+import { useEffect, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type TdHTMLAttributes } from "react";
 import { createPortal } from "react-dom";
 import { useToast } from "../app/toast";
 import { COPY_BLOCKED, copyText } from "../lib/clipboard";
@@ -989,4 +989,14 @@ export function UnsavedBar({
       )}
     </>
   );
+}
+
+/** A value that follows `value` after it stopped changing for `ms` (search boxes, live previews). */
+export function useDebounced<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
 }

@@ -1,242 +1,435 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Globe, Link2, Pencil, Plus, RefreshCw, Rocket, Undo2 } from "lucide-react";
+import {
+  Eraser,
+  Globe,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Rocket,
+  Trash2,
+  Undo2,
+} from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 
-import { api, get, post } from "../../api/client";
-import { useServers } from "../../api/hooks";
+import { useClusters, useServers } from "../../api/hooks";
+import {
+  type Site,
+  ruleKindLabel,
+  siteKinds,
+  useCertificates,
+  useDeleteSite,
+  useRenewSite,
+  useSiteRun,
+  useSites,
+} from "../../api/ingress";
 import { errorText, useToast } from "../../app/toast";
-import { Badge, Button, Confirm, Empty, Panel, RowMenu, type RowAction, Skeleton, Status, Table, Td, ago, useRowMenu } from "../ui";
+import {
+  Badge,
+  Button,
+  Confirm,
+  Empty,
+  ErrorNote,
+  Panel,
+  RowMenu,
+  type RowAction,
+  Select,
+  Skeleton,
+  Table,
+  Td,
+  ago,
+  time,
+  useRowMenu,
+} from "../ui";
 import { EndpointDialog } from "./EndpointDialog";
-import { useSites } from "./sites";
-import { targetLabel } from "./TargetEditor";
-import { type Certificate, type EdgeCert, type Member, type Site } from "./types";
+import { EndpointEditor } from "./EndpointEditor";
+import { CertChip, placementLabel } from "./EndpointParts";
 
-
-/** Certificate chip: green while valid (Forge renews Let's Encrypt at 5 days left). */
-function CertChip({ site, edges, certs }: { site: Site; edges: string[]; certs: Certificate[] }) {
-  const tls = site.config.spec.tls;
-  if (tls === "off") return <Badge>HTTP</Badge>;
-  if (tls === "uploaded") {
-    const c = certs.find((x) => x.id === site.config.spec.cert_id);
-    if (!c) return <Badge tone="bad">certificate missing</Badge>;
-    const tone = c.days_left < 0 ? "bad" : c.days_left <= 14 ? "warn" : "ok";
-    return (
-      <span title={c.days_left <= 14 ? "Uploaded certificates cannot renew themselves: upload the new one from your CA and switch this endpoint to it." : undefined}>
-        <Badge tone={tone}>{c.days_left < 0 ? "certificate expired" : `${c.name} · ${c.days_left}d`}</Badge>
-      </span>
-    );
-  }
-  const states = edges.map((e) => site.edge_status[e]?.cert).filter((c): c is EdgeCert => !!c);
-  const failing = states.find((c) => c.renew_error);
-  const days = states.map((c) => c.days_left).filter((d): d is number => typeof d === "number");
-  const min = days.length ? Math.min(...days) : undefined;
-  if (failing) {
-    return (
-      <span title={failing.renew_error ?? undefined}>
-        <Badge tone="bad">renewal failing{min !== undefined ? ` · ${min}d` : ""}</Badge>
-      </span>
-    );
-  }
-  return (
-    <span title="Let's Encrypt: Forge checks every 6 hours and renews automatically when 5 days or fewer are left.">
-      <Badge tone="ok">Let's Encrypt{min !== undefined ? ` · ${min}d · auto-renews` : " · auto-renews"}</Badge>
-    </span>
-  );
-}
-
+type Pending = { site: Site; what: "remove" | "delete" };
 
 /**
- * Service endpoints (Nginx sites). With `clusterId`, only that cluster's
- * endpoints are listed and new ones are served by its ingress profile.
+ * Every endpoint (Nginx site), whatever serves it: single nodes or a
+ * cluster's edge group. `scope` pins the list to one cluster (no filter).
  */
-export function Endpoints({ clusterId, members = [], hasProfile = false }: { clusterId?: string; members?: Member[]; hasProfile?: boolean }) {
-  const qc = useQueryClient();
+export function Endpoints({
+  scope,
+  defaultFilter = "all",
+}: {
+  scope?: string;
+  defaultFilter?: string;
+}) {
   const toast = useToast();
-  const all = useSites();
-  // A cluster lists its linked endpoints and the unlinked ones whose explicit
-  // edges are its nodes (they stay on the workspace page too).
-  const memberIds = new Set(members.map((m) => m.id));
-  const unlinkedHere = (s: Site) => !!clusterId && !s.config.cluster_id && (s.config.edges ?? []).some((e) => memberIds.has(e));
-  const sites = {
-    isLoading: all.isLoading,
-    data: all.data?.filter((s) => (clusterId ? s.config.cluster_id === clusterId || unlinkedHere(s) : !s.config.cluster_id)),
-  };
+  const sites = useSites();
+  const certs = useCertificates().data ?? [];
   const nodes = useServers().data ?? [];
-  const certs = useQuery({ queryKey: ["certificates"], queryFn: () => get<Certificate[]>("/api/v1/certificates") }).data ?? [];
-  const renew = useMutation({
-    mutationFn: (id: string) => post<{ ok: boolean; certificates: Record<string, EdgeCert | null> }>(`/api/v1/sites/${id}/renew`),
-    onMutate: (id) => setBusy(id),
-    onSettled: () => {
-      setBusy(undefined);
-      void qc.invalidateQueries({ queryKey: ["sites"] });
-    },
-    onSuccess: (r) => {
-      const bad = Object.entries(r.certificates).find(([, c]) => c?.renew_error);
-      if (bad) toast(`Renewal failed on ${host(bad[0])}: ${bad[1]?.renew_error}`, "error");
-      else toast("Certificate renewed on every edge");
-    },
-    onError: (e) => toast(errorText(e), "error"),
-  });
-  const [editing, setEditing] = useState<Site | "new">();
-  const [busy, setBusy] = useState<string>();
-  const [removing, setRemoving] = useState<Site>();
-  const [linking, setLinking] = useState<Site>();
+  const clusters = useClusters().data ?? [];
+  const run = useSiteRun();
+  const renew = useRenewSite();
+  const del = useDeleteSite();
   const rm = useRowMenu();
-  const host = (id: string) => nodes.find((n) => n.id === id)?.hostname ?? id.slice(0, 8);
+  const [ui, setUi] = useState<{
+    filter: string;
+    editing?: string;
+    creating: boolean;
+    pending?: Pending;
+    busy?: string;
+  }>({ filter: defaultFilter, creating: false });
+  const patch = (p: Partial<typeof ui>) => setUi((u) => ({ ...u, ...p }));
+  const host = (id: string) =>
+    nodes.find((n) => n.id === id)?.hostname ?? id.slice(0, 8);
+  const clusterName = (id: string) =>
+    clusters.find((c) => c.id === id)?.name ?? id.slice(0, 8);
+  const filter = scope ?? ui.filter;
+  const list = (sites.data ?? []).filter((s) => {
+    const p = s.config.placement;
+    if (filter === "all") return true;
+    if (filter === "nodes") return p.kind === "nodes";
+    return p.kind === "cluster" && p.cluster_id === filter;
+  });
 
-  const act = useMutation({
-    mutationFn: ({ id, action }: { id: string; action: "apply" | "remove" }) => post<{ edges: { server_id: string; result: { status: string; error?: string } }[]; dns?: { name: string; type: string; status: string; error?: string }[] | null }>(`/api/v1/sites/${id}/${action}`),
-    onMutate: ({ id }) => setBusy(id),
-    onSettled: () => {
-      setBusy(undefined);
-      void qc.invalidateQueries({ queryKey: ["sites"] });
-    },
-    onSuccess: (r, { action }) => {
-      const failed = r.edges.filter((e) => e.result.status !== "succeeded");
-      if (failed.length) toast(`${action} failed on ${failed.map((f) => host(f.server_id)).join(", ")}: ${failed[0]!.result.error ?? ""}`, "error");
-      else toast(`${action === "apply" ? "Applied" : "Removed"} on ${r.edges.length} edge node${r.edges.length === 1 ? "" : "s"}${r.dns?.length ? ` · ${r.dns.filter((d) => d.status === "succeeded").length} DNS records published` : ""}`);
-    },
-    onError: (e) => toast(errorText(e), "error"),
-  });
-  const link = useMutation({
-    mutationFn: (s: Site) =>
-      api<Site>("PUT", `/api/v1/sites/${s.id}`, {
-        ...s.config.spec,
-        name: s.name,
-        edges: [],
-        cluster_id: clusterId,
-        targets: s.config.targets ?? [],
-        standby_targets: s.config.standby_targets ?? [],
-        dns: s.config.dns ?? null,
-      }),
-    onSuccess: (s) => {
-      toast(`${s.name} now follows the cluster's ingress profile; press Apply to push it to the edges`);
-      void qc.invalidateQueries({ queryKey: ["sites"] });
-      void qc.invalidateQueries({ queryKey: ["cluster-routing", clusterId] });
-    },
-    onError: (e) => toast(errorText(e), "error"),
-  });
-  const del = useMutation({
-    mutationFn: (id: string) => api<void>("DELETE", `/api/v1/sites/${id}`),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["sites"] }),
-    onError: (e) => toast(errorText(e), "error"),
-  });
+  const edgeRun = (s: Site, action: "apply" | "remove" | "cache/clear") => {
+    patch({ busy: s.id });
+    run.mutate(
+      { id: s.id, action },
+      {
+        onSuccess: (r) => {
+          const failed = (r.edges ?? []).filter(
+            (e) => e.result?.status !== "succeeded",
+          );
+          const verb =
+            action === "apply"
+              ? "Apply"
+              : action === "remove"
+                ? "Remove"
+                : "Clearing the cache";
+          if (failed.length)
+            toast(
+              `${verb} failed on ${failed.map((x) => host(x.server_id)).join(", ")}: ${failed[0]?.result?.error ?? ""}`,
+              "error",
+            );
+          else {
+            const n = r.edges?.length ?? 0;
+            const dns = (r.dns ?? []).filter(
+              (d) => d.status === "succeeded",
+            ).length;
+            toast(
+              `${action === "apply" ? "Applied" : action === "remove" ? "Removed" : "Cache cleared"} on ${n} edge${n === 1 ? "" : "s"}${dns ? ` · ${dns} DNS records published` : ""}`,
+            );
+          }
+        },
+        onError: (e) => toast(errorText(e), "error"),
+        onSettled: () => patch({ busy: undefined }),
+      },
+    );
+  };
 
   return (
     <>
       <Panel
-        title={`${sites.data?.length ?? 0} endpoint${sites.data?.length === 1 ? "" : "s"}`}
-        description={clusterId ? "Domains served by this cluster's edge nodes. Apply pushes the config to every edge." : "Endpoints with hand-picked edge nodes (not tied to a cluster profile)."}
+        title={`${list.length} endpoint${list.length === 1 ? "" : "s"}`}
+        description="Domains served by Nginx on single nodes or a cluster's edge group. Saving never applies; Apply pushes the config to the edges."
         actions={
-          <Button variant="primary" disabled={!!clusterId && !hasProfile} title={clusterId && !hasProfile ? "Configure the ingress profile first" : undefined} onClick={() => setEditing("new")}>
-            <Plus className="size-4" /> New endpoint
-          </Button>
+          <>
+            {!scope && (
+              <div className="w-48">
+                <Select
+                  aria-label="Filter endpoints by placement"
+                  value={ui.filter}
+                  onChange={(e) => patch({ filter: e.target.value })}
+                >
+                  <option value="all">All endpoints</option>
+                  <option value="nodes">Single nodes</option>
+                  {clusters.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      Cluster {c.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            )}
+            <Button variant="primary" onClick={() => patch({ creating: true })}>
+              <Plus className="size-4" /> New endpoint
+            </Button>
+          </>
         }
       >
-        {sites.isLoading ? (
+        {sites.error ? (
+          <ErrorNote error={sites.error} />
+        ) : sites.isLoading ? (
           <Skeleton />
-        ) : !sites.data?.length ? (
-          <Empty icon={<Globe className="size-5" />} title="No endpoints yet">
-            {clusterId
-              ? hasProfile
-                ? "Register a domain and point it at a service in this cluster, a node port or any address."
-                : "Configure the cluster's ingress profile (Profile tab), then register endpoints here."
-              : "Install Nginx from the App Store on one or more edge nodes, then route a domain to a service."}
+        ) : !list.length ? (
+          <Empty
+            icon={<Globe className="size-5" />}
+            title={
+              sites.data?.length ? "No endpoints here" : "No endpoints yet"
+            }
+            action={
+              <Button onClick={() => patch({ creating: true })}>
+                New endpoint
+              </Button>
+            }
+          >
+            {sites.data?.length ? (
+              "No endpoint matches this filter."
+            ) : (
+              <>
+                Route a domain to a service, a node port or any address. You
+                need Nginx on a node (
+                <Link
+                  to="/app-store/$packageId"
+                  params={{ packageId: "nginx" }}
+                  className="text-accent hover:underline"
+                >
+                  App Store
+                </Link>
+                ) or a cluster with an ingress profile.
+              </>
+            )}
           </Empty>
         ) : (
-          <Table head={["Endpoint", "Targets", "Edges", "TLS / DNS", ""]}>
-            {sites.data.map((s) => {
-              const working = busy === s.id ? "An action on this endpoint is running" : undefined;
+          <Table head={["Domain", "Rules", "Served by", "SSL", "Edges", ""]}>
+            {list.map((s) => {
+              const spec = s.config.spec;
+              const busy = ui.busy === s.id;
+              const why = busy
+                ? "An action on this endpoint is running"
+                : undefined;
+              const applied = Object.values(s.edge_status).some(
+                (e) => e.status === "applied",
+              );
               const actions: RowAction[] = [
-                { label: busy === s.id ? "Applying…" : "Apply to edges", icon: Rocket, disabled: busy === s.id, hint: working, onSelect: () => act.mutate({ id: s.id, action: "apply" }) },
-                { label: "Edit", icon: Pencil, onSelect: () => setEditing(s) },
-                ...(unlinkedHere(s)
-                  ? [{ label: "Link to cluster", icon: Link2, disabled: !hasProfile || link.isPending, hint: hasProfile ? undefined : "Configure this cluster's ingress profile first", onSelect: () => setLinking(s) }]
-                  : []),
-                ...(s.config.spec.tls === "acme"
-                  ? [{ label: busy === s.id ? "Renewing…" : "Renew certificate now", icon: RefreshCw, disabled: busy === s.id, hint: working, onSelect: () => renew.mutate(s.id) }]
-                  : []),
-                { label: "Remove from edges", icon: Undo2, danger: true, disabled: busy === s.id, hint: working, onSelect: () => setRemoving(s) },
+                {
+                  label: "Edit",
+                  icon: Pencil,
+                  onSelect: () => patch({ editing: s.id }),
+                },
+                {
+                  label: busy ? "Working…" : "Apply to edges",
+                  icon: Rocket,
+                  tone: "ok",
+                  disabled: busy || !s.config.edges.length,
+                  hint:
+                    why ??
+                    (s.config.edges.length
+                      ? undefined
+                      : "No edges: choose where it's served (Edit → Placement)"),
+                  onSelect: () => edgeRun(s, "apply"),
+                },
+                {
+                  label: "Renew certificate now",
+                  icon: RefreshCw,
+                  hidden: spec.tls !== "acme",
+                  disabled: busy || renew.isPending,
+                  hint: why,
+                  onSelect: () =>
+                    renew.mutate(s.id, {
+                      onSuccess: (r) => {
+                        const bad = Object.entries(r.certificates ?? {}).find(
+                          ([, c]) => c?.renew_error,
+                        );
+                        toast(
+                          bad
+                            ? `Renewal failed on ${host(bad[0])}: ${bad[1]?.renew_error}`
+                            : "Certificate renewed on every edge",
+                          bad ? "error" : "ok",
+                        );
+                      },
+                      onError: (e) => toast(errorText(e), "error"),
+                    }),
+                },
+                {
+                  label: "Clear cache",
+                  icon: Eraser,
+                  hidden: !spec.cache,
+                  disabled: busy,
+                  hint: why,
+                  onSelect: () => edgeRun(s, "cache/clear"),
+                },
+                {
+                  label: "Remove from edges",
+                  icon: Undo2,
+                  danger: true,
+                  disabled: busy || !applied,
+                  hint: why ?? (applied ? undefined : "Not applied anywhere"),
+                  onSelect: () =>
+                    patch({ pending: { site: s, what: "remove" } }),
+                },
+                {
+                  label: "Delete",
+                  icon: Trash2,
+                  danger: true,
+                  disabled: busy || applied,
+                  hint: applied ? "Remove it from its edges first" : why,
+                  onSelect: () =>
+                    patch({ pending: { site: s, what: "delete" } }),
+                },
               ];
+              const primary = spec.domains[0];
+              const scheme = spec.tls === "off" ? "http" : "https";
+              const last = Math.max(
+                0,
+                ...Object.values(s.edge_status).map((e) => e.updated_at ?? 0),
+              );
               return (
-              <tr key={s.id} className="hover:bg-panel-2/60" {...rm.rowProps(actions, `Actions for ${s.name}`)}>
-                <Td>
-                  <button className="text-left font-medium hover:text-accent" onClick={() => setEditing(s)}>
-                    {s.config.spec.domains[0]}
-                  </button>
-                  {s.config.spec.domains.length > 1 && <span className="ml-1 text-xs text-faint">+{s.config.spec.domains.length - 1}</span>}
-                  <div className="text-xs text-faint">
-                    {s.name} · updated {ago(s.updated_at)}
-                  </div>
-                  {unlinkedHere(s) && (
-                    <span title="Served by hand-picked edge nodes of this cluster, not by its ingress profile. Use Link to cluster in the row menu.">
-                      <Badge tone="warn">explicit edges · not linked to profile</Badge>
-                    </span>
-                  )}
-                </Td>
-                <Td className="font-mono text-xs text-muted">
-                  {s.config.targets?.length ? s.config.targets.map((t) => targetLabel(t, members)).join(", ") : s.config.spec.upstreams.join(", ")}
-                  {s.config.spec.standby.length > 0 && <div className="text-faint">standby {s.config.spec.standby.join(", ")}</div>}
-                </Td>
-                <Td>
-                  <div className="flex flex-wrap gap-1">
-                    {s.config.edges.map((e) => {
-                      const st = s.edge_status[e];
-                      return (
-                        <span key={e} title={st?.error ?? undefined} className="inline-flex items-center gap-1 text-xs">
-                          <Status value={st?.status === "applied" ? "online" : st?.status === "failed" ? "failed" : "pending"} />
-                          {host(e)}
+                <tr
+                  key={s.id}
+                  className="hover:bg-panel-2/60"
+                  {...rm.rowProps(actions, `Actions for ${s.name}`)}
+                >
+                  <Td className="max-w-[280px]">
+                    <div className="flex min-w-0 items-center gap-1">
+                      {primary ? (
+                        <a
+                          href={`${scheme}://${primary.replace(/^\*\./, "")}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="truncate font-medium hover:text-accent"
+                          title={`${scheme}://${primary}`}
+                        >
+                          {primary}
+                        </a>
+                      ) : (
+                        <span className="text-faint">—</span>
+                      )}
+                      {spec.domains.length > 1 && (
+                        <span
+                          className="shrink-0 text-xs text-faint"
+                          title={spec.domains.slice(1).join("\n")}
+                        >
+                          +{spec.domains.length - 1}
                         </span>
-                      );
-                    })}
-                  </div>
-                </Td>
-                <Td>
-                  <div className="flex flex-wrap gap-1">
-                    <CertChip site={s} edges={s.config.edges} certs={certs} />
-                    {s.config.dns && <Badge tone="accent">DNS {s.config.dns.mode === "active_standby" ? "active/standby" : "round-robin"}</Badge>}
-                    {s.config.spec.custom.trim() && <Badge>custom block</Badge>}
-                  </div>
-                </Td>
-                <Td className="text-right">
-                  <RowMenu actions={actions} label={`Actions for ${s.name}`} />
-                </Td>
-              </tr>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      className="block max-w-full truncate font-mono text-[11px] text-faint hover:text-accent"
+                      onClick={() => patch({ editing: s.id })}
+                      title={`Edit ${s.name}`}
+                    >
+                      {s.name}
+                    </button>
+                  </Td>
+                  <Td>
+                    <div className="flex flex-wrap gap-1">
+                      {siteKinds(spec).map((k) => (
+                        <Badge
+                          key={k}
+                          tone={k === "balancer" ? "accent" : "muted"}
+                        >
+                          {ruleKindLabel(k)}
+                        </Badge>
+                      ))}
+                      {spec.custom.trim() && <Badge>custom</Badge>}
+                    </div>
+                  </Td>
+                  <Td className="max-w-[220px] text-xs">
+                    <span
+                      className="block truncate"
+                      title={placementLabel(s, host, clusterName)}
+                    >
+                      {placementLabel(s, host, clusterName)}
+                    </span>
+                  </Td>
+                  <Td>
+                    <CertChip site={s} certs={certs} />
+                  </Td>
+                  <Td>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {s.config.edges.length === 0 && (
+                        <span className="text-xs text-faint">—</span>
+                      )}
+                      {s.config.edges.map((e) => {
+                        const st = s.edge_status[e];
+                        const tone =
+                          st?.status === "applied"
+                            ? "bg-ok"
+                            : st?.status === "failed"
+                              ? "bg-bad"
+                              : "bg-faint";
+                        return (
+                          <span
+                            key={e}
+                            role="img"
+                            aria-label={`${host(e)}: ${st?.status ?? "not applied"}`}
+                            title={`${host(e)}: ${st?.status ?? "not applied"}${st?.error ? ` · ${st.error}` : ""}`}
+                            className={`size-2 rounded-full ${tone}`}
+                          />
+                        );
+                      })}
+                      {last > 0 && (
+                        <span
+                          className="text-[11px] text-faint"
+                          title={time(last)}
+                        >
+                          {ago(last)}
+                        </span>
+                      )}
+                    </div>
+                  </Td>
+                  <Td className="text-right">
+                    <RowMenu
+                      actions={actions}
+                      label={`Actions for ${s.name}`}
+                    />
+                  </Td>
+                </tr>
               );
             })}
           </Table>
         )}
       </Panel>
       {rm.menu}
-      {editing && (
+      {ui.creating && (
         <EndpointDialog
-          site={editing === "new" ? undefined : editing}
-          // Editing an unlinked endpoint from a cluster page keeps its own edges.
-          clusterId={editing !== "new" && !editing.config.cluster_id ? undefined : clusterId} members={members} onClose={() => setEditing(undefined)} onDelete={(id) => del.mutate(id)} />
+          clusterId={scope}
+          onClose={() => patch({ creating: false })}
+          onCreated={(s) => patch({ creating: false, editing: s.id })}
+        />
       )}
-      <Confirm
-        open={!!removing}
-        onOpenChange={(o) => !o && setRemoving(undefined)}
-        title={`Take ${removing?.name} off its edge nodes?`}
-        body="Removes the Nginx config (after nginx -t) on every edge. DNS records are left as they are."
-        confirmLabel="Remove from edges"
-        onConfirm={() => {
-          if (removing) act.mutate({ id: removing.id, action: "remove" });
-          setRemoving(undefined);
-        }}
-      />
-      <Confirm
-        open={!!linking}
-        onOpenChange={(o) => !o && setLinking(undefined)}
-        title={`Link ${linking?.name} to this cluster?`}
-        body="Its edge nodes then come from the cluster's ingress profile instead of the hand-picked list. Nothing changes on the edges until you press Apply. If a current edge is not in the profile, remove the endpoint from its edges first, or its old config stays on that node."
-        confirmLabel="Link to cluster"
-        onConfirm={() => {
-          if (linking) link.mutate(linking);
-          setLinking(undefined);
-        }}
-      />
+      {ui.editing && (
+        <EndpointEditor
+          siteId={ui.editing}
+          onClose={() => patch({ editing: undefined })}
+        />
+      )}
+      {ui.pending && (
+        <Confirm
+          open
+          onOpenChange={(o) => !o && patch({ pending: undefined })}
+          title={
+            ui.pending.what === "remove"
+              ? `Take ${ui.pending.site.name} off its edges?`
+              : `Delete ${ui.pending.site.name}?`
+          }
+          body={
+            ui.pending.what === "remove" ? (
+              <>
+                Removes the Nginx config (after{" "}
+                <span className="font-mono">nginx -t</span>) on{" "}
+                {ui.pending.site.config.edges.map(host).join(", ") ||
+                  "its edges"}
+                . {ui.pending.site.config.spec.domains.join(", ")} stop
+                answering there. DNS records are left as they are.
+              </>
+            ) : (
+              "Deletes the saved endpoint. It is not on any edge, so no traffic changes."
+            )
+          }
+          confirmLabel={
+            ui.pending.what === "remove" ? "Remove from edges" : "Delete"
+          }
+          onConfirm={() => {
+            const p = ui.pending;
+            patch({ pending: undefined });
+            if (!p) return;
+            if (p.what === "remove") edgeRun(p.site, "remove");
+            else
+              del.mutate(p.site.id, {
+                onSuccess: () => toast(`Endpoint ${p.site.name} deleted`),
+                onError: (e) => toast(errorText(e), "error"),
+              });
+          }}
+        />
+      )}
     </>
   );
 }
-

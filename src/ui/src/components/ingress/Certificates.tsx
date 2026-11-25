@@ -1,30 +1,13 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, FileKey2, Lock, Plus, RefreshCw, ShieldCheck, Trash2, Upload } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
-import { api, get, post } from "../../api/client";
+import { api, post } from "../../api/client";
 import { useServers } from "../../api/hooks";
 import { errorText, useToast } from "../../app/toast";
 import { Button, Confirm, Empty, Field, Input, Modal, Skeleton, TextArea, ago } from "../ui";
 import { AddAlertButton } from "../alerts/AddAlert";
-import type { Certificate } from "./types";
-
-/** Let's Encrypt state on one edge (checked by Forge every 6 h). */
-interface EdgeCert {
-  days_left?: number;
-  expiry?: string;
-  checked_at: number;
-  renewed_at?: number;
-  renew_error?: string | null;
-  error?: string;
-  missing?: boolean;
-}
-interface Site {
-  id: string;
-  name: string;
-  config: { spec: { domains: string[]; tls: string; cert_id?: string | null }; edges: string[]; cluster_id?: string | null };
-  edge_status: Record<string, { status: string; cert?: EdgeCert }>;
-}
+import { type Certificate, type EdgeCert, type Site, useCertificates, useSites } from "../../api/ingress";
 
 type Tone = "ok" | "warn" | "bad" | "idle";
 const toneText: Record<Tone, string> = { ok: "text-ok", warn: "text-warn", bad: "text-bad", idle: "text-faint" };
@@ -33,7 +16,7 @@ const daysTone = (d?: number): Tone => (d === undefined ? "idle" : d < 0 ? "bad"
 const daysText = (d?: number) => (d === undefined ? "not checked yet" : d < 0 ? "expired" : `${d} day${d === 1 ? "" : "s"} left`);
 
 /** Reads a dropped / chosen PEM file into a text field. */
-function PemField({ label, hint, value, onChange, placeholder }: { label: string; hint?: string; value: string; onChange: (v: string) => void; placeholder: string }) {
+export function PemField({ label, hint, value, onChange, placeholder }: { label: string; hint?: string; value: string; onChange: (v: string) => void; placeholder: string }) {
   return (
     <Field label={label} hint={hint}>
       <div className="space-y-1">
@@ -87,8 +70,8 @@ export function Certificates({ clusterId }: { clusterId?: string }) {
   const qc = useQueryClient();
   const toast = useToast();
   const nodes = useServers().data ?? [];
-  const list = useQuery({ queryKey: ["certificates"], queryFn: () => get<Certificate[]>("/api/v1/certificates") });
-  const sites = useQuery({ queryKey: ["sites"], queryFn: () => get<Site[]>("/api/v1/sites") });
+  const list = useCertificates();
+  const sites = useSites();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", chain_pem: "", key_pem: "" });
   const [dropping, setDropping] = useState<Certificate>();

@@ -1,16 +1,14 @@
-import { useQuery } from "@tanstack/react-query";
 import { Activity, FileKey2, Globe, Network, RefreshCw, Route, Settings2, Sparkles, Waypoints } from "lucide-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
-import { get } from "../api/client";
 import { useClusters } from "../api/hooks";
 import { Certificates } from "../components/ingress/Certificates";
 import { Endpoints } from "../components/ingress/Endpoints";
 import { Health } from "../components/ingress/Health";
 import { ProfileEditor } from "../components/ingress/ProfileEditor";
 import { Routing } from "../components/ingress/Routing";
-import { type LiveResponse, MODES, type ProfileResponse } from "../components/ingress/types";
+import { MODES, useClusterLive, useClusterProfile } from "../api/ingress";
 import { ClusterWizard } from "../components/setup/ClusterWizard";
 import { FilterBar } from "../components/filters/FilterBar";
 import { Badge, Button, Empty, ErrorNote, FadeSwitch, GroupedSections, IconButton, PageHeader, Skeleton, Status, VIEW_LIST, ViewToggle, groupedView, tabTrigger, usePageView } from "../components/ui";
@@ -57,17 +55,8 @@ export function Ingress() {
   }, [clusterId]);
   useEffect(() => store(TAB_KEY, tab), [tab]);
 
-  const profile = useQuery({
-    queryKey: ["cluster-profile", clusterId],
-    queryFn: () => get<ProfileResponse>(`/api/v1/clusters/${clusterId}/profile`),
-    enabled: !!clusterId,
-  });
-  const live = useQuery({
-    queryKey: ["cluster-live", clusterId],
-    queryFn: () => get<LiveResponse>(`/api/v1/clusters/${clusterId}/live`),
-    enabled: !!clusterId && !!profile.data?.profile,
-    refetchInterval: tab === "routing" ? 10_000 : 30_000,
-  });
+  const profile = useClusterProfile(clusterId);
+  const live = useClusterLive(clusterId, !!profile.data?.profile, tab === "routing" ? 10_000 : 30_000);
 
   const p = profile.data?.profile;
   const members = profile.data?.members ?? [];
@@ -80,7 +69,7 @@ export function Ingress() {
       <PageHeader
         eyebrow="Networking"
         title="Ingress"
-        description="How traffic enters each cluster: Nginx on edge nodes in a standalone, active-standby or active-active layout, routing your domains to the services in the cluster."
+        description="How traffic enters each cluster: Nginx on edge nodes in a single-edge, active-standby or active-active layout, routing your domains to the services in the cluster."
         actions={
           <Button onClick={() => setWizard(true)}>
             <Sparkles className="size-4" /> Set up a cluster
@@ -93,9 +82,12 @@ export function Ingress() {
       ) : clusters.isLoading ? (
         <Skeleton />
       ) : !clusters.data?.length ? (
-        <Empty icon={<Waypoints className="size-5" />} title="No clusters yet" action={<Button variant="primary" onClick={() => setWizard(true)}>Set up your first cluster</Button>}>
+        <>
+          <Endpoints />
+          <Empty icon={<Waypoints className="size-5" />} title="No clusters yet" action={<Button variant="primary" onClick={() => setWizard(true)}>Set up your first cluster</Button>}>
           A cluster groups nodes that share a network and an ingress. The wizard sets up the members, the cluster network and the Nginx layout in one go.
-        </Empty>
+          </Empty>
+        </>
       ) : (
         <>
           <FilterBar
@@ -174,10 +166,12 @@ export function Ingress() {
           </div>
 
           <FadeSwitch k={tab}>
-          {profile.isLoading || !profile.data ? (
+          {tab === "endpoints" ? (
+            <Endpoints />
+          ) : profile.error ? (
+            <ErrorNote error={profile.error} />
+          ) : profile.isLoading || !profile.data ? (
             <Skeleton />
-          ) : tab === "endpoints" ? (
-            <Endpoints clusterId={clusterId} members={members} hasProfile={!!p?.ingress} />
           ) : tab === "profile" ? (
             <ProfileEditor key={clusterId} clusterId={clusterId} data={profile.data} />
           ) : tab === "routing" ? (
@@ -191,12 +185,6 @@ export function Ingress() {
           </FadeSwitch>
           )}
 
-          <details className="mt-6">
-            <summary className="cursor-pointer text-xs text-muted">Standalone endpoints (not tied to a cluster)</summary>
-            <div className="mt-3">
-              <Endpoints />
-            </div>
-          </details>
         </>
       )}
       <ClusterWizard open={wizard} onOpenChange={setWizard} onDone={(id) => setClusterId(id)} />
@@ -206,10 +194,7 @@ export function Ingress() {
 
 /** One cluster's section in the "By cluster" layout: its mode, edges and endpoints. */
 function ClusterEndpoints({ cluster, onOpen }: { cluster: Cluster; onOpen: () => void }) {
-  const profile = useQuery({
-    queryKey: ["cluster-profile", cluster.id],
-    queryFn: () => get<ProfileResponse>(`/api/v1/clusters/${cluster.id}/profile`),
-  });
+  const profile = useClusterProfile(cluster.id);
   const p = profile.data?.profile;
   const mode = MODES.find((m) => m.id === p?.ingress?.mode);
   const edges = p?.ingress?.edges?.length ?? 0;
@@ -224,7 +209,7 @@ function ClusterEndpoints({ cluster, onOpen }: { cluster: Cluster; onOpen: () =>
         </button>
       </div>
       <ErrorNote error={profile.error} />
-      {profile.isLoading ? <Skeleton rows={2} /> : <Endpoints clusterId={cluster.id} members={profile.data?.members ?? []} hasProfile={!!p?.ingress} />}
+      <Endpoints scope={cluster.id} />
     </div>
   );
 }

@@ -128,7 +128,7 @@ export function Overview() {
           <Sparkles className="size-6 text-accent" />
           <div className="flex-1">
             <div className="font-semibold">Set up your first cluster</div>
-            <p className="text-[13px] text-muted">Pick the members, the cluster network and how Nginx takes traffic in (standalone, active-standby or active-active).</p>
+            <p className="text-[13px] text-muted">Pick the members, the cluster network and how Nginx takes traffic in (single edge, active-standby or active-active).</p>
           </div>
           <Button variant="primary" onClick={() => setWizard(true)}>
             Start setup

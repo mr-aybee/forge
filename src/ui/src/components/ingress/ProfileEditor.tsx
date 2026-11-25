@@ -238,7 +238,7 @@ export function ProfileEditor({ clusterId, data }: { clusterId: string; data: Pr
         >
           {!ha && (
             <p className="text-xs text-muted">
-              Standalone needs no DNS from Forge: point each endpoint's domain at{" "}
+              A single edge needs no DNS from Forge: point each endpoint's domain at{" "}
               <span className="font-mono text-fg">{ingress.edges[0]?.public_ip || members.find((m) => m.id === ingress.edges[0]?.server_id)?.address || "the edge's public IP"}</span>. Or let Forge keep the records:
             </p>
           )}
