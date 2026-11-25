@@ -133,6 +133,7 @@ struct RunResult {
 fn sim_config(url: String) -> AgentConfig {
     let mut cfg = AgentConfig::new(url);
     cfg.allowed_commands = vec!["ping".into(), "collect_facts".into()];
+
     cfg
 }
 
@@ -164,6 +165,7 @@ impl ServerProc {
         );
         let config = dir.join("forge.toml");
         std::fs::write(&config, toml)?;
+
         Ok(Self {
             bin,
             config,
@@ -176,6 +178,7 @@ impl ServerProc {
     fn cmd(&self) -> Command {
         let mut c = Command::new(&self.bin);
         c.arg("--config").arg(&self.config).env("RUST_LOG", "warn").stdout(Stdio::null()).stderr(Stdio::null());
+
         c
     }
 
@@ -184,17 +187,21 @@ impl ServerProc {
         if !ok {
             bail!("forge-server init failed");
         }
+
         Ok(())
     }
 
     async fn start(&mut self) -> anyhow::Result<()> {
         self.child = Some(self.cmd().arg("serve").spawn().context("starting forge-server")?);
+
         for _ in 0..200 {
             if reqwest::get(format!("{}/api/health", self.base)).await.is_ok_and(|r| r.status().is_success()) {
                 return Ok(());
             }
+
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+
         bail!("server did not become healthy")
     }
 
@@ -225,10 +232,12 @@ struct Api {
 impl Api {
     async fn login(base: &str, login: &str, password: &str) -> anyhow::Result<Self> {
         let http = reqwest::Client::builder().cookie_store(true).pool_max_idle_per_host(0).build()?;
+
         // Login challenge (D-064): solve it when the server asks for one.
         let mut body = json!({"login": login, "password": password});
         let c: Value =
             http.get(format!("{base}/api/v1/auth/challenge")).query(&[("login", login)]).send().await?.json().await?;
+
         if c["required"] == true {
             let salt = forge_secrets::pow::salt_from_hex(c["salt"].as_str().unwrap_or_default())
                 .ok_or_else(|| anyhow::anyhow!("bad challenge salt"))?;
@@ -236,8 +245,10 @@ impl Api {
             body["challenge_id"] = c["id"].clone();
             body["nonce"] = json!(forge_secrets::pow::solve(&salt, bits.min(forge_secrets::pow::MAX_BITS)));
         }
+
         let r: Value =
             http.post(format!("{base}/api/v1/auth/login")).json(&body).send().await?.error_for_status()?.json().await?;
+
         Ok(Self { http, base: base.to_owned(), csrf: r["csrf_token"].as_str().unwrap_or_default().to_owned() })
     }
 
@@ -269,12 +280,15 @@ impl Api {
 
 async fn wait_online(api: &Api, n: usize, timeout: Duration) -> anyhow::Result<f64> {
     let start = Instant::now();
+
     while api.online().await < n {
         if start.elapsed() > timeout {
             bail!("only {} of {n} agents online after {timeout:?}", api.online().await);
         }
+
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+
     Ok(start.elapsed().as_secs_f64())
 }
 
@@ -284,9 +298,11 @@ async fn sample(pids: &[Pid], secs: u64) -> Vec<Sample> {
     let kind = ProcessRefreshKind::nothing().with_memory().with_cpu();
     sys.refresh_processes_specifics(ProcessesToUpdate::Some(pids), true, kind);
     let mut acc: Vec<(Vec<f64>, Vec<f64>)> = vec![(vec![], vec![]); pids.len()];
+
     for _ in 0..secs.max(2) {
         tokio::time::sleep(Duration::from_secs(1)).await;
         sys.refresh_processes_specifics(ProcessesToUpdate::Some(pids), true, kind);
+
         for (i, pid) in pids.iter().enumerate() {
             if let Some(p) = sys.process(*pid) {
                 #[allow(clippy::cast_precision_loss)]
@@ -295,6 +311,7 @@ async fn sample(pids: &[Pid], secs: u64) -> Vec<Sample> {
             }
         }
     }
+
     acc.into_iter()
         .map(|(rss, cpu)| Sample {
             rss_mb_avg: avg(&rss),
@@ -314,6 +331,7 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
     if sorted.is_empty() {
         return 0.0;
     }
+
     sorted[((sorted.len() - 1) as f64 * p).round() as usize]
 }
 
@@ -349,14 +367,17 @@ async fn run(args: &Args, n: u32, with_agent_process: bool) -> anyhow::Result<Ru
     let enroll_secs = t0.elapsed().as_secs_f64();
 
     let (stop, rx) = tokio::sync::watch::channel(false);
+
     for p in enrolled {
         let agent = Agent::load(p?)?;
         tokio::spawn(agent.run(rx.clone()));
     }
+
     let all_online_secs = wait_online(&api, n as usize, Duration::from_secs(300)).await?;
 
     // Optional real agent process.
     let mut agent_child = None;
+
     if with_agent_process {
         let bin = args.agent_bin.clone().unwrap_or_else(|| sibling("forge-agent"));
         let tok = api.post("/api/v1/enrollment-tokens", json!({})).await?;
@@ -369,6 +390,7 @@ async fn run(args: &Args, n: u32, with_agent_process: bool) -> anyhow::Result<Ru
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .output()?;
+
         if enroll.status.success() {
             agent_child = Some(
                 Command::new(&bin)
@@ -398,20 +420,24 @@ async fn run(args: &Args, n: u32, with_agent_process: bool) -> anyhow::Result<Ru
 
     // Idle sampling.
     let mut pids = vec![server.pid().context("server pid")?];
+
     if let Some(c) = &agent_child {
         pids.push(Pid::from_u32(c.id()));
     }
+
     let mut samples = sample(&pids, args.idle_secs).await.into_iter();
     let server_idle = samples.next().unwrap_or_default();
     let agent_process = samples.next();
 
     // API latency.
     let mut lat = Vec::with_capacity(200);
+
     for _ in 0..200 {
         let t = Instant::now();
         api.get("/api/v1/servers").await?;
         lat.push(t.elapsed().as_secs_f64() * 1000.0);
     }
+
     lat.sort_by(f64::total_cmp);
 
     let db = dir.path().join("data").join("forge.db");
@@ -426,6 +452,7 @@ async fn run(args: &Args, n: u32, with_agent_process: bool) -> anyhow::Result<Ru
     let t1 = Instant::now();
     let api = Api::login(&server.base, EMAIL, PASSWORD).await?;
     let expected = n as usize + usize::from(agent_child.is_some());
+
     // The database still says "online" right after a restart, so count only
     // agents that have actually reconnected (heartbeat after the restart).
     loop {
@@ -433,21 +460,27 @@ async fn run(args: &Args, n: u32, with_agent_process: bool) -> anyhow::Result<Ru
             api.get("/api/v1/servers").await?.as_array().map_or(0, |a| {
                 a.iter().filter(|s| s["last_seen_at"].as_i64().is_some_and(|t| t >= restarted_ms)).count()
             });
+
         if back >= expected {
             break;
         }
+
         if t1.elapsed() > Duration::from_secs(300) {
             bail!("only {back} of {expected} agents reconnected");
         }
+
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+
     let reconnect_storm_secs = t1.elapsed().as_secs_f64();
 
     let _ = stop.send(true);
+
     if let Some(mut c) = agent_child {
         let _ = c.kill();
         let _ = c.wait();
     }
+
     server.kill();
 
     Ok(RunResult {
@@ -467,6 +500,7 @@ fn markdown(results: &[RunResult]) -> String {
     let mut s = String::from(
         "| Agents | Enroll (s) | All online (s) | CP RSS avg / max (MB) | CP CPU avg (% core) | API p50 / p99 (ms) | Reconnect storm (s) | DB (MB) |\n|---:|---:|---:|---:|---:|---:|---:|---:|\n",
     );
+
     for r in results {
         s.push_str(&format!(
             "| {} | {:.1} | {:.1} | {:.1} / {:.1} | {:.2} | {:.1} / {:.1} | {:.1} | {:.2} |\n",
@@ -482,12 +516,14 @@ fn markdown(results: &[RunResult]) -> String {
             r.db_size_mb
         ));
     }
+
     if let Some(a) = results.iter().find_map(|r| r.agent_process.as_ref()) {
         s.push_str(&format!(
             "\nReal `forge-agent` process, idle: RSS avg {:.1} MB (max {:.1} MB), CPU avg {:.2} % of one core.\n",
             a.rss_mb_avg, a.rss_mb_max, a.cpu_pct_avg
         ));
     }
+
     s
 }
 
@@ -500,6 +536,7 @@ async fn main() -> anyhow::Result<()> {
             [n] => *n,
             _ => bail!("soak mode (--target) takes exactly one --agents value"),
         };
+
         let file = args.password_file.as_ref().context("soak mode needs --password-file")?;
         let password = std::fs::read_to_string(file).context("reading --password-file")?.trim().to_owned();
         let r = soak::run(soak::SoakArgs {
@@ -522,22 +559,29 @@ async fn main() -> anyhow::Result<()> {
         .await?;
         let json = serde_json::to_string_pretty(&r)?;
         println!("{json}");
+
         if let Some(out) = &args.out {
             std::fs::write(out, json)?;
         }
+
         return soak::check_rss(&r, args.max_server_rss_mb);
     }
+
     let mut results = Vec::new();
+
     for (i, n) in args.agents.iter().enumerate() {
         eprintln!("== {n} agents ==");
         let r = run(&args, *n, i == 0 && !args.no_agent_process).await?;
         eprintln!("{}", serde_json::to_string(&r)?);
         results.push(r);
     }
+
     println!("{}", markdown(&results));
+
     if let Some(out) = &args.out {
         std::fs::write(out, serde_json::to_string_pretty(&results)?)?;
     }
+
     Ok(())
 }
 
@@ -560,20 +604,24 @@ mod docs_coverage {
             if matches!(id, "help" | "version") {
                 continue;
             }
+
             let shown = match a.get_long() {
                 Some(l) => format!("--{l}"),
                 None => format!("<{}>", id.to_uppercase()),
             };
+
             let alt = format!("[{}]", id.to_uppercase());
             if !doc.contains(&shown) && !doc.contains(&alt) {
                 missing.push(format!("{path}: {shown}"));
             }
         }
+
         for sub in cmd.get_subcommands().filter(|s| s.get_name() != "help") {
             let p = format!("{path} {}", sub.get_name());
             if !doc.contains(&format!("## {p}\n")) && !doc.contains(&format!("### {p}\n")) {
                 missing.push(format!("heading `## {p}`"));
             }
+
             walk(sub, &p, doc, missing);
         }
     }

@@ -25,14 +25,17 @@ async fn node(h: &Harness, admin: &Client) -> (String, tokio::sync::watch::Sende
     let (stop, rx) = tokio::sync::watch::channel(false);
     tokio::spawn(agent.run(rx));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+
     loop {
         let (_, s) = admin.get(&format!("/api/v1/servers/{}", id.server_id)).await;
         if s["status"] == "online" {
             break;
         }
+
         assert!(tokio::time::Instant::now() < deadline, "agent never came online");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+
     (id.server_id, stop, dir)
 }
 
@@ -66,6 +69,7 @@ async fn stale_and_concurrent_stack_edits_are_refused() {
     assert_eq!(s, StatusCode::OK, "{first}");
     let v1 = version(&first);
     assert!(v1 > v0, "the version changes on every save");
+
     // The second, still on v0, is refused and changes nothing.
     let (s, e) = admin.call(Method::PUT, &path, Some(json!({ "env": "A=3\n", "version": v0 }))).await;
     assert_eq!(s, StatusCode::CONFLICT, "{e}");
@@ -85,6 +89,7 @@ async fn stale_and_concurrent_stack_edits_are_refused() {
 
     // Concurrent saves of the same version: exactly one wins.
     let mut tasks = Vec::new();
+
     for i in 0..4 {
         let http = admin.http.clone();
         let base = admin.base.clone();
@@ -100,7 +105,9 @@ async fn stale_and_concurrent_stack_edits_are_refused() {
                 .status()
         }));
     }
+
     let mut ok = 0;
+
     for t in tasks {
         match t.await.unwrap() {
             StatusCode::OK => ok += 1,
@@ -108,5 +115,6 @@ async fn stale_and_concurrent_stack_edits_are_refused() {
             other => panic!("unexpected {other}"),
         }
     }
+
     assert_eq!(ok, 1, "exactly one concurrent save wins");
 }

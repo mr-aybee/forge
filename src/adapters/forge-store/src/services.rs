@@ -97,18 +97,22 @@ impl ServiceRepository for Store {
 
     async fn get_services(&self, ids: &[ServiceId]) -> DomainResult<Vec<Service>> {
         let mut out = Vec::with_capacity(ids.len());
+
         // One statement per 200 ids keeps the placeholder count small.
         for chunk in ids.chunks(200) {
             let marks: Vec<String> = (1..=chunk.len()).map(|i| format!("${i}")).collect();
             let sql = format!("SELECT * FROM services WHERE id IN ({})", marks.join(", "));
             let mut q = sqlx::query(&sql);
+
             for id in chunk {
                 q = q.bind(id.to_string());
             }
+
             for r in &q.fetch_all(self.pool()).await.map_err(db_err)? {
                 out.push(app_row(r)?);
             }
         }
+
         Ok(out)
     }
 
@@ -123,6 +127,7 @@ impl ServiceRepository for Store {
             None => sqlx::query("SELECT * FROM services ORDER BY name").fetch_all(self.pool()).await,
         }
         .map_err(db_err)?;
+
         rows.iter().map(app_row).collect()
     }
 
@@ -139,6 +144,7 @@ impl ServiceRepository for Store {
         ] {
             sqlx::query(q).bind(id.to_string()).execute(self.pool()).await.map_err(db_err)?;
         }
+
         sqlx::query("DELETE FROM app_health_authority WHERE service_id = $1")
             .bind(id.to_string())
             .execute(self.pool())
@@ -149,6 +155,7 @@ impl ServiceRepository for Store {
             .execute(self.pool())
             .await
             .map_err(db_err)?;
+
         Ok(())
     }
 
@@ -191,6 +198,7 @@ impl ServiceRepository for Store {
             }
         }
         .map_err(db_err)?;
+
         rows.iter().map(instance_row).collect()
     }
 
@@ -222,6 +230,7 @@ impl ServiceRepository for Store {
         .fetch_all(self.pool())
         .await
         .map_err(db_err)?;
+
         Ok((
             apps.iter().map(app_row).collect::<DomainResult<_>>()?,
             inst.iter().map(instance_row).collect::<DomainResult<_>>()?,
@@ -250,6 +259,7 @@ impl ServiceRepository for Store {
             .execute(self.pool())
             .await
             .map_err(db_err)?;
+
         Ok(())
     }
 }
@@ -269,6 +279,7 @@ impl HealthAuthorityRepository for Store {
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
+
         match authority {
             Some(h) => {
                 sqlx::query(
@@ -291,6 +302,7 @@ impl HealthAuthorityRepository for Store {
                     .map_err(db_err)?;
             }
         }
+
         tx.commit().await.map_err(db_err)
     }
 

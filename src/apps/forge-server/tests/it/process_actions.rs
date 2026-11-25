@@ -24,6 +24,7 @@ async fn start_mfa(require_mfa: bool) -> Harness {
     let init =
         forge_server::bootstrap::init_admin(&state, None, Some(ADMIN_EMAIL), "Admin", PASSWORD, false).await.unwrap();
     let app = App::start_with(state, api, agent).unwrap();
+
     Harness {
         base: format!("http://{}", app.api_addr),
         agent_url: format!("https://127.0.0.1:{}", app.agent_addr.port()),
@@ -48,6 +49,7 @@ async fn api_keys_follow_the_installation_mfa_setting() {
         ci.bearer = created["secret"].as_str().map(str::to_owned);
         let url = format!("/api/v1/servers/{node}/processes/4242/signal");
         let (s, e) = ci.post(&url, json!({"start_time": 1, "signal": "term"})).await;
+
         if require_mfa {
             assert_eq!((s, e["title"].as_str()), (StatusCode::FORBIDDEN, Some("step_up_required")), "{e}");
         } else {
@@ -72,6 +74,7 @@ async fn enroll_node(h: &Harness, admin: &Client, os: &str) -> (String, tempfile
     )
     .await
     .unwrap();
+
     (id.server_id, dir)
 }
 
@@ -113,16 +116,19 @@ async fn process_actions_need_rights_mfa_and_valid_input() {
     for bad in [json!({"start_time": 1, "signal": "stop"}), json!({"start_time": 1, "signal": ""})] {
         assert_eq!(admin.post(&sig(&linux), bad).await.0, StatusCode::BAD_REQUEST);
     }
+
     assert_eq!(admin.post(&pri(&linux), json!({"start_time": 1, "nice": 20})).await.0, StatusCode::BAD_REQUEST);
     assert_eq!(admin.post(&pri(&linux), json!({"start_time": 1, "class": "high"})).await.0, StatusCode::BAD_REQUEST);
     let zero = format!("/api/v1/servers/{linux}/processes/0/signal");
     assert_eq!(admin.post(&zero, term.clone()).await.0, StatusCode::BAD_REQUEST);
+
     // Unknown fields are refused.
     let extra = json!({"start_time": 1, "signal": "kill", "pid": 1});
     assert_eq!(admin.post(&sig(&linux), extra).await.0, StatusCode::UNPROCESSABLE_ENTITY);
 
     // Windows: End task / End process only; classes, never realtime; no nice.
     assert_eq!(admin.post(&sig(&windows), json!({"start_time": 1, "signal": "hup"})).await.0, StatusCode::BAD_REQUEST);
+
     for bad in [json!({"start_time": 1, "class": "realtime"}), json!({"start_time": 1, "nice": 5})] {
         assert_eq!(admin.post(&pri(&windows), bad).await.0, StatusCode::BAD_REQUEST);
     }

@@ -49,6 +49,7 @@ async fn start_with_sftp_cfg(change: impl FnOnce(&mut forge_server::ServerConfig
         app,
         dir,
     };
+
     Gw { h, sftp }
 }
 
@@ -67,14 +68,17 @@ async fn enroll_agent(
     let (stop, rx) = tokio::sync::watch::channel(false);
     tokio::spawn(agent.run(rx));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+
     loop {
         let (_, s) = admin.get(&format!("/api/v1/servers/{}", id.server_id)).await;
         if s["status"] == "online" {
             break;
         }
+
         assert!(tokio::time::Instant::now() < deadline, "agent never came online");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+
     (id.server_id, stop, dir)
 }
 
@@ -113,6 +117,7 @@ async fn connect(addr: std::net::SocketAddr, user: &str, pass: &str) -> (client:
     let mut handle = client::connect(config, addr, AnyKey(seen.clone())).await.unwrap();
     let ok = handle.authenticate_password(user, pass).await.unwrap().success();
     let fp = seen.lock().unwrap().clone();
+
     (handle, ok, fp)
 }
 
@@ -120,10 +125,12 @@ async fn sftp(handle: &client::Handle<AnyKey>) -> SftpSession {
     let ch = handle.channel_open_session().await.unwrap();
     ch.request_subsystem(true, "sftp").await.unwrap();
     let s = SftpSession::new(ch.into_stream()).await.unwrap();
+
     // russh-sftp gives up on a request after 10 s by default. Closing an
     // upload commits it through the agent (up to the 30 s file-op timeout),
     // which takes longer than 10 s on a busy runner; OpenSSH clients wait.
     s.set_timeout(60);
+
     s
 }
 
@@ -150,6 +157,7 @@ async fn grants_need_mfa_log_in_only_with_their_token_and_stop_when_revoked() {
     assert_eq!(s, StatusCode::FORBIDDEN, "{e}");
     assert_eq!(e["title"], "step_up_required");
     step_up(&mut admin).await;
+
     // Longer than the maximum, unknown roots and bad address lists are refused.
     for bad in [
         json!({"name": "x", "roots": ["node"], "expires_in_minutes": 7 * 24 * 60 + 1}),
@@ -159,11 +167,13 @@ async fn grants_need_mfa_log_in_only_with_their_token_and_stop_when_revoked() {
         let (s, _) = admin.post(&format!("{base}/grants"), bad.clone()).await;
         assert!(s == StatusCode::BAD_REQUEST || s == StatusCode::NOT_FOUND, "{bad}: {s}");
     }
+
     let (s, issued) = admin.post(&format!("{base}/grants"), req).await;
     assert_eq!(s, StatusCode::CREATED, "{issued}");
     let conn = &issued["connection"];
     let (user, pass) = (conn["username"].as_str().unwrap().to_owned(), conn["password"].as_str().unwrap().to_owned());
     assert!(issued["grant"].get("token_hash").is_none(), "the hash must not leave the server");
+
     // The token is never listed again.
     let (_, list) = admin.get(&format!("{base}/grants")).await;
     assert!(!list.to_string().contains(&pass));
@@ -180,22 +190,27 @@ async fn grants_need_mfa_log_in_only_with_their_token_and_stop_when_revoked() {
     ch.exec(true, "id").await.unwrap();
     let mut ch = ch;
     let mut refused = false;
+
     while let Some(msg) = tokio::time::timeout(Duration::from_secs(5), ch.wait()).await.ok().flatten() {
         if matches!(msg, russh::ChannelMsg::Failure | russh::ChannelMsg::Close | russh::ChannelMsg::Eof) {
             refused = true;
             break;
         }
+
         assert!(!matches!(msg, russh::ChannelMsg::Data { .. }), "exec produced output");
     }
+
     assert!(refused, "exec was not refused");
 
     let s = sftp(&handle).await;
     let top: Vec<String> = s.read_dir("/").await.unwrap().map(|e| e.file_name()).collect();
     assert_eq!(top, ["node"]);
+
     // Protected paths are refused before they reach the node; `..` cannot climb.
     assert!(s.metadata("/node/etc/shadow").await.is_err());
     assert!(s.read_dir("/node/etc/forge").await.is_err());
     assert!(s.metadata("/../../etc/shadow").await.is_err());
+
     // A read-only grant cannot write.
     assert!(s.create("/node/tmp/x").await.is_err());
 
@@ -203,17 +218,21 @@ async fn grants_need_mfa_log_in_only_with_their_token_and_stop_when_revoked() {
     let (s2, r) = admin.post(&format!("{base}/grants/{user}/revoke"), json!({})).await;
     assert_eq!(s2, StatusCode::OK, "{r}");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+
     while !handle.is_closed() {
         assert!(tokio::time::Instant::now() < deadline, "the session stayed open after revocation");
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+
     let (_, ok, _) = connect(addr, &user, &pass).await;
     assert!(!ok, "a revoked grant must not log in");
 
     let log = audit(&admin).await;
+
     for a in ["file.grant.create", "file.sftp.connect", "file.grant.revoke"] {
         assert!(log.iter().any(|e| e["action"] == a), "{a} not audited");
     }
+
     let _ = stop.send(true);
 }
 
@@ -257,12 +276,14 @@ async fn windows_sftp_uploads_and_downloads_inside_an_approved_root() {
     let s = sftp(&handle).await;
     let top: Vec<String> = s.read_dir("/").await.unwrap().map(|e| e.file_name()).collect();
     assert_eq!(top, ["Vendor-Drop"]);
+
     // Download.
     let mut f = s.open("/Vendor-Drop/readme.txt").await.unwrap();
     let mut got = Vec::new();
     f.read_to_end(&mut got).await.unwrap();
     assert_eq!(got, b"hello from the node");
     drop(f);
+
     // Upload (several chunks), committed only on close.
     let data: Vec<u8> = (0..700_000u32).map(|i| (i % 253) as u8).collect();
     let mut w = s.create("/Vendor-Drop/inbox/report.bin").await.unwrap();
@@ -270,20 +291,25 @@ async fn windows_sftp_uploads_and_downloads_inside_an_approved_root() {
     w.shutdown().await.unwrap();
     drop(w);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+
     while std::fs::read(tmp.path().join("inbox/report.bin")).ok().as_deref() != Some(data.as_slice()) {
         assert!(tokio::time::Instant::now() < deadline, "upload never landed");
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+
     // No delete permission: replacing or removing is refused.
     assert!(s.remove_file("/Vendor-Drop/readme.txt").await.is_err());
     assert!(tmp.path().join("readme.txt").exists());
+
     // The root confines: nothing outside it is reachable.
     assert!(s.metadata("/Vendor-Drop/../../Windows").await.is_err());
 
     let log = audit(&admin).await;
+
     for a in ["file.sftp.download", "file.sftp.upload"] {
         assert!(log.iter().any(|e| e["action"] == a), "{a} not audited");
     }
+
     let _ = stop.send(true);
 }
 
@@ -294,6 +320,7 @@ async fn patch(c: &Client, path: &str, body: Value) -> (StatusCode, Value) {
 /// Waits until the server side closed `handle`.
 async fn wait_closed(handle: &client::Handle<AnyKey>, what: &str) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+
     while !handle.is_closed() {
         assert!(tokio::time::Instant::now() < deadline, "the session stayed open after {what}");
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -328,6 +355,7 @@ async fn grants_are_listed_fleet_wide_changed_without_new_passwords_and_narrowin
     assert_eq!(row["server_name"], "sftp-01");
     assert_eq!(row["status"], "active");
     assert!(!all.to_string().contains(&pass), "the password must never be listed");
+
     for (q, n) in [
         (format!("?server={server}"), 1),
         ("?status=active".to_owned(), 1),
@@ -340,17 +368,21 @@ async fn grants_are_listed_fleet_wide_changed_without_new_passwords_and_narrowin
         assert_eq!(s, StatusCode::OK, "{q}: {l}");
         assert_eq!(l["grants"].as_array().unwrap().len(), n, "{q}");
     }
+
     let (s, _) = admin.get("/api/v1/files/grants?status=bogus").await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
+
     // Others see only what their authorization allows: an operator (file.read)
     // sees no one else's grants, a developer (no file.read) none at all.
     let op = user_with_role(&h, &admin, "op@example.com", "operator", &format!("workspace:{}", h.default_org)).await;
     let dev = user_with_role(&h, &admin, "dev@example.com", "developer", &format!("workspace:{}", h.default_org)).await;
+
     for c in [&op, &dev] {
         let (s, l) = c.get("/api/v1/files/grants").await;
         assert_eq!(s, StatusCode::OK, "{l}");
         assert_eq!(l["grants"].as_array().unwrap().len(), 0, "{l}");
     }
+
     // ...and cannot read, change or revoke it.
     let (s, _) = op.get(&format!("{base}/grants/{user}")).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
@@ -459,6 +491,7 @@ async fn never_expiring_access_needs_the_setting_and_file_admin() {
     assert_eq!(issued["grant"]["never_expires"], true);
     assert_eq!(issued["grant"]["expires_at"], forge_core::files::NEVER_EXPIRES);
     let id = issued["grant"]["id"].as_str().unwrap().to_owned();
+
     // Back to a normal expiry, and to never again.
     let (s, g) = patch(&admin, &format!("{base}/grants/{id}"), json!({"never_expires": false})).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "an expiry is needed: {g}");
@@ -471,6 +504,7 @@ async fn never_expiring_access_needs_the_setting_and_file_admin() {
     assert_eq!(g["never_expires"], true);
     let (_, l) = admin.get("/api/v1/files/grants").await;
     assert_eq!(l["grants"][0]["never_expires"], true);
+
     // Still revocable.
     let (s, r) = admin.post(&format!("{base}/grants/{id}/revoke"), json!({})).await;
     assert_eq!(s, StatusCode::OK, "{r}");

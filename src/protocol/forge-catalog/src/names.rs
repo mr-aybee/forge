@@ -61,9 +61,11 @@ pub fn check_label(l: &str) -> Result<(), String> {
             "`{l}` is not a DNS label: use 1 to 63 lowercase letters, digits and `-`, not starting or ending with `-`"
         ));
     }
+
     if RESERVED.contains(&l) {
         return Err(format!("`{l}` is reserved"));
     }
+
     Ok(())
 }
 
@@ -93,15 +95,18 @@ pub fn check_suffix(s: &str) -> Result<(), String> {
             "`{s}` is not a domain suffix: use lowercase DNS labels separated by dots, at most 63 characters in all"
         ));
     }
+
     if labels.iter().any(|l| *l == "localhost" || *l == "localhost6") {
         return Err("the suffix cannot contain `localhost`".into());
     }
+
     if labels.len() == 1 && !SINGLE_LABEL_SUFFIXES.contains(&s) {
         return Err(format!(
             "`{s}` could be a public top-level domain; use one of {} or a domain you own (`corp.example.com`)",
             SINGLE_LABEL_SUFFIXES.join(", ")
         ));
     }
+
     Ok(())
 }
 
@@ -110,14 +115,17 @@ pub fn check_suffix(s: &str) -> Result<(), String> {
 #[must_use]
 pub fn label_from(name: &str) -> Option<String> {
     let mut l = String::new();
+
     for c in name.to_ascii_lowercase().chars() {
         let c = if c.is_ascii_alphanumeric() { c } else { '-' };
         if !(c == '-' && (l.is_empty() || l.ends_with('-'))) {
             l.push(c);
         }
     }
+
     let l: String = l.trim_matches('-').chars().take(63).collect();
     let l = l.trim_end_matches('-').to_owned();
+
     check_label(&l).is_ok().then_some(l)
 }
 
@@ -135,9 +143,11 @@ impl NameEntry {
         if !valid_name(&self.name) {
             return Err(format!("invalid name `{}`", self.name.escape_default()));
         }
+
         if self.ip.is_unspecified() || self.ip.is_multicast() {
             return Err(format!("invalid address for `{}`", self.name));
         }
+
         Ok(())
     }
 }
@@ -164,6 +174,7 @@ pub fn published_port(p: &str) -> Option<PublishedPort> {
     if !matches!(proto, "tcp" | "udp") {
         return None;
     }
+
     let num = |s: &str| s.parse::<u16>().ok().filter(|n| *n > 0);
     let parts: Vec<&str> = body.split(':').collect();
     let (bind, port, target) = match parts.as_slice() {
@@ -171,6 +182,7 @@ pub fn published_port(p: &str) -> Option<PublishedPort> {
         [ip, h, c] => (Some(ip.parse::<IpAddr>().ok()?), num(h)?, num(c)?),
         _ => return None,
     };
+
     Some(PublishedPort { port, proto: proto.to_owned(), target, bind: bind.filter(|b| !b.is_unspecified()) })
 }
 
@@ -179,6 +191,7 @@ pub fn validate_entries(entries: &[NameEntry]) -> Result<(), String> {
     if entries.len() > MAX_ENTRIES {
         return Err(format!("at most {MAX_ENTRIES} names"));
     }
+
     entries.iter().try_for_each(NameEntry::validate)
 }
 
@@ -192,11 +205,13 @@ pub fn markers(tag: &str) -> (String, String) {
 fn lines_with_ranges(text: &str) -> Vec<(usize, usize, &str)> {
     let mut out = Vec::new();
     let mut start = 0;
+
     for piece in text.split_inclusive('\n') {
         let end = start + piece.len();
         out.push((start, end, piece.trim_end_matches('\n').trim_end_matches('\r')));
         start = end;
     }
+
     out
 }
 
@@ -215,17 +230,21 @@ pub fn render_block(current: &str, tag: &str, entries: &[NameEntry]) -> Result<S
     let (begin, end) = markers(tag);
     let nl = if current.contains("\r\n") { "\r\n" } else { "\n" };
     let mut block = String::new();
+
     if !entries.is_empty() {
         block.push_str(&begin);
         block.push_str(nl);
         block.push_str("# Names on the Forge network. Managed by Orbyn Forge; edits are overwritten.");
         block.push_str(nl);
+
         for e in entries {
             block.push_str(&format!("{}\t{}{nl}", e.ip, e.name));
         }
+
         block.push_str(&end);
         block.push_str(nl);
     }
+
     let lines = lines_with_ranges(current);
     let begins: Vec<usize> = (0..lines.len()).filter(|i| lines[*i].2 == begin).collect();
     let ends: Vec<usize> = (0..lines.len()).filter(|i| lines[*i].2 == end).collect();
@@ -240,13 +259,16 @@ pub fn render_block(current: &str, tag: &str, entries: &[NameEntry]) -> Result<S
         if block.is_empty() {
             return current.to_owned();
         }
+
         let mut out = current.to_owned();
         if !out.is_empty() && !out.ends_with('\n') {
             out.push_str(nl);
         }
+
         out.push_str(&block);
         out
     };
+
     Ok(match (begins.as_slice(), ends.as_slice()) {
         ([], []) => append(),
         ([b], [e]) if b < e => replace(*b, *e),
@@ -276,10 +298,12 @@ mod tests {
         for ok in ["web-1", "a", "x0", &"a".repeat(63)] {
             assert!(check_label(ok).is_ok(), "{ok}");
         }
+
         for bad in ["", "-a", "a-", "A", "a_b", "a.b", "a b", "a\nb", "a#b", "é", &"a".repeat(64), "localhost", "local"]
         {
             assert!(check_label(bad).is_err(), "{bad:?}");
         }
+
         assert!(valid_name("web-1.lab.local"));
         assert!(!valid_name("web"), "one label");
         assert!(!valid_name("localhost.local"));
@@ -300,6 +324,7 @@ mod tests {
         ] {
             assert!(check_suffix(ok).is_ok(), "{ok}");
         }
+
         for bad in [
             "com",
             "net",
@@ -336,8 +361,10 @@ mod tests {
         for bad in ["a.local\n1.2.3.4 evil", "a.local #x", "a .local", "a\t.local"] {
             assert!(NameEntry { name: bad.into(), ip: "10.0.0.1".parse().unwrap() }.validate().is_err(), "{bad:?}");
         }
+
         assert!(e("a.local", "0.0.0.0").validate().is_err());
         assert!(e("a.local", "224.0.0.1").validate().is_err());
+
         // Unknown fields are refused on the wire.
         assert!(serde_json::from_str::<NameEntry>(r#"{"name":"a.local","ip":"10.0.0.1","x":1}"#).is_err());
         assert!(serde_json::from_str::<NameEntry>(r#"{"name":"a.local","ip":"10.0.0.1 b"}"#).is_err());
@@ -351,17 +378,22 @@ mod tests {
         assert!(one.contains("\n# BEGIN orbyn-forge names\n") && one.contains("10.0.0.1\ta.local\n"));
         let two = render_block(&one, "names", &[e("b.lab.local", "fd00::5")]).unwrap();
         assert!(two.starts_with(base) && !two.contains("a.local") && two.contains("fd00::5\tb.lab.local"));
+
         // Same list: same text.
         assert_eq!(render_block(&two, "names", &[e("b.lab.local", "fd00::5")]).unwrap(), two);
+
         // Lines after the block stay too.
         let after = format!("{two}10.9.9.9 later\n");
         let three = render_block(&after, "names", &[e("c.local", "10.0.0.3")]).unwrap();
         assert!(three.starts_with(base) && three.ends_with("10.9.9.9 later\n"));
+
         // Empty list: the block goes, the rest stays.
         let gone = render_block(&three, "names", &[]).unwrap();
         assert_eq!(gone, format!("{base}\n10.9.9.9 later\n"));
+
         // Nothing to write and no block: unchanged, byte for byte.
         assert_eq!(render_block(base, "names", &[]).unwrap(), base);
+
         // Other blocks (the fabric's) are left alone.
         let fab = "# BEGIN orbyn-forge forge0\n10.64.0.1\tn.lab.local\n# END orbyn-forge forge0\n";
         let mixed = render_block(fab, "names", &[e("a.local", "10.0.0.1")]).unwrap();
@@ -383,6 +415,7 @@ mod tests {
         let lost_end = "127.0.0.1 localhost\n# BEGIN orbyn-forge names\n10.0.0.1\told.local\n10.1.1.1 printer\n";
         let one = render_block(lost_end, "names", &[e("a.local", "10.0.0.1")]).unwrap();
         assert!(one.starts_with(lost_end), "nothing deleted");
+
         // The appended block is reused next time: no growth.
         let two = render_block(&one, "names", &[e("b.local", "10.0.0.2")]).unwrap();
         assert!(two.starts_with(lost_end) && two.contains("b.local") && !two.contains("a.local"));
@@ -405,6 +438,7 @@ mod tests {
         assert_eq!((p.port, p.proto.as_str(), p.target), (9000, "udp", 9001));
         assert_eq!(p.bind, Some("127.0.0.1".parse().unwrap()));
         assert_eq!(published_port("0.0.0.0:1:2").unwrap().bind, None);
+
         for bad in ["80", "a:80", "0:80", "1:2/sctp", "x:1:2", "1:2:3:4"] {
             assert!(published_port(bad).is_none(), "{bad}");
         }

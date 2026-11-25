@@ -44,6 +44,7 @@ impl<T: FileIo> Read for Reader<'_, T> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let n = self.f.read_at(buf, self.pos).map_err(std::io::Error::other)?;
         self.pos += n as u64;
+
         Ok(n)
     }
 }
@@ -55,7 +56,9 @@ impl<T: FileIo> Seek for Reader<'_, T> {
             SeekFrom::End(d) => i128::from(self.len) + i128::from(d),
             SeekFrom::Current(d) => i128::from(self.pos) + i128::from(d),
         };
+
         self.pos = u64::try_from(p).map_err(|_| std::io::Error::other("seek before start"))?;
+
         Ok(self.pos)
     }
 }
@@ -72,6 +75,7 @@ impl<T: FileIo> Write for Writer<'_, T> {
         self.f.write_all_at(buf, self.pos).map_err(std::io::Error::other)?;
         self.pos += buf.len() as u64;
         self.end = self.end.max(self.pos);
+
         Ok(buf.len())
     }
 
@@ -87,7 +91,9 @@ impl<T: FileIo> Seek for Writer<'_, T> {
             SeekFrom::End(d) => i128::from(self.end) + i128::from(d),
             SeekFrom::Current(d) => i128::from(self.pos) + i128::from(d),
         };
+
         self.pos = u64::try_from(p).map_err(|_| std::io::Error::other("seek before start"))?;
+
         Ok(self.pos)
     }
 }
@@ -97,17 +103,22 @@ impl<T: FileIo> Seek for Writer<'_, T> {
 pub(crate) fn safe_entry(raw: &str) -> Result<Vec<String>, String> {
     let name = raw.replace('\\', "/");
     let bad = |why: &str| Err(format!("unsafe archive entry `{}`: {why}", raw.chars().take(200).collect::<String>()));
+
     if name.starts_with('/') {
         return bad("absolute path");
     }
+
     let b = name.as_bytes();
     if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
         return bad("drive path");
     }
+
     if name.contains('\0') {
         return bad("NUL byte");
     }
+
     let mut out = Vec::new();
+
     for comp in name.split('/') {
         match comp {
             "" | "." => {}
@@ -117,9 +128,11 @@ pub(crate) fn safe_entry(raw: &str) -> Result<Vec<String>, String> {
             c => out.push(c.to_owned()),
         }
     }
+
     if out.len() > 64 {
         return bad("too deep");
     }
+
     #[cfg(windows)]
     for comp in &out {
         super::windows::valid_name(comp).map_err(|e| format!("unsafe archive entry `{raw}`: {e}"))?;
@@ -136,20 +149,25 @@ struct Caps {
 impl Caps {
     fn entry(&mut self) -> Result<(), String> {
         self.entries += 1;
+
         if self.entries > ARCHIVE_MAX_ENTRIES {
             return Err(format!("the archive has more than {ARCHIVE_MAX_ENTRIES} entries"));
         }
+
         Ok(())
     }
 
     fn bytes(&mut self, n: u64, archive_size: u64) -> Result<(), String> {
         self.bytes = self.bytes.saturating_add(n);
+
         if self.bytes > ARCHIVE_MAX_BYTES {
             return Err("the archive expands to more than 4 GiB".into());
         }
+
         if self.bytes > 1024 * 1024 && self.bytes > archive_size.saturating_mul(ARCHIVE_MAX_RATIO) {
             return Err("the archive expands more than 200 times its size (possible zip bomb)".into());
         }
+
         Ok(())
     }
 }
@@ -171,16 +189,20 @@ impl<F: Fs> Ops<'_, F> {
         let mut stack = vec![c(path).to_vec()];
         let (mut changed, mut unchanged, mut skipped, mut seen) = (0usize, 0usize, 0usize, 0usize);
         let mut sample = Vec::new();
+
         while let Some(p) = stack.pop() {
             seen += 1;
+
             if seen > super::MAX_DELETE_ENTRIES {
                 return Err("too many entries to change at once".into());
             }
+
             let fp = FilePath::from_components(&p);
             if protected(self.spec, &fp).is_err() {
                 skipped += 1;
                 continue;
             }
+
             // The requested path must exist and be reachable (no links);
             // entries that vanish while walking below it are skipped.
             let m = match self.fs.stat(&p) {
@@ -188,10 +210,12 @@ impl<F: Fs> Ops<'_, F> {
                 Err(e) if p.len() == path.components().len() => return Err(e),
                 Err(_) => continue,
             };
+
             if !matches!(m.kind, Kind::File | Kind::Dir) {
                 skipped += 1;
                 continue;
             }
+
             let (before, after) = (describe(&m), target(&m));
             if before == after {
                 unchanged += 1;
@@ -199,16 +223,20 @@ impl<F: Fs> Ops<'_, F> {
                 if !dry_run {
                     apply(&p, &m)?;
                 }
+
                 changed += 1;
+
                 if sample.len() < SAMPLE {
                     sample.push(json!({ "path": fp.to_string(), "before": before, "after": after }));
                 }
             }
+
             if recursive && m.kind == Kind::Dir {
                 let (names, _, _) = self.fs.read_dir(&p)?;
                 stack.extend(names.into_iter().filter(|n| !is_forge_internal(n)).map(|n| with(&p, n)));
             }
         }
+
         Ok(
             json!({ "path": path.to_string(), "dry_run": dry_run, "changed": changed, "unchanged": unchanged, "skipped": skipped, "sample": sample }),
         )
@@ -224,6 +252,7 @@ impl<F: Fs> Ops<'_, F> {
         let describe = |m: &Meta| format!("{:04o}", m.mode.unwrap_or(0) & 0o7777);
         let target = |_: &Meta| format!("{:04o}", mode & 0o7777);
         let apply = |p: &[String], _: &Meta| self.fs.set_mode(p, mode & 0o7777);
+
         self.walk_apply(path, recursive, dry_run, &describe, &target, &apply)
     }
 
@@ -236,6 +265,7 @@ impl<F: Fs> Ops<'_, F> {
         dry_run: bool,
     ) -> Result<Value, String> {
         let ids = Ids::get();
+
         let uid = match owner {
             Some(n) => Some(
                 ids.users
@@ -246,6 +276,7 @@ impl<F: Fs> Ops<'_, F> {
             ),
             None => None,
         };
+
         let gid = match group {
             Some(n) => Some(
                 ids.groups
@@ -256,18 +287,21 @@ impl<F: Fs> Ops<'_, F> {
             ),
             None => None,
         };
+
         let name = |id: Option<u32>, map: &std::collections::HashMap<u32, String>| {
             id.map_or_else(|| "?".to_owned(), |i| map.get(&i).cloned().unwrap_or_else(|| i.to_string()))
         };
         let describe = |m: &Meta| format!("{}:{}", name(m.uid, &ids.users), name(m.gid, &ids.groups));
         let target = |m: &Meta| format!("{}:{}", name(uid.or(m.uid), &ids.users), name(gid.or(m.gid), &ids.groups));
         let apply = |p: &[String], _: &Meta| self.fs.set_owner(p, uid, gid);
+
         self.walk_apply(path, recursive, dry_run, &describe, &target, &apply)
     }
 
     pub(crate) fn acl(&self, path: &FilePath) -> Result<Value, String> {
         let m = self.fs.stat(c(path))?;
         let text = self.fs.acl(c(path))?;
+
         Ok(json!({ "path": path.to_string(), "acl": text, "mode": m.mode.map(|x| format!("{:04o}", x & 0o7777)) }))
     }
 
@@ -282,12 +316,15 @@ impl<F: Fs> Ops<'_, F> {
         if cfg!(windows) && format != ArchiveFormat::Zip {
             return Err("Windows nodes create .zip archives only".into());
         }
+
         let store;
+
         let (out_fs, tmp, temp_id): (&F, Vec<String>, Option<String>) = match dest {
             Some(d) => {
                 if self.fs.stat(c(d)).is_ok() {
                     return Err("the archive already exists; choose another name".into());
                 }
+
                 (self.fs, with(c(&d.parent()), format!("{UPLOAD_PREFIX}{}.part", random_id())), None)
             }
             None => {
@@ -297,6 +334,7 @@ impl<F: Fs> Ops<'_, F> {
                 (&store, vec![format!("{id}.part")], Some(id))
             }
         };
+
         let f = out_fs.open_write(&tmp, true, true)?;
         let mut caps = Caps { entries: 0, bytes: 0 };
         let mut skipped: Vec<Value> = Vec::new();
@@ -305,11 +343,13 @@ impl<F: Fs> Ops<'_, F> {
             match format {
                 ArchiveFormat::Zip => {
                     let mut z = zip::ZipWriter::new(w);
+
                     for s in sources {
                         self.add_tree(s, &mut caps, &mut skipped, &mut |rel, m, f| {
                             let opts = zip::write::SimpleFileOptions::default()
                                 .compression_method(zip::CompressionMethod::Deflated)
                                 .unix_permissions(if m.kind == Kind::Dir { 0o755 } else { 0o644 });
+
                             if m.kind == Kind::Dir {
                                 z.add_directory(format!("{rel}/"), opts).map_err(|e| e.to_string())
                             } else {
@@ -318,16 +358,19 @@ impl<F: Fs> Ops<'_, F> {
                             }
                         })?;
                     }
+
                     let w = z.finish().map_err(|e| e.to_string())?;
                     Ok(w.end)
                 }
                 ArchiveFormat::TarGz | ArchiveFormat::Tar => {
                     let gz = flate2::write::GzEncoder::new(w, flate2::Compression::default());
                     let mut t = tar::Builder::new(gz);
+
                     for s in sources {
                         self.add_tree(s, &mut caps, &mut skipped, &mut |rel, m, f| {
                             let mut h = tar::Header::new_gnu();
                             h.set_mtime(u64::try_from(m.modified_ms / 1000).unwrap_or(0));
+
                             if m.kind == Kind::Dir {
                                 h.set_entry_type(tar::EntryType::Directory);
                                 h.set_mode(0o755);
@@ -345,12 +388,14 @@ impl<F: Fs> Ops<'_, F> {
                             }
                         })?;
                     }
+
                     let gz = t.into_inner().map_err(|e| e.to_string())?;
                     let w = gz.finish().map_err(|e| e.to_string())?;
                     Ok(w.end)
                 }
             }
         })();
+
         let size = match result {
             Ok(n) => n,
             Err(e) => {
@@ -358,14 +403,18 @@ impl<F: Fs> Ops<'_, F> {
                 return Err(e);
             }
         };
+
         f.sync()?;
+
         if dest.is_some() {
             // Written private (0600) while it fills; a finished archive in a
             // folder gets the usual 0644 like any new file (download-only
             // temporary archives stay private).
             f.chown_like(&Meta { mode: Some(0o644), ..Meta::default() })?;
         }
+
         drop(f);
+
         match (dest, temp_id) {
             (Some(d), _) => {
                 out_fs.inherit_owner(&tmp)?;
@@ -396,13 +445,16 @@ impl<F: Fs> Ops<'_, F> {
     ) -> Result<(), String> {
         let parent_len = src.components().len().saturating_sub(1);
         let mut stack = vec![c(src).to_vec()];
+
         while let Some(p) = stack.pop() {
             let fp = FilePath::from_components(&p);
             let rel = p[parent_len..].join("/");
+
             if protected(self.spec, &fp).is_err() {
                 skipped.push(json!({ "path": fp.to_string(), "reason": "protected" }));
                 continue;
             }
+
             let m = self.fs.stat(&p)?;
             match m.kind {
                 Kind::Dir => {
@@ -423,6 +475,7 @@ impl<F: Fs> Ops<'_, F> {
                 }
             }
         }
+
         Ok(())
     }
 
@@ -441,10 +494,12 @@ impl<F: Fs> Ops<'_, F> {
             Some(m) if m.kind != Kind::Dir => return Err(format!("`{dest}` exists and is not a folder")),
             _ => {}
         }
+
         let parent = c(&dest.parent()).to_vec();
         if self.fs.stat(&parent).map(|m| m.kind) != Ok(Kind::Dir) {
             return Err(self.missing_folder("the destination's folder", &dest.parent()));
         }
+
         let (src, am) = self.open_regular(c(archive))?;
         let tmp = with(&parent, format!("{UPLOAD_PREFIX}{}.part", random_id()));
         self.fs.mkdir(&tmp).map_err(FsError::msg)?;
@@ -455,15 +510,18 @@ impl<F: Fs> Ops<'_, F> {
             let _ = remove_tree(self.fs, &tmp, &mut 0);
             return Err(e);
         }
+
         if existing.is_some() {
             // The new folder gets its parent folder's owner before it goes live.
             if let Err(e) = self.fs.inherit_owner(&tmp) {
                 let _ = remove_tree(self.fs, &tmp, &mut 0);
                 return Err(e);
             }
+
             let old = self.swap_in(&tmp, c(dest), &parent).inspect_err(|_| {
                 let _ = remove_tree(self.fs, &tmp, &mut 0);
             })?;
+
             // Best effort: the new content is live; leftovers are hidden
             // (`.forge-upload-…`) and never listed.
             let _ = remove_tree(self.fs, &old, &mut 0);
@@ -472,8 +530,10 @@ impl<F: Fs> Ops<'_, F> {
                 let _ = remove_tree(self.fs, &tmp, &mut 0);
                 return Err(e.msg());
             }
+
             self.fs.inherit_owner(c(dest))?;
         }
+
         Ok(json!({
             "dest": dest.to_string(),
             "entries": caps.entries,
@@ -490,13 +550,16 @@ impl<F: Fs> Ops<'_, F> {
             // `tmp` now holds the old content.
             return Ok(tmp.to_vec());
         }
+
         let old = with(parent, format!("{UPLOAD_PREFIX}{}.old", random_id()));
         self.fs.rename(dest, self.fs, &old, false).map_err(FsError::msg)?;
+
         if let Err(e) = self.fs.rename(tmp, self.fs, dest, false) {
             // Put the old content back.
             let _ = self.fs.rename(&old, self.fs, dest, false);
             return Err(e.msg());
         }
+
         Ok(old)
     }
 
@@ -512,28 +575,35 @@ impl<F: Fs> Ops<'_, F> {
         skipped: &mut Vec<Value>,
     ) -> Result<(), String> {
         let reader = Reader { f: src, pos: 0, len: size };
+
         match format {
             ArchiveFormat::Zip => {
                 let mut z = zip::ZipArchive::new(reader).map_err(|e| format!("not a valid zip archive: {e}"))?;
                 if z.len() > ARCHIVE_MAX_ENTRIES {
                     return Err(format!("the archive has more than {ARCHIVE_MAX_ENTRIES} entries"));
                 }
+
                 let declared: u64 = (0..z.len()).filter_map(|i| z.by_index_raw(i).ok().map(|e| e.size())).sum();
+
                 if let Some(free) = self.fs.free_bytes(tmp)
                     && free < declared
                 {
                     return Err("not enough free space to extract".into());
                 }
+
                 for i in 0..z.len() {
                     let mut e = z.by_index(i).map_err(|e| format!("damaged zip archive: {e}"))?;
                     let name = e.name().map_err(|err| format!("damaged zip archive: {err}"))?.into_owned();
                     let comps = safe_entry(&name)?;
                     caps.entry()?;
+
                     if comps.is_empty() {
                         continue;
                     }
+
                     let mode = e.unix_mode().unwrap_or(0);
                     let kind = mode & 0o170_000;
+
                     if e.is_dir() {
                         self.mkdirs(tmp, &comps, dest)?;
                     } else if kind == 0o120_000 || (kind != 0 && kind != 0o100_000) {
@@ -544,9 +614,11 @@ impl<F: Fs> Ops<'_, F> {
                         if e.size() > 1024 * 1024 && e.size() > e.compressed_size().saturating_mul(ARCHIVE_MAX_RATIO) {
                             return Err(format!("entry `{name}` expands more than 200 times (possible zip bomb)"));
                         }
+
                         self.write_entry(tmp, &comps, dest, &mut e, size, caps)?;
                     }
                 }
+
                 Ok(())
             }
             ArchiveFormat::TarGz | ArchiveFormat::Tar => {
@@ -555,15 +627,19 @@ impl<F: Fs> Ops<'_, F> {
                 } else {
                     Box::new(flate2::read::GzDecoder::new(reader))
                 };
+
                 let mut t = tar::Archive::new(inner);
+
                 for entry in t.entries().map_err(|e| format!("not a valid tar archive: {e}"))? {
                     let mut e = entry.map_err(|e| format!("damaged tar archive: {e}"))?;
                     let name = String::from_utf8_lossy(&e.path_bytes()).into_owned();
                     let comps = safe_entry(&name)?;
                     caps.entry()?;
+
                     if comps.is_empty() {
                         continue;
                     }
+
                     match e.header().entry_type() {
                         tar::EntryType::Directory => self.mkdirs(tmp, &comps, dest)?,
                         tar::EntryType::Regular | tar::EntryType::Continuous => {
@@ -580,6 +656,7 @@ impl<F: Fs> Ops<'_, F> {
                         _ => skipped.push(json!({ "entry": name, "reason": "special file" })),
                     }
                 }
+
                 Ok(())
             }
         }
@@ -588,17 +665,21 @@ impl<F: Fs> Ops<'_, F> {
     /// Creates the folders of `comps` inside `tmp` (no links followed).
     fn mkdirs(&self, tmp: &[String], comps: &[String], dest: &FilePath) -> Result<(), String> {
         let mut p = tmp.to_vec();
+
         for (i, comp) in comps.iter().enumerate() {
             p.push(comp.clone());
             protected(self.spec, &dest.append(&FilePath::from_components(&comps[..=i])))?;
+
             match self.fs.mkdir(&p) {
                 Ok(()) | Err(FsError::Exists) => {}
                 Err(e) => return Err(e.msg()),
             }
+
             if self.fs.stat(&p)?.kind != Kind::Dir {
                 return Err(format!("archive entry `{}` collides with a file", comps[..=i].join("/")));
             }
         }
+
         Ok(())
     }
 
@@ -616,22 +697,27 @@ impl<F: Fs> Ops<'_, F> {
         protected(self.spec, &dest.append(&FilePath::from_components(comps)))?;
         let mut p = tmp.to_vec();
         p.extend(comps.iter().cloned());
+
         if self.fs.stat(&p).is_ok() {
             return Err(format!("archive entry `{}` appears twice", comps.join("/")));
         }
+
         let f = self.fs.open_write(&p, true, true)?;
         f.chown_like(&Meta { mode: Some(0o644), ..Meta::default() })?;
         let mut buf = vec![0u8; 256 * 1024];
         let mut off = 0u64;
+
         loop {
             let n = r.read(&mut buf).map_err(|e| format!("damaged archive entry `{name}`: {e}"))?;
             if n == 0 {
                 break;
             }
+
             caps.bytes(n as u64, archive_size)?;
             f.write_all_at(&buf[..n], off)?;
             off += n as u64;
         }
+
         Ok(())
     }
 
@@ -641,6 +727,7 @@ impl<F: Fs> Ops<'_, F> {
     fn temp_tag(&self) -> String {
         let spec = serde_json::to_string(self.spec).unwrap_or_default();
         let d = ring::digest::digest(&ring::digest::SHA256, spec.as_bytes());
+
         d.as_ref()[..6].iter().map(|b| format!("{b:02x}")).collect()
     }
 
@@ -663,6 +750,7 @@ impl<F: Fs> Ops<'_, F> {
         let f = store.open_read(&[name])?;
         let m = f.meta()?;
         let data = read_range(&f, offset, m.size.saturating_sub(offset).min(u64::from(length)))?;
+
         Ok(json!({
             "ext": ext,
             "offset": offset,
@@ -677,9 +765,11 @@ impl<F: Fs> Ops<'_, F> {
         self.own_temp(id)?;
         let store = self.fs.store("tmp")?;
         let (names, _, _) = store.read_dir(&[])?;
+
         for n in names.into_iter().filter(|n| n.starts_with(&format!("{id}."))) {
             let _ = store.remove_file(&[n]);
         }
+
         Ok(json!({ "deleted": true }))
     }
 }
@@ -688,14 +778,17 @@ fn copy_into<T: FileIo>(f: Option<&T>, size: u64, w: &mut dyn Write) -> Result<(
     let f = f.ok_or("missing file")?;
     let mut buf = vec![0u8; 256 * 1024];
     let mut off = 0u64;
+
     while off < size {
         let n = f.read_at(&mut buf, off)?;
         if n == 0 {
             break;
         }
+
         w.write_all(&buf[..n]).map_err(|e| e.to_string())?;
         off += n as u64;
     }
+
     Ok(())
 }
 
@@ -703,6 +796,7 @@ fn copy_into<T: FileIo>(f: Option<&T>, size: u64, w: &mut dyn Write) -> Result<(
 fn prune_temp<F: Fs>(store: &F) {
     let Ok((names, _, _)) = store.read_dir(&[]) else { return };
     let cutoff = now_ms() - TEMP_MAX_AGE_MS;
+
     for n in names {
         if let Ok(m) = store.stat(std::slice::from_ref(&n))
             && m.modified_ms < cutoff

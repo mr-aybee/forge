@@ -56,12 +56,15 @@ impl CommandExecutor for FakeHelper {
         let body = CommandBody::decode(signed.body.as_slice()).unwrap();
         let Some(forge_proto::Command::ContainerExecOpen(x)) = body.command else { panic!("not an exec") };
         self.seen.lock().unwrap().containers.push(x.container.clone());
+
         if x.container == "hang" {
             std::future::pending::<()>().await;
         }
+
         if x.container == "missing" {
             return Err("no container `missing` on this node".into());
         }
+
         let (agent, helper) = tokio::io::duplex(64 * 1024);
         let seen = self.seen.clone();
         tokio::spawn(async move {
@@ -69,12 +72,15 @@ impl CommandExecutor for FakeHelper {
             wr.write_all(&Frame::Data(b"$ ".to_vec()).encode()).await.unwrap();
             let mut dec = Decoder::new();
             let mut buf = vec![0u8; 4096];
+
             loop {
                 let n = rd.read(&mut buf).await.unwrap_or(0);
                 if n == 0 {
                     return;
                 }
+
                 dec.push(&buf[..n]);
+
                 while let Some(f) = dec.next_frame().unwrap() {
                     match f {
                         Frame::Data(d) if String::from_utf8_lossy(&d).contains("exit 3") => {
@@ -89,6 +95,7 @@ impl CommandExecutor for FakeHelper {
             }
         });
         let (r, w) = tokio::io::split(agent);
+
         Ok(ExecPipe { reader: Box::new(r), writer: Box::new(w) })
     }
 }
@@ -110,19 +117,23 @@ async fn node(h: &Harness, admin: &Client, helper: FakeHelper) -> (String, tokio
     std::mem::forget(dir);
     crate::tunnels::wait_online(admin, &node).await;
     let id: forge_core::ServerId = node.parse().unwrap();
+
     for _ in 0..100 {
         let f = h.app.state.store.all_facts().await.unwrap();
         if f.get(&id).is_some_and(|(v, _)| v["container_exec"] == true) {
             return (node, stop);
         }
+
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+
     panic!("facts never arrived");
 }
 
 async fn api_key(c: &Client) -> String {
     let (s, key) = c.post("/api/v1/api-keys", json!({"name": "cli", "expires_days": 1})).await;
     assert_eq!(s, StatusCode::CREATED, "{key}");
+
     key["secret"].as_str().unwrap().to_owned()
 }
 
@@ -133,6 +144,7 @@ async fn shell(base: &str, node: &str, container: &str, token: &str) -> Socket {
     );
     let mut req = url.into_client_request().unwrap();
     req.headers_mut().insert("authorization", format!("Bearer {token}").parse().unwrap());
+
     tokio_tungstenite::connect_async(req).await.unwrap().0
 }
 
@@ -183,6 +195,7 @@ async fn a_container_shell_runs_through_the_agent_without_a_terminal_account() {
     assert_eq!(closed["type"], "closed", "{closed}");
     assert_eq!(closed["reason"], "shell_exited");
     assert_eq!(closed["exit_code"], 3);
+
     {
         let seen = helper.seen.lock().unwrap();
         assert_eq!(seen.containers, ["web-1"]);
@@ -241,6 +254,7 @@ async fn ssh_is_used_only_with_an_explicit_login() {
     assert_eq!(s, StatusCode::CONFLICT, "{e}");
     assert_eq!(e["title"], "agent_update_required", "{e}");
     assert!(!e.to_string().contains("terminal account"), "{e}");
+
     // With `login=` it is the SSH path (this node has no SSH endpoint).
     let (s, e) = admin.get(&format!("/api/v1/servers/{}/containers/web-1/shell/check?login=forgeops", old.id)).await;
     assert_eq!(s, StatusCode::CONFLICT, "{e}");

@@ -45,11 +45,14 @@ impl People {
     pub async fn check_members(&self, workspace: WorkspaceId, ids: &[UserId]) -> DomainResult<()> {
         let found: HashSet<UserId> = self.users.get_users(ids).await?.into_iter().map(|u| u.id).collect();
         let ws = ws_ref(workspace);
+
         for id in ids {
             if !found.contains(id) {
                 return Err(DomainError::Invalid(format!("email_users: no user {id}")));
             }
+
             let mut member = false;
+
             for b in self.bindings.list_bindings_for_user(*id).await? {
                 member = match b.scope.kind {
                     EntityKind::Platform => true,
@@ -61,14 +64,17 @@ impl People {
                         Err(e) => return Err(e),
                     },
                 };
+
                 if member {
                     break;
                 }
             }
+
             if !member {
                 return Err(DomainError::Invalid(format!("email_users: user {id} has no role in this workspace")));
             }
         }
+
         Ok(())
     }
 
@@ -78,6 +84,7 @@ impl People {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
+
         let users = self.users.get_users(ids).await?;
         let mut out: Vec<UserId> = users
             .into_iter()
@@ -85,6 +92,7 @@ impl People {
             .map(|u| u.id)
             .collect();
         out.sort();
+
         Ok(out)
     }
 
@@ -110,14 +118,17 @@ impl People {
         mailbox: impl Fn(&str) -> Option<String>,
     ) -> DomainResult<DeliveryRecipients> {
         let mut candidates: Vec<UserId> = policy.email_users.clone();
+
         if !policy.email_roles.is_empty() {
             let resource = self.resource(alarm).await?;
+
             for b in self.bindings.list_bindings().await? {
                 if policy.email_roles.contains(&b.role) && resource.is_within(&b.scope) {
                     candidates.push(b.user_id);
                 }
             }
         }
+
         candidates.sort();
         candidates.dedup();
         let users: HashMap<UserId, User> =
@@ -144,35 +155,45 @@ impl People {
 
         let mut out = DeliveryRecipients::default();
         let mut seen: HashSet<String> = HashSet::new();
+
         for id in candidates {
             let skip = |reason| SkippedRecipient { user_id: id, reason };
+
             let Some(user) = users.get(&id) else {
                 out.skipped.push(skip(RecipientSkip::NoAccess));
                 continue;
             };
+
             if user.disabled {
                 out.skipped.push(skip(RecipientSkip::Disabled));
                 continue;
             }
+
             if !allowed.contains(&id) {
                 out.skipped.push(skip(RecipientSkip::NoAccess));
                 continue;
             }
+
             let Some(address) = user.email.as_deref().map(str::trim).filter(|e| !e.is_empty()).and_then(&mailbox)
             else {
                 out.skipped.push(skip(RecipientSkip::NoEmail));
                 continue;
             };
+
             if !seen.insert(address.to_lowercase()) {
                 continue;
             }
+
             if out.to.len() >= MAX_RESOLVED_RECIPIENTS {
                 out.skipped.push(skip(RecipientSkip::TooMany));
                 continue;
             }
+
             out.to.push(address);
         }
+
         out.count = out.to.len();
+
         Ok(out)
     }
 }

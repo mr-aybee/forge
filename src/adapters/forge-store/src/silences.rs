@@ -84,10 +84,12 @@ impl SilenceRepository for Store {
         }
         let mut sql = String::from("SELECT * FROM silences WHERE 1 = 1");
         let mut binds: Vec<B> = Vec::new();
+
         if let Some(ws) = f.workspace {
             binds.push(B::S(ws.to_string()));
             sql.push_str(&format!(" AND workspace_id = ${}", binds.len()));
         }
+
         if let Some((state, now)) = f.state {
             binds.push(B::I(now.0));
             let n = binds.len();
@@ -97,21 +99,26 @@ impl SilenceRepository for Store {
                 SilenceState::Active => format!(" AND ends_at > ${n} AND starts_at <= ${n}"),
             });
         }
+
         if let Some((at, id)) = f.before {
             binds.push(B::I(at.0));
             let t = binds.len();
             binds.push(B::S(id.to_string()));
             sql.push_str(&format!(" AND (starts_at < ${t} OR (starts_at = ${t} AND id < ${}))", binds.len()));
         }
+
         sql.push_str(&format!(" ORDER BY starts_at DESC, id DESC LIMIT {}", limit.clamp(1, 1000)));
         let mut q = sqlx::query(&sql);
+
         for bind in binds {
             q = match bind {
                 B::S(s) => q.bind(s),
                 B::I(i) => q.bind(i),
             };
         }
+
         let rows = q.fetch_all(self.pool()).await.map_err(db_err)?;
+
         rows.iter().map(silence_row).collect()
     }
 
@@ -142,7 +149,9 @@ impl SilenceRepository for Store {
             Some(p) => q.bind(p.to_string()),
             None => q,
         };
+
         let r = q.fetch_one(self.pool()).await.map_err(db_err)?;
+
         u64::try_from(int(&r, "n")?).map_err(|_| DomainError::Internal("negative silence count".into()))
     }
 

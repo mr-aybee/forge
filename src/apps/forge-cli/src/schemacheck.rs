@@ -21,6 +21,7 @@ const MAX_PROBLEMS: usize = 20;
 pub fn find_operation<'a>(doc: &'a Value, method: &str, path: &str) -> Option<&'a Value> {
     let path = path.split('?').next().unwrap_or(path);
     let want: Vec<&str> = path.trim_end_matches('/').split('/').collect();
+
     doc["paths"].as_object()?.iter().find_map(|(template, item)| {
         let t: Vec<&str> = template.trim_end_matches('/').split('/').collect();
         let matches = t.len() == want.len()
@@ -33,12 +34,14 @@ pub fn find_operation<'a>(doc: &'a Value, method: &str, path: &str) -> Option<&'
 #[must_use]
 pub fn request_schema(op: &Value) -> Option<&Value> {
     let s = op.pointer("/requestBody/content/application~1json/schema")?;
+
     // `{ "type": "object" }` alone is the untyped placeholder.
     (s.get("$ref").is_some() || s.get("properties").is_some()).then_some(s)
 }
 
 fn resolve<'a>(doc: &'a Value, schema: &'a Value) -> &'a Value {
     let mut s = schema;
+
     for _ in 0..32 {
         match s.get("$ref").and_then(Value::as_str) {
             Some(r) => match r.strip_prefix("#/") {
@@ -51,6 +54,7 @@ fn resolve<'a>(doc: &'a Value, schema: &'a Value) -> &'a Value {
             None => return s,
         }
     }
+
     s
 }
 
@@ -83,38 +87,46 @@ fn check(doc: &Value, schema: &Value, v: &Value, at: &str, out: &mut Vec<String>
     if out.len() >= MAX_PROBLEMS {
         return;
     }
+
     let s = resolve(doc, schema);
     let Some(obj) = s.as_object() else { return };
     let here = if at.is_empty() { "the body".to_owned() } else { format!("`{at}`") };
+
     if let Some(t) = obj.get("type") {
         let types: Vec<&str> = match t {
             Value::String(x) => vec![x.as_str()],
             Value::Array(a) => a.iter().filter_map(Value::as_str).collect(),
             _ => Vec::new(),
         };
+
         if !types.is_empty() && !types.iter().any(|t| type_ok(t, v)) {
             out.push(format!("{here} must be {} (got {})", types.join(" or "), kind(v)));
             return;
         }
     }
+
     if let Some(Value::Array(allowed)) = obj.get("enum")
         && !allowed.contains(v)
     {
         let list: Vec<String> = allowed.iter().map(Value::to_string).collect();
         out.push(format!("{here} must be one of {} (got {v})", list.join(", ")));
+
         return;
     }
+
     if let Some(c) = obj.get("const")
         && c != v
     {
         out.push(format!("{here} must be {c} (got {v})"));
         return;
     }
+
     if let (Some(min), Some(n)) = (obj.get("minimum").and_then(Value::as_f64), v.as_f64())
         && n < min
     {
         out.push(format!("{here} must be at least {min}"));
     }
+
     for (key, all) in [("anyOf", false), ("oneOf", false), ("allOf", true)] {
         if let Some(Value::Array(subs)) = obj.get(key) {
             let results: Vec<Vec<String>> = subs
@@ -125,6 +137,7 @@ fn check(doc: &Value, schema: &Value, v: &Value, at: &str, out: &mut Vec<String>
                     e
                 })
                 .collect();
+
             if all {
                 out.extend(results.into_iter().flatten());
             } else if !results.iter().any(Vec::is_empty) {
@@ -135,6 +148,7 @@ fn check(doc: &Value, schema: &Value, v: &Value, at: &str, out: &mut Vec<String>
             }
         }
     }
+
     match v {
         Value::Object(map) => check_object(doc, obj, map, at, out),
         Value::Array(items) => {
@@ -150,11 +164,13 @@ fn check(doc: &Value, schema: &Value, v: &Value, at: &str, out: &mut Vec<String>
 
 fn check_object(doc: &Value, s: &Map<String, Value>, map: &Map<String, Value>, at: &str, out: &mut Vec<String>) {
     let props = s.get("properties").and_then(Value::as_object);
+
     for req in s.get("required").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
         if !map.contains_key(req) {
             out.push(format!("`{}` is required", join(at, req)));
         }
     }
+
     for (k, val) in map {
         match props.and_then(|p| p.get(k)) {
             Some(ps) => check(doc, ps, val, &join(at, k), out),
@@ -184,10 +200,13 @@ pub fn validate(doc: &Value, method: &str, path: &str, body: &Value) -> Result<(
     let Some(schema) = request_schema(op) else { return Ok(()) };
     let mut problems = Vec::new();
     check(doc, schema, body, "", &mut problems);
+
     if problems.is_empty() {
         return Ok(());
     }
+
     let id = op["operationId"].as_str().unwrap_or("this operation");
+
     Err(CliError::usage(format!(
         "the body does not match {id}'s schema (`forge api describe {id}`): {}{}",
         problems.join("; "),
@@ -249,6 +268,7 @@ mod tests {
         assert!(e.contains("`tags[0]` must be string"), "{e}");
         assert!(e.contains("`oops` is not a field here"), "{e}");
         assert!(e.contains("things.update"), "{e}");
+
         // Untyped operations and unknown paths are not checked.
         assert!(validate(&d, "POST", "/api/v1/loose", &json!([1, 2])).is_ok());
         assert!(validate(&d, "POST", "/api/v1/unknown", &json!(1)).is_ok());

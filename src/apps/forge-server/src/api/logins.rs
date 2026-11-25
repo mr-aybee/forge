@@ -53,19 +53,23 @@ pub async fn save_login(
     if !valid_login(login) {
         return Ok(None);
     }
+
     let before = repo.logins_of(server).await?;
     if before.iter().any(|l| l == login) || before.len() >= MAX_LOGINS {
         return Ok(None);
     }
+
     let mut after = before.clone();
     after.push(login.to_owned());
     repo.set_logins(server, &after, now).await?;
+
     Ok(Some(before))
 }
 
 /// Accounts a node reported in its facts that are not saved yet.
 fn discovered(facts: Option<&Value>, saved: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
+
     for l in facts.and_then(|f| f.get("login_accounts")).and_then(Value::as_array).into_iter().flatten() {
         if let Some(l) = l.as_str().filter(|l| valid_login(l))
             && !saved.iter().any(|s| s == l)
@@ -74,6 +78,7 @@ fn discovered(facts: Option<&Value>, saved: &[String]) -> Vec<String> {
             out.push(l.to_owned());
         }
     }
+
     out
 }
 
@@ -85,6 +90,7 @@ pub async fn list(State(state): State<AppState>, caller: Caller, Path(id): Path<
     let saved = state.store.logins_of(id).await?;
     let facts = state.store.all_facts().await?;
     let found = discovered(facts.get(&id).map(|(f, _)| f), &saved);
+
     Ok(Json(json!({ "logins": saved, "saved": saved, "discovered": found })))
 }
 
@@ -102,22 +108,27 @@ pub async fn set(
     caller.authorize(Action::ServerManage, server_ref(id)).await?;
     state.store.get_server(id).await.map_err(|_| ApiError::not_found("node not found"))?;
     let mut logins: Vec<String> = Vec::new();
+
     for l in req.logins.iter().map(|l| l.trim()).filter(|l| !l.is_empty()) {
         if !valid_login(l) {
             return Err(ApiError::bad_request(format!(
                 "`{l}` is not a valid login name (letters, digits, '_', '.', '-')"
             )));
         }
+
         if !logins.iter().any(|x| x == l) {
             logins.push(l.to_owned());
         }
     }
+
     if logins.len() > MAX_LOGINS {
         return Err(ApiError::bad_request(format!("at most {MAX_LOGINS} accounts per node")));
     }
+
     let before = state.store.logins_of(id).await?;
     state.store.set_logins(id, &logins, state.clock.now()).await?;
     caller.audit("server.logins.update", &server_ref(id), None, json!({ "from": before, "to": logins })).await;
+
     Ok(Json(json!({ "logins": logins })))
 }
 
@@ -149,9 +160,11 @@ pub async fn create_account(
             "`{name}` is not allowed: use 1–32 of a-z, 0-9, `_` and `-`, starting with a letter or `_`, and not a system name"
         )));
     }
+
     if node.os != "linux" {
         return Err(ApiError::conflict("terminal accounts need a Linux node"));
     }
+
     let (body, signed) = state.signer.issue(
         &id.to_string(),
         &caller.principal().to_string(),
@@ -167,12 +180,14 @@ pub async fn create_account(
         .ok_or_else(|| ApiError::new(StatusCode::GATEWAY_TIMEOUT, "timeout", "the node did not answer in time"))?;
     let target = server_ref(id);
     let details = json!({ "name": name, "sudo": req.sudo });
+
     if !r.ok {
         caller
             .audit_failed("server.terminal_account.create", &target, Some(node.workspace_id), details, &r.error)
             .await;
         return Err(ApiError::conflict(format!("the node refused: {}", r.error)));
     }
+
     let created = serde_json::from_str::<Value>(&r.output).ok().and_then(|v| v["created"].as_bool()).unwrap_or(false);
     caller
         .audit(
@@ -182,6 +197,7 @@ pub async fn create_account(
             json!({ "name": name, "sudo": req.sudo, "created": created }),
         )
         .await;
+
     if let Some(before) = save_login(&state.store, id, &name, state.clock.now()).await? {
         let mut after = before.clone();
         after.push(name.clone());
@@ -189,6 +205,7 @@ pub async fn create_account(
             .audit("server.logins.update", &target, Some(node.workspace_id), json!({ "from": before, "to": after }))
             .await;
     }
+
     Ok(Json(json!({ "name": name, "sudo": req.sudo, "created": created, "logins": state.store.logins_of(id).await? })))
 }
 

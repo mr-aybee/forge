@@ -61,11 +61,13 @@ impl reqwest::dns::Resolve for GuardedResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let rules = self.rules;
         let host = name.as_str().to_owned();
+
         Box::pin(async move {
             let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
             if addrs.is_empty() || addrs.iter().any(|a| !address_allowed(a.ip(), rules)) {
                 return Err(Box::new(Blocked) as Box<dyn StdError + Send + Sync>);
             }
+
             let iter: reqwest::dns::Addrs = Box::new(addrs.into_iter());
             Ok(iter)
         })
@@ -75,18 +77,22 @@ impl reqwest::dns::Resolve for GuardedResolver {
 /// Whether `T` is anywhere in an error's chain of causes.
 fn caused_by<T: StdError + 'static>(e: &(dyn StdError + 'static)) -> bool {
     let mut cur: Option<&(dyn StdError + 'static)> = Some(e);
+
     while let Some(c) = cur {
         if c.is::<T>() {
             return true;
         }
+
         // An I/O error can wrap its cause without naming it as the source.
         if let Some(inner) = c.downcast_ref::<std::io::Error>().and_then(std::io::Error::get_ref)
             && caused_by::<T>(inner)
         {
             return true;
         }
+
         cur = c.source();
     }
+
     false
 }
 
@@ -138,16 +144,21 @@ impl Transport for HttpTransport {
             Some(url::Host::Domain(_)) => None,
             None => return SendOutcome::Failed(FailureClass::Config),
         };
+
         if literal.is_some_and(|ip| check_address(ip, self.rules).is_err()) {
             return SendOutcome::Failed(FailureClass::BlockedTarget);
         }
+
         if request.url.scheme() == "http" && !self.rules.allow_http {
             return SendOutcome::Failed(FailureClass::BlockedTarget);
         }
+
         let mut req = self.client.post(request.url.clone()).body(request.body.clone());
+
         for (name, value) in &request.headers {
             req = req.header(*name, value);
         }
+
         match req.send().await {
             // The answer's body is dropped unread: only the status counts.
             Ok(resp) => SendOutcome::Status(resp.status().as_u16()),
@@ -261,6 +272,7 @@ async fn pass(notifier: &Notifier) {
         Ok(_) => {}
         Err(e) => tracing::warn!(error = %e, "notification planning failed"),
     }
+
     match notifier.dispatch().await {
         Ok(r) if r.sent + r.retried + r.failed + r.cancelled + r.suppressed > 0 => {
             tracing::info!(
@@ -281,6 +293,7 @@ async fn pass(notifier: &Notifier) {
 pub(crate) async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
     let mut tick = tokio::time::interval(Duration::from_millis(state.config.alerts.deliver_interval_ms));
     let mut prune = tokio::time::interval(PRUNE_EVERY);
+
     loop {
         tokio::select! {
             _ = tick.tick() => pass(&state.notifier).await,
@@ -317,6 +330,7 @@ mod tests {
     async fn literal_addresses_and_plain_http_are_checked_before_any_connection() {
         let strict = HttpTransport::new(TargetRules::default()).unwrap();
         let to = |url: &str| Outbound { url: url.parse().unwrap(), headers: vec![], body: b"{}".to_vec() };
+
         for url in [
             "https://169.254.169.254/latest/meta-data/",
             "https://127.0.0.1:1/x",
@@ -327,12 +341,14 @@ mod tests {
         ] {
             assert_eq!(strict.send(&to(url)).await, SendOutcome::Failed(FailureClass::BlockedTarget), "{url}");
         }
+
         // A name that resolves to loopback is blocked by the resolver.
         assert_eq!(
             strict.send(&to("https://localhost:1/x")).await,
             SendOutcome::Failed(FailureClass::BlockedTarget),
             "the cause survives the HTTP client's error"
         );
+
         // Allowed, and nothing listens: a connection failure, not a block.
         let lab = HttpTransport::new(LAB).unwrap();
         let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();

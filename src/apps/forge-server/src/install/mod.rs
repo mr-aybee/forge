@@ -56,12 +56,14 @@ impl DistManifest {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(format!("{}: {e}", path.display())),
         };
+
         let mut raw = Vec::new();
         f.take(MAX_MANIFEST).read_to_end(&mut raw).map_err(|e| format!("{}: {e}", path.display()))?;
         let m: Self = serde_json::from_slice(&raw).map_err(|e| format!("{}: {e}", path.display()))?;
         if !forge_catalog::versions::valid_build(&m.version) {
             return Err(format!("{}: `{}` is not a version", path.display(), m.version));
         }
+
         Ok(Some(m))
     }
 
@@ -77,6 +79,7 @@ impl DistManifest {
         let mut f = std::fs::File::create(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
         f.write_all(&raw).and_then(|()| f.sync_all()).map_err(|e| format!("{}: {e}", tmp.display()))?;
         drop(f);
+
         std::fs::rename(&tmp, dir.join(MANIFEST)).map_err(|e| format!("{}: {e}", dir.join(MANIFEST).display()))
     }
 }
@@ -99,6 +102,7 @@ impl AgentDist {
     /// Scans `dir` for `forge-agent-linux-x86_64` style files and hashes them.
     pub fn scan(dir: &Path) -> Self {
         let mut sums = HashMap::new();
+
         for arch in LINUX_ARCHES {
             for bin in BINARIES {
                 let name = file_name("linux", arch, bin);
@@ -107,12 +111,14 @@ impl AgentDist {
                 }
             }
         }
+
         for arch in WINDOWS_ARCHES {
             let name = windows_file(arch);
             if let Ok(bytes) = std::fs::read(dir.join(&name)) {
                 sums.insert(name, sha256_hex(&bytes));
             }
         }
+
         let version = match DistManifest::read(dir) {
             Ok(Some(m)) => {
                 // Only files the manifest lists, with its hash: a file
@@ -123,6 +129,7 @@ impl AgentDist {
                     if !ok {
                         tracing::warn!(file = %name, version = %m.version, "agent binary does not match MANIFEST.json; not handed out");
                     }
+
                     ok
                 });
                 Some(m.version)
@@ -131,6 +138,7 @@ impl AgentDist {
                 if !sums.is_empty() {
                     tracing::warn!(dir = %dir.display(), version = crate::VERSION, "no MANIFEST.json beside the agent binaries; offering them as this server's version");
                 }
+
                 None
             }
             Err(e) => {
@@ -139,9 +147,11 @@ impl AgentDist {
                 None
             }
         };
+
         if sums.is_empty() {
             tracing::warn!(dir = %dir.display(), "no agent binaries found; node onboarding is unavailable until they are added");
         }
+
         Self { dir: dir.to_path_buf(), sums, version }
     }
 
@@ -172,10 +182,13 @@ impl AgentDist {
             let name = windows_file(arch);
             return self.sums.get(&name).map(|sum| (self.dir.join(&name), sum.as_str()));
         }
+
         if os != "linux" || !LINUX_ARCHES.contains(&arch) || !BINARIES.contains(&bin) {
             return None;
         }
+
         let name = file_name(os, arch, bin);
+
         self.sums.get(&name).map(|sum| (self.dir.join(&name), sum.as_str()))
     }
 
@@ -224,6 +237,7 @@ pub fn render_script(dist: &AgentDist, p: &InstallParams<'_>) -> String {
         Some(t) => format!("FORGE_ENROLL_TOKEN={}", sh_quote(t)),
         None => r#": "${FORGE_ENROLL_TOKEN:?set FORGE_ENROLL_TOKEN to the token shown in Orbyn Forge}""#.to_owned(),
     };
+
     let ssh_ca = sh_quote(p.ssh_user_ca.unwrap_or_default());
     let host_flag = p.hostname.map(|h| format!(" --hostname {}", sh_quote(h))).unwrap_or_default();
     let account = sh_quote(p.terminal_account.unwrap_or_default());
@@ -239,6 +253,7 @@ pub fn render_script(dist: &AgentDist, p: &InstallParams<'_>) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
+
     format!(
         r#"#!/bin/sh
 # Orbyn Forge node installer. Installs forge-agent as an unprivileged service
@@ -524,6 +539,7 @@ mod tests {
     fn dist() -> AgentDist {
         let mut d = AgentDist::default();
         d.sums.insert("forge-agent-linux-x86_64".into(), "ab".repeat(32));
+
         d
     }
 
@@ -547,17 +563,22 @@ mod tests {
         assert!(s.contains("sha256sum -c"));
         assert!(s.contains("SSH_USER_CA='ssh-ed25519 AAAAC3 ca'"));
         assert!(s.contains("TrustedUserCAKeys /etc/ssh/forge_user_ca.pub"));
+
         // D-070: updates offer new command kinds through the agent, which
         // keeps the operator's removals; no blind re-adding.
         assert!(s.contains("forge-agent --state-dir /var/lib/forge-agent offer-commands"));
         assert!(!s.contains("for CMD in"), "the installer no longer re-adds removed commands");
+
         // D-068: a fresh enrollment is pinned as root for the helper.
         let enroll = s.find("enroll --server");
+
         // The last pin is the fresh-install one; the first is the re-run branch.
         let pin = s.rfind("forge-agent-helper pin --agent-dir /var/lib/forge-agent");
         assert!(matches!((enroll, pin), (Some(e), Some(p)) if p > e), "pinned right after enrolling");
+
         // A re-run pins a node that has no pin yet (old node, or a failed pin).
         assert!(s.contains("[ ! -f /var/lib/forge-agent-helper/pin.json ]"));
+
         // D-069: re-running keeps node-bound certificates, and the drop-in is
         // readable by the agent that reports it.
         assert!(s.contains("ssh-principals %u %i") && s.contains("chmod 0644 /etc/ssh/sshd_config.d/50-forge.conf"));
@@ -577,6 +598,7 @@ mod tests {
                 terminal_account_sudo: false,
             },
         );
+
         // systemd: a crash-looping unit fails the install with its journal.
         let restart = s.find("systemctl restart forge-agent.service\n").unwrap_or(usize::MAX);
         let check = s.find("systemctl show -p NRestarts --value forge-agent.service");
@@ -584,10 +606,13 @@ mod tests {
         assert!(matches!((check, ok), (Some(c), Some(o)) if restart < c && c < o), "checked before success");
         assert!(s.contains("journalctl -u forge-agent.service -n 15 --no-pager"));
         assert!(s.contains("die \"forge-agent is not running"));
+
         // No systemd: the respawned process must stay up too.
         assert!(s.contains("tail -n 15 /var/log/forge-agent.log"));
+
         // offer-commands output is not echoed raw ("no new commands").
         assert!(s.contains("OFFERED=$(as_agent"));
+
         // The rendered script parses as POSIX sh where a shell is present.
         if let Ok(out) = std::process::Command::new("sh").arg("-n").arg("-c").arg(&s).output() {
             assert!(out.status.success(), "sh -n: {}", String::from_utf8_lossy(&out.stderr));
@@ -610,6 +635,7 @@ mod tests {
         );
         assert!(s.contains(r"FORGE_ENROLL_TOKEN='t'\''; rm -rf /'"));
         assert!(s.contains("--hostname 'a b'"));
+
         // D-078: the account is created as root before enrolling, and the
         // agent reports it only when it was created.
         assert!(s.contains("TERMINAL_ACCOUNT='forge-ops'\nTERMINAL_ACCOUNT_SUDO=1\n"));
@@ -634,6 +660,7 @@ mod tests {
                 },
             );
             assert!(s.contains("export FORGE_ENROLL_TOKEN\n"));
+
             // The only uses: the assignment / required check, the 0600 header
             // file, export and unset. No `VAR=value cmd` or `env VAR=…` argv.
             for line in s.lines().filter(|l| l.contains("FORGE_ENROLL_TOKEN")) {
@@ -646,6 +673,7 @@ mod tests {
                     || l.starts_with('#');
                 assert!(ok, "token on a command line: {l}");
             }
+
             assert!(!s.contains("env FORGE_ENROLL_TOKEN"));
         }
     }
@@ -668,12 +696,15 @@ const INSTALL_PS1: &str = include_str!("install.ps1");
 /// each is doubled, which PowerShell reads as one literal quote.
 fn ps_quote_body(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
+
     for c in s.chars() {
         if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
             out.push(c);
         }
+
         out.push(c);
     }
+
     out
 }
 
@@ -694,9 +725,11 @@ mod manifest_tests {
 
     fn dist_with(files: &[(&str, &[u8])]) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+
         for (name, body) in files {
             std::fs::write(dir.path().join(name), body).unwrap_or_else(|e| panic!("{e}"));
         }
+
         dir
     }
 
@@ -782,21 +815,26 @@ mod windows_tests {
         assert!(ps1.contains("$AgentUrl = 'https://forge.example.com:7443'"));
         assert!(ps1.contains(&format!("$AgentSha = '{sum}'")));
         assert!(!ps1.contains("{{"), "every placeholder filled");
+
         // Only Forge's own branded folders: never a generic name such as
         // ProgramData\Forge that another product could own (D-079).
         assert!(!ps1.contains("'Forge'") && !ps1.contains("ProgramData\\Forge"), "generic folder in install.ps1");
+
         // A quote in a URL cannot break out of the PowerShell string.
         let evil = render_ps1(&dist, "https://x/'; Remove-Item C:\\ ;'", "https://x");
         assert!(evil.contains("$ForgeUrl = 'https://x/''; Remove-Item C:\\ ;'''"), "{}", &evil[..200]);
+
         // PowerShell also closes a single-quoted string at typographic quotes.
         let smart = render_ps1(&dist, "https://x/\u{2019}; calc; \u{2018}", "https://x\u{201B}");
         assert!(smart.contains("$ForgeUrl = 'https://x/\u{2019}\u{2019}; calc; \u{2018}\u{2018}'"));
         assert!(smart.contains("$AgentUrl = 'https://x\u{201B}\u{201B}'"));
+
         // The URL is substituted into the quoted assignment only, never into
         // a comment line, where a newline would start a command.
         let multi = render_ps1(&dist, "https://x\nRemove-Item C:\\", "https://x");
         assert_eq!(multi.matches("Remove-Item C:\\").count(), 1);
         assert!(multi.contains("$ForgeUrl = 'https://x\nRemove-Item C:\\'"));
+
         // The agent is staged in the install folder (Administrators only),
         // never in %TEMP%, where this user's programs could swap it after the
         // checksum (it then runs as LocalSystem).
@@ -805,6 +843,7 @@ mod windows_tests {
             ps1.find("Get-FileHash -LiteralPath $staged").unwrap_or_else(|| panic!("no checksum of the staged file"));
         let install = ps1.find("Move-Item -Force -LiteralPath $staged").unwrap_or_else(|| panic!("no move into place"));
         assert!(hash < install, "checksum before install");
+
         // The data folder gets a fresh ACL (icacls /grant:r keeps other
         // accounts' entries) after a check for links and foreign owners.
         assert!(ps1.contains("Set-Acl -LiteralPath $Path -AclObject $acl"));
@@ -817,15 +856,18 @@ mod windows_tests {
     fn with_install_functions(script: &str) -> Option<std::process::Output> {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let ps1 = render_ps1(&AgentDist::scan(dir.path()), "https://f", "https://f:7443");
+
         // Everything before the main `try {` block: settings and functions.
         let head = &ps1[..ps1.find("\ntry {\n").unwrap_or_else(|| panic!("no main block"))];
         let file = dir.path().join("t.ps1");
         std::fs::write(&file, format!("{head}\n{script}\n")).unwrap_or_else(|e| panic!("{e}"));
+
         // Windows PowerShell 5.1 by absolute path, without an inherited
         // PSModulePath: under a PowerShell 7 parent (GitHub's `pwsh` steps)
         // 5.1 would load pwsh's module versions and fail on Get-Acl.
         let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
         let exe = std::path::Path::new(&root).join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+
         std::process::Command::new(exe)
             .env_remove("PSModulePath")
             .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
@@ -871,6 +913,7 @@ mod windows_tests {
             "$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('{}', [ref]$null, [ref]$e); if ($e) {{ $e | ForEach-Object {{ $_.ToString() }}; exit 1 }}",
             file.display()
         );
+
         for shell in ["pwsh", "powershell"] {
             if let Ok(out) =
                 std::process::Command::new(shell).args(["-NoProfile", "-NonInteractive", "-Command", &check]).output()

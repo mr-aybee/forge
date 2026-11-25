@@ -28,6 +28,7 @@ impl CommandSigner {
     pub fn from_pkcs8(pkcs8: &[u8]) -> Result<Self, VerifyError> {
         let key = Ed25519KeyPair::from_pkcs8(pkcs8).map_err(|_| VerifyError::Malformed)?;
         let key_id = sha256_hex(key.public_key().as_ref())[..16].to_owned();
+
         Ok(Self { key, key_id })
     }
 
@@ -43,6 +44,7 @@ impl CommandSigner {
                 .map_err(|_| std::io::Error::other("key generation failed"))?;
             forge_secrets::write_private(path, pkcs8.as_ref())?;
         }
+
         Self::from_pkcs8(&std::fs::read(path)?).map_err(|_| std::io::Error::other("invalid command key"))
     }
 
@@ -71,6 +73,7 @@ impl CommandSigner {
             command: Some(command),
         };
         let signed = self.sign(&body);
+
         (body, signed)
     }
 
@@ -79,6 +82,7 @@ impl CommandSigner {
     pub fn sign(&self, body: &CommandBody) -> SignedCommand {
         let bytes = body.encode_to_vec();
         let signature = self.key.sign(&bytes).as_ref().to_vec();
+
         SignedCommand { body: bytes, signature, key_id: self.key_id.clone() }
     }
 }
@@ -96,6 +100,7 @@ fn server_keys_message(body: &[u8]) -> Vec<u8> {
     let mut m = Vec::with_capacity(SERVER_KEYS_CONTEXT.len() + body.len());
     m.extend_from_slice(SERVER_KEYS_CONTEXT);
     m.extend_from_slice(body);
+
     m
 }
 
@@ -105,6 +110,7 @@ impl CommandSigner {
     pub fn sign_server_keys(&self, keys: &ServerKeys) -> SignedServerKeys {
         let body = keys.encode_to_vec();
         let signature = self.key.sign(&server_keys_message(&body)).as_ref().to_vec();
+
         SignedServerKeys { body, signature }
     }
 }
@@ -124,17 +130,22 @@ pub fn verify_server_keys(
     if keys.server_id != server_id {
         return Err(VerifyError::WrongTarget);
     }
+
     let skew = i64::try_from(MAX_CLOCK_SKEW.as_millis()).unwrap_or(i64::MAX);
     let max_age = i64::try_from(SERVER_KEYS_MAX_AGE.as_millis()).unwrap_or(i64::MAX);
+
     if keys.issued_at_ms > now.0 + skew {
         return Err(VerifyError::NotYetValid);
     }
+
     if now.0 > keys.issued_at_ms + max_age + skew {
         return Err(VerifyError::Expired);
     }
+
     if keys.keys.len() > crate::messages::MAX_SERVER_KEYS || keys.revoked.len() > crate::messages::MAX_REVOKED_KEYS {
         return Err(VerifyError::Malformed);
     }
+
     Ok(keys)
 }
 
@@ -199,24 +210,31 @@ impl CommandVerifier {
         if body.command.is_none() || body.operation_id.is_empty() {
             return Err(VerifyError::Malformed);
         }
+
         if body.server_id != self.server_id {
             return Err(VerifyError::WrongTarget);
         }
+
         let skew = i64::try_from(MAX_CLOCK_SKEW.as_millis()).unwrap_or(i64::MAX);
         let max_ttl = i64::try_from(MAX_COMMAND_TTL.as_millis()).unwrap_or(i64::MAX);
         if body.expires_at_ms - body.issued_at_ms > max_ttl {
             return Err(VerifyError::TtlTooLong);
         }
+
         if now.0 > body.expires_at_ms + skew {
             return Err(VerifyError::Expired);
         }
+
         if body.issued_at_ms > now.0 + skew {
             return Err(VerifyError::NotYetValid);
         }
+
         if body.issued_at_ms + skew < self.started_at.0 {
             return Err(VerifyError::IssuedBeforeStart);
         }
+
         self.remember(&body, now)?;
+
         Ok(body)
     }
 
@@ -232,10 +250,12 @@ impl CommandVerifier {
     /// the next verification, and at most the cache's capacity is kept.
     pub fn restore(&self, entries: impl IntoIterator<Item = (i64, String)>) {
         let Ok(mut cache) = self.seen.lock() else { return };
+
         for (exp, id) in entries {
             if cache.ids.len() >= REPLAY_CAPACITY {
                 break;
             }
+
             if cache.ids.insert(id.clone()) {
                 cache.order.push_back((exp, id));
             }
@@ -245,19 +265,24 @@ impl CommandVerifier {
     fn remember(&self, body: &CommandBody, now: Timestamp) -> Result<(), VerifyError> {
         let mut cache = self.seen.lock().map_err(|_| VerifyError::Malformed)?;
         let skew = i64::try_from(MAX_CLOCK_SKEW.as_millis()).unwrap_or(i64::MAX);
+
         while cache.order.front().is_some_and(|(exp, _)| exp + skew < now.0) {
             if let Some((_, id)) = cache.order.pop_front() {
                 cache.ids.remove(&id);
             }
         }
+
         if cache.ids.contains(&body.operation_id) {
             return Err(VerifyError::Replay);
         }
+
         if cache.ids.len() >= REPLAY_CAPACITY {
             return Err(VerifyError::CacheFull);
         }
+
         cache.ids.insert(body.operation_id.clone());
         cache.order.push_back((body.expires_at_ms, body.operation_id.clone()));
+
         Ok(())
     }
 }
@@ -273,6 +298,7 @@ mod tests {
     fn pair() -> (CommandSigner, CommandVerifier) {
         let s = CommandSigner::generate().unwrap();
         let v = CommandVerifier::new(s.public_key(), "srv-1".into(), T0);
+
         (s, v)
     }
 
@@ -334,6 +360,7 @@ mod tests {
     fn commands_from_before_restart_are_rejected() {
         let s = CommandSigner::generate().unwrap();
         let (_, cmd) = s.issue("srv-1", "user:a", Command::Ping(Ping {}), T0, ttl());
+
         // Agent restarted 40 s after the command was issued (beyond skew).
         let restarted = CommandVerifier::new(s.public_key(), "srv-1".into(), T0.plus(Duration::from_secs(40)));
         assert_eq!(restarted.verify(&cmd, T0.plus(Duration::from_secs(41))), Err(VerifyError::IssuedBeforeStart));
@@ -353,11 +380,13 @@ mod tests {
     #[test]
     fn replay_cache_forgets_expired_entries() {
         let (s, v) = pair();
+
         for i in 0..10 {
             let now = T0.plus(Duration::from_secs(i * 100));
             let (_, cmd) = s.issue("srv-1", "user:a", Command::Ping(Ping {}), now, ttl());
             v.verify(&cmd, now).unwrap();
         }
+
         assert!(v.seen.lock().unwrap().ids.len() <= 2);
     }
 
@@ -388,6 +417,7 @@ mod tests {
         let mut tampered = signed.clone();
         tampered.body.push(0);
         assert_eq!(verify_server_keys(&s.public_key(), &tampered, "srv-1", T0), Err(VerifyError::BadSignature));
+
         // A command signature never passes as an announcement.
         let (_, cmd) = s.issue("srv-1", "u", Command::Ping(Ping {}), T0, ttl());
         let forged = SignedServerKeys { body: cmd.body, signature: cmd.signature };

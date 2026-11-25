@@ -39,27 +39,33 @@ fn reserved(key: &str) -> ApiResult<()> {
     if key.starts_with("agents.") {
         return Err(ApiError::bad_request("this setting is managed on its own page (Updates → Agents)"));
     }
+
     if key.starts_with("packages.") {
         return Err(ApiError::bad_request("this setting is managed with the package's update policy"));
     }
+
     if key.starts_with("server.") {
         return Err(ApiError::bad_request(
             "server settings are changed with /api/v1/server/... (console: Settings); the public address with PUT /api/v1/server/public-address",
         ));
     }
+
     if key.starts_with("analytics.") {
         return Err(ApiError::bad_request(
             "analytics settings are changed with PUT /api/v1/analytics/settings (Settings → Analytics)",
         ));
     }
+
     if key.starts_with(crate::agent_keys::SETTING_PREFIX) {
         return Err(ApiError::bad_request("the agent key is managed with forge-server agent-key"));
     }
+
     if key.starts_with("names.") {
         return Err(ApiError::bad_request(
             "the local name suffix is set with PUT /api/v1/names/suffix (DNS → Local names)",
         ));
     }
+
     Ok(())
 }
 
@@ -78,6 +84,7 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Ws(ws): Ws) -> A
         .filter(|(k, _)| !k.starts_with(crate::agent_keys::SETTING_PREFIX))
         .map(|(k, v)| json!({ "key": k, "value": v }))
         .collect();
+
     Ok(Json(json!({
         "instance": {
             "version": crate::VERSION,
@@ -105,6 +112,7 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Ws(ws): Ws) -> A
 fn mfa_actions_sorted() -> Vec<&'static String> {
     let mut v: Vec<&'static String> = super::openapi::mfa_actions().iter().collect();
     v.sort();
+
     v
 }
 
@@ -121,15 +129,20 @@ pub async fn put(
     Json(req): Json<SettingValue>,
 ) -> ApiResult<StatusCode> {
     caller.authorize(Action::WorkspaceManage, ws_ref(ws)).await?;
+
     if !valid_setting_key(&key) {
         return Err(ApiError::bad_request("key: lowercase letters, digits, `_`, `.`, `-` (max 64)"));
     }
+
     reserved(&key)?;
+
     if req.value.len() > 4096 || req.value.contains(['\n', '\r', '\0']) {
         return Err(ApiError::bad_request("value: one line, at most 4096 characters"));
     }
+
     state.store.put_setting(&key, &req.value, state.clock.now()).await?;
     caller.audit("settings.update", &ws_ref(ws), Some(ws), json!({ "key": key })).await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -143,6 +156,7 @@ pub async fn delete(
     reserved(&key)?;
     state.store.delete_setting(&key).await?;
     caller.audit("settings.delete", &ws_ref(ws), Some(ws), json!({ "key": key })).await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -197,16 +211,21 @@ async fn parse_restrictions(
     req: &[NewTokenGrant],
 ) -> ApiResult<Vec<forge_core::permissions::TokenGrant>> {
     use forge_core::permissions::{MAX_TOKEN_GRANTS, TokenGrant, parse_actions, parse_scope};
+
     if req.is_empty() || req.len() > MAX_TOKEN_GRANTS {
         return Err(ApiError::bad_request(format!("restrictions: 1 to {MAX_TOKEN_GRANTS} entries")));
     }
+
     let mut out = Vec::with_capacity(req.len());
+
     for g in req {
         let scope = parse_scope(&g.scope)?;
+
         // Fails closed for forged ids.
         state.authz_resolve(&scope).await.map_err(|_| ApiError::not_found(format!("no such scope {scope}")))?;
         out.push(TokenGrant { scope, actions: parse_actions(&g.actions)? });
     }
+
     Ok(out)
 }
 
@@ -227,6 +246,7 @@ pub(crate) async fn check_elevated(
             "elevated tokens are turned off for this server ([security] allow_elevated_tokens = false)",
         ));
     }
+
     caller.require_mfa(action, resource).await
 }
 
@@ -246,10 +266,12 @@ pub(crate) async fn mint_key(state: &AppState, user: forge_core::UserId, req: &N
         Some(r) => Some(parse_restrictions(state, r).await?),
         None => None,
     };
+
     let name = req.name.trim();
     if name.is_empty() || name.len() > 80 {
         return Err(ApiError::bad_request("name: 1–80 characters"));
     }
+
     let prefix = format!("fk_{}", forge_secrets::crypto::random_token::<6>().to_lowercase().replace(['-', '_'], "x"));
     let secret = format!("{prefix}_{}", forge_secrets::crypto::random_token::<32>());
     let now = state.clock.now();
@@ -269,6 +291,7 @@ pub(crate) async fn mint_key(state: &AppState, user: forge_core::UserId, req: &N
         restrictions,
     };
     state.store.create_api_key(&key).await?;
+
     Ok((key, secret))
 }
 
@@ -281,10 +304,13 @@ pub async fn create_key(
     if caller.via_api_key() {
         return Err(ApiError::forbidden("API keys cannot create API keys; sign in to the console"));
     }
+
     let me = EntityRef::new(EntityKind::User, caller.session.user.id);
+
     if req.elevated {
         check_elevated(&state, &caller, "apikey.create", &me).await?;
     }
+
     // A token can only be given what its creator holds now (#13); it is
     // checked again, as the intersection, at every request.
     if let Some(r) = &req.restrictions {
@@ -306,6 +332,7 @@ pub async fn create_key(
             }
         }
     }
+
     let (key, secret) = mint_key(&state, caller.session.user.id, &req).await?;
     caller
         .audit(
@@ -319,6 +346,7 @@ pub async fn create_key(
             }),
         )
         .await;
+
     Ok((StatusCode::CREATED, Json(CreatedKey { key, secret })))
 }
 
@@ -330,11 +358,13 @@ pub async fn delete_key(
     if !state.store.delete_api_key(caller.session.user.id, &id).await? {
         return Err(ApiError::not_found("API key not found"));
     }
+
     // Terminals and exec sessions opened with the key end now.
     state.remote_sessions.end_api_key(&id);
     caller
         .audit("apikey.revoke", &EntityRef::new(EntityKind::User, caller.session.user.id), None, json!({ "id": id }))
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -360,12 +390,15 @@ pub async fn delete_user_key(
 ) -> ApiResult<StatusCode> {
     let target = EntityRef::new(EntityKind::User, user);
     caller.authorize(forge_core::Action::UserManage, EntityRef::platform()).await?;
+
     if !state.store.delete_api_key(user, &id).await? {
         caller.audit_denied("apikey.revoke", &target, None, "not found").await;
         return Err(ApiError::not_found("API key not found"));
     }
+
     state.remote_sessions.end_api_key(&id);
     caller.audit("apikey.revoke", &target, None, json!({ "id": id, "by_admin": true })).await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -380,6 +413,7 @@ pub async fn delete_user_keys(
     let n = state.store.delete_user_api_keys(user).await?;
     state.remote_sessions.end_user_api_keys(user);
     caller.audit("apikey.revoke_all", &target, None, json!({ "revoked": n })).await;
+
     Ok(Json(json!({ "revoked": n })))
 }
 

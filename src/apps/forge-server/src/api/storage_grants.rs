@@ -83,6 +83,7 @@ pub(super) async fn revoke_for_bucket(
     reason: &'static str,
 ) -> ApiResult<usize> {
     let revoked = state.bucket_grants.revoke_bucket(store, bucket).await?;
+
     for g in &revoked {
         caller
             .audit(
@@ -96,6 +97,7 @@ pub(super) async fn revoke_for_bucket(
             )
             .await;
     }
+
     Ok(revoked.len())
 }
 
@@ -109,6 +111,7 @@ pub async fn list(
 ) -> ApiResult<Json<GrantList>> {
     let (store, _) = stores::authorized(&state, &caller, ws, id, Action::StorageManage).await?;
     let grants = state.bucket_grants.on_store(&store, q.all, q.limit).await?;
+
     Ok(Json(GrantList { grants }))
 }
 
@@ -166,6 +169,7 @@ pub async fn create(
         "store_id": store.id, "name": store.name, "user": audit_text(&req.user), "bucket": audit_text(&req.bucket),
         "access": req.access,
     });
+
     let grant = match issue(&state, &caller, &store, req).await {
         Ok(grant) => grant,
         Err(e) => {
@@ -173,9 +177,11 @@ pub async fn create(
             // bucket, with the error's code, not its text.
             let error = format!("{} ({})", e.code, e.status.as_u16());
             caller.audit_failed(AUDIT_CREATE, &target, Some(ws), asked, &error).await;
+
             return Err(e);
         }
     };
+
     caller
         .audit(
             AUDIT_CREATE,
@@ -188,18 +194,21 @@ pub async fn create(
             }),
         )
         .await;
+
     Ok((StatusCode::CREATED, Json(grant)))
 }
 
 /// Checks the request against the store and issues the grant.
 async fn issue(state: &AppState, caller: &Caller, store: &ObjectStore, req: NewGrantRequest) -> ApiResult<GrantView> {
     let expiry = expiry(&req)?;
+
     // A grant names a bucket that is there: a typo is refused now, instead
     // of leaving a grant that opens whatever bucket gets that name later.
     let buckets = stores::client(state, store).await?.list_buckets().await.map_err(stores::s3_error)?;
     if !buckets.iter().any(|b| b.name == req.bucket) {
         return Err(ApiError::not_found(format!("no bucket `{}` in this store", req.bucket)));
     }
+
     let new = NewBucketGrant {
         user: req.user,
         bucket: req.bucket,
@@ -208,6 +217,7 @@ async fn issue(state: &AppState, caller: &Caller, store: &ObjectStore, req: NewG
         note: req.note,
         created_by: caller.principal(),
     };
+
     Ok(state.bucket_grants.issue(store, new).await?)
 }
 
@@ -231,6 +241,7 @@ pub async fn revoke(
             }),
         )
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -243,5 +254,6 @@ pub async fn mine(State(state): State<AppState>, caller: Caller, Ws(ws): Ws) -> 
     } else {
         Vec::new()
     };
+
     Ok(Json(MyGrantList { grants }))
 }

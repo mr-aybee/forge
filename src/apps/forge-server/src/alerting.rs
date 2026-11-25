@@ -75,6 +75,7 @@ fn server_samples(servers: &[Server], subject: &str, p: Pass) -> Vec<SeriesSampl
                 // A node that never received a certificate has no expiry.
                 Some(p.days_until(s.cert_not_after?))
             };
+
             Some(p.sample(EntityRef::new(EntityKind::Server, s.id), None, value))
         })
         .collect()
@@ -118,6 +119,7 @@ impl SeriesSource for ControlPlaneSource {
         // passes later, so a slow pass never reads as missing evidence.
         let p =
             Pass { now: self.clock.now().0, valid_ms: i64::try_from(self.interval.as_millis()).unwrap_or(15_000) * 2 };
+
         match subject {
             NODE_AGENT_STATUS | NODE_CERT_EXPIRES => {
                 Ok(server_samples(&self.store.list_servers(None).await?, subject, p))
@@ -141,6 +143,7 @@ async fn observed(store: &forge_store::Store, subject: &str) -> DomainResult<Vec
     use forge_core::observation::{ObservationFilter, ObservationQuery, ObservedValue};
     let filter = ObservationFilter { subject_prefix: Some(subject.to_owned()), ..ObservationFilter::default() };
     let rows = store.latest(&filter, 10_000).await?;
+
     Ok(rows
         .into_iter()
         .filter(|l| l.key.subject.as_str() == subject)
@@ -153,6 +156,7 @@ async fn observed(store: &forge_store::Store, subject: &str) -> DomainResult<Vec
                     j.get("state").and_then(serde_json::Value::as_str).map(|s| Value::State(s.to_owned()))
                 }),
             };
+
             SeriesSample {
                 resource: l.key.resource.clone(),
                 server: l.key.server,
@@ -185,11 +189,13 @@ fn interval(state: &AppState) -> Duration {
 pub(crate) async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
     let eval = evaluator(&state);
     let mut tick = tokio::time::interval(interval(&state));
+
     loop {
         tokio::select! {
             _ = tick.tick() => {}
             _ = shutdown.changed() => break,
         }
+
         match eval.pass(state.clock.now()).await {
             Ok(r) if r.fired + r.resolved + r.ended > 0 => {
                 tracing::info!(fired = r.fired, resolved = r.resolved, ended = r.ended, "alert pass");

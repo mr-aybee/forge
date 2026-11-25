@@ -80,6 +80,7 @@ fn actor(caller: &Caller) -> Actor {
 /// Maps a service refusal to an HTTP problem.
 fn api_error(e: FileError) -> ApiError {
     let msg = e.to_string();
+
     match e {
         FileError::Invalid(_) => ApiError::new(StatusCode::BAD_REQUEST, "bad_request", msg),
         FileError::Denied(_) => ApiError::forbidden(msg),
@@ -144,6 +145,7 @@ pub async fn add_root(
     Json(req): Json<NewRoot>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let base = parse_path(Some(&req.path))?;
+
     let spec = match req.kind {
         RootKind::Service => RootSpec::Dir { base },
         RootKind::Container => RootSpec::Container {
@@ -152,11 +154,13 @@ pub async fn add_root(
         },
         RootKind::Node => return Err(ApiError::bad_request("the whole-node root is built in")),
     };
+
     let root = state
         .files
         .add_root(&actor(&caller), id, req.kind, req.label, spec, req.read_only, req.service_id)
         .await
         .map_err(api_error)?;
+
     Ok((StatusCode::CREATED, Json(json!(root))))
 }
 
@@ -280,6 +284,7 @@ fn disposition(name: &str) -> HeaderValue {
             }
         })
         .collect();
+
     HeaderValue::from_str(&format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{utf8}"))
         .unwrap_or_else(|_| HeaderValue::from_static("attachment"))
 }
@@ -316,6 +321,7 @@ pub async fn download(
             "files over 512 MiB cannot be downloaded through the console; use SFTP access",
         ));
     }
+
     let version = first["version"].as_str().unwrap_or_default().to_owned();
     let head = decode(&first).map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, "bad_node_response", e))?;
     state.files.audit(&who, id, "file.download", json!({ "root": root, "path": path.to_string(), "size": size })).await;
@@ -330,15 +336,18 @@ pub async fn download(
             if let Some(chunk) = pending {
                 return Some((Ok(Bytes::from(chunk)), (None, offset)));
             }
+
             if offset >= size {
                 return None;
             }
+
             let chunk =
                 match files.read_range(&who, id, &root, path, offset, DOWNLOAD_CHUNK, Some(version), Audit::Skip).await
                 {
                     Ok(v) => decode(&v),
                     Err(e) => Err(format!("download stopped: {e}")),
                 };
+
             match chunk {
                 Ok(c) if !c.is_empty() => {
                     let next = offset + c.len() as u64;
@@ -349,16 +358,19 @@ pub async fn download(
             }
         }
     });
+
     // Fused: a consumer that polls again after the end gets None, not a panic.
     let mut out = Body::from_stream(futures::StreamExt::fuse(stream)).into_response();
     let h = out.headers_mut();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
     h.insert(header::CONTENT_LENGTH, HeaderValue::from(size));
     h.insert(header::CONTENT_DISPOSITION, disposition(&name));
+
     // File bytes come from the node, not from Forge: never let the browser
     // render them on the console's origin.
     h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox; default-src 'none'"));
+
     Ok(out)
 }
 
@@ -466,6 +478,7 @@ pub async fn save(
         .decode(&b.content_b64)
         .map_err(|_| ApiError::bad_request("content_b64 is not valid base64"))?;
     let path = parse_path(Some(&b.path))?;
+
     state
         .files
         .save(&actor(&caller), id, &root_id(b.root), path, &content, b.version)
@@ -507,11 +520,13 @@ pub async fn begin_upload(
         Some(OverwriteBody::Version { version }) => Overwrite::IfVersion { version },
         Some(OverwriteBody::Mode(m)) => return Err(ApiError::bad_request(format!("unknown overwrite mode `{m}`"))),
     };
+
     let up = state
         .files
         .begin_upload(&actor(&caller), id, &root_id(b.root), parse_path(Some(&b.path))?, b.size, overwrite)
         .await
         .map_err(api_error)?;
+
     Ok((
         StatusCode::CREATED,
         Json(json!({
@@ -619,6 +634,7 @@ pub async fn trash_restore(
 ) -> ApiResult<Json<Value>> {
     let entry = b.id.ok_or_else(|| ApiError::bad_request("`id` is required"))?;
     let op = FileOp::TrashRestore { root: RootSpec::Node, id: entry, overwrite: b.overwrite };
+
     run(&state, &caller, id, &root_id(b.root), op).await
 }
 
@@ -791,6 +807,7 @@ fn paths(list: &[String]) -> ApiResult<Vec<FilePath>> {
     if list.is_empty() || list.len() > BULK_MAX_ITEMS {
         return Err(ApiError::bad_request(format!("choose between 1 and {BULK_MAX_ITEMS} items")));
     }
+
     list.iter().map(|p| parse_path(Some(p))).collect()
 }
 
@@ -807,6 +824,7 @@ pub async fn compress(
         .or_else(|| ArchiveFormat::from_name(dest.name().unwrap_or_default()))
         .ok_or_else(|| ApiError::bad_request("the archive name must end in .zip, .tar.gz or .tgz"))?;
     let op = FileOp::Compress { root: RootSpec::Node, sources: paths(&b.sources)?, dest: Some(dest), format };
+
     run(&state, &caller, id, &root_id(b.root), op).await
 }
 
@@ -868,19 +886,23 @@ pub async fn bulk(
 ) -> ApiResult<Json<Value>> {
     let items = paths(&b.paths)?;
     let root = root_id(b.root);
+
     let to = match (&b.action, &b.to) {
         (BulkAction::Copy | BulkAction::Move, Some(t)) => Some(parse_path(Some(t))?),
         (BulkAction::Copy | BulkAction::Move, None) => return Err(ApiError::bad_request("copy and move need `to`")),
         _ => None,
     };
+
     let who = actor(&caller);
     let mut results = Vec::with_capacity(items.len());
     let (mut ok, mut failed) = (0usize, 0usize);
+
     for p in items {
         let target = match (&to, p.name()) {
             (Some(dir), Some(name)) => Some(dir.join(name).map_err(ApiError::bad_request)?),
             _ => None,
         };
+
         let op = match (&b.action, target) {
             (BulkAction::Copy, Some(t)) => {
                 FileOp::Copy { root: RootSpec::Node, from: p.clone(), to: t, overwrite: b.overwrite }
@@ -893,9 +915,11 @@ pub async fn bulk(
             _ => {
                 failed += 1;
                 results.push(json!({ "path": p.to_string(), "ok": false, "error": "the root itself cannot be moved" }));
+
                 continue;
             }
         };
+
         match state.files.run(&who, id, &root, op, Audit::Record).await {
             Ok(_) => {
                 ok += 1;
@@ -903,15 +927,18 @@ pub async fn bulk(
             }
             Err(e) => {
                 failed += 1;
+
                 // Authorization failures stop the batch: the rest would fail too.
                 let stop = matches!(e, FileError::StepUp(_));
                 results.push(json!({ "path": p.to_string(), "ok": false, "error": e.to_string() }));
+
                 if stop {
                     return Err(api_error(e));
                 }
             }
         }
     }
+
     Ok(Json(json!({ "ok": ok, "failed": failed, "results": results })))
 }
 
@@ -933,6 +960,7 @@ pub async fn make_archive(
 ) -> ApiResult<Json<Value>> {
     let format = b.format.unwrap_or(ArchiveFormat::Zip);
     let op = FileOp::Compress { root: RootSpec::Node, sources: paths(&b.paths)?, dest: None, format };
+
     run(&state, &caller, id, &root_id(b.root), op).await
 }
 
@@ -961,16 +989,21 @@ pub async fn download_archive(
                 if done {
                     return None;
                 }
+
                 if let Some(chunk) = pending {
                     return Some((Ok(Bytes::from(chunk)), (None, offset, false)));
                 }
+
                 if offset >= size {
                     // Finished: remove the temporary archive.
                     let del = FileOp::TempDelete { root: RootSpec::Node, id: archive };
                     let _ = files.run(&who, id, &root, del, Audit::Skip).await;
+
                     return None;
                 }
+
                 let op = FileOp::TempRead { root: RootSpec::Node, id: archive, offset, length: MAX_READ_BYTES };
+
                 match files
                     .run(&who, id, &root, op, Audit::Skip)
                     .await
@@ -988,6 +1021,7 @@ pub async fn download_archive(
         },
     );
     let ext = first["ext"].as_str().unwrap_or("zip");
+
     // Fused: a consumer that polls again after the end gets None, not a panic.
     let mut out = Body::from_stream(futures::StreamExt::fuse(stream)).into_response();
     let h = out.headers_mut();
@@ -996,6 +1030,7 @@ pub async fn download_archive(
     h.insert(header::CONTENT_DISPOSITION, disposition(&format!("files.{ext}")));
     h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox; default-src 'none'"));
+
     Ok(out)
 }
 
@@ -1011,6 +1046,7 @@ fn sftp_endpoint(state: &AppState) -> (String, u16) {
         let url = url.as_str();
         let rest = url.split_once("://").map_or(url, |(_, r)| r);
         let host = rest.split(['/', '?']).next().unwrap_or("localhost");
+
         // Strip a port, keeping IPv6 brackets.
         match host.rsplit_once(':') {
             Some((h, p)) if p.bytes().all(|b| b.is_ascii_digit()) && !h.ends_with(':') => h.to_owned(),
@@ -1018,6 +1054,7 @@ fn sftp_endpoint(state: &AppState) -> (String, u16) {
         }
     });
     let bound = state.sftp_bound.get().map_or(cfg.listen.port(), SocketAddr::port);
+
     (host, cfg.public_port.unwrap_or(bound))
 }
 
@@ -1029,10 +1066,13 @@ pub async fn sftp_info(
 ) -> ApiResult<Json<Value>> {
     // Same visibility as the explorer itself.
     state.files.roots(&actor(&caller), id).await.map_err(api_error)?;
+
     let Some(key) = state.sftp_host_key.as_ref() else {
         return Ok(Json(json!({ "enabled": false })));
     };
+
     let (host, port) = sftp_endpoint(&state);
+
     Ok(Json(json!({
         "enabled": true,
         "protocol": "SFTP",
@@ -1051,6 +1091,7 @@ fn grant_json(g: &FileGrant, now: forge_core::Timestamp) -> Value {
     v["active"] = json!(g.is_active(now));
     v["status"] = json!(g.status(now));
     v["never_expires"] = json!(g.never_expires());
+
     v
 }
 
@@ -1076,6 +1117,7 @@ pub async fn list_all_grants(
     {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid", "status is active, expired or revoked"));
     }
+
     let now = state.clock.now();
     let q = f.q.as_deref().map(str::to_lowercase).filter(|q| !q.is_empty());
     let grants: Vec<Value> = state
@@ -1100,6 +1142,7 @@ pub async fn list_all_grants(
             v
         })
         .collect();
+
     Ok(Json(json!({ "grants": grants })))
 }
 
@@ -1138,8 +1181,10 @@ pub async fn reset_grant_password(
             "the SFTP gateway is not enabled on this Forge",
         ));
     };
+
     let issued = state.files.reset_grant_password(&actor(&caller), id, &grant).await.map_err(api_error)?;
     let (host, port) = sftp_endpoint(&state);
+
     Ok(Json(json!({
         "grant": grant_json(&issued.grant, state.clock.now()),
         "connection": {
@@ -1163,6 +1208,7 @@ pub async fn list_grants(
     let grants = state.files.list_grants(&actor(&caller), id).await.map_err(api_error)?;
     let now = state.clock.now();
     let grants: Vec<Value> = grants.into_iter().map(|g| grant_json(&g, now)).collect();
+
     Ok(Json(json!({ "grants": grants })))
 }
 
@@ -1180,8 +1226,10 @@ pub async fn create_grant(
             "the SFTP gateway is not enabled on this Forge",
         ));
     };
+
     let issued = state.files.create_grant(&actor(&caller), id, req).await.map_err(api_error)?;
     let (host, port) = sftp_endpoint(&state);
+
     Ok((
         StatusCode::CREATED,
         Json(json!({

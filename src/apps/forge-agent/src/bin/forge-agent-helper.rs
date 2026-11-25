@@ -52,6 +52,7 @@ async fn server_pins(pin: Option<helper_trust::Pin>, keys: String) -> HelperResp
     let Some(pin) = pin else {
         return HelperResponse::failed("refused: this helper has no pin of Forge's command key to check the keys with");
     };
+
     let run = move || -> Result<serde_json::Value, String> {
         let raw = forge_secrets::crypto::b64url_decode(&keys).ok_or("refused: the keys are not base64url")?;
         let signed = <forge_proto::messages::SignedServerKeys as prost::Message>::decode(raw.as_slice())
@@ -60,11 +61,14 @@ async fn server_pins(pin: Option<helper_trust::Pin>, keys: String) -> HelperResp
         let path = std::path::Path::new(forge_agent::pins::SYSTEM_DIR).join(forge_agent::pins::FILE);
         let changed = forge_agent::pins::apply_signed(&path, &signed, &public, &pin.server_id, SystemClock.now())
             .map_err(|e| e.to_string())?;
+
         if changed {
             tracing::info!(path = %path.display(), "control-plane key pins updated from Forge's announcement");
         }
+
         Ok(serde_json::json!({ "changed": changed }))
     };
+
     match tokio::task::spawn_blocking(run).await {
         Ok(r) => data(r),
         Err(e) => HelperResponse::failed(e.to_string()),
@@ -75,9 +79,11 @@ async fn server_pins(pin: Option<helper_trust::Pin>, keys: String) -> HelperResp
 /// agent user (D-167), only when no root-owned pin file exists yet.
 fn adopt_enrollment_pins(agent_dir: &std::path::Path) {
     use forge_agent::pins;
+
     if !pins::root_owned(agent_dir) {
         return;
     }
+
     let system = std::path::Path::new(pins::SYSTEM_DIR).join(pins::FILE);
     match pins::adopt_staged(&pins::staged_path(agent_dir), &system) {
         Ok(pins::Adoption::Adopted(n)) => println!("pinned {n} control-plane key(s) in {}", system.display()),
@@ -113,6 +119,7 @@ async fn handle(
 ) -> HelperResponse {
     let health = ctx.health.clone();
     let manager = service::platform();
+
     match req {
         HelperRequest::RestartService { name } => match manager.restart(&name).await {
             Ok(()) => HelperResponse { ok: true, state: None, error: None, output: None, details: None, data: None },
@@ -139,15 +146,18 @@ async fn handle(
         }
         HelperRequest::App { action, spec, tail, .. } => {
             let r = app_request(&action, &spec, tail).await;
+
             // The command checks the helper may run follow what is deployed (D-111).
             if r.ok {
                 let (dir, now_ms) = (forge_agent::health_exec::state_dir(), SystemClock.now().0);
+
                 // Best effort and logged inside: it never fails the app action.
                 let _ = tokio::task::spawn_blocking(move || {
                     forge_agent::health_exec::on_app_action(&dir, &action, &spec, now_ms);
                 })
                 .await;
             }
+
             r
         }
         HelperRequest::HealthPolicy { health: policy, issued_at_ms } => {
@@ -156,6 +166,7 @@ async fn handle(
                 forge_agent::health_exec::store(&forge_agent::health_exec::state_dir(), &policy, at)
             })
             .await;
+
             match stored {
                 Ok(Ok(applied)) => data(serde_json::to_value(applied).map_err(|e| e.to_string())),
                 Ok(Err(e)) => HelperResponse::failed(e.to_string()),
@@ -302,6 +313,7 @@ async fn follow_request(
             let _ = p.send(l.to_owned());
         }
     };
+
     match forge_agent::apps::follow(spec, cursor, &emit).await {
         Ok(data) => {
             HelperResponse { ok: true, state: None, error: None, output: None, details: None, data: Some(data) }
@@ -349,16 +361,20 @@ async fn serve(agent_dir: &str) -> std::io::Result<()> {
     // The agent's state directory is owned by the unprivileged agent user.
     let meta = std::fs::metadata(agent_dir)?;
     let _ = AGENT_DIR.set(std::path::PathBuf::from(agent_dir));
+
     // Self-update: roll back if a new agent never confirms (issue #4).
     // A swap a crash interrupted is finished or undone before the watchdog
     // looks at the pending marker.
     {
         let dir = std::path::PathBuf::from(agent_dir);
+
         // Logged inside; nothing else to do here either way.
         let _ = tokio::task::spawn_blocking(move || forge_agent::self_update::recover(&dir)).await;
     }
+
     tokio::spawn(forge_agent::self_update::watchdog(std::path::PathBuf::from(agent_dir)));
     let (agent_uid, agent_gid) = (meta.uid(), meta.gid());
+
     // Forge's command key and this node's id, pinned in the helper's
     // root-only folder (on first use for nodes enrolled before D-068).
     let trust = std::sync::Arc::new(Trust::open(
@@ -367,9 +383,11 @@ async fn serve(agent_dir: &str) -> std::io::Result<()> {
         true,
         SystemClock.now(),
     ));
+
     match trust.pinned() {
         Some(p) => {
             eprintln!("forge-agent-helper: verifying commands for server {} (pin: {})", p.server_id, p.source);
+
             // Browser terminal certificates bound to this node (D-069).
             match forge_agent::ssh_principals::ensure(&p.server_id).await {
                 Ok(true) => eprintln!("forge-agent-helper: sshd now accepts only certificates for this node"),
@@ -379,10 +397,13 @@ async fn serve(agent_dir: &str) -> std::io::Result<()> {
         }
         None => eprintln!("forge-agent-helper: no pin; requests are not verified (enroll the node)"),
     }
+
     // Command health checks: who runs now and what could not be ended (D-111).
     let health = std::sync::Arc::new(forge_agent::health_exec::Runner::new(forge_agent::health_exec::state_dir()));
+
     // Container shells of this run, counted for the per-node limit (D-114).
     let shells = forge_agent::container_exec::ShellCount::default();
+
     // Logs and samples of every container; cursors in the root-only folder.
     let ctx = Ctx {
         health,
@@ -396,6 +417,7 @@ async fn serve(agent_dir: &str) -> std::io::Result<()> {
     std::os::unix::fs::chown(SOCKET, Some(0), Some(agent_gid))?;
     std::fs::set_permissions(SOCKET, std::fs::Permissions::from_mode(0o660))?;
     eprintln!("forge-agent-helper: serving on {SOCKET} for uid {agent_uid}");
+
     loop {
         let (stream, _) = listener.accept().await?;
         let allowed = stream.peer_cred().is_ok_and(|c| c.uid() == 0 || c.uid() == agent_uid);
@@ -404,6 +426,7 @@ async fn serve(agent_dir: &str) -> std::io::Result<()> {
         let shells = shells.clone();
         tokio::spawn(async move {
             let (read, mut write) = stream.into_split();
+
             let resp = if allowed {
                 let mut line = String::new();
                 let mut reader = BufReader::new(read.take(forge_agent::helper::MAX_REQUEST_BYTES as u64 + 2));
@@ -417,9 +440,11 @@ async fn serve(agent_dir: &str) -> std::io::Result<()> {
                                     let _ = write.write_all(b"{\"ok\":false,\"error\":\"unexpected data\"}\n").await;
                                     return;
                                 }
+
                                 let read = reader.into_inner().into_inner();
                                 let docker = std::path::Path::new(forge_agent::docker::SOCKET);
                                 forge_agent::container_exec::serve(exec, docker, &shells, read, write).await;
+
                                 return;
                             }
                             // Shells only with a pin: `admit` refuses them otherwise.
@@ -430,11 +455,13 @@ async fn serve(agent_dir: &str) -> std::io::Result<()> {
                                 // Forward live output lines while the request runs.
                                 let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
                                 let work = tokio::spawn(handle(req, Some(tx), ctx));
+
                                 // The agent closing the connection means the
                                 // operation was cancelled: stop the work, which
                                 // kills the recipe's process group.
                                 let disconnected = async {
                                     let mut b = [0u8; 64];
+
                                     loop {
                                         match reader.read(&mut b).await {
                                             Ok(0) | Err(_) => break,
@@ -443,6 +470,7 @@ async fn serve(agent_dir: &str) -> std::io::Result<()> {
                                     }
                                 };
                                 tokio::pin!(disconnected);
+
                                 loop {
                                     tokio::select! {
                                         l = rx.recv() => match l {
@@ -462,6 +490,7 @@ async fn serve(agent_dir: &str) -> std::io::Result<()> {
                                         }
                                     }
                                 }
+
                                 work.await.unwrap_or_else(|e| {
                                     HelperResponse::failed(if e.is_cancelled() {
                                         "cancelled".to_owned()
@@ -478,6 +507,7 @@ async fn serve(agent_dir: &str) -> std::io::Result<()> {
             } else {
                 HelperResponse::failed("caller is not the forge-agent user")
             };
+
             let mut out = serde_json::to_string(&resp).unwrap_or_else(|_| "{\"ok\":false}".into());
             out.push('\n');
             let _ = write.write_all(out.as_bytes()).await;
@@ -487,11 +517,13 @@ async fn serve(agent_dir: &str) -> std::io::Result<()> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+
     // The self-update dry run of a staged helper (`forge-agent-helper 1.2.3`).
     if matches!(args.get(1).map(String::as_str), Some("--version" | "-V" | "version")) {
         println!("forge-agent-helper {}", forge_agent::VERSION);
         return;
     }
+
     let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
         Ok(rt) => rt,
         Err(e) => {
@@ -499,6 +531,7 @@ fn main() {
             std::process::exit(1);
         }
     };
+
     #[cfg(target_os = "linux")]
     if args.get(1).map(String::as_str) == Some("file-worker") {
         // One file operation as a native app's account (D-083); started by
@@ -518,12 +551,14 @@ fn main() {
             eprintln!("forge-agent-helper supervise: {e}");
             std::process::exit(1);
         }
+
         return;
     }
     // sshd `AuthorizedPrincipalsCommand` (runs as `nobody`): the one
     // principal this node accepts for the user (D-069).
     if args.get(1).map(String::as_str) == Some("ssh-principals") {
         let user = args.get(2).map_or("", String::as_str);
+
         // The certificate's key id (`%i`), signed by Forge's CA: names the
         // one destination of a direct tunnel (#35 phase 2).
         let key_id = args.get(3).map_or("", String::as_str);
@@ -531,17 +566,21 @@ fn main() {
         if let Some(p) = forge_agent::ssh_principals::principals_for(&node, user, key_id) {
             println!("{p}");
         }
+
         return;
     }
+
     // Installer, as root: create or keep a terminal account (D-078).
     #[cfg(unix)]
     if args.get(1).map(String::as_str) == Some("terminal-account") {
         let name = args.get(2).map_or("", String::as_str);
         let sudo = args.iter().skip(3).any(|a| a == "--sudo");
+
         if !rustix::process::geteuid().is_root() {
             eprintln!("forge-agent-helper terminal-account: run as root");
             std::process::exit(1);
         }
+
         match rt.block_on(forge_agent::terminal_accounts::ensure(name, sudo)) {
             Ok(v) => println!(
                 "terminal account {name}: {}{}",
@@ -553,6 +592,7 @@ fn main() {
                 std::process::exit(1);
             }
         }
+
         return;
     }
     // Installer, as root, right after a fresh enrollment.
@@ -567,9 +607,12 @@ fn main() {
                 std::process::exit(1);
             }
         }
+
         adopt_enrollment_pins(std::path::Path::new(&dir));
+
         return;
     }
+
     if args.get(1).map(String::as_str) == Some("serve") {
         #[cfg(unix)]
         {
@@ -592,10 +635,12 @@ fn main() {
         respond(&HelperResponse::failed("no request"));
         std::process::exit(2);
     }
+
     // One-shot: runs with the caller's own rights; signed requests are
     // checked against a pin if this node has one.
     let trust =
         Trust::open(&helper_trust::state_dir(), std::path::Path::new(&agent_dir_arg(&args)), false, SystemClock.now());
+
     let req = match HelperRequest::parse(line.trim()).and_then(|r| trust.admit(r, SystemClock.now())) {
         Ok(r) => r,
         Err(e) => {
@@ -603,6 +648,7 @@ fn main() {
             std::process::exit(2);
         }
     };
+
     let health = std::sync::Arc::new(forge_agent::health_exec::Runner::new(forge_agent::health_exec::state_dir()));
     let ctx = Ctx {
         health,

@@ -115,6 +115,7 @@ fn listen_address(p: &EnablePayload, prepared: &Prepared) -> Result<IpAddr, Stri
     if let Some(l) = p.listen {
         return Ok(l);
     }
+
     match p.host.parse::<IpAddr>() {
         Ok(ip) if prepared.addresses.contains(&ip) => Ok(ip),
         _ => Err(format!(
@@ -137,7 +138,9 @@ impl DockerEndpointEnableJob {
                 prepared.running_containers
             )));
         }
+
         ctx.set_state("prepared", out);
+
         Ok(())
     }
 
@@ -145,6 +148,7 @@ impl DockerEndpointEnableJob {
         if ctx.state_value("cert_pem").is_some() {
             return Ok(());
         }
+
         let p: EnablePayload = parse(ctx)?;
         let prepared: Prepared =
             serde_json::from_value(ctx.state_value("prepared").cloned().unwrap_or(Value::Null)).map_err(fatal)?;
@@ -152,14 +156,17 @@ impl DockerEndpointEnableJob {
         let engines = &self.link.engines;
         let (ca, sealed) = engines.new_node_ca(p.server_id).map_err(fatal)?;
         let mut sans: Vec<IpAddr> = Vec::new();
+
         if !listen.is_unspecified() {
             sans.push(listen);
         }
+
         if let Ok(ip) = p.host.parse::<IpAddr>()
             && !sans.contains(&ip)
         {
             sans.push(ip);
         }
+
         let now = engines.now();
         let cert = ca
             .issue_docker_daemon_certificate(
@@ -191,17 +198,21 @@ impl DockerEndpointEnableJob {
         ctx.set_state("ca_pem", json!(ca.cert_pem()));
         ctx.set_state("cert_pem", json!(cert.cert_pem));
         ctx.set_state("listen", json!(listen));
+
         Ok(())
     }
 
     async fn apply(&self, ctx: &mut StepContext) -> Result<(), StepError> {
         let p: EnablePayload = parse(ctx)?;
         let get = |k: &str| ctx.state_value(k).and_then(Value::as_str).map(str::to_owned);
+
         let (Some(ca_pem), Some(cert_pem), Some(listen)) = (get("ca_pem"), get("cert_pem"), get("listen")) else {
             return Err(fatal("the certificates were not issued"));
         };
+
         let op = DockerTlsOp::Apply { ca_pem, cert_pem, listen: listen.parse().map_err(fatal)?, port: p.port };
         op.validate().map_err(fatal)?;
+
         match self.link.run(ctx, p.server_id, "apply_op", &op, APPLY_WAIT).await {
             Ok(out) => {
                 ctx.set_state("applied", out);
@@ -217,19 +228,24 @@ impl DockerEndpointEnableJob {
     async fn verify(&self, ctx: &mut StepContext) -> Result<(), StepError> {
         let p: EnablePayload = parse(ctx)?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
+
         loop {
             let ep = self.link.engines.check(p.server_id).await.map_err(retry)?;
             if ep.state == DockerEndpointState::Enabled {
                 ctx.set_state("engine_version", json!(ep.engine_version));
                 ctx.set_state("api_version", json!(ep.api_version));
+
                 return Ok(());
             }
+
             if tokio::time::Instant::now() >= deadline {
                 let why = ep.last_error.unwrap_or_else(|| "no answer".into());
                 let e = fatal(format!("dockerd listens, but the control plane cannot reach it: {why}"));
                 self.mark_failed(p.server_id, &e).await;
+
                 return Err(e);
             }
+
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
     }
@@ -239,12 +255,14 @@ impl DockerEndpointEnableJob {
         let msg = match e {
             StepError::Fatal(m) | StepError::Retryable(m) => m.clone(),
         };
+
         let engines = &self.link.engines;
         match engines.endpoint(server).await {
             Ok(Some(mut ep)) => {
                 ep.state = DockerEndpointState::Failed;
                 ep.last_error = Some(msg);
                 ep.updated_at = engines.now();
+
                 if let Err(err) = engines.put(&ep).await {
                     tracing::warn!(%server, error = %err, "could not record the Docker endpoint failure");
                 }
@@ -295,6 +313,7 @@ impl JobHandler for DockerEndpointDisableJob {
 
     async fn run_step(&self, index: usize, ctx: &mut StepContext) -> Result<(), StepError> {
         let p: DisablePayload = parse(ctx)?;
+
         match index {
             0 if p.force => Ok(()),
             0 => {

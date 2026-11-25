@@ -37,11 +37,13 @@ impl Receiver {
                 tokio::spawn(async move {
                     let mut raw = Vec::new();
                     let mut buf = [0u8; 8192];
+
                     let (end, length) = loop {
                         let Ok(n) = stream.read(&mut buf).await else { return };
                         if n == 0 {
                             return;
                         }
+
                         raw.extend_from_slice(&buf[..n]);
                         let Some(end) = raw.windows(4).position(|w| w == b"\r\n\r\n") else { continue };
                         let head = String::from_utf8_lossy(&raw[..end]).to_string();
@@ -51,13 +53,16 @@ impl Receiver {
                             .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
                             .and_then(|(_, v)| v.trim().parse::<usize>().ok())
                             .unwrap_or(0);
+
                         if raw.len() >= end + 4 + length {
                             break (end, length);
                         }
                     };
+
                     if let Ok(v) = serde_json::from_slice(&raw[end + 4..end + 4 + length]) {
                         bodies.lock().unwrap().push(v);
                     }
+
                     let _ = stream
                         .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                         .await;
@@ -65,6 +70,7 @@ impl Receiver {
                 });
             }
         });
+
         me
     }
 
@@ -79,12 +85,15 @@ where
     Fut: std::future::Future<Output = Option<T>>,
 {
     let end = std::time::Instant::now() + Duration::from_secs(secs);
+
     while std::time::Instant::now() < end {
         if let Some(v) = f().await {
             return v;
         }
+
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+
     panic!("timed out waiting for {what}");
 }
 
@@ -117,6 +126,7 @@ async fn node(h: &Harness, name: &str) -> ServerId {
         created_at: h.app.state.clock.now(),
     };
     h.app.state.store.create_server(&s).await.unwrap();
+
     s.id
 }
 
@@ -146,6 +156,7 @@ async fn fire(h: &Harness, server: ServerId) -> Alarm {
     };
     let ev = AlarmEvent { alarm_id: a.id, at: now, kind: "fired".into(), actor: None, detail: json!({}) };
     state.store.open_alarm(&a, &ev).await.unwrap();
+
     a
 }
 
@@ -172,18 +183,21 @@ async fn admin_with_channel(h: &Harness, rx: &Receiver) -> Client {
         json!({"name": "Everything", "min_severity": "info", "events": ["fired", "resolved"], "channels": [c["id"]]});
     let (s, p) = admin.post("/api/v1/notification-policies", policy).await;
     assert_eq!(s, StatusCode::CREATED, "{p}");
+
     admin
 }
 
 async fn deliveries(c: &Client, alarm: AlarmId) -> Vec<Value> {
     let (s, v) = c.get(&format!("/api/v1/notification-deliveries?alarm={alarm}")).await;
     assert_eq!(s, StatusCode::OK, "{v}");
+
     v.as_array().unwrap().clone()
 }
 
 async fn silence(c: &Client, body: Value) -> Value {
     let (s, v) = c.post("/api/v1/silences", body).await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
+
     v
 }
 
@@ -202,6 +216,7 @@ async fn an_alarm_during_a_silence_is_suppressed_and_ending_it_sends_exactly_one
     let sid = s["id"].as_str().unwrap().to_owned();
 
     let alarm = fire(&h, server).await;
+
     // Recorded as suppressed with the silence; nothing reaches the receiver.
     let held = wait_for("a suppressed delivery", 60, || {
         let (c, a) = (&admin, alarm.id);
@@ -245,9 +260,11 @@ async fn an_alarm_during_a_silence_is_suppressed_and_ending_it_sends_exactly_one
     let statuses: Vec<(&str, bool)> =
         list.iter().map(|d| (d["status"].as_str().unwrap(), d["after_silence"] == true)).collect();
     assert_eq!(statuses, [("sent", true), ("suppressed", false)], "newest first");
+
     // No longer marked as silenced.
     let (_, a) = admin.get(&format!("/api/v1/alarms/{}", alarm.id)).await;
     assert!(a.get("silence").is_none(), "{a}");
+
     // Ended twice: refused, nothing changes.
     assert_eq!(admin.post(&format!("/api/v1/silences/{sid}/end"), json!({})).await.0, StatusCode::CONFLICT);
     h.app.stop().await;
@@ -312,6 +329,7 @@ async fn silences_are_authorized_on_their_scope_validated_and_audited() {
     let op = user_with_role(&h, &admin, "op@example.com", "operator", &format!("environment:{web_id}")).await;
     let mine = silence(&op, body(json!({"kind": "environment", "id": web_id}))).await;
     let mine_id = mine["id"].as_str().unwrap().to_owned();
+
     for scope in [
         json!({"kind": "workspace"}),
         json!({"kind": "environment", "id": api_id}),
@@ -320,9 +338,11 @@ async fn silences_are_authorized_on_their_scope_validated_and_audited() {
         let (s, e) = op.post("/api/v1/silences", body(scope.clone())).await;
         assert_eq!(s, StatusCode::FORBIDDEN, "{scope}: {e}");
     }
+
     // An id of nothing is refused the same way (no probing).
     let (s, _) = op.post("/api/v1/silences", body(json!({"kind": "servers", "ids": [ServerId::new()]}))).await;
     assert_eq!(s, StatusCode::FORBIDDEN);
+
     // The administrator silences the workspace.
     let wide = silence(&admin, body(json!({"kind": "workspace"}))).await;
     let wide_id = wide["id"].as_str().unwrap().to_owned();
@@ -355,6 +375,7 @@ async fn silences_are_authorized_on_their_scope_validated_and_audited() {
 
     // Validation.
     let ws_scope = json!({"kind": "workspace"});
+
     for (bad, status) in [
         (json!({"scope": ws_scope, "duration_secs": 3600, "reason": " "}), StatusCode::UNPROCESSABLE_ENTITY),
         (json!({"scope": ws_scope, "duration_secs": 31 * 86_400, "reason": "x"}), StatusCode::UNPROCESSABLE_ENTITY),
@@ -380,6 +401,7 @@ async fn silences_are_authorized_on_their_scope_validated_and_audited() {
             "{bad}: {s} {e}"
         );
     }
+
     // A maintenance window: scheduled until it starts.
     let start = h.app.state.clock.now().0 + 86_400_000;
     let w = silence(
@@ -399,9 +421,11 @@ async fn silences_are_authorized_on_their_scope_validated_and_audited() {
     assert_eq!(created.len(), 3, "{audit}");
     let d = &created.iter().find(|r| r.to_string().contains("Release 4.2") && r.to_string().contains(&web_id)).unwrap();
     let text = d.to_string();
+
     for needle in ["\"environment\"", "starts_at", "ends_at", "Release 4.2"] {
         assert!(text.contains(needle), "{needle} in {text}");
     }
+
     assert!(of("alert.silence.extend").iter().any(|r| r.to_string().contains("previous_ends_at")));
     assert_eq!(of("alert.silence.end").iter().filter(|r| r["outcome"] != "denied").count(), 1);
     assert!(rows.iter().any(|r| r["action"] == "alert.manage" && r["outcome"] == "denied"), "refusals are recorded");

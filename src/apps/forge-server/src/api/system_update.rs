@@ -47,6 +47,7 @@ pub async fn get(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
     let mut status = update::status();
     status.enabled = state.config.update.enabled;
     let can_update = caller.can(Action::SystemUpdate, EntityRef::platform()).await;
+
     Ok(Json(View { status, can_update, target: update::target(), feed_url: state.config.update.feed_url.clone() }))
 }
 
@@ -55,6 +56,7 @@ pub async fn check(State(state): State<AppState>, caller: Caller) -> ApiResult<J
     let status = update::check(&state.config.update.feed_url, state.clock.now().0)
         .await
         .map_err(|e| ApiError::bad_request(format!("cannot reach the release feed: {e}")))?;
+
     Ok(Json(View {
         status,
         can_update: true,
@@ -97,6 +99,7 @@ pub async fn releases(State(state): State<AppState>, caller: Caller) -> ApiResul
     let list = update::list_releases(&list_url(&state))
         .await
         .map_err(|e| ApiError::bad_request(format!("cannot reach the release feed: {e}")))?;
+
     Ok(Json(json!({ "current": crate::VERSION, "releases": release_views(list) })))
 }
 
@@ -120,6 +123,7 @@ fn upgrade_allowed(version: &str, current: &str) -> Result<(), String> {
     if update::compare_release(version, current) != std::cmp::Ordering::Greater {
         return Err(format!("{version} is not newer than {current}: Forge only upgrades"));
     }
+
     Ok(())
 }
 
@@ -130,10 +134,12 @@ async fn backup(state: &AppState, from: &str) -> Result<Option<PathBuf>, String>
     if !url.starts_with("sqlite:") {
         return Ok(None);
     }
+
     let dir = state.config.data_dir.join("backups");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let file = dir.join(format!("forge-{from}-{}.db", state.clock.now().0));
     state.store.backup_sqlite(&url, &file).await.map_err(|e| format!("database backup failed: {e}"))?;
+
     Ok(Some(file))
 }
 
@@ -152,18 +158,23 @@ pub async fn apply(
     let version = req.version.trim().trim_start_matches('v').to_owned();
     let agents = req.agents.as_deref().unwrap_or("rollout").to_owned();
     let batch = req.batch.unwrap_or(1);
+
     if !matches!(agents.as_str(), "rollout" | "none") {
         return Err(ApiError::bad_request("agents: `rollout` or `none`"));
     }
+
     if batch == 0 || batch > crate::jobs::agent_rollout::MAX_BATCH {
         return Err(ApiError::bad_request("batch: 1 to 100 nodes"));
     }
+
     if let Err(e) = upgrade_allowed(&version, crate::VERSION) {
         return refuse(&caller, e).await;
     }
+
     if matches!(update::status().state.as_str(), "downloading" | "verifying" | "installing" | "restarting") {
         return refuse(&caller, "an update is already in progress".into()).await;
     }
+
     // The release comes from the feed by tag and must be one the list offers.
     let url = list_url(&state);
     let rel = update::release_by_tag(&url, &version)
@@ -172,9 +183,11 @@ pub async fn apply(
     let offered = update::list_releases(&url)
         .await
         .map_err(|e| ApiError::bad_request(format!("cannot reach the release feed: {e}")))?;
+
     if !offered.iter().any(|r| r.version == rel.version) {
         return refuse(&caller, format!("{version} is not offered by the release feed")).await;
     }
+
     let from = crate::VERSION;
     let follow = (agents == "rollout").then(|| update::AgentFollowUp {
         mode: agents.clone(),
@@ -190,6 +203,7 @@ pub async fn apply(
             json!({ "from": from, "to": rel.version, "agents": agents, "batch": batch, "target": update::target() }),
         )
         .await;
+
     // Runs in the background; the console polls the status, then waits for
     // the new version to answer.
     let st = state.clone();
@@ -201,9 +215,11 @@ pub async fn apply(
         let r =
             update::apply(&rel, &key, &data_dir, &dist, cfg.as_deref(), backup(&st, from), follow, st.clock.now().0)
                 .await;
+
         match r {
             Ok(a) => {
                 tracing::info!(from = %a.from, to = %a.to, "update installed; restarting");
+
                 // Let the console read "restarting" before the listener goes.
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 update::restart_signal().notify_one();
@@ -214,6 +230,7 @@ pub async fn apply(
             }
         }
     });
+
     Ok((StatusCode::ACCEPTED, Json(json!({ "version": version, "agents": agents, "state": "downloading" }))))
 }
 
@@ -230,15 +247,19 @@ pub(crate) async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
     if !state.config.update.enabled {
         return;
     }
+
     let mut wait = Duration::from_secs(60);
+
     loop {
         tokio::select! {
             () = tokio::time::sleep(wait) => {}
             _ = shutdown.changed() => break,
         }
+
         if let Err(e) = update::check(&state.config.update.feed_url, state.clock.now().0).await {
             tracing::debug!(error = %e, "update check failed");
         }
+
         wait = CHECK_EVERY;
     }
 }

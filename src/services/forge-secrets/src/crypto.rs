@@ -14,6 +14,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 pub fn random_bytes<const N: usize>() -> [u8; N] {
     let mut buf = [0u8; N];
     SystemRandom::new().fill(&mut buf).expect("system RNG unavailable");
+
     buf
 }
 
@@ -35,6 +36,7 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     let d = ring::digest::digest(&ring::digest::SHA256, data);
     let mut out = [0u8; 32];
     out.copy_from_slice(d.as_ref());
+
     out
 }
 

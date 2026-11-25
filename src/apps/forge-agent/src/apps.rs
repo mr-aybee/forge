@@ -43,9 +43,11 @@ fn write(path: &str, content: &str, mode: u32) -> Result<(), String> {
     if let Some(dir) = Path::new(path).parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
+
     let tmp = format!("{path}.tmp");
     std::fs::write(&tmp, content).map_err(|e| format!("{tmp}: {e}"))?;
     std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode)).map_err(|e| e.to_string())?;
+
     std::fs::rename(&tmp, path).map_err(|e| format!("{path}: {e}"))
 }
 
@@ -74,6 +76,7 @@ fn parse_passwd(name: &str, line: &str) -> Option<Account> {
     if f.len() < 7 || f[0] != name {
         return None;
     }
+
     Some(Account {
         uid: f[2].parse().ok()?,
         gid: f[3].parse().ok()?,
@@ -95,17 +98,22 @@ async fn shaped_like_app_account(home: &str, a: &Account) -> bool {
     if a.uid == 0 || a.gid == 0 || a.home != home {
         return false;
     }
+
     if !(a.shell.ends_with("/nologin") || a.shell == "/bin/false") {
         return false;
     }
+
     if let Ok(meta) = std::fs::symlink_metadata(&a.home) {
         use std::os::unix::fs::MetadataExt;
+
         if !meta.is_dir() || meta.uid() != a.uid {
             return false;
         }
     }
+
     let group = sh("getent", &["group", &a.gid.to_string()]).await.unwrap_or_default();
     let group = group.split(':').next().unwrap_or("").trim();
+
     !PRIVILEGED_GROUPS.contains(&group)
 }
 
@@ -129,6 +137,7 @@ async fn find_account(environment: &str, app: &str) -> Result<Option<(String, Ac
     let mark = forge_catalog::apps::app_user_mark(environment, app);
     let home = forge_catalog::apps::app_home(environment, app);
     let mut found = Vec::new();
+
     for name in forge_catalog::apps::app_user_candidates(environment, app) {
         if let Some(a) = account(&name).await
             && a.gecos == mark
@@ -137,6 +146,7 @@ async fn find_account(environment: &str, app: &str) -> Result<Option<(String, Ac
             found.push((name, a));
         }
     }
+
     match found.len() {
         0 => Ok(None),
         1 => Ok(found.pop()),
@@ -156,9 +166,11 @@ async fn find_user(spec: &AppSpec) -> Result<Option<String>, String> {
 /// from a request; resolved here from the environment and app name.
 pub async fn app_account(environment: &str, app: &str) -> Result<(String, u32, u32), String> {
     use std::os::unix::fs::MetadataExt;
+
     let Some((name, a)) = find_account(environment, app).await? else {
         return Err(format!("{environment}/{app} has no account on this node yet; deploy the app first"));
     };
+
     // Fail closed: the folder must exist as a real directory of that account.
     match std::fs::symlink_metadata(&a.home) {
         Ok(m) if m.is_dir() && m.uid() == a.uid => Ok((name, a.uid, a.gid)),
@@ -190,10 +202,13 @@ pub fn ensure_app_store(environment: &str, app: &str, uid: u32, gid: u32) -> Res
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("{dir}: {e}")),
     }
+
     std::fs::create_dir(&dir).map_err(|e| format!("{dir}: {e}"))?;
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| format!("{dir}: {e}"))?;
+
     // Just created by root in a root-owned parent: no link can stand in its place.
     std::os::unix::fs::lchown(&dir, Some(uid), Some(gid)).map_err(|e| format!("{dir}: {e}"))?;
+
     Ok(dir)
 }
 
@@ -207,11 +222,15 @@ async fn rename_legacy(spec: &AppSpec, legacy: &str, new: &str) -> Result<(), St
     } else {
         stop_supervisor(spec).await;
     }
+
     sh("usermod", &["--login", new, "--comment", &spec.user_mark(), legacy]).await?;
+
     if sh("getent", &["group", legacy]).await.is_ok() {
         sh("groupmod", &["--new-name", new, legacy]).await?;
     }
+
     tracing::info!(app = %spec.key(), from = legacy, to = new, "app account renamed");
+
     Ok(())
 }
 
@@ -222,12 +241,14 @@ async fn ensure_user(spec: &AppSpec) -> Result<String, String> {
         Some(u) => u,
         None => {
             let mut free = None;
+
             for name in spec.user_candidates() {
                 if account(&name).await.is_none() {
                     free = Some(name);
                     break;
                 }
             }
+
             let Some(name) = free else {
                 return Err(format!(
                     "the account names for {} ({}) belong to accounts Orbyn Forge did not create; rename or remove them",
@@ -235,6 +256,7 @@ async fn ensure_user(spec: &AppSpec) -> Result<String, String> {
                     spec.user_candidates().join(", ")
                 ));
             };
+
             let legacy = spec.legacy_user();
             match account(&legacy).await {
                 Some(a) if shaped_like_app_account(&spec.home(), &a).await => {
@@ -258,21 +280,27 @@ async fn ensure_user(spec: &AppSpec) -> Result<String, String> {
                     .await?;
                 }
             }
+
             name
         }
     };
+
     // World-traversable parents; the app directory itself is private to the app user.
     for dir in ["/srv/forge", "/srv/forge/apps", &format!("/srv/forge/apps/{}", spec.environment)] {
         mkdir(dir, 0o755)?;
     }
+
     mkdir(&spec.home(), 0o750)?;
     sh("chown", &[&format!("{user}:{user}"), &spec.home()]).await?;
+
     // Traversable, not listable.
     mkdir(&format!("/etc/forge/apps/{}", spec.environment), 0o711)?;
+
     // Trash and revisions of the file explorer on this app's folder (D-083).
     if let Some(a) = account(&user).await {
         ensure_app_store(&spec.environment, &spec.name, a.uid, a.gid)?;
     }
+
     Ok(user)
 }
 
@@ -291,6 +319,7 @@ async fn remove_app_store(spec: &AppSpec) {
 async fn write_app_env(spec: &AppSpec, user: &str) -> Result<(), String> {
     write(&spec.env_path(), &spec.env_file(), 0o600)?;
     sh("chown", &[&format!("root:{user}"), &spec.env_path()]).await?;
+
     std::fs::set_permissions(spec.env_path(), std::fs::Permissions::from_mode(0o640)).map_err(|e| e.to_string())
 }
 
@@ -313,12 +342,14 @@ fn dir_open_flags() -> rfs::OFlags {
 fn open_forge_dir(home: &str, create: bool, owner: u32) -> Result<Option<OwnedFd>, String> {
     let home_fd = rfs::open(home, dir_open_flags(), rfs::Mode::empty()).map_err(|e| format!("{home}: {e}"))?;
     let path = format!("{home}/{FORGE_DIR}");
+
     if create {
         match rfs::mkdirat(&home_fd, FORGE_DIR, rfs::Mode::from_raw_mode(0o755)) {
             Ok(()) | Err(Errno::EXIST) => {}
             Err(e) => return Err(format!("{path}: {e}")),
         }
     }
+
     let fd = match rfs::openat(&home_fd, FORGE_DIR, dir_open_flags(), rfs::Mode::empty()) {
         Ok(fd) => fd,
         Err(Errno::NOENT) if !create => return Ok(None),
@@ -327,11 +358,14 @@ fn open_forge_dir(home: &str, create: bool, owner: u32) -> Result<Option<OwnedFd
         }
         Err(e) => return Err(format!("{path}: {e}")),
     };
+
     let st = rfs::fstat(&fd).map_err(|e| format!("{path}: {e}"))?;
     if st.st_uid != owner {
         return Err(format!("{path} is not owned by root; remove it and deploy again"));
     }
+
     rfs::fchmod(&fd, rfs::Mode::from_raw_mode(0o755)).map_err(|e| format!("{path}: {e}"))?;
+
     Ok(Some(fd))
 }
 
@@ -348,6 +382,7 @@ fn write_at(dir: &OwnedFd, name: &str, content: &str, mode: u32) -> Result<(), S
     f.write_all(content.as_bytes()).and_then(|()| f.sync_all()).map_err(|e| format!("{tmp}: {e}"))?;
     rfs::fchmod(&f, rfs::Mode::from_raw_mode(mode)).map_err(|e| format!("{tmp}: {e}"))?;
     drop(f);
+
     rfs::renameat(dir, tmp.as_str(), dir, name).map_err(|e| format!("{name}: {e}"))
 }
 
@@ -361,8 +396,10 @@ fn remove_bin_at(dir: &OwnedFd) -> Result<(), String> {
         }
         Ok(_) => {}
     }
+
     let bin = rfs::openat(dir, "bin", dir_open_flags(), rfs::Mode::empty()).map_err(|e| format!("bin: {e}"))?;
     let mut names = Vec::new();
+
     for entry in rfs::Dir::read_from(&bin).map_err(|e| format!("bin: {e}"))? {
         let entry = entry.map_err(|e| format!("bin: {e}"))?;
         let name = entry.file_name();
@@ -370,10 +407,12 @@ fn remove_bin_at(dir: &OwnedFd) -> Result<(), String> {
             names.push(name.to_owned());
         }
     }
+
     // `bin` only ever holds links; a subdirectory makes this fail, never recurse.
     for n in &names {
         rfs::unlinkat(&bin, n.as_c_str(), rfs::AtFlags::empty()).map_err(|e| format!("bin/{n:?}: {e}"))?;
     }
+
     rfs::unlinkat(dir, "bin", rfs::AtFlags::REMOVEDIR).map_err(|e| format!("bin: {e}"))
 }
 
@@ -388,10 +427,12 @@ fn write_launcher(spec: &AppSpec, owner: u32) -> Result<(), String> {
         rfs::mkdirat(&dir, "bin", rfs::Mode::from_raw_mode(0o755)).map_err(|e| format!("bin: {e}"))?;
         let bin = rfs::openat(&dir, "bin", dir_open_flags(), rfs::Mode::empty()).map_err(|e| format!("bin: {e}"))?;
         rfs::fchmod(&bin, rfs::Mode::from_raw_mode(0o755)).map_err(|e| format!("bin: {e}"))?;
+
         for (name, target) in links {
             rfs::symlinkat(target.as_str(), &bin, name.as_str()).map_err(|e| format!("bin/{name}: {e}"))?;
         }
     }
+
     Ok(())
 }
 
@@ -404,6 +445,7 @@ fn remove_launcher(spec: &AppSpec, owner: u32) -> Result<(), String> {
             Err(e) => return Err(format!("{file}: {e}")),
         }
     }
+
     Ok(())
 }
 
@@ -411,12 +453,15 @@ fn remove_launcher(spec: &AppSpec, owner: u32) -> Result<(), String> {
 fn load_env(spec: &AppSpec) -> Vec<(String, String)> {
     // The node's log listener (D-142); a value the app sets comes later and wins.
     let mut env = vec![(forge_catalog::apps::LOG_URL_ENV.to_owned(), spec.log_url().to_owned())];
+
     for f in &spec.pkg_env_files() {
         if let Ok(text) = std::fs::read_to_string(format!("/etc/forge/pkgs/{f}.env")) {
             env.extend(text.lines().filter_map(|l| l.split_once('=')).map(|(k, v)| (k.to_owned(), v.to_owned())));
         }
     }
+
     env.extend(spec.env.iter().cloned());
+
     env
 }
 
@@ -449,10 +494,12 @@ async fn write_native(spec: &AppSpec) -> Result<String, String> {
     write_app_env(spec, &user).await?;
     write_launcher(spec, 0)?;
     write(&spec_path(spec), &serde_json::to_string(spec).map_err(|e| e.to_string())?, 0o600)?;
+
     if has_systemd() {
         write(&format!("/etc/systemd/system/{}.service", spec.unit()), &spec.service_unit(&user), 0o644)?;
         sh("systemctl", &["daemon-reload"]).await?;
     }
+
     Ok(user)
 }
 
@@ -475,13 +522,16 @@ fn spawn_supervisor(spec: &AppSpec) -> Result<(), String> {
     if supervised_pid(spec).is_some() {
         return Ok(());
     }
+
     use std::os::unix::process::CommandExt;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+
     // World-readable on purpose: the unprivileged agent's health check reads
     // the PID files. A plain create_dir_all would follow the helper's umask.
     if let Some(parent) = Path::new(SUPERVISE_DIR).parent() {
         mkdir(&parent.to_string_lossy(), 0o755)?;
     }
+
     mkdir(SUPERVISE_DIR, 0o755)?;
     let child = std::process::Command::new(exe)
         .arg("supervise")
@@ -492,6 +542,7 @@ fn spawn_supervisor(spec: &AppSpec) -> Result<(), String> {
         .process_group(0)
         .spawn()
         .map_err(|e| e.to_string())?;
+
     write(&pid_path(spec), &child.id().to_string(), 0o644)
 }
 
@@ -500,6 +551,7 @@ async fn stop_supervisor(spec: &AppSpec) {
         // The supervisor leads its own process group: stop it and the app.
         let _ = sh("kill", &["-TERM", "--", &format!("-{pid}")]).await;
     }
+
     let _ = std::fs::remove_file(pid_path(spec));
 }
 
@@ -507,16 +559,20 @@ async fn native(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, String
     let unit = spec.unit();
     let systemd = has_systemd();
     let mut user = None;
+
     match action {
         // The account, its folder and its file-explorer store only (F-03):
         // nothing runs and no unit is written. Idempotent.
         "prepare" => user = Some(ensure_user(spec).await?),
         "deploy" => {
             let account = write_native(spec).await?;
+
             if let Some(a) = &spec.artifact {
                 stage(spec, &account, a).await?;
             }
+
             user = Some(account);
+
             match (spec.runtime, systemd) {
                 (Runtime::Systemd, true) => {
                     sh("systemctl", &["enable", &format!("{unit}.service")]).await?;
@@ -537,6 +593,7 @@ async fn native(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, String
                 if action != "start" {
                     stop_supervisor(spec).await;
                 }
+
                 if action != "stop" {
                     spawn_supervisor(spec)?;
                 }
@@ -551,14 +608,19 @@ async fn native(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, String
             } else {
                 stop_supervisor(spec).await;
             }
+
             let _ = std::fs::remove_file(spec.env_path());
+
             if let Err(e) = remove_launcher(spec, 0) {
                 tracing::warn!(app = %spec.key(), error = %e, "launcher left in place");
             }
+
             let _ = std::fs::remove_file(spec_path(spec));
+
             // The file explorer's trash and revisions go with the app (D-083),
             // only when the store is a real folder of this app's account.
             remove_app_store(spec).await;
+
             // Code and data under /srv/forge/apps are kept.
             return Ok(json!({ "state": "removed" }));
         }
@@ -570,19 +632,25 @@ async fn native(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, String
             } else {
                 stop_supervisor(spec).await;
             }
+
             let _ = std::fs::remove_file(spec.env_path());
+
             if let Err(e) = remove_launcher(spec, 0) {
                 tracing::warn!(app = %spec.key(), error = %e, "launcher left in place");
             }
+
             let _ = std::fs::remove_file(spec_path(spec));
+
             return Ok(json!({ "state": "retired" }));
         }
         "probe" => return Ok(probe(spec, native_ready(spec).await).await),
         "status" | "logs" => {}
         other => return Err(format!("unknown action `{other}`")),
     }
+
     let state = native_status(spec).await;
     let logs = if action == "logs" { Some(native_logs(spec, tail).await) } else { None };
+
     // `user`: the account the app runs as, for the deploy's audit record.
     Ok(json!({ "state": state, "logs": logs, "user": user }))
 }
@@ -609,28 +677,35 @@ pub async fn follow(spec: &AppSpec, cursor: &str, emit: &(dyn Fn(&str) + Sync)) 
     let out = |text: &str, kept: &mut String| {
         for l in text.lines().filter(|l| !l.is_empty()) {
             emit(l);
+
             if kept.len() < FOLLOW_KEEP {
                 kept.push_str(l);
                 kept.push('\n');
             }
         }
     };
+
     loop {
         let text = match spec.runtime {
             Runtime::Container => follow_container(spec, &mut cursor).await?,
             Runtime::Systemd if has_systemd() => follow_journal(spec, &mut cursor).await?,
             Runtime::Systemd => follow_file(spec, &mut cursor),
         };
+
         out(&text, &mut kept);
+
         if tokio::time::Instant::now() >= deadline {
             break;
         }
+
         tokio::time::sleep(FOLLOW_POLL).await;
     }
+
     let state = match spec.runtime {
         Runtime::Container => Value::Null,
         _ => json!(native_status(spec).await),
     };
+
     Ok(json!({ "cursor": cursor, "lines": kept, "state": state }))
 }
 
@@ -639,14 +714,17 @@ async fn follow_journal(spec: &AppSpec, cursor: &mut String) -> Result<String, S
     let unit = format!("{}.service", spec.unit());
     let mut args = vec!["-u", unit.as_str(), "--no-pager", "-o", "short-iso", "--show-cursor"];
     let after;
+
     if cursor.is_empty() {
         args.extend(["-n", "200"]);
     } else {
         after = format!("--after-cursor={cursor}");
         args.push(&after);
     }
+
     let raw = sh("journalctl", &args).await?;
     let mut lines = Vec::new();
+
     for l in raw.lines() {
         if let Some(c) = l.strip_prefix("-- cursor: ") {
             c.trim().clone_into(cursor);
@@ -654,6 +732,7 @@ async fn follow_journal(spec: &AppSpec, cursor: &mut String) -> Result<String, S
             lines.push(l);
         }
     }
+
     Ok(lines.join("\n"))
 }
 
@@ -665,10 +744,13 @@ fn follow_file(spec: &AppSpec, cursor: &mut String) -> String {
         let nl: Vec<usize> = text.iter().enumerate().filter(|(_, b)| **b == b'\n').map(|(i, _)| i + 1).collect();
         nl.len().checked_sub(201).map_or(0, |i| nl[i])
     });
+
     if from > text.len() {
         from = 0; // the file was truncated or replaced
     }
+
     *cursor = text.len().to_string();
+
     String::from_utf8_lossy(&text[from..]).into_owned()
 }
 
@@ -679,13 +761,16 @@ async fn follow_container(spec: &AppSpec, cursor: &mut String) -> Result<String,
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
     let since = cursor.parse::<f64>().unwrap_or(now - 3600.0);
     let first = cursor.is_empty();
+
     match crate::docker::logs_window(&spec.unit(), since, now).await? {
         Some(text) => {
             *cursor = format!("{now:.6}");
+
             if first {
                 let lines: Vec<&str> = text.lines().collect();
                 return Ok(lines[lines.len().saturating_sub(200)..].join("\n"));
             }
+
             Ok(text)
         }
         None => Ok(String::new()),
@@ -694,6 +779,7 @@ async fn follow_container(spec: &AppSpec, cursor: &mut String) -> Result<String,
 
 async fn native_logs(spec: &AppSpec, tail: u32) -> String {
     let n = tail.clamp(1, 5000).to_string();
+
     if has_systemd() {
         sh("journalctl", &["-u", &format!("{}.service", spec.unit()), "-n", &n, "--no-pager", "-o", "short-iso"])
             .await
@@ -712,6 +798,7 @@ async fn run_once(spec: &AppSpec, limit: Duration) -> Result<i32, String> {
     let log = std::fs::OpenOptions::new().create(true).append(true).open(log_path(spec)).map_err(|e| e.to_string())?;
     let err = log.try_clone().map_err(|e| e.to_string())?;
     let wd = if spec.working_dir.is_empty() { spec.home() } else { spec.working_dir.clone() };
+
     // Resolved before env_clear(): the child's PATH would not find /usr/sbin.
     let runuser = ["/usr/sbin/runuser", "/sbin/runuser", "/usr/bin/runuser"]
         .into_iter()
@@ -736,6 +823,7 @@ async fn run_once(spec: &AppSpec, limit: Duration) -> Result<i32, String> {
         .await
         .map_err(|_| "timed out".to_owned())?
         .map_err(|e| e.to_string())?;
+
     Ok(status.code().unwrap_or(-1))
 }
 
@@ -745,19 +833,23 @@ pub async fn supervise(spec_file: &str) -> Result<(), String> {
     let text = std::fs::read_to_string(spec_file).map_err(|e| e.to_string())?;
     let spec: AppSpec = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     spec.validate()?;
+
     loop {
         // Errors starting the app go to its log, where the console shows them.
         let note = match run_once(&spec, Duration::from_secs(365 * 24 * 3600)).await {
             Ok(code) => format!("forge: process exited with status {code}"),
             Err(e) => format!("forge: could not start the app: {e}"),
         };
+
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path(&spec)) {
             use std::io::Write;
             let _ = writeln!(f, "{note}");
         }
+
         if !spec.restart {
             return Ok(());
         }
+
         tokio::time::sleep(Duration::from_secs(3)).await;
     }
 }
@@ -765,41 +857,53 @@ pub async fn supervise(spec_file: &str) -> Result<(), String> {
 /// Resource limits, identity, health check and logging from the spec.
 fn apply_container_options(body: &mut Value, spec: &AppSpec) {
     let host = &mut body["HostConfig"];
+
     if spec.cpu_millis > 0 {
         host["NanoCpus"] = json!(u64::from(spec.cpu_millis) * 1_000_000);
     }
+
     if spec.memory_mb > 0 {
         host["Memory"] = json!(u64::from(spec.memory_mb) * 1024 * 1024);
     }
+
     if spec.read_only {
         host["ReadonlyRootfs"] = json!(true);
     }
+
     // `forge-node` reaches the node's log listener (D-142), unless the app
     // names that host itself.
     let mut hosts = spec.extra_hosts.clone();
     if !hosts.iter().any(|h| h.split(':').next() == Some("forge-node")) {
         hosts.push(forge_catalog::apps::LOG_HOST_ENTRY.to_owned());
     }
+
     host["ExtraHosts"] = json!(hosts);
+
     if spec.log_max_mb > 0 {
         host["LogConfig"] =
             json!({ "Type": "json-file", "Config": { "max-size": format!("{}m", spec.log_max_mb), "max-file": "3" } });
     }
+
     if !spec.entrypoint.trim().is_empty() {
         body["Entrypoint"] = json!(spec.entrypoint.split_whitespace().collect::<Vec<_>>());
     }
+
     if !spec.user.is_empty() {
         body["User"] = json!(spec.user);
     }
+
     if !spec.hostname.is_empty() {
         body["Hostname"] = json!(spec.hostname);
     }
+
     if spec.stop_timeout_secs > 0 {
         body["StopTimeout"] = json!(spec.stop_timeout_secs);
     }
+
     for (k, v) in &spec.labels {
         body["Labels"][k] = json!(v);
     }
+
     if let Some(hc) = &spec.healthcheck {
         let ns = |s: u32| u64::from(s) * 1_000_000_000;
         body["Healthcheck"] = json!({
@@ -815,6 +919,7 @@ fn apply_container_options(body: &mut Value, spec: &AppSpec) {
 async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, String> {
     let name = spec.unit();
     let t = Duration::from_secs(90);
+
     match action {
         // Containers keep their files in volumes: nothing to prepare.
         "prepare" => return Ok(json!({ "state": "prepared" })),
@@ -825,6 +930,7 @@ async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, Str
             let _ = docker::api("DELETE", &format!("/containers/{name}?force=1"), None, t).await;
             let mut bindings = serde_json::Map::new();
             let mut exposed = serde_json::Map::new();
+
             for p in &spec.ports {
                 let (body, proto) = p.split_once('/').unwrap_or((p, "tcp"));
                 let parts: Vec<&str> = body.split(':').collect();
@@ -833,10 +939,12 @@ async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, Str
                     [ip, h, c] => (*ip, *h, *c),
                     _ => continue,
                 };
+
                 let key = format!("{ctr}/{proto}");
                 exposed.insert(key.clone(), json!({}));
                 bindings.insert(key, json!([{ "HostIp": ip, "HostPort": host }]));
             }
+
             // Host folders: the policy again (Docker socket, system and
             // Forge paths), made without following links, then the
             // resolved path checked too (see `stacks::walk_host_path`).
@@ -846,12 +954,14 @@ async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, Str
                 if let Some(why) = forge_catalog::stacks::protected_host_path(host) {
                     return Err(format!("volume `{v}` is not allowed: {why}"));
                 }
+
                 crate::stacks::walk_host_path(host, true)?;
                 let real = std::fs::canonicalize(host).map_err(|e| format!("{host}: {e}"))?;
                 if let Some(why) = forge_catalog::stacks::protected_host_path(&real.to_string_lossy()) {
                     return Err(format!("volume `{v}` resolves to {}: {why}", real.display()));
                 }
             }
+
             let env: Vec<String> = load_env(spec).into_iter().map(|(k, v)| format!("{k}={v}")).collect();
             let mut body = json!({
                 "Image": image_ref,
@@ -868,9 +978,11 @@ async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, Str
                     "RestartPolicy": { "Name": if spec.restart { "unless-stopped" } else { "no" } },
                 },
             });
+
             if !spec.command.trim().is_empty() {
                 body["Cmd"] = json!(["/bin/sh", "-c", spec.command.trim()]);
             }
+
             apply_container_options(&mut body, spec);
             docker::api("POST", &format!("/containers/create?name={name}"), Some(&body), t).await?;
             docker::api("POST", &format!("/containers/{name}/start"), None, t).await?;
@@ -883,25 +995,31 @@ async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, Str
         "remove" => {
             let _ = docker::api("DELETE", &format!("/containers/{name}?force=1"), None, t).await?;
             let _ = std::fs::remove_file(spec.env_path());
+
             return Ok(json!({ "state": "removed" }));
         }
         "retire" => {
             let _ = docker::api("DELETE", &format!("/containers/{name}?force=1"), None, t).await?;
             let _ = std::fs::remove_file(spec.env_path());
+
             return Ok(json!({ "state": "retired" }));
         }
         "probe" => return Ok(probe(spec, container_ready(&name).await).await),
         "status" | "logs" => {}
         other => return Err(format!("unknown action `{other}`")),
     }
+
     let state = match docker::api("GET", &format!("/containers/{name}/json"), None, t).await? {
         Some(v) => v.pointer("/State/Status").and_then(Value::as_str).unwrap_or("unknown").to_owned(),
         None => "not-deployed".to_owned(),
     };
+
     let logs = if action == "logs" { Some(docker::logs(&name, tail.clamp(1, 5000)).await?) } else { None };
+
     // The digest the image resolved to: a release pinned by tag records it,
     // and every other node then pulls exactly that (#73).
     let digest = if action == "deploy" { image_digest(&spec.image).await } else { None };
+
     Ok(json!({
         "state": if state == "running" { "active".to_owned() } else { state },
         "logs": logs,
@@ -915,16 +1033,19 @@ async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, Str
 async fn pull(from: &str, tag: &str) -> Result<(), String> {
     let path = format!("/images/create?fromImage={from}&tag={tag}");
     let mut last = String::new();
+
     for attempt in 0..3u64 {
         if attempt > 0 {
             tokio::time::sleep(Duration::from_secs(5 * attempt * attempt)).await;
         }
+
         match docker::api("POST", &path, None, Duration::from_secs(20 * 60)).await {
             Ok(_) => return Ok(()),
             Err(e) if transient_pull_error(&e) => last = e,
             Err(e) => return Err(e),
         }
     }
+
     Err(format!("pulling {from}:{tag} failed three times: {last}"))
 }
 
@@ -957,8 +1078,10 @@ fn pull_ref(image: &str) -> (String, String, String) {
             Some((n, t)) if !t.contains('/') => n,
             _ => name,
         };
+
         return (repo.to_owned(), digest.to_owned(), format!("{repo}@{digest}"));
     }
+
     match image.rsplit_once(':') {
         Some((n, t)) if !t.contains('/') => (n.to_owned(), t.to_owned(), image.to_owned()),
         _ => (image.to_owned(), "latest".to_owned(), format!("{image}:latest")),
@@ -969,6 +1092,7 @@ fn pull_ref(image: &str) -> (String, String, String) {
 async fn image_digest(image: &str) -> Option<String> {
     let (_, _, reference) = pull_ref(image);
     let v = docker::api("GET", &format!("/images/{reference}/json"), None, Duration::from_secs(15)).await.ok()??;
+
     v["RepoDigests"]
         .as_array()?
         .iter()
@@ -983,6 +1107,7 @@ async fn container_ready(name: &str) -> (bool, String) {
         Ok(Some(v)) => {
             let running = v.pointer("/State/Running").and_then(Value::as_bool).unwrap_or(false);
             let health = v.pointer("/State/Health/Status").and_then(Value::as_str).unwrap_or("");
+
             if !running {
                 let s = v.pointer("/State/Status").and_then(Value::as_str).unwrap_or("not running");
                 (false, format!("the container is {s}"))
@@ -1004,6 +1129,7 @@ async fn native_ready(spec: &AppSpec) -> (bool, String) {
     if state != "active" {
         return (false, format!("{} is {state}", spec.unit()));
     }
+
     if let Some(port) = spec.listen_port {
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
         match tokio::time::timeout(Duration::from_secs(2), tokio::net::TcpStream::connect(addr)).await {
@@ -1012,6 +1138,7 @@ async fn native_ready(spec: &AppSpec) -> (bool, String) {
             Err(_) => return (false, format!("port {port}: no answer within 2 s")),
         }
     }
+
     (true, String::new())
 }
 
@@ -1026,6 +1153,7 @@ async fn as_app(user: &str, home: &str, args: &[&str]) -> Result<String, String>
     let home_env = format!("HOME={home}");
     full.push(&home_env);
     full.extend_from_slice(args);
+
     sh("runuser", &full).await
 }
 
@@ -1041,19 +1169,23 @@ async fn stage(spec: &AppSpec, user: &str, a: &forge_catalog::deploy::ArtifactRe
     let releases = format!("{home}/releases");
     let dir = spec.release_dir();
     let marker = format!("{dir}/.forge-release");
+
     let want = match a {
         ArtifactRef::Git { commit, .. } => format!("git {commit}"),
         ArtifactRef::Archive { sha256, .. } => format!("sha256 {sha256}"),
         ArtifactRef::Image { .. } => return Err("an image is not fetched into a folder".into()),
     };
+
     if crate::self_update::read_nofollow(Path::new(&marker), 4096)
         .is_some_and(|m| String::from_utf8_lossy(&m).trim() == want)
     {
         return Ok(());
     }
+
     as_app(user, &home, &["mkdir", "-p", &releases]).await?;
     let tmp = format!("{releases}/.staging-{}", spec.release);
     let _ = as_app(user, &home, &["rm", "-rf", &tmp]).await;
+
     match a {
         ArtifactRef::Git { repo, commit, .. } => {
             as_app(user, &home, &["git", "init", "-q", &tmp]).await?;
@@ -1073,8 +1205,10 @@ async fn stage(spec: &AppSpec, user: &str, a: &forge_catalog::deploy::ArtifactRe
         }
         ArtifactRef::Archive { url, sha256, strip_components } => {
             let file = format!("{releases}/.download-{}", spec.release);
+
             // A retried step starts from a fresh download.
             let _ = as_app(user, &home, &["rm", "-f", &file]).await;
+
             // curl streams to disk as the app's account. `prlimit --fsize`
             // stops it at the cap even when the server sends no
             // Content-Length (`--max-filesize` alone cannot).
@@ -1103,12 +1237,14 @@ async fn stage(spec: &AppSpec, user: &str, a: &forge_catalog::deploy::ArtifactRe
             )
             .await
             .map_err(|e| format!("download failed (archives are limited to 2 GiB): {e}"))?;
+
             // Hashed in 64 KiB chunks off the async runtime: memory stays
             // flat whatever the archive's size.
             let path = std::path::PathBuf::from(&file);
             let hashed = tokio::task::spawn_blocking(move || crate::self_update::sha256_nofollow(&path, MAX_ARCHIVE))
                 .await
                 .map_err(|e| format!("hashing the archive stopped: {e}"))?;
+
             let got = match hashed {
                 Ok((got, _)) => got,
                 Err(e) => {
@@ -1116,12 +1252,15 @@ async fn stage(spec: &AppSpec, user: &str, a: &forge_catalog::deploy::ArtifactRe
                     return Err(format!("cannot read the downloaded archive: {e}"));
                 }
             };
+
             if got != *sha256 {
                 let _ = tokio::fs::remove_file(&file).await;
                 return Err(format!("the archive's SHA-256 is {got}, not {sha256}: refused"));
             }
+
             as_app(user, &home, &["mkdir", "-p", &tmp]).await?;
             let strip = format!("--strip-components={strip_components}");
+
             let r = match ArchiveKind::of(url) {
                 Some(ArchiveKind::TarGz) => {
                     as_app(
@@ -1143,23 +1282,28 @@ async fn stage(spec: &AppSpec, user: &str, a: &forge_catalog::deploy::ArtifactRe
                     let r = as_app(user, &home, &["unzip", "-q", &file, "-d", &tmp])
                         .await
                         .map_err(|e| format!("unzip failed (is unzip installed?): {e}"));
+
                     if r.is_ok() && *strip_components > 0 {
                         strip_zip(user, &home, &tmp, *strip_components).await?;
                     }
+
                     r
                 }
                 None => Err("unknown archive type".into()),
             };
+
             let _ = tokio::fs::remove_file(&file).await;
             r?;
         }
         ArtifactRef::Image { .. } => {}
     }
+
     as_app(user, &home, &["sh", "-c", "printf '%s\\n' \"$1\" > \"$2\"", "sh", &want, &format!("{tmp}/.forge-release")])
         .await?;
     let _ = as_app(user, &home, &["rm", "-rf", &dir]).await;
     as_app(user, &home, &["mv", &tmp, &dir]).await?;
     prune_releases(user, &home, &releases, spec.release.parse().unwrap_or(0)).await;
+
     Ok(())
 }
 
@@ -1171,18 +1315,21 @@ async fn strip_zip(user: &str, home: &str, tmp: &str, n: u32) -> Result<(), Stri
         if !only.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             return Err("stripComponents needs one top folder in the zip".into());
         }
+
         let inner = only.path().to_string_lossy().into_owned();
         let up = format!("{tmp}.up");
         as_app(user, home, &["mv", &inner, &up]).await?;
         as_app(user, home, &["rmdir", tmp]).await?;
         as_app(user, home, &["mv", &up, tmp]).await?;
     }
+
     Ok(())
 }
 
 /// Removes release folders older than the newest [`KEEP_RELEASES`] (as the app).
 async fn prune_releases(user: &str, home: &str, releases: &str, current: u64) {
     let Ok(rd) = std::fs::read_dir(releases) else { return };
+
     for e in rd.filter_map(Result::ok) {
         let name = e.file_name().to_string_lossy().into_owned();
         if let Ok(n) = name.parse::<u64>()
@@ -1201,6 +1348,7 @@ async fn probe(spec: &AppSpec, default: (bool, String)) -> Value {
     use forge_catalog::health::Probe;
     let mut checks = vec![json!({ "name": "default", "ok": default.0, "detail": default.1 })];
     let mut ready = default.0;
+
     if let Some(policy) = &spec.health {
         for c in policy.readiness.iter().filter(|c| c.enabled) {
             let skip = match &c.probe {
@@ -1210,10 +1358,12 @@ async fn probe(spec: &AppSpec, default: (bool, String)) -> Value {
                 Probe::Tcp(t) => !forge_catalog::health::workload_host(&t.host),
                 Probe::Exec(_) | Probe::Shell(_) => true,
             };
+
             if skip {
                 checks.push(json!({ "name": c.name, "ok": null, "detail": "checked by the node's health runner" }));
                 continue;
             }
+
             let timeout = Duration::from_secs(u64::from(c.timeout_secs.max(1)));
             let ctx = crate::health_probe::Context { fleet: &[], secrets: &[] };
             let o = crate::health_probe::run(&c.probe, timeout, ctx).await;
@@ -1221,15 +1371,18 @@ async fn probe(spec: &AppSpec, default: (bool, String)) -> Value {
             if c.required && !ok {
                 ready = false;
             }
+
             checks.push(json!({ "name": c.name, "ok": ok, "required": c.required, "detail": o.detail }));
         }
     }
+
     json!({ "ready": ready, "checks": checks })
 }
 
 /// Runs one action for a validated spec.
 pub async fn run(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, String> {
     spec.validate()?;
+
     match spec.runtime {
         Runtime::Container => container(action, spec, tail).await,
         Runtime::Systemd => native(action, spec, tail).await,
@@ -1285,6 +1438,7 @@ mod tests {
             home: spec.home(),
             shell: "/usr/sbin/nologin".into(),
         };
+
         // The test home does not exist here, so ownership is not checked.
         assert!(shaped_like_app_account(&spec.home(), &good).await);
         let human = Account { home: "/home/alice".into(), shell: "/bin/bash".into(), uid: 1000, gid: 1000, ..good };
@@ -1319,6 +1473,7 @@ mod tests {
         let err = open_forge_dir(h, true, me()).unwrap_err();
         assert!(err.contains("symlink"), "{err}");
         assert!(open_forge_dir(h, false, me()).is_err());
+
         // Nothing was written through the link.
         assert_eq!(std::fs::read_dir(target.path()).unwrap().count(), 0);
     }
@@ -1337,6 +1492,7 @@ mod tests {
         let h = home.path().to_str().unwrap();
         assert!(open_forge_dir(h, false, me()).unwrap().is_none());
         let dir = open_forge_dir(h, true, me()).unwrap().unwrap();
+
         // A planted `run.sh.tmp` link and a `bin` with a link to a victim file.
         let victim = home.path().join("victim");
         std::fs::write(&victim, "keep").unwrap();

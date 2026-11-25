@@ -15,9 +15,11 @@ use crate::state::AppState;
 pub(super) fn acceptor(state: &AppState) -> anyhow::Result<TlsAcceptor> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let mut roots = RootCertStore::empty();
+
     for c in CertificateDer::pem_slice_iter(state.ca.cert_pem().as_bytes()) {
         roots.add(c?)?;
     }
+
     let verifier = WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider.clone())
         .allow_unauthenticated()
         .build()?;
@@ -26,5 +28,6 @@ pub(super) fn acceptor(state: &AppState) -> anyhow::Result<TlsAcceptor> {
         .with_client_cert_verifier(verifier)
         .with_cert_resolver(state.agent_keys.resolver());
     cfg.alpn_protocols = vec![b"h2".to_vec()];
+
     Ok(TlsAcceptor::from(Arc::new(cfg)))
 }

@@ -26,20 +26,25 @@ impl Store {
     async fn environment_chain(&self, id: EnvironmentId) -> DomainResult<Vec<EntityRef>> {
         let e = self.get_environment(id).await?;
         let mut chain = vec![EntityRef::new(EntityKind::Environment, e.id)];
+
         if let Some(g) = e.project_id {
             chain.push(EntityRef::new(EntityKind::Project, g));
         }
+
         chain.extend(self.workspace_chain(e.workspace_id).await?);
+
         Ok(chain)
     }
 
     async fn server_chain(&self, id: ServerId) -> DomainResult<Vec<EntityRef>> {
         let s = self.get_server(id).await?;
         let mut chain = vec![EntityRef::new(EntityKind::Server, s.id)];
+
         match s.environment_id {
             Some(env) => chain.extend(self.environment_chain(env).await?),
             None => chain.extend(self.workspace_chain(s.workspace_id).await?),
         }
+
         Ok(chain)
     }
 
@@ -101,9 +106,11 @@ impl Store {
             EntityKind::Job => {
                 let job = self.get_job(parse_id(e)?).await?;
                 let mut chain = vec![e.clone()];
+
                 if job.resource.kind != EntityKind::Job {
                     chain.extend(Box::pin(self.chain(&job.resource)).await?);
                 }
+
                 Ok(chain)
             }
         }
@@ -118,6 +125,7 @@ impl ResourceResolver for Store {
         let servers: Vec<EntityRef> =
             std::iter::once(&first).chain(chain.iter()).filter(|e| e.kind == EntityKind::Server).cloned().collect();
         let mut resource = ResourceRef::new(first, chain);
+
         // A node in a cluster has a second parent: server → cluster → workspace.
         for server in servers {
             let s = self.get_server(parse_id(&server)?).await?;
@@ -129,6 +137,7 @@ impl ResourceResolver for Store {
                 ]);
             }
         }
+
         Ok(resource)
     }
 
@@ -138,25 +147,31 @@ impl ResourceResolver for Store {
     async fn resolve_many(&self, entities: &[EntityRef]) -> Vec<DomainResult<ResourceRef>> {
         if entities.len() < 2 || entities.iter().any(|e| e.kind != EntityKind::Server) {
             let mut out = Vec::with_capacity(entities.len());
+
             for e in entities {
                 out.push(self.resolve(e).await);
             }
+
             return out;
         }
+
         let rows: std::collections::HashMap<String, forge_core::model::Server> = match self.list_servers(None).await {
             Ok(list) => list.into_iter().map(|s| (s.id.to_string(), s)).collect(),
             Err(e) => return entities.iter().map(|_| Err(DomainError::internal(&e))).collect(),
         };
+
         let mut ns_memo: std::collections::HashMap<EnvironmentId, Option<Vec<EntityRef>>> =
             std::collections::HashMap::new();
         let mut ws_memo: std::collections::HashMap<WorkspaceId, Option<Vec<EntityRef>>> =
             std::collections::HashMap::new();
         let mut out = Vec::with_capacity(entities.len());
+
         for e in entities {
             let Some(s) = rows.get(&e.id) else {
                 out.push(Err(DomainError::NotFound(format!("server {}", e.id))));
                 continue;
             };
+
             let parent = match s.environment_id {
                 Some(ns) => match ns_memo.get(&ns) {
                     Some(c) => c.clone(),
@@ -175,12 +190,15 @@ impl ResourceResolver for Store {
                     }
                 },
             };
+
             let Some(parent) = parent else {
                 out.push(Err(DomainError::NotFound(format!("ancestry of server {}", e.id))));
                 continue;
             };
+
             let server = EntityRef::new(EntityKind::Server, s.id);
             let mut resource = ResourceRef::new(server.clone(), parent);
+
             if let Some(cluster) = s.cluster_id {
                 resource.add_chain(&[
                     server,
@@ -188,8 +206,10 @@ impl ResourceResolver for Store {
                     EntityRef::new(EntityKind::Workspace, s.workspace_id),
                 ]);
             }
+
             out.push(Ok(resource));
         }
+
         out
     }
 }

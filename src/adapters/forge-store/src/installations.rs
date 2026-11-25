@@ -62,6 +62,7 @@ impl InstallationRepository for Store {
         .execute(self.pool())
         .await
         .map_err(db_err)?;
+
         Ok(())
     }
 
@@ -101,6 +102,7 @@ impl InstallationRepository for Store {
             None => sqlx::query("SELECT * FROM installations ORDER BY package, version").fetch_all(self.pool()).await,
         }
         .map_err(db_err)?;
+
         rows.iter().map(row).collect()
     }
 
@@ -120,6 +122,7 @@ impl InstallationRepository for Store {
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
+
         for r in releases {
             sqlx::query(
                 "INSERT INTO package_releases (product, line, latest, lts, released_at, latest_at, eol,
@@ -139,6 +142,7 @@ impl InstallationRepository for Store {
             .await
             .map_err(db_err)?;
         }
+
         tx.commit().await.map_err(db_err)
     }
 

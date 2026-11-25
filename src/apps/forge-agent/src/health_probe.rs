@@ -120,6 +120,7 @@ fn allowed_targets(addrs: &[SocketAddr], allow_remote: bool, fleet: &[IpAddr]) -
     if addrs.is_empty() {
         return Err(Outcome::fail("connect_failed", "the host name has no address"));
     }
+
     for a in addrs {
         // A relay or translator delivers these to the IPv4 address they
         // name, outside what the checks below can see.
@@ -129,20 +130,24 @@ fn allowed_targets(addrs: &[SocketAddr], allow_remote: bool, fleet: &[IpAddr]) -
                 format!("{} is an IPv6 transition address (6to4, Teredo or NAT64)", a.ip()),
             ));
         }
+
         let ip = canonical(a.ip());
         if forbidden_address(ip) {
             return Err(Outcome::fail("invalid_config", format!("{ip} is a link-local or metadata address")));
         }
+
         if !allow_remote && !ip.is_loopback() {
             return Err(Outcome::fail(
                 "invalid_config",
                 format!("{ip} is not the workload itself; allow a remote host in the check to probe it"),
             ));
         }
+
         if fleet.iter().any(|f| canonical(*f) == ip) {
             return Err(Outcome::fail("invalid_config", format!("{ip} is another node of the fleet")));
         }
     }
+
     Ok(addrs.to_vec())
 }
 
@@ -159,7 +164,9 @@ async fn connect(host: &str, allow_remote: bool, port: u16, fleet: &[IpAddr]) ->
             .collect();
         allowed_targets(&found, allow_remote, fleet)?
     };
+
     let Some(addr) = addrs.first() else { return Err(Outcome::fail("connect_failed", "no address")) };
+
     TcpStream::connect(addr).await.map_err(|e| Outcome::fail("connect_failed", format!("port {port}: {e}")))
 }
 
@@ -176,10 +183,12 @@ async fn http(h: &HttpProbe, ctx: Context<'_>) -> Outcome {
         Ok(r) => r,
         Err(e) => return Outcome::fail("invalid_config", e),
     };
+
     let stream = match connect(&h.host, h.allow_remote_host, h.port, ctx.fleet).await {
         Ok(s) => s,
         Err(o) => return o,
     };
+
     // A vault value goes in clear text, or to a peer nobody verified, only
     // to this machine. Checked on the connection that was made, not on how
     // the host was spelled: `localhost` is whatever the resolver says.
@@ -189,6 +198,7 @@ async fn http(h: &HttpProbe, ctx: Context<'_>) -> Outcome {
             "a vault secret is sent to another host only over HTTPS with certificate verification",
         );
     }
+
     let status = match h.scheme {
         Scheme::Http => exchange(stream, &request).await,
         Scheme::Https => {
@@ -199,19 +209,23 @@ async fn http(h: &HttpProbe, ctx: Context<'_>) -> Outcome {
             } else {
                 h.host.clone()
             };
+
             let Ok(server_name) = rustls_pki_types::ServerName::try_from(name) else {
                 return Outcome::fail("invalid_config", "the TLS server name is not valid");
             };
+
             let cfg = match crate::tls::health_probe(h.tls_verify) {
                 Ok(c) => c,
                 Err(e) => return Outcome::fail("tls", e.to_string()),
             };
+
             match tokio_rustls::TlsConnector::from(cfg).connect(server_name, stream).await {
                 Ok(tls) => exchange(tls, &request).await,
                 Err(e) => return Outcome::fail("tls", e.to_string()),
             }
         }
     };
+
     match status {
         Ok(code) if h.expected_statuses.iter().any(|r| (r.from..=r.to).contains(&code)) => Outcome::pass(),
         Ok(code @ (401 | 403)) => Outcome::fail("auth", format!("status {code}")),
@@ -229,10 +243,12 @@ fn request(h: &HttpProbe, secrets: &[crate::health_secrets::ResolvedHeader]) -> 
     if !h.path.starts_with('/') || !clean(&h.path) || h.path.contains(' ') {
         return Err("the path is not valid".into());
     }
+
     let method = match h.method {
         Method::Get => "GET",
         Method::Head => "HEAD",
     };
+
     let host = if h.host.is_empty() { "localhost" } else { h.host.as_str() };
     let host = if host.contains(':') { format!("[{host}]") } else { host.to_owned() };
     let mut out = format!(
@@ -240,6 +256,7 @@ fn request(h: &HttpProbe, secrets: &[crate::health_secrets::ResolvedHeader]) -> 
         h.path, h.port
     );
     let mut resolved = secrets.iter();
+
     for hd in &h.headers {
         let value = match (&hd.value, &hd.secret) {
             (Some(v), _) => v.as_str(),
@@ -249,13 +266,17 @@ fn request(h: &HttpProbe, secrets: &[crate::health_secrets::ResolvedHeader]) -> 
             },
             (None, None) => return Err(format!("header `{}` has no value", hd.name)),
         };
+
         let token = !hd.name.is_empty() && hd.name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
         if !token || !clean(value) {
             return Err(format!("header `{}` is not valid", hd.name));
         }
+
         let _ = write!(out, "{}: {value}\r\n", hd.name);
     }
+
     out.push_str("\r\n");
+
     Ok(out.into_bytes())
 }
 
@@ -264,14 +285,17 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, request: &[u
     stream.write_all(request).await.map_err(|e| format!("sending the request: {e}"))?;
     let mut buf = Vec::with_capacity(64);
     let mut chunk = [0u8; 64];
+
     // Stop at the end of the status line.
     while buf.len() < 1024 && !buf.contains(&b'\n') {
         let n = stream.read(&mut chunk).await.map_err(|e| format!("reading the answer: {e}"))?;
         if n == 0 {
             break;
         }
+
         buf.extend_from_slice(chunk.get(..n).unwrap_or_default());
     }
+
     status_code(&buf).ok_or_else(|| "the answer is not HTTP".to_owned())
 }
 
@@ -282,6 +306,7 @@ fn status_code(answer: &[u8]) -> Option<u16> {
     if !parts.next()?.starts_with("HTTP/1.") {
         return None;
     }
+
     parts.next()?.parse::<u16>().ok().filter(|c| (100..=599).contains(c))
 }
 
@@ -309,6 +334,7 @@ mod tests {
                 let _ = s.write_all(answer.as_bytes()).await;
             }
         });
+
         (port, rx)
     }
 
@@ -349,13 +375,16 @@ mod tests {
         let req = seen.recv().await.unwrap();
         assert!(req.contains("X-Plain: 1\r\nAuthorization: Bearer s3cret\r\n"), "{req}");
         assert!(!req.contains("vault:abc"), "the reference itself is never sent");
+
         // No value, or a value for another header: refused before connecting.
         for secrets in [vec![], vec![ResolvedHeader::new("Cookie", "x")]] {
             let o = run(&p, T, Context { fleet: &[], secrets: &secrets }).await;
             assert_eq!((o.verdict, o.reason), (Verdict::Fail, "invalid_config"));
             assert!(o.detail.contains("Authorization") && !o.detail.contains("s3cret"), "{}", o.detail);
         }
+
         assert!(seen.try_recv().is_err(), "no request reached the target");
+
         // A value that would add a line of its own is refused, and not quoted.
         let split = [ResolvedHeader::new("Authorization", "x\r\nHost: evil")];
         let o = run(&p, T, Context { fleet: &[], secrets: &split }).await;
@@ -376,19 +405,24 @@ mod tests {
             "allow_remote_host": true, "headers": secret }));
         let verified = h(json!({ "port": 443, "scheme": "https", "host": "api.internal",
             "allow_remote_host": true, "headers": secret }));
+
         for remote in ["10.0.0.5", "2001:db8::1", "192.0.2.1"] {
             assert!(!may_send_secrets(&plain, ip(remote)), "plain HTTP to {remote}");
             assert!(!may_send_secrets(&unverified, ip(remote)), "unverified TLS to {remote}");
             assert!(may_send_secrets(&verified, ip(remote)));
         }
+
         for local in ["127.0.0.1", "::1", "::ffff:127.0.0.1"] {
             assert!(may_send_secrets(&plain, ip(local)) && may_send_secrets(&unverified, ip(local)), "{local}");
         }
+
         assert!(!may_send_secrets(&plain, None), "an unknown peer is not this machine");
+
         // `localhost` that resolves elsewhere gets no value either: the
         // spelling of the host decides nothing here.
         let named = h(json!({ "port": 80, "host": "localhost", "allow_remote_host": true, "headers": secret }));
         assert!(!may_send_secrets(&named, ip("10.0.0.5")));
+
         // Without a vault value nothing is restricted.
         let open = h(json!({ "port": 80, "host": "api.internal", "allow_remote_host": true }));
         assert!(may_send_secrets(&open, ip("10.0.0.5")));
@@ -411,14 +445,18 @@ mod tests {
     async fn tcp_checks_connect_and_report_refusals_and_timeouts() {
         let (port, _seen) = server("").await;
         assert_eq!(plain(&probe(json!({ "type": "tcp", "port": port })), T).await, Outcome::pass());
+
         // A port nothing listens on.
         let free = {
             let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             l.local_addr().unwrap().port()
         };
+
         let o = plain(&probe(json!({ "type": "tcp", "port": free })), T).await;
+
         // Windows retries a refused connect for longer than the timeout.
         assert!(!o.ok() && matches!(o.reason, "connect_failed" | "timeout"), "{o:?}");
+
         // A server that accepts and never answers.
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = l.local_addr().unwrap().port();
@@ -430,11 +468,14 @@ mod tests {
     #[test]
     fn targets_are_checked_where_the_connection_is_made() {
         let a = |s: &str| -> SocketAddr { format!("{s}:80").parse().unwrap() };
+
         // The workload itself needs no permission.
         assert!(allowed_targets(&[a("127.0.0.1")], false, &[]).is_ok());
+
         // Another host needs `allow_remote_host`.
         assert_eq!(allowed_targets(&[a("10.0.0.5")], false, &[]).unwrap_err().reason, "invalid_config");
         assert!(allowed_targets(&[a("10.0.0.5")], true, &[]).is_ok());
+
         // Metadata and link-local are refused even when allowed, also as one
         // of several answers and in IPv4-mapped form.
         assert!(allowed_targets(&[a("169.254.169.254")], true, &[]).is_err());
@@ -452,10 +493,12 @@ mod tests {
             let o = allowed_targets(&[target], true, &[]).unwrap_err();
             assert_eq!(o.reason, "invalid_config", "{ip}");
             assert!(o.detail.contains("transition"), "{ip}: {}", o.detail);
+
             // Also as one of several answers of a name.
             let ok: SocketAddr = "10.0.0.5:80".parse().unwrap();
             assert!(allowed_targets(&[ok, target], true, &[]).is_err(), "{ip}");
         }
+
         // Ordinary global IPv6 still passes.
         assert!(allowed_targets(&["[2001:db8::1]:80".parse().unwrap()], true, &[]).is_ok());
     }
@@ -466,13 +509,16 @@ mod tests {
     async fn other_nodes_of_the_fleet_are_refused_at_probe_time() {
         let fleet: Vec<IpAddr> = vec!["10.0.0.7".parse().unwrap(), "fd00::7".parse().unwrap()];
         let a = |s: &str| -> SocketAddr { s.parse().unwrap() };
+
         for target in ["10.0.0.7:80", "[::ffff:10.0.0.7]:80", "[64:ff9b::a00:7]:80", "[fd00::7]:80"] {
             let o = allowed_targets(&[a(target)], true, &fleet).unwrap_err();
             assert_eq!(o.reason, "invalid_config", "{target}");
             assert!(o.detail.contains("another node of the fleet"), "{target}: {}", o.detail);
         }
+
         assert!(allowed_targets(&[a("10.0.0.5:80"), a("10.0.0.7:80")], true, &fleet).is_err(), "one of several");
         assert!(allowed_targets(&[a("10.0.0.8:80")], true, &fleet).is_ok());
+
         // Through the probe itself: refused before any connection.
         let p = probe(json!({ "type": "tcp", "host": "10.0.0.7", "allow_remote_host": true, "port": 9 }));
         let o = run(&p, T, Context { fleet: &fleet, secrets: &[] }).await;

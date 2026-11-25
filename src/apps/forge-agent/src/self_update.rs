@@ -106,10 +106,12 @@ pub(crate) fn ensure_private_dir(dir: &Path) -> Result<(), String> {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(format!("{}: {e}", dir.display())),
     }
+
     let meta = std::fs::symlink_metadata(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     if !meta.is_dir() {
         return Err(format!("{} is not a directory", dir.display()));
     }
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -130,6 +132,7 @@ fn unique_tmp(path: &Path) -> Result<PathBuf, String> {
     ring::rand::SystemRandom::new().fill(&mut r).map_err(|_| "no randomness for a temporary name".to_owned())?;
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let suffix: String = r.iter().map(|b| format!("{b:02x}")).collect();
+
     Ok(path.with_file_name(format!(".{name}.{}.{suffix}.tmp", std::process::id())))
 }
 
@@ -142,12 +145,14 @@ pub(crate) fn write_nofollow(path: &Path, data: &[u8]) -> Result<(), String> {
     let tmp = unique_tmp(path)?;
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o644).custom_flags(i32::try_from(rustix::fs::OFlags::NOFOLLOW.bits()).unwrap_or(0));
     }
     let mut f = opts.open(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+
     // The creation mode is masked by the umask (the installer runs with a
     // strict one), so set 0644 explicitly: the pin file must stay readable
     // by the unprivileged agent user.
@@ -168,6 +173,7 @@ pub(crate) fn write_nofollow(path: &Path, data: &[u8]) -> Result<(), String> {
         // Best effort: a failed write leaves no temporary file behind.
         let _ = std::fs::remove_file(&tmp);
     }
+
     renamed
 }
 
@@ -183,6 +189,7 @@ pub(crate) fn read_nofollow(path: &Path, max: u64) -> Option<Vec<u8>> {
     }
     let mut raw = Vec::new();
     opts.open(path).ok()?.take(max).read_to_end(&mut raw).ok()?;
+
     Some(raw)
 }
 
@@ -203,17 +210,22 @@ pub(crate) fn sha256_nofollow(path: &Path, max: u64) -> std::io::Result<(String,
     let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
     let mut buf = vec![0u8; 64 * 1024];
     let mut total = 0u64;
+
     loop {
         let n = f.read(&mut buf)?;
         if n == 0 {
             break;
         }
+
         total += n as u64;
+
         if total > max {
             return Err(std::io::Error::new(std::io::ErrorKind::FileTooLarge, format!("larger than {max} bytes")));
         }
+
         ctx.update(&buf[..n]);
     }
+
     Ok((hex::encode(ctx.finish()), total))
 }
 
@@ -226,6 +238,7 @@ fn read_marker(path: &Path) -> Option<Pending> {
 fn save_pending(p: &Pending, agent_dir: &Path, state: &Path) -> Result<(), String> {
     let raw = serde_json::to_vec(p).map_err(|e| e.to_string())?;
     write_nofollow(&state.join(PENDING), &raw)?;
+
     write_nofollow(&marker(agent_dir), &raw)
 }
 
@@ -237,6 +250,7 @@ fn prev(p: &Path) -> PathBuf {
 fn sibling(p: &Path, suffix: &str) -> PathBuf {
     let mut s = p.as_os_str().to_owned();
     s.push(suffix);
+
     PathBuf::from(s)
 }
 
@@ -306,6 +320,7 @@ impl UpdateHost for SystemHost {
 
     fn report_version(&self, bin: &Path) -> Result<String, String> {
         use std::io::Read as _;
+
         // A clean environment, the staging folder as working folder, and a
         // time limit: the binary is verified, but runs as root while the
         // update lock is held.
@@ -320,21 +335,26 @@ impl UpdateHost for SystemHost {
             .spawn()
             .map_err(|e| format!("dry run: {e}"))?;
         let deadline = std::time::Instant::now() + DRY_RUN_LIMIT;
+
         let status = loop {
             match child.try_wait().map_err(|e| format!("dry run: {e}"))? {
                 Some(st) => break st,
                 None if std::time::Instant::now() >= deadline => {
                     let _ = child.kill();
                     let _ = child.wait();
+
                     return Err(format!("dry run: {} did not answer within {DRY_RUN_LIMIT:?}", bin.display()));
                 }
                 None => std::thread::sleep(Duration::from_millis(50)),
             }
         };
+
         let mut out = String::new();
+
         if let Some(mut o) = child.stdout.take() {
             let _ = o.by_ref().take(4096).read_to_string(&mut out);
         }
+
         if status.success() { Ok(out) } else { Err(format!("dry run: {} exited with {status}", bin.display())) }
     }
 
@@ -353,19 +373,23 @@ pub fn validate(u: &UpdateSpec) -> Result<(), String> {
     if !hex64(&u.agent_sha256) || !hex64(&u.helper_sha256) {
         return Err("invalid checksums".into());
     }
+
     if !matches!(u.arch.as_str(), "x86_64" | "aarch64") {
         return Err("unsupported architecture".into());
     }
+
     if u.version.is_empty()
         || u.version.len() > 64
         || !u.version.bytes().all(|b| b.is_ascii_alphanumeric() || b"._+-~".contains(&b))
     {
         return Err("invalid version".into());
     }
+
     let base = url::Url::parse(&u.download_base).map_err(|_| "invalid download base".to_owned())?;
     if !matches!(base.scheme(), "http" | "https") || base.host_str().is_none() || base.query().is_some() {
         return Err("download base must be an http(s) URL without a query".into());
     }
+
     Ok(())
 }
 
@@ -396,6 +420,7 @@ fn download(url: &str, to: &Path) -> Result<(), CommandError> {
             }
             _ => CommandError::from(format!("curl: {e}")),
         })?;
+
     if out.status.success() {
         Ok(())
     } else {
@@ -421,6 +446,7 @@ fn restart_later() -> Result<(), String> {
         ])
         .output()
         .map_err(|e| format!("systemd-run: {e}"))?;
+
     if out.status.success() {
         Ok(())
     } else {
@@ -474,6 +500,7 @@ impl UpdateLock {
             .write(true)
             .open(&path)
             .map_err(|e| format!("{}: {e}", path.display()))?;
+
         #[cfg(unix)]
         rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
             .map_err(|_| CommandError::refused(RefusalCode::Busy, "another agent update is running on this node"))?;
@@ -506,6 +533,7 @@ fn install_file(src: &Path, dst: &Path, want: &str) -> Result<(), String> {
     use std::io::Write as _;
     let new = sibling(dst, ".new");
     let _ = std::fs::remove_file(&new);
+
     {
         let mut opts = std::fs::OpenOptions::new();
         opts.write(true).create_new(true);
@@ -518,16 +546,21 @@ fn install_file(src: &Path, dst: &Path, want: &str) -> Result<(), String> {
         let data = std::fs::read(src).map_err(|e| format!("{}: {e}", src.display()))?;
         out.write_all(&data).and_then(|()| out.sync_all()).map_err(|e| format!("{}: {e}", new.display()))?;
     }
+
     if hash_of(&new)?.as_deref() != Some(want) {
         let _ = std::fs::remove_file(&new);
         return Err(format!("{}: the copy does not match the checksum", new.display()));
     }
+
     let old = prev(dst);
     let _ = std::fs::remove_file(&old);
+
     if dst.exists() && std::fs::hard_link(dst, &old).is_err() {
         std::fs::copy(dst, &old).map_err(|e| format!("backup {}: {e}", dst.display()))?;
     }
+
     std::fs::rename(&new, dst).map_err(|e| format!("{}: {e}", dst.display()))?;
+
     sync_dir(dst.parent().unwrap_or(Path::new("/")))
 }
 
@@ -550,40 +583,51 @@ fn recover_in(l: &Layout, host: &dyn UpdateHost) -> Option<&'static str> {
                 helper_starts: 0,
                 agent_restarts_base: host.agent_restarts(),
             };
+
             if let Err(e) = save_pending(&p, &l.agent_dir, &l.state) {
                 eprintln!("forge-agent-helper: self-update marker: {e}");
             }
         }
+
         "finished"
     } else {
         let mut restored = true;
+
         for (f, c) in intent.files.iter().zip(&current) {
             let _ = std::fs::remove_file(sibling(&f.path, ".new"));
+
             if c.as_deref() != Some(f.new.as_str()) {
                 continue;
             }
+
             let back = prev(&f.path);
+
             let r = match &f.old {
                 // The file did not exist before the update.
                 None => std::fs::remove_file(&f.path),
                 Some(_) if hash_of(&back).ok().flatten() == f.old => std::fs::rename(&back, &f.path),
                 Some(_) => Err(std::io::Error::other("its .prev is not the file it replaced")),
             };
+
             if let Err(e) = r {
                 eprintln!("forge-agent-helper: self-update: restoring {}: {e}", f.path.display());
                 restored = false;
             }
         }
+
         if !restored {
             // Keep the record: the next start or update tries again.
             return Some("partly reverted");
         }
+
         "reverted"
     };
+
     let _ = std::fs::remove_file(&path);
     let _ = sync_dir(&l.state);
     eprintln!("forge-agent-helper: an interrupted self-update to {} was {what}", intent.to);
     let _ = host.restart();
+
     Some(what)
 }
 
@@ -591,6 +635,7 @@ fn recover_in(l: &Layout, host: &dyn UpdateHost) -> Option<&'static str> {
 pub fn recover(agent_dir: &Path) -> Option<&'static str> {
     let l = Layout::system(agent_dir);
     let _lock = UpdateLock::acquire(&l.state).ok()?;
+
     recover_in(&l, &SystemHost)
 }
 
@@ -607,17 +652,20 @@ fn reported_version(host: &dyn UpdateHost, bin: &Path, want: &str) -> Result<(),
 
 fn apply_in(u: &UpdateSpec, l: &Layout, host: &dyn UpdateHost) -> Result<Value, CommandError> {
     validate(u)?;
+
     if !host.supervised() {
         return Err(CommandError::refused(
             RefusalCode::Unsupported,
             "self-update needs systemd on this node; reinstall the agent instead",
         ));
     }
+
     // Root-only staging: what is checked below is exactly what gets installed.
     ensure_private_dir(&l.state)?;
     let _lock = UpdateLock::acquire(&l.state)?;
     recover_in(l, host);
     let (want_agent, want_helper) = (u.agent_sha256.to_lowercase(), u.helper_sha256.to_lowercase());
+
     // Idempotent by what is installed, not by this helper's version: a
     // retry after the swap restarts (if needed) instead of swapping again.
     if hash_of(&l.agent_bin)?.as_deref() == Some(want_agent.as_str())
@@ -627,10 +675,12 @@ fn apply_in(u: &UpdateSpec, l: &Layout, host: &dyn UpdateHost) -> Result<Value, 
         if pending {
             host.restart()?;
         }
+
         return Ok(
             json!({ "updated": false, "version": u.version, "reason": "already installed", "restarting": pending }),
         );
     }
+
     if forge_sdk::release::compare_release(&u.version, crate::VERSION) == std::cmp::Ordering::Less && !u.allow_downgrade
     {
         return Err(CommandError::refused(
@@ -638,18 +688,21 @@ fn apply_in(u: &UpdateSpec, l: &Layout, host: &dyn UpdateHost) -> Result<Value, 
             format!("{} is older than {}: not installed without allow_downgrade", u.version, crate::VERSION),
         ));
     }
+
     // A staging folder per request; earlier ones are left-overs.
     if let Ok(dir) = std::fs::read_dir(&l.state) {
         for e in dir.flatten().filter(|e| e.file_name().to_string_lossy().starts_with("update-staging")) {
             let _ = std::fs::remove_dir_all(e.path());
         }
     }
+
     let stage = l.state.join(format!("update-staging-{}", now_ms()));
     ensure_private_dir(&stage)?;
     let r = stage_and_swap(u, l, host, &stage, (&want_agent, &want_helper));
     let _ = std::fs::remove_dir_all(&stage);
     let pending = r?;
     host.restart()?;
+
     Ok(json!({ "updated": true, "from": pending.from, "to": pending.to, "restarting_in_secs": 3 }))
 }
 
@@ -666,9 +719,11 @@ fn stage_and_swap(
     let (a, h) = (stage.join("forge-agent"), stage.join("forge-agent-helper"));
     host.download(&format!("{base}/agent/download/linux/{}/forge-agent", u.arch), &a)?;
     host.download(&format!("{base}/agent/download/linux/{}/forge-agent-helper", u.arch), &h)?;
+
     if sha256_file(&a)? != want_agent || sha256_file(&h)? != want_helper {
         return Err("checksum mismatch: nothing was installed".into());
     }
+
     #[cfg(unix)]
     for p in [&a, &h] {
         use std::os::unix::fs::PermissionsExt;
@@ -688,6 +743,7 @@ fn stage_and_swap(
     };
     write_nofollow(&l.state.join(INTENT), &serde_json::to_vec(&intent).map_err(|e| e.to_string())?)?;
     sync_dir(&l.state)?;
+
     for (src, f) in [&h, &a].into_iter().zip(&intent.files) {
         if let Err(e) = install_file(src, &f.path, &f.new) {
             // Undo what was swapped; the intent marker goes with it.
@@ -695,6 +751,7 @@ fn stage_and_swap(
             return Err(e.into());
         }
     }
+
     let pending = Pending {
         from: crate::VERSION.to_owned(),
         to: u.version.clone(),
@@ -705,6 +762,7 @@ fn stage_and_swap(
     save_pending(&pending, &l.agent_dir, &l.state)?;
     let _ = std::fs::remove_file(l.state.join(INTENT));
     sync_dir(&l.state)?;
+
     Ok(pending)
 }
 
@@ -719,17 +777,21 @@ pub fn rollback(agent_dir: &Path, reason: &str) -> bool {
 fn rollback_in(l: &Layout, host: &dyn UpdateHost, reason: &str) -> bool {
     let Ok(_lock) = UpdateLock::acquire(&l.state) else { return false };
     eprintln!("forge-agent-helper: self-update rollback ({reason})");
+
     for b in l.bins() {
         if prev(b).exists() {
             let _ = std::fs::rename(prev(b), b);
         }
     }
+
     if let Some(dir) = l.agent_bin.parent() {
         let _ = sync_dir(dir);
     }
+
     let _ = std::fs::rename(l.state.join(PENDING), l.state.join("update-rolled-back.json"));
     let _ = std::fs::remove_file(marker(&l.agent_dir));
     let _ = host.restart();
+
     true
 }
 
@@ -740,32 +802,41 @@ pub fn confirm(agent_dir: &Path) -> Result<Value, String> {
 
 fn confirm_in(l: &Layout) -> Result<Value, String> {
     let (agent_dir, state) = (l.agent_dir.as_path(), l.state.as_path());
+
     // Never while an update runs or a swap is half done: confirming removes
     // the `.prev` copies a rollback or recovery needs.
     let _lock = match state.exists().then(|| UpdateLock::acquire(state)) {
         Some(Err(_)) => return Ok(json!({ "confirmed": false, "reason": "an update is running" })),
         lock => lock,
     };
+
     if state.join(INTENT).exists() {
         return Ok(json!({ "confirmed": false, "reason": "an update is not finished" }));
     }
+
     let real = state.join(PENDING);
+
     // An update started by an older helper only left the agent's copy.
     let Some(p) = read_marker(&real).or_else(|| read_marker(&marker(agent_dir))) else {
         let _ = std::fs::remove_file(marker(agent_dir));
         return Ok(json!({ "confirmed": false }));
     };
+
     if p.to != crate::VERSION {
         // The helper must run the new version too; otherwise wait.
         return Ok(json!({ "confirmed": false, "reason": "helper is not the new version yet" }));
     }
+
     if real.exists() {
         let _ = std::fs::rename(&real, state.join("update-last.json"));
     }
+
     let _ = std::fs::remove_file(marker(agent_dir));
+
     for b in l.bins() {
         let _ = std::fs::remove_file(prev(b));
     }
+
     Ok(json!({ "confirmed": true, "version": p.to }))
 }
 
@@ -777,12 +848,15 @@ pub fn watchdog_start(agent_dir: &Path) -> Option<Duration> {
 
 fn watchdog_start_in(l: &Layout, host: &dyn UpdateHost) -> Option<Duration> {
     let (agent_dir, state) = (l.agent_dir.as_path(), l.state.as_path());
+
     // An update started by an older helper only left the agent's copy: adopt it.
     let mut p = read_marker(&state.join(PENDING)).or_else(|| read_marker(&marker(agent_dir)))?;
     p.helper_starts += 1;
+
     if let Err(e) = ensure_private_dir(state).and_then(|()| save_pending(&p, agent_dir, state)) {
         eprintln!("forge-agent-helper: self-update marker: {e}");
     }
+
     // The update restarts the helper once itself.
     if p.helper_starts > MAX_STARTS + 1 {
         // At start nothing else holds the lock; if something does, the
@@ -790,7 +864,9 @@ fn watchdog_start_in(l: &Layout, host: &dyn UpdateHost) -> Option<Duration> {
         let _ = rollback_in(l, host, "too many restarts");
         return None;
     }
+
     let elapsed = u64::try_from(now_ms() - p.started_ms).unwrap_or(0);
+
     Some(CONFIRM_WITHIN.saturating_sub(Duration::from_millis(elapsed)))
 }
 
@@ -801,9 +877,11 @@ fn agent_restarts() -> Option<u32> {
         .args(["show", "forge-agent.service", "--property=NRestarts", "--value"])
         .output()
         .ok()?;
+
     if !out.status.success() {
         return None;
     }
+
     String::from_utf8_lossy(&out.stdout).trim().parse().ok()
 }
 
@@ -811,17 +889,21 @@ fn agent_restarts() -> Option<u32> {
 /// restarted the agent [`MAX_STARTS`] times since the update: a crash loop.
 fn agent_crash_loop_in(agent_dir: &Path, state: &Path, restarts: u32) -> bool {
     let Some(mut p) = read_marker(&state.join(PENDING)) else { return false };
+
     // First reading, or systemd reset its counter (the update's own restart).
     let base = match p.agent_restarts_base {
         Some(b) if b <= restarts => b,
         _ => {
             p.agent_restarts_base = Some(restarts);
+
             if let Err(e) = save_pending(&p, agent_dir, state) {
                 eprintln!("forge-agent-helper: self-update marker: {e}");
             }
+
             restarts
         }
     };
+
     restarts - base >= MAX_STARTS
 }
 
@@ -831,12 +913,15 @@ pub async fn watchdog(agent_dir: PathBuf) {
     let Some(wait) = watchdog_start(&agent_dir) else { return };
     let state = Path::new(HELPER_STATE);
     let deadline = tokio::time::Instant::now() + wait;
+
     loop {
         let left = deadline.saturating_duration_since(tokio::time::Instant::now());
         tokio::time::sleep(left.min(WATCH_EVERY)).await;
+
         if !state.join(PENDING).exists() {
             return;
         }
+
         let reason = if tokio::time::Instant::now() >= deadline {
             Some("the new agent did not reconnect in time")
         } else {
@@ -845,8 +930,10 @@ pub async fn watchdog(agent_dir: PathBuf) {
                 .is_some_and(|n| agent_crash_loop_in(&agent_dir, state, n))
                 .then_some("the new agent keeps crashing")
         };
+
         if let Some(reason) = reason {
             let dir = agent_dir.clone();
+
             // A rollback waits for an update that holds the lock: next tick.
             if tokio::task::spawn_blocking(move || rollback(&dir, reason)).await.unwrap_or(false) {
                 return;
@@ -883,20 +970,26 @@ pub struct HostProbe {
 pub fn assess(p: &HostProbe) -> forge_proto::facts::SelfUpdateCapability {
     use forge_proto::facts::{SelfUpdateCapability, Supervisor, UpdateIssue};
     let mut reasons = Vec::new();
+
     if !p.systemd {
         reasons.push(UpdateIssue::NoSystemd);
     }
+
     if !p.curl {
         reasons.push(UpdateIssue::NoCurl);
     }
+
     if !p.bin_dir_writable {
         reasons.push(UpdateIssue::BinDirNotWritable);
     }
+
     // The swap writes `.new` copies next to the binaries and keeps `.prev`.
     if p.free_bytes.is_some_and(|free| free < p.binaries_bytes.saturating_mul(2)) {
         reasons.push(UpdateIssue::LowDisk);
     }
+
     let warnings = if p.image_layer { vec![UpdateIssue::EphemeralContainer] } else { Vec::new() };
+
     SelfUpdateCapability {
         supervisor: if p.systemd { Supervisor::Systemd } else { Supervisor::None },
         ready: reasons.is_empty(),
@@ -925,9 +1018,11 @@ pub fn probe_host() -> HostProbe {
     let read_only = vfs.as_ref().is_some_and(|v| v.f_flag.contains(StatVfsMountFlags::RDONLY));
     let size = |p: &str| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
     let container = Path::new("/.dockerenv").exists() || Path::new("/run/.containerenv").exists();
+
     // OVERLAYFS_SUPER_MAGIC: the image layer of a container.
     // `f_type` has a different integer type per target.
     let overlay = rustix::fs::statfs(dir).is_ok_and(|f| u64::try_from(f.f_type).ok() == Some(0x794c_7630));
+
     HostProbe {
         systemd: Path::new("/run/systemd/system").exists(),
         curl: curl_installed(),
@@ -974,12 +1069,14 @@ mod tests {
         let p = dir.path().join("pins.toml");
         write_nofollow(&p, b"x")?;
         assert_eq!(std::fs::metadata(&p)?.permissions().mode() & 0o777, 0o644);
+
         Ok(())
     }
 
     #[test]
     fn streamed_sha256_matches_the_one_shot_digest() -> TestResult {
         let dir = tempfile::tempdir()?;
+
         for len in [0usize, 1, 64 * 1024 - 1, 64 * 1024, 64 * 1024 + 1, 3 * 64 * 1024 + 17] {
             let data: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
             let p = dir.path().join(format!("f{len}"));
@@ -987,6 +1084,7 @@ mod tests {
             let want = hex::encode(ring::digest::digest(&ring::digest::SHA256, &data));
             assert_eq!(sha256_nofollow(&p, u64::MAX)?, (want, len as u64), "length {len}");
         }
+
         Ok(())
     }
 
@@ -998,12 +1096,15 @@ mod tests {
         std::fs::File::create(&p)?.set_len(len)?;
         let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
         let zeros = vec![0u8; 1024 * 1024];
+
         for _ in 0..300 {
             ctx.update(&zeros);
         }
+
         assert_eq!(sha256_nofollow(&p, len)?, (hex::encode(ctx.finish()), len));
         let err = sha256_nofollow(&p, len - 1).err().map(|e| e.kind());
         assert_eq!(err, Some(std::io::ErrorKind::FileTooLarge));
+
         Ok(())
     }
 
@@ -1016,6 +1117,7 @@ mod tests {
         let link = dir.path().join("l");
         std::os::unix::fs::symlink(&target, &link)?;
         assert!(sha256_nofollow(&link, u64::MAX).is_err());
+
         Ok(())
     }
 
@@ -1060,6 +1162,7 @@ mod tests {
             [UpdateIssue::NoSystemd, UpdateIssue::NoCurl, UpdateIssue::BinDirNotWritable, UpdateIssue::LowDisk]
         );
         assert_eq!(c.warnings, [UpdateIssue::EphemeralContainer]);
+
         // Unknown free space is not a blocker.
         assert!(assess(&HostProbe { free_bytes: None, ..good }).ready);
     }
@@ -1078,6 +1181,7 @@ mod tests {
         let agent = tempfile::tempdir().unwrap_or_else(|_| std::process::abort());
         let root = tempfile::tempdir().unwrap_or_else(|_| std::process::abort());
         let state = root.path().join("forge-agent-helper");
+
         (agent, root, state)
     }
 
@@ -1085,6 +1189,7 @@ mod tests {
     fn layout(agent: &Path, root: &Path, state: &Path) -> Layout {
         let bin = root.join("bin");
         std::fs::create_dir_all(&bin).ok();
+
         Layout {
             agent_bin: bin.join("forge-agent"),
             helper_bin: bin.join("forge-agent-helper"),
@@ -1106,15 +1211,18 @@ mod tests {
     #[test]
     fn an_agent_crash_loop_is_counted_from_the_update() {
         let (agent, _root, state) = dirs();
+
         // No marker: never a crash loop.
         assert!(!agent_crash_loop_in(agent.path(), &state, 9));
         ensure_private_dir(&state).ok();
+
         // The unit had 7 restarts before the update; its restart resets the counter.
         save_pending(&Pending { agent_restarts_base: Some(7), ..pending() }, agent.path(), &state).ok();
         assert!(!agent_crash_loop_in(agent.path(), &state, 0));
         assert_eq!(read_marker(&state.join(PENDING)).and_then(|p| p.agent_restarts_base), Some(0));
         assert!(!agent_crash_loop_in(agent.path(), &state, MAX_STARTS - 1));
         assert!(agent_crash_loop_in(agent.path(), &state, MAX_STARTS));
+
         // A marker without a base (older helper) starts counting at the first reading.
         save_pending(&pending(), agent.path(), &state).ok();
         assert!(!agent_crash_loop_in(agent.path(), &state, 5));
@@ -1125,10 +1233,12 @@ mod tests {
     #[test]
     fn confirm_and_watchdog_use_the_marker() {
         let (agent, _root, state) = dirs();
+
         // No marker: nothing to do.
         let (l, host) = (layout(agent.path(), _root.path(), &state), FakeHost::default());
         assert_eq!(confirm_in(&l).unwrap_or_default()["confirmed"], false);
         assert!(watchdog_start_in(&l, &host).is_none());
+
         // A marker for this very version confirms; the agent sees its copy.
         ensure_private_dir(&state).ok();
         save_pending(&pending(), agent.path(), &state).ok();
@@ -1155,6 +1265,7 @@ mod tests {
     #[test]
     fn markers_never_follow_a_link_planted_by_the_agent_user() {
         let (agent, root, state) = dirs();
+
         // The agent user points its marker (and the temp name) at a root file.
         let victim = root.path().join("victim");
         std::fs::write(&victim, "keep").ok();
@@ -1164,6 +1275,7 @@ mod tests {
         save_pending(&pending(), agent.path(), &state).ok();
         assert_eq!(std::fs::read_to_string(&victim).unwrap_or_default(), "keep");
         assert!(std::fs::symlink_metadata(marker(agent.path())).is_ok_and(|m| m.is_file()));
+
         // A link as the agent's marker is not read through.
         let _ = std::fs::remove_file(marker(agent.path()));
         let _ = std::fs::remove_file(state.join(PENDING));
@@ -1208,6 +1320,7 @@ mod tests {
             self.downloads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let name = url.rsplit('/').next().unwrap_or_default();
             let body = self.files.get(name).ok_or_else(|| CommandError::from(format!("404 {url}")))?;
+
             std::fs::write(to, body).map_err(|e| CommandError::from(e.to_string()))
         }
         fn report_version(&self, bin: &Path) -> Result<String, String> {
@@ -1250,6 +1363,7 @@ mod tests {
             helper_sha256: sha(b"new helper"),
             ..spec()
         };
+
         (agent, root, l, host, u)
     }
 
@@ -1260,6 +1374,7 @@ mod tests {
 
     fn leftovers(l: &Layout) -> Vec<String> {
         let mut out = Vec::new();
+
         for dir in [l.agent_bin.parent().unwrap_or(Path::new("/")), l.state.as_path()] {
             for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
                 let n = e.file_name().to_string_lossy().into_owned();
@@ -1268,6 +1383,7 @@ mod tests {
                 }
             }
         }
+
         out
     }
 
@@ -1283,6 +1399,7 @@ mod tests {
         assert!(marker(&l.agent_dir).exists());
         assert!(leftovers(&l).is_empty(), "{:?}", leftovers(&l));
         assert_eq!(host.restarts.load(std::sync::atomic::Ordering::SeqCst), 1);
+
         Ok(())
     }
 
@@ -1302,6 +1419,7 @@ mod tests {
         host.versions.remove("forge-agent-helper");
         let e = apply_in(&u, &l, &host).err();
         assert!(e.is_some_and(|e| e.message.contains("crashed")));
+
         // A helper reporting another version is refused too.
         host.versions.insert("forge-agent-helper", "forge-agent-helper 1.0.0".into());
         let e = apply_in(&u, &l, &host).err();
@@ -1319,6 +1437,7 @@ mod tests {
         assert_eq!(e.and_then(|e| e.code), Some(RefusalCode::Busy));
         drop(held);
         assert!(apply_in(&u, &l, &host).is_ok());
+
         Ok(())
     }
 
@@ -1327,12 +1446,14 @@ mod tests {
         let (_a, _r, l, host, u) = node();
         apply_in(&u, &l, &host).map_err(|e| e.message)?;
         let downloads = host.downloads.load(std::sync::atomic::Ordering::SeqCst);
+
         // Same command again (a retry): nothing downloaded or swapped; the
         // pending restart is asked for again.
         let again = apply_in(&u, &l, &host).map_err(|e| e.message)?;
         assert_eq!((again["updated"].as_bool(), again["restarting"].as_bool()), (Some(false), Some(true)));
         assert_eq!(host.downloads.load(std::sync::atomic::Ordering::SeqCst), downloads);
         assert_eq!(std::fs::read_to_string(prev(&l.agent_bin))?, "old agent", "the backup is kept");
+
         Ok(())
     }
 
@@ -1376,6 +1497,7 @@ mod tests {
         let staged = l.state.join("staged-helper");
         std::fs::write(&staged, b"new helper")?;
         install_file(&staged, &l.helper_bin, &u.helper_sha256)?;
+
         Ok(())
     }
 
@@ -1388,10 +1510,12 @@ mod tests {
         assert_eq!(installed(&l), ("old agent".into(), "old helper".into()));
         assert!(!l.state.join(INTENT).exists() && !l.state.join(PENDING).exists());
         assert_eq!(host.restarts.load(std::sync::atomic::Ordering::SeqCst), 1, "the reverted helper restarts");
+
         // Nothing left to recover; the retried update then goes through.
         assert_eq!(recover_in(&l, &host), None);
         apply_in(&u, &l, &host).map_err(|e| e.message)?;
         assert_eq!(installed(&l), ("new agent".into(), "new helper".into()));
+
         Ok(())
     }
 
@@ -1402,11 +1526,13 @@ mod tests {
         let staged = l.state.join("staged-agent");
         std::fs::write(&staged, b"new agent")?;
         install_file(&staged, &l.agent_bin, &u.agent_sha256)?;
+
         // Before the pending marker: the update completes.
         assert_eq!(recover_in(&l, &host), Some("finished"));
         assert_eq!(installed(&l), ("new agent".into(), "new helper".into()));
         assert_eq!(read_marker(&l.state.join(PENDING)).map(|p| p.to), Some(NEW.to_owned()));
         assert!(!l.state.join(INTENT).exists());
+
         Ok(())
     }
 
@@ -1414,6 +1540,7 @@ mod tests {
     fn confirm_waits_while_a_swap_is_half_done_or_an_update_runs() -> TestResult {
         let (_a, _r, l, host, u) = node();
         crash_after_helper_swap(&l, &u)?;
+
         // The agent user plants its own marker copy and asks to confirm:
         // the `.prev` copies recovery needs must stay.
         std::fs::write(marker(&l.agent_dir), serde_json::to_vec(&pending())?)?;
@@ -1424,6 +1551,7 @@ mod tests {
         assert_eq!(confirm_in(&l)?["confirmed"], false);
         assert!(!rollback_in(&l, &host, "test"), "a rollback waits for the lock");
         drop(held);
+
         Ok(())
     }
 
@@ -1447,6 +1575,7 @@ mod tests {
         assert_eq!(recover_in(&l, &host), Some("reverted"));
         assert!(!l.helper_bin.exists());
         assert_eq!(std::fs::read_to_string(&l.agent_bin)?, "old agent");
+
         Ok(())
     }
 
@@ -1461,6 +1590,7 @@ mod tests {
         assert_eq!(installed(&l), ("new agent".into(), "new helper".into()));
         assert_eq!(std::fs::read_to_string(prev(&l.helper_bin))?, "old helper");
         assert!(leftovers(&l).is_empty());
+
         Ok(())
     }
 }

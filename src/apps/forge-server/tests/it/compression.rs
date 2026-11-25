@@ -14,10 +14,13 @@ async fn encoding(
 ) -> Option<String> {
     let c = reqwest::Client::builder().no_proxy().build().unwrap();
     let mut req = c.request(method, format!("{}{path}", h.base)).header("accept-encoding", accept);
+
     if let Some(b) = body {
         req = req.json(&b);
     }
+
     let resp = req.send().await.unwrap();
+
     resp.headers().get("content-encoding").map(|v| v.to_str().unwrap().to_owned())
 }
 

@@ -45,22 +45,27 @@ pub(crate) fn valid_name(c: &str) -> Result<(), String> {
             "`{c}` contains a character Windows does not allow (alternate data streams are not supported)"
         ));
     }
+
     if c.ends_with('.') || c.ends_with(' ') {
         return Err(format!("`{c}` ends with a dot or space"));
     }
+
     // `PROGRA~3` reaches `ProgramData` under another spelling, past the
     // protected-path policy; only long names are resolved.
     if forge_core::files::is_short_name(c) {
         return Err(format!("protected path (`{c}` looks like an 8.3 short name; use the long name)"));
     }
+
     let stem = c.split('.').next().unwrap_or_default().trim_end().to_ascii_uppercase();
     let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
         || ((stem.starts_with("COM") || stem.starts_with("LPT"))
             && stem.len() == 4
             && stem.as_bytes()[3].is_ascii_digit());
+
     if reserved {
         return Err(format!("`{c}` is a reserved device name"));
     }
+
     Ok(())
 }
 
@@ -90,6 +95,7 @@ fn is_reparse(md: &Metadata) -> bool {
 
 fn meta(md: &Metadata, name: &str) -> Meta {
     let attrs = md.file_attributes();
+
     let kind = if is_reparse(md) {
         if md.file_type().is_symlink() { Kind::Symlink } else { Kind::Other }
     } else if md.is_dir() {
@@ -99,11 +105,13 @@ fn meta(md: &Metadata, name: &str) -> Meta {
     } else {
         Kind::Other
     };
+
     let modified_ms = md
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+
     Meta {
         kind,
         size: if md.is_file() { md.len() } else { 0 },
@@ -132,10 +140,12 @@ impl Root {
                 if !std::fs::symlink_metadata(&p).map_err(|e| io_err(d, &e))?.is_dir() {
                     return Err("the approved directory is missing".into());
                 }
+
                 Some(p)
             }
             RootSpec::Container { .. } => return Err("container files are not supported on Windows nodes".into()),
         };
+
         Ok(Self { base, store: store_dir() })
     }
 
@@ -154,10 +164,12 @@ impl Root {
                 (drive(d)?, rest)
             }
         };
+
         for (i, c) in rest.iter().enumerate() {
             valid_name(c)?;
             p.push(c);
             let last = i + 1 == rest.len();
+
             match std::fs::symlink_metadata(&p) {
                 Ok(md) if is_reparse(&md) && !(last && last_may_be_link) => {
                     return Err(format!("`{c}` is a link, junction or mount point; Forge does not follow them"));
@@ -169,6 +181,7 @@ impl Root {
                 Err(e) => return Err(io_err(c, &e)),
             }
         }
+
         Ok(p)
     }
 }
@@ -189,6 +202,7 @@ impl FileIo for File {
 
     fn write_all_at(&self, buf: &[u8], offset: u64) -> Result<(), String> {
         let mut done = 0usize;
+
         while done < buf.len() {
             match self.f.seek_write(&buf[done..], offset + done as u64) {
                 Ok(0) => return Err("write failed".into()),
@@ -197,6 +211,7 @@ impl FileIo for File {
                 Err(e) => return Err(io_err("file", &e)),
             }
         }
+
         Ok(())
     }
 
@@ -205,6 +220,7 @@ impl FileIo for File {
         if is_reparse(&md) {
             return Err("the file is a link; Forge does not follow links".into());
         }
+
         Ok(meta(&md, ""))
     }
 
@@ -224,20 +240,24 @@ impl Fs for Root {
         if path.is_empty() && self.base.is_none() {
             return Ok(dir_meta());
         }
+
         // A drive on the node root: `\?\C:\` has no metadata of its own.
         if let ([d], None) = (path, &self.base) {
             drive(d)?;
+
             return match std::fs::metadata(format!(r"{d}\")) {
                 Ok(m) if m.is_dir() => Ok(dir_meta()),
                 _ => Err(format!("drive `{d}` was not found")),
             };
         }
+
         let p = self.resolve(path, true)?;
         let md = std::fs::symlink_metadata(&p).map_err(|e| io_err(path.last().map_or("/", String::as_str), &e))?;
         let mut m = meta(&md, path.last().map_or("", String::as_str));
         if m.kind == Kind::Symlink {
             m.link_target = std::fs::read_link(&p).ok().map(|t| t.display().to_string());
         }
+
         Ok(m)
     }
 
@@ -249,19 +269,24 @@ impl Fs for Root {
                 .collect();
             return Ok((drives, 0, false));
         }
+
         let p = self.resolve(path, false)?;
         let (mut names, mut skipped, mut truncated) = (Vec::new(), 0usize, false);
+
         for item in std::fs::read_dir(&p).map_err(|e| io_err(path.last().map_or("/", String::as_str), &e))? {
             let Ok(item) = item else { continue };
+
             if names.len() >= MAX_DIR_ENTRIES {
                 truncated = true;
                 break;
             }
+
             match item.file_name().into_string() {
                 Ok(n) => names.push(n),
                 Err(_) => skipped += 1,
             }
         }
+
         Ok((names, skipped, truncated))
     }
 
@@ -273,8 +298,10 @@ impl Fs for Root {
             .open(&p)
             .map_err(|e| io_err(path.last().map_or("/", String::as_str), &e))?;
         let f = File { f };
+
         // Checked on the open handle: a link swapped in after the walk fails here.
         f.meta()?;
+
         Ok(f)
     }
 
@@ -292,6 +319,7 @@ impl Fs for Root {
         if f.meta()?.kind != Kind::File {
             return Err("not a regular file".into());
         }
+
         Ok(f)
     }
 
@@ -309,10 +337,12 @@ impl Fs for Root {
         if !replace && std::fs::symlink_metadata(&dst).is_ok() {
             return Err(FsError::Exists);
         }
+
         // Replacing a directory is not atomic on Windows: refuse it.
         if replace && std::fs::symlink_metadata(&dst).is_ok_and(|m| m.is_dir()) {
             return Err(FsError::Exists);
         }
+
         std::fs::rename(&src, &dst).map_err(|e| {
             if e.raw_os_error() == Some(ERROR_NOT_SAME_DEVICE) {
                 FsError::CrossDevice
@@ -330,8 +360,10 @@ impl Fs for Root {
     fn remove_file(&self, path: &[String]) -> Result<(), String> {
         let p = self.resolve(path, true)?;
         let md = std::fs::symlink_metadata(&p).map_err(|e| io_err("file", &e))?;
+
         // Directory links and junctions are removed as directories.
         let r = if md.is_dir() { std::fs::remove_dir(&p) } else { std::fs::remove_file(&p) };
+
         r.map_err(|e| io_err(path.last().map_or("/", String::as_str), &e))
     }
 
@@ -381,6 +413,7 @@ impl Fs for Root {
     fn store(&self, sub: &str) -> Result<Self, String> {
         let dir = self.store.join(sub);
         std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create Forge's file store: {e}"))?;
+
         Ok(Self { base: Some(dir), store: self.store.clone() })
     }
 }

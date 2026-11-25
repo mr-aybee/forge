@@ -157,10 +157,12 @@ pub async fn profiles(g: &Global, api: &mut Api, cmd: ProfilesCmd) -> Result<()>
             let current = api.get(&format!("/api/v1/access/profiles/{}", enc(&id))).await?;
             let body = json!({ "actions": actions, "expected_revision": current["revision"] });
             let url = format!("/api/v1/access/profiles/{}", enc(&id));
+
             if dry_run {
                 let v = api.call(Method::PUT, &format!("{url}?dry_run=true"), Some(&body)).await?;
                 return show(g, &v, None);
             }
+
             confirm(g, yes, &format!("Publish a new revision of {profile}? Every assignment of it changes at once."))?;
             let v = api.call(Method::PUT, &url, Some(&body)).await?;
             show(g, &v, None)
@@ -204,6 +206,7 @@ pub async fn assignments(g: &Global, api: &mut Api, cmd: AssignmentsCmd) -> Resu
             let who = if group { format!("every member of group {user}") } else { user.clone() };
             confirm(g, yes, &format!("Give {who} the profile {profile} at {s}?"))?;
             let mut body = json!({ "profile_id": pid, "scope": s, "expires_in_minutes": expires_in_minutes });
+
             if group {
                 body["group_id"] = json!(group_id(api, &user).await?);
             } else if crate::admincmd::looks_like_id(&user) {
@@ -211,6 +214,7 @@ pub async fn assignments(g: &Global, api: &mut Api, cmd: AssignmentsCmd) -> Resu
             } else {
                 body["login"] = json!(user);
             }
+
             let v = api.post("/api/v1/access/assignments", &body).await?;
             show(g, &v, None)
         }
@@ -232,6 +236,7 @@ async fn group_id(api: &mut Api, g: &str) -> Result<String> {
         .into_iter()
         .flatten()
         .find(|x| x["id"] == g || x["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(g)));
+
     match found.and_then(|x| x["id"].as_str()) {
         Some(id) => Ok(id.to_owned()),
         None => Err(crate::error::CliError::new(crate::error::Exit::NotFound, format!("no group `{g}`"))),
@@ -315,6 +320,7 @@ pub async fn effective(g: &Global, api: &mut Api, user: &str, s: String, allowed
     if allowed && let Some(list) = v["actions"].as_array_mut() {
         list.retain(|a| a["allowed"] == true);
     }
+
     show(g, &v, None)
 }
 
@@ -401,6 +407,7 @@ pub async fn service_accounts(g: &Global, cmd: ServiceAccountsCmd) -> Result<()>
     let t = crate::target(g)?;
     let mut api = crate::connect(g, &t).await?;
     let api = &mut api;
+
     match cmd {
         ServiceAccountsCmd::List => {
             let v = api.get("/api/v1/service-accounts").await?;
@@ -465,16 +472,21 @@ pub async fn service_accounts(g: &Global, cmd: ServiceAccountsCmd) -> Result<()>
         ServiceAccountsCmd::TokenCreate { account, name, expires_days, never_expires, elevated, allow } => {
             let id = account_id(api, &account).await?;
             let mut body = json!({ "name": name, "expires_days": expires_days, "never_expires": never_expires });
+
             if elevated {
                 body["elevated"] = json!(true);
             }
+
             if let Some(r) = crate::admincmd::restrictions(api, &allow).await? {
                 body["restrictions"] = r;
             }
+
             let v = api.post(&format!("/api/v1/service-accounts/{}/tokens", enc(&id)), &body).await?;
+
             if g.output == out::Format::Table {
                 eprintln!("Store this secret now; Forge shows it only once.");
             }
+
             show(g, &v, None)
         }
         ServiceAccountsCmd::TokenRevoke { account, token, yes } => {

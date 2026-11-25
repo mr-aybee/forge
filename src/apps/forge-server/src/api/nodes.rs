@@ -31,6 +31,7 @@ fn valid_host(h: &str) -> ApiResult<String> {
     let ok = !h.is_empty()
         && h.len() <= 253
         && h.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']'));
+
     if ok { Ok(h.to_owned()) } else { Err(ApiError::bad_request("invalid host")) }
 }
 
@@ -45,11 +46,13 @@ fn valid_user(u: &str) -> ApiResult<String> {
 /// Scope for onboarding: the target cluster if given, else the workspace.
 async fn onboarding_scope(state: &AppState, ws: WorkspaceId, cluster: Option<ClusterId>) -> ApiResult<EntityRef> {
     state.store.get_workspace(ws).await?;
+
     match cluster {
         Some(c) => {
             if state.store.get_cluster(c).await?.workspace_id != ws {
                 return Err(ApiError::bad_request("cluster belongs to another workspace"));
             }
+
             Ok(EntityRef::new(EntityKind::Cluster, c))
         }
         None => Ok(EntityRef::new(EntityKind::Workspace, ws)),
@@ -77,6 +80,7 @@ pub async fn probe(
     caller.authorize(Action::NodeOnboard, onboarding_scope(&state, ws, None).await?).await?;
     let host = valid_host(&req.host)?;
     let info = state.ssh.probe(&host, req.port).await?;
+
     Ok(Json(json!({ "host": host, "port": req.port, "host_key": info })))
 }
 
@@ -131,16 +135,20 @@ pub async fn onboard(
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let scope = onboarding_scope(&state, ws, req.cluster_id).await?;
     caller.authorize(Action::NodeOnboard, scope.clone()).await?;
+
     if let Some(e) = req.environment_id {
         if state.store.get_environment(e).await?.workspace_id != ws {
             return Err(ApiError::bad_request("environment belongs to another workspace"));
         }
+
         // As for an enrollment token into that environment.
         caller.authorize(Action::ServerEnroll, EntityRef::new(EntityKind::Environment, e)).await?;
     }
+
     if !req.host_key_fingerprint.starts_with("SHA256:") {
         return Err(ApiError::bad_request("confirm the host key fingerprint from the probe first"));
     }
+
     let account = terminal_account(req.terminal_account.as_deref())?;
     let target = RemoteTarget {
         host: valid_host(&req.host)?,
@@ -196,6 +204,7 @@ pub async fn onboard(
             max_attempts: 3,
         })
         .await;
+
     let job = match job {
         Ok(j) => j,
         Err(e) => {
@@ -203,6 +212,7 @@ pub async fn onboard(
             return Err(e.into());
         }
     };
+
     caller
         .audit(
             "node.onboard",
@@ -211,6 +221,7 @@ pub async fn onboard(
             json!({ "target": format!("{}@{}:{}", target.username, target.host, target.port), "job_id": job.id, "host_key": target.host_key_fingerprint, "keep_credential": req.keep_credential }),
         )
         .await;
+
     Ok((StatusCode::ACCEPTED, Json(json!({ "job": job }))))
 }
 
@@ -254,6 +265,7 @@ pub async fn install_script(
             terminal_account_sudo: sudo,
         },
     );
+
     Ok(([(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")], SCRIPT_CACHE_HEADERS, body).into_response())
 }
 
@@ -271,6 +283,7 @@ pub async fn download(
     Path((os, arch, bin)): Path<(String, String, String)>,
 ) -> ApiResult<Response> {
     let (path, sum) = state.dist.binary(&os, &arch, &bin).ok_or_else(|| ApiError::not_found("no such agent build"))?;
+
     // Public and large: streamed in chunks, and only so many at once.
     let permit =
         state.downloads.clone().try_acquire_owned().map_err(|_| {
@@ -294,9 +307,11 @@ pub async fn download(
     let h = resp.headers_mut();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
     h.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
+
     if let Ok(v) = HeaderValue::from_str(&format!("sha256={sum}")) {
         h.insert("x-checksum", v);
     }
+
     Ok(resp)
 }
 
@@ -306,6 +321,7 @@ pub async fn download(
 pub async fn install_ps1(State(state): State<AppState>, origin: RequestOrigin) -> Response {
     let urls = NodeUrls::from_state(&state, &origin);
     let body = crate::install::render_ps1(&state.dist, &urls.forge_url, &urls.agent_url);
+
     ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], SCRIPT_CACHE_HEADERS, body).into_response()
 }
 
@@ -319,6 +335,7 @@ pub async fn onboarding_info(
     caller.authorize(Action::ServerEnroll, EntityRef::new(EntityKind::Workspace, ws)).await?;
     let urls = NodeUrls::from_state(&state, &origin);
     let url = urls.forge_url.as_str();
+
     Ok(Json(json!({
         "agents_available": state.dist.available(),
         "install_url": format!("{url}/install.sh"),
@@ -355,5 +372,6 @@ pub async fn delete_secret(
             json!({ "secret_id": id, "label": rec.label }),
         )
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }

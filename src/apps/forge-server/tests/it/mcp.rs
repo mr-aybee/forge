@@ -24,12 +24,14 @@ async fn start_mcp_pinned(max_mode: &str, pinned: bool) -> Harness {
     config.public_url = pinned.then(|| format!("http://{}", api.local_addr().unwrap()));
     config.mcp.enabled = true;
     config.mcp.max_mode = forge_core::model::AgentMode::parse(max_mode).unwrap();
+
     // The development toggle must never give an agent MFA.
     config.dev_skip_mfa = false;
     let state = Services::build(config).await.unwrap();
     let init =
         forge_server::bootstrap::init_admin(&state, None, Some(ADMIN_EMAIL), "Admin", PASSWORD, false).await.unwrap();
     let app = App::start_with(state, api, agent).unwrap();
+
     Harness {
         base: format!("http://{}", app.api_addr),
         agent_url: format!("https://127.0.0.1:{}", app.agent_addr.port()),
@@ -102,26 +104,31 @@ async fn connect(h: &Harness, web: &Client, client_id: &str, mode: &str) -> (Val
     )
     .await;
     assert_eq!(tokens.0, StatusCode::OK, "{}", tokens.1);
+
     (tokens.1, id)
 }
 
 async fn token(h: &Harness, form: &[(&str, &str)]) -> (StatusCode, Value) {
     let r = reqwest::Client::new().post(format!("{}/oauth/token", h.base)).form(form).send().await.unwrap();
     let s = r.status();
+
     (s, r.json().await.unwrap_or(Value::Null))
 }
 
 async fn rpc(h: &Harness, bearer: Option<&str>, body: Value) -> reqwest::Response {
     let mut r = reqwest::Client::new().post(format!("{}/mcp", h.base)).json(&body);
+
     if let Some(b) = bearer {
         r = r.bearer_auth(b);
     }
+
     r.send().await.unwrap()
 }
 
 async fn rpc_ok(h: &Harness, bearer: &str, method: &str, params: Value) -> Value {
     let r = rpc(h, Some(bearer), json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })).await;
     assert_eq!(r.status(), StatusCode::OK);
+
     r.json().await.unwrap()
 }
 
@@ -155,6 +162,7 @@ async fn discovery_registration_and_consent_bind_tokens_to_mcp() {
         assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}");
         assert!(e["error"] == "invalid_redirect_uri" || e["error"] == "invalid_client_metadata", "{e}");
     }
+
     let (s, reg) = register(&h, json!([REDIRECT])).await;
     assert_eq!(s, StatusCode::CREATED, "{reg}");
     let client_id = reg["client_id"].as_str().unwrap().to_owned();
@@ -314,6 +322,7 @@ async fn discovery_registration_and_consent_bind_tokens_to_mcp() {
     // Audit names the connector.
     let (_, log) = web.get("/api/v1/audit?limit=200").await;
     let items = log.as_array().cloned().or_else(|| log["items"].as_array().cloned()).unwrap_or_default();
+
     for a in ["oauth.client.register", "connector.approve", "connector.revoke"] {
         assert!(items.iter().any(|e| e["action"] == a), "missing audit {a}");
     }
@@ -333,6 +342,7 @@ async fn auto_mode_runs_changes_through_the_rest_handlers_and_never_mfa() {
         list["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
     assert!(names.contains(&"forge_stack_service_action"), "{names:?}");
     assert!(names.contains(&"forge_deploy_stack"), "destructive tools are listed and wait for approval");
+
     // A change goes through the REST handler: unknown stack → its 404.
     let r = rpc_ok(
         &h,
@@ -350,6 +360,7 @@ async fn auto_mode_runs_changes_through_the_rest_handlers_and_never_mfa() {
     .await;
     assert_eq!(r["result"]["isError"], true);
     assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("not found"), "{r}");
+
     // A malformed id is the handler's own rejection, passed on as text.
     let r = rpc_ok(
         &h,
@@ -364,6 +375,7 @@ async fn auto_mode_runs_changes_through_the_rest_handlers_and_never_mfa() {
     assert_eq!(r["result"]["isError"], true);
     let text = r["result"]["content"][0]["text"].as_str().unwrap();
     assert!(!text.ends_with(": "), "the reason is passed on: {r}");
+
     // Arguments are validated before anything runs.
     let r =
         rpc_ok(&h, &access, "tools/call", json!({ "name": "forge_get_node", "arguments": { "node": "../me" } })).await;
@@ -433,6 +445,7 @@ async fn ask_mode_waits_for_the_owner_who_runs_it_in_the_console() {
         .await
         .unwrap();
     assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+
     // Nor can another person.
     let other = user_with_role(&h, &web, "ops@example.com", "operator", &format!("workspace:{}", h.default_org)).await;
     let (s, _) = other.post(&format!("/api/v1/approvals/{id}/approve"), json!({})).await;
@@ -503,6 +516,7 @@ async fn ask(h: &Harness, access: &str, tool: &str) -> String {
 async fn approval(web: &Client, id: &str) -> Value {
     let (s, a) = web.get(&format!("/api/v1/approvals/{id}")).await;
     assert_eq!(s, StatusCode::OK, "{a}");
+
     a
 }
 
@@ -554,11 +568,13 @@ async fn revoking_a_connection_or_client_cancels_its_approvals_and_refusals_are_
     let (s, d) = web.post(&format!("/api/v1/connected-apps/{}/revoke", conn["id"].as_str().unwrap()), json!({})).await;
     assert_eq!(s, StatusCode::OK, "{d}");
     assert_eq!(d["cancelled_approvals"], 2, "{d}");
+
     for id in [&deploy, &refresh] {
         assert_eq!(approval(&web, id).await["status"], "cancelled");
         let (s, _) = web.post(&format!("/api/v1/approvals/{id}/approve"), json!({})).await;
         assert_eq!(s, StatusCode::CONFLICT, "a cancelled request never runs");
     }
+
     let (s, _) = web.post(&format!("/api/v1/approvals/{refresh}/deny"), json!({})).await;
     assert_eq!(s, StatusCode::CONFLICT);
     assert_eq!(refusals(&web, &refresh).await.len(), 3, "both later refusals are audited");
@@ -588,6 +604,7 @@ async fn restart_with(h: &Harness, enabled: bool, max_mode: &str) -> (forge_serv
     let state = Services::build(config).await.unwrap();
     let app = App::start_with(state, api, agent).unwrap();
     let base = format!("http://{}", app.api_addr);
+
     (app, base)
 }
 
@@ -637,6 +654,7 @@ async fn expired_requests_do_not_block_new_ones() {
     let template = store.get_approval(&first).await.unwrap().unwrap();
     let now = i64::try_from(std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap().as_millis()).unwrap();
     let mut old = Vec::new();
+
     for i in 0..10 {
         let mut a = template.clone();
         a.id = format!("ap_expired_{i}");
@@ -645,6 +663,7 @@ async fn expired_requests_do_not_block_new_ones() {
         store.create_approval(&a).await.unwrap();
         old.push(a.id);
     }
+
     // A decided request from long ago, past retention.
     let mut stale = template.clone();
     stale.id = "ap_stale".into();
@@ -654,9 +673,11 @@ async fn expired_requests_do_not_block_new_ones() {
 
     let next = ask(&h, &access, "forge_refresh_stack").await;
     assert_ne!(next, first);
+
     for id in &old {
         assert_eq!(store.get_approval(id).await.unwrap().unwrap().status, "expired");
     }
+
     assert!(store.get_approval("ap_stale").await.unwrap().is_none(), "old decided requests are dropped");
     assert_eq!(store.get_approval(&first).await.unwrap().unwrap().status, "pending", "open requests stay");
 }
@@ -664,15 +685,18 @@ async fn expired_requests_do_not_block_new_ones() {
 #[tokio::test]
 async fn connector_endpoints_need_a_pinned_address() {
     let h = start_mcp_pinned("auto", false).await;
+
     // An administrator signs in (records a last-admin address), which OAuth
     // must still not use.
     let _admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
     let anon = Client::anonymous(&h.base);
+
     for path in ["/.well-known/oauth-authorization-server", "/.well-known/oauth-protected-resource/mcp"] {
         let (s, v) = anon.get(path).await;
         assert_eq!(s, StatusCode::CONFLICT, "{path}: {v}");
         assert!(v.to_string().contains("no_public_address"), "{v}");
     }
+
     let (s, v) = register(&h, json!([REDIRECT])).await;
     assert_eq!(s, StatusCode::CONFLICT, "{v}");
     let r = rpc(&h, None, json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" })).await;

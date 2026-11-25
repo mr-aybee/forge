@@ -140,11 +140,13 @@ impl PermissionRepository for Store {
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
+
         tx.commit().await.map_err(db_err)
     }
 
     async fn publish_revision(&self, rev: &ProfileRevision, at: Timestamp) -> DomainResult<()> {
         let mut tx = self.pool().begin().await.map_err(db_err)?;
+
         // Only the next number, and never on a built-in or archived profile:
         // a concurrent publish loses instead of overwriting.
         let r = sqlx::query(
@@ -158,9 +160,11 @@ impl PermissionRepository for Store {
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
+
         if r.rows_affected() != 1 {
             return Err(DomainError::Conflict("the profile changed meanwhile, or it is built in or archived".into()));
         }
+
         sqlx::query(
             "INSERT INTO permission_profile_revisions (profile_id, revision, actions, created_by, created_at)
              VALUES ($1, $2, $3, $4, $5)",
@@ -173,6 +177,7 @@ impl PermissionRepository for Store {
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
+
         tx.commit().await.map_err(db_err)
     }
 
@@ -205,9 +210,11 @@ impl PermissionRepository for Store {
         .execute(self.pool())
         .await
         .map_err(db_err)?;
+
         if r.rows_affected() != 1 {
             return Err(DomainError::Conflict("the profile is built in or already archived".into()));
         }
+
         Ok(())
     }
 
@@ -217,15 +224,18 @@ impl PermissionRepository for Store {
             .fetch_optional(self.pool())
             .await
             .map_err(db_err)?;
+
         let Some(row) = existing else {
             self.create_profile(p, rev).await?;
             return Ok(p.clone());
         };
+
         let current = profile_row(&row)?;
         let latest = self.get_revision(current.id, current.revision).await?;
         if latest.is_some_and(|l| l.actions == rev.actions) {
             return Ok(current);
         }
+
         let next = current.revision + 1;
         let mut tx = self.pool().begin().await.map_err(db_err)?;
         sqlx::query(
@@ -248,6 +258,7 @@ impl PermissionRepository for Store {
             .await
             .map_err(db_err)?;
         tx.commit().await.map_err(db_err)?;
+
         Ok(PermissionProfile { revision: next, updated_at: rev.created_at, ..current })
     }
 
@@ -261,10 +272,13 @@ impl PermissionRepository for Store {
             .fetch_all(self.pool())
             .await
             .map_err(db_err)?;
+
         for r in &rows {
             out.push(group_assignment_row(r)?);
         }
+
         out.sort_by_key(|a| a.created_at);
+
         Ok(out)
     }
 
@@ -289,6 +303,7 @@ impl PermissionRepository for Store {
             ),
             None => return Err(DomainError::Invalid("an assignment names exactly one user or group".into())),
         };
+
         let r = sqlx::query(sql)
             .bind(a.id.to_string())
             .bind(who)
@@ -301,18 +316,22 @@ impl PermissionRepository for Store {
             .execute(self.pool())
             .await
             .map_err(db_err)?;
+
         if r.rows_affected() != 1 {
             return Err(DomainError::Conflict("the profile was archived or changed meanwhile; try again".into()));
         }
+
         Ok(())
     }
 
     async fn delete_assignment(&self, id: ProfileAssignmentId) -> DomainResult<bool> {
         let mut n = 0;
+
         for sql in ["DELETE FROM profile_assignments WHERE id = $1", "DELETE FROM group_assignments WHERE id = $1"] {
             let r = sqlx::query(sql).bind(id.to_string()).execute(self.pool()).await.map_err(db_err)?;
             n += r.rows_affected();
         }
+
         Ok(n > 0)
     }
 
@@ -360,6 +379,7 @@ impl PermissionRepository for Store {
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
+
         tx.commit().await.map_err(db_err)
     }
 
@@ -419,9 +439,11 @@ impl PermissionRepository for Store {
             .execute(self.pool())
             .await
             .map_err(db_err)?;
+
         if r.rows_affected() != 1 {
             return Err(DomainError::NotFound("group not found".into()));
         }
+
         Ok(())
     }
 
@@ -434,6 +456,7 @@ impl PermissionRepository for Store {
             .await
             .map_err(db_err)?;
         let ids = rows.iter().map(|r| parsed(r, "id")).collect::<DomainResult<Vec<ProfileAssignmentId>>>()?;
+
         for sql in [
             "DELETE FROM group_assignments WHERE group_id = $1",
             "DELETE FROM access_group_members WHERE group_id = $1",
@@ -441,7 +464,9 @@ impl PermissionRepository for Store {
         ] {
             sqlx::query(sql).bind(id.to_string()).execute(&mut *tx).await.map_err(db_err)?;
         }
+
         tx.commit().await.map_err(db_err)?;
+
         Ok(ids)
     }
 

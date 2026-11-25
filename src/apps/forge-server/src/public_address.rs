@@ -36,19 +36,24 @@ pub fn validate(input: &str) -> Result<String, AddressError> {
     if s.len() > 255 {
         return Err(AddressError::TooLong);
     }
+
     let url = url::Url::parse(s).map_err(|_| AddressError::NotAUrl)?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(AddressError::Scheme);
     }
+
     if url.host_str().is_none_or(str::is_empty) {
         return Err(AddressError::NoHost);
     }
+
     if !url.username().is_empty() || url.password().is_some() {
         return Err(AddressError::UserInfo);
     }
+
     if url.path() != "/" || url.query().is_some() || url.fragment().is_some() {
         return Err(AddressError::NotOrigin);
     }
+
     Ok(url.origin().ascii_serialization())
 }
 
@@ -60,18 +65,21 @@ pub async fn load(settings: &dyn SettingsRepository, configured: &str) -> anyhow
     let all = settings.all_settings().await?;
     let stored =
         |key: &str| all.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone()).filter(|v| !v.trim().is_empty());
+
     if let Some(v) = stored(SETTING_KEY) {
         match validate(&v) {
             Ok(v) => addr.set_runtime(Some(v)),
             Err(e) => tracing::warn!(error = %e, "ignoring the stored public address; links use public_url"),
         }
     }
+
     if let Some(v) = stored(LAST_ADMIN_KEY) {
         match validate(&v) {
             Ok(v) => addr.set_last_admin(Some(v)),
             Err(e) => tracing::warn!(error = %e, "ignoring the stored last administrator address"),
         }
     }
+
     Ok(addr)
 }
 
@@ -101,6 +109,7 @@ impl LocalNames {
             .collect();
         let nets = sysinfo::Networks::new_with_refreshed_list();
         let ips = nets.values().flat_map(|d| d.ip_networks().iter().map(|n| n.addr)).collect();
+
         Self { hostnames, ips }
     }
 }
@@ -111,10 +120,12 @@ fn host_of(s: &str) -> Option<String> {
     if s.is_empty() {
         return None;
     }
+
     let host = match url::Url::parse(s) {
         Ok(u) if u.host_str().is_some() => u.host_str().map(str::to_owned),
         _ => Some(s.to_owned()),
     }?;
+
     forge_core::allowed_hosts::normalize_host(&host).ok()
 }
 
@@ -139,6 +150,7 @@ pub fn host_trusted(
         if ip.is_loopback() || ip.is_unspecified() {
             return false;
         }
+
         if local.ips.contains(&ip) {
             return true;
         }
@@ -147,9 +159,11 @@ pub fn host_trusted(
     } else if local.hostnames.contains(&host) {
         return true;
     }
+
     if configured.iter().filter_map(|c| host_of(c)).any(|c| c == host) {
         return true;
     }
+
     !allowed.any() && allowed.allows(&host)
 }
 
@@ -175,8 +189,10 @@ pub async fn record_last_admin(
     if from.as_deref() == Some(v.as_str()) {
         return Ok(None);
     }
+
     settings.put_setting(LAST_ADMIN_KEY, &v, now).await?;
     addr.set_last_admin(Some(v.clone()));
+
     Ok(Some(AddressChange { from, to: v }))
 }
 
@@ -199,6 +215,7 @@ pub async fn save(
             addr.set_runtime(None);
         }
     }
+
     Ok(())
 }
 
@@ -217,6 +234,7 @@ pub fn allowed_origins(addr: &PublicAddress) -> Vec<String> {
         .filter_map(|u| origin_of(&u))
         .collect();
     v.dedup();
+
     v
 }
 
@@ -281,19 +299,24 @@ mod tests {
         let local = LocalNames { hostnames: vec!["lab-a".into()], ips: vec!["192.0.2.5".parse().unwrap()] };
         let any = AllowedHosts::default();
         let configured = ["https://forge.example.com", "forge.internal", "", "localhost", "127.0.0.1"];
+
         for h in ["192.0.2.5", "lab-a", "forge.example.com", "forge.internal"] {
             assert!(host_trusted(h, &local, &configured, &any), "{h}");
         }
+
         // Loopback is never recorded, even when configured or allowed.
         let loopback_ok = AllowedHosts::default();
         loopback_ok.set(Some(parse_list(&["localhost", "127.0.0.1", "app.localhost"]).unwrap()));
+
         for h in ["127.0.0.1", "127.0.0.2", "[::1]", "localhost", "app.localhost", "0.0.0.0"] {
             assert!(!host_trusted(h, &local, &configured, &any), "{h}");
             assert!(!host_trusted(h, &local, &configured, &loopback_ok), "{h} allowed explicitly");
         }
+
         for h in ["evil.test", "192.0.2.99", "lab-a.evil.test", "[2001:db8::1]"] {
             assert!(!host_trusted(h, &local, &configured, &any), "{h} with allowed hosts *");
         }
+
         let narrow = AllowedHosts::default();
         narrow.set(Some(parse_list(&["*.corp.example"]).unwrap()));
         assert!(host_trusted("forge.corp.example", &local, &[], &narrow));

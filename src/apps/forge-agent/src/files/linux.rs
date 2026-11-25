@@ -60,6 +60,7 @@ impl Root {
     pub(crate) fn open(spec: &RootSpec, pid: Option<u32>) -> Result<Self, String> {
         let slash = fs::open("/", OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC, Mode::empty())
             .map_err(|e| errno("/", e))?;
+
         let (start, base, system) = match spec {
             RootSpec::Node => (slash, Vec::new(), true),
             RootSpec::Dir { base } => (slash, base.components().to_vec(), true),
@@ -67,6 +68,7 @@ impl Root {
             RootSpec::App { .. } => return Err("an app root runs as the app's account, not here".into()),
             RootSpec::Container { base, .. } => {
                 let pid = pid.ok_or("container root without a process")?;
+
                 // The container's root directory as its init process sees it
                 // (works for shell-less images; no overlay internals).
                 let fd = fs::open(
@@ -78,7 +80,9 @@ impl Root {
                 (fd, base.components().to_vec(), false)
             }
         };
+
         let base = walk_from(&start, &base)?;
+
         Ok(Self { base, store: store_dir(), system })
     }
 
@@ -102,9 +106,11 @@ impl Root {
 
 fn walk_from(start: &OwnedFd, comps: &[String]) -> Result<OwnedFd, String> {
     let mut fd = fs::openat(start, ".", dir_flags(), Mode::empty()).map_err(|e| errno("/", e))?;
+
     for c in comps {
         fd = fs::openat(&fd, c.as_str(), dir_flags(), Mode::empty()).map_err(|e| errno(c, e))?;
     }
+
     Ok(fd)
 }
 
@@ -116,6 +122,7 @@ fn meta(st: &Stat) -> Meta {
         FileType::Symlink => Kind::Symlink,
         _ => Kind::Other,
     };
+
     Meta {
         kind,
         size: st.st_size as u64,
@@ -158,6 +165,7 @@ impl FileIo for File {
 
     fn write_all_at(&self, buf: &[u8], offset: u64) -> Result<(), String> {
         let mut done = 0usize;
+
         while done < buf.len() {
             match rustix::io::pwrite(&self.fd, &buf[done..], offset + done as u64) {
                 Ok(0) => return Err("write failed".into()),
@@ -166,6 +174,7 @@ impl FileIo for File {
                 Err(e) => return Err(errno("file", e)),
             }
         }
+
         Ok(())
     }
 
@@ -182,9 +191,11 @@ impl FileIo for File {
             // Only root may give files away; unprivileged test runs skip it.
             let _ = fs::fchown(&self.fd, Some(rustix::fs::Uid::from_raw(uid)), Some(rustix::fs::Gid::from_raw(gid)));
         }
+
         if let Some(mode) = like.mode {
             fs::fchmod(&self.fd, Mode::from_raw_mode(mode & 0o7777)).map_err(|e| errno("file", e))?;
         }
+
         Ok(())
     }
 }
@@ -196,43 +207,52 @@ impl Fs for Root {
         if path.is_empty() {
             return fs::fstat(&self.base).map(|s| meta(&s)).map_err(|e| errno("/", e));
         }
+
         let (parent, name) = self.split(path)?;
         let st = fs::statat(&parent, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|e| errno(name, e))?;
         let mut m = meta(&st);
         m.hidden = name.starts_with('.');
+
         if m.kind == Kind::Symlink {
             m.link_target = fs::readlinkat(&parent, name, Vec::new())
                 .ok()
                 .map(|t| String::from_utf8_lossy(t.as_bytes()).chars().take(4096).collect());
         }
+
         Ok(m)
     }
 
     fn read_dir(&self, path: &[String]) -> Result<(Vec<String>, usize, bool), String> {
         let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+
         let dir = match path.split_last() {
             None => fs::openat(&self.base, ".", flags, Mode::empty()).map_err(|e| errno("/", e))?,
             Some((name, parents)) => {
                 fs::openat(self.walk(parents)?, name.as_str(), flags, Mode::empty()).map_err(|e| errno(name, e))?
             }
         };
+
         let (mut names, mut skipped, mut truncated) = (Vec::new(), 0usize, false);
+
         for item in fs::Dir::read_from(&dir).map_err(|e| errno(last(path), e))? {
             let item = item.map_err(|e| e.to_string())?;
             let bytes = item.file_name().to_bytes();
             if bytes == b"." || bytes == b".." {
                 continue;
             }
+
             if names.len() >= MAX_DIR_ENTRIES {
                 truncated = true;
                 break;
             }
+
             match std::str::from_utf8(bytes) {
                 Ok(n) => names.push(n.to_owned()),
                 // Not addressable through the UTF-8 API; reported as a count.
                 Err(_) => skipped += 1,
             }
         }
+
         Ok((names, skipped, truncated))
     }
 
@@ -243,19 +263,24 @@ impl Fs for Root {
             Errno::LOOP => format!("`{name}` is a link; Forge does not follow links"),
             e => errno(name, e),
         })?;
+
         Ok(File { fd })
     }
 
     fn open_write(&self, path: &[String], create: bool, truncate: bool) -> Result<File, String> {
         let (parent, name) = self.split(path)?;
+
         // Read access too: commits hash the partial file through this handle.
         let mut flags = OFlags::RDWR | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC;
+
         if create {
             flags |= OFlags::CREATE;
         }
+
         if truncate {
             flags |= OFlags::TRUNC;
         }
+
         let fd = fs::openat(&parent, name, flags, Mode::from_raw_mode(0o600)).map_err(|e| match e {
             Errno::LOOP => format!("`{name}` is a link; Forge does not follow links"),
             e => errno(name, e),
@@ -264,6 +289,7 @@ impl Fs for Root {
         if f.meta()?.kind != Kind::File {
             return Err(format!("`{name}` is not a regular file"));
         }
+
         Ok(f)
     }
 
@@ -279,17 +305,20 @@ impl Fs for Root {
         let (fp, fname) = self.split(from)?;
         let (tp, tname) = to_root.split(to)?;
         let flags = if replace { RenameFlags::empty() } else { RenameFlags::NOREPLACE };
+
         let map = |e: Errno| match e {
             Errno::XDEV => FsError::CrossDevice,
             Errno::EXIST | Errno::NOTEMPTY => FsError::Exists,
             e => FsError::Other(errno(fname, e)),
         };
+
         match fs::renameat_with(&fp, fname, &tp, tname, flags) {
             // Filesystems without RENAME_NOREPLACE: check, then rename.
             Err(Errno::INVAL) if !replace => {
                 if fs::statat(&tp, tname, AtFlags::SYMLINK_NOFOLLOW).is_ok() {
                     return Err(FsError::Exists);
                 }
+
                 fs::renameat(&fp, fname, &tp, tname).map_err(map)
             }
             r => r.map_err(map),
@@ -325,6 +354,7 @@ impl Fs for Root {
     fn inherit_owner(&self, path: &[String]) -> Result<(), String> {
         let (parent, name) = self.split(path)?;
         let p = fs::fstat(&parent).map_err(|e| e.to_string())?;
+
         // Only root may give files away; unprivileged test runs skip it.
         let _ = fs::chownat(
             &parent,
@@ -333,6 +363,7 @@ impl Fs for Root {
             Some(rustix::fs::Gid::from_raw(p.st_gid)),
             AtFlags::SYMLINK_NOFOLLOW,
         );
+
         Ok(())
     }
 
@@ -340,6 +371,7 @@ impl Fs for Root {
     fn free_bytes(&self, path: &[String]) -> Option<u64> {
         let parent = self.walk(path.split_last()?.1).ok()?;
         let s = fs::fstatvfs(&parent).ok()?;
+
         Some((s.f_bavail as u64).saturating_mul(s.f_frsize as u64))
     }
 
@@ -347,12 +379,15 @@ impl Fs for Root {
         let (parent, name) = self.split(path)?;
         let st = fs::statat(&parent, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|e| errno(name, e))?;
         let mut flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC;
+
         match FileType::from_raw_mode(st.st_mode as _) {
             FileType::RegularFile => {}
             FileType::Directory => flags |= OFlags::DIRECTORY,
             _ => return Err(format!("`{name}` is not a regular file or folder")),
         }
+
         let fd = fs::openat(&parent, name, flags, Mode::empty()).map_err(|e| errno(name, e))?;
+
         fs::fchmod(&fd, Mode::from_raw_mode(mode & 0o7777)).map_err(|e| errno(name, e))
     }
 
@@ -382,6 +417,7 @@ impl Fs for Root {
         std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create Forge's file store: {e}"))?;
         let _ = std::fs::set_permissions(&self.store, std::os::unix::fs::PermissionsExt::from_mode(0o700));
         let base = fs::open(&dir, dir_flags(), Mode::empty()).map_err(|e| errno(sub, e))?;
+
         Ok(Self { base, store: self.store.clone(), system: false })
     }
 }
@@ -398,16 +434,21 @@ pub(crate) fn protected_inodes(roots: &[&str], homes: bool) -> HashSet<(u64, u64
     use std::os::unix::fs::MetadataExt;
     let mut out = HashSet::new();
     let mut stack: Vec<(PathBuf, u8)> = roots.iter().map(|p| (PathBuf::from(p), 0)).collect();
+
     if homes && let Ok(h) = std::fs::read_dir("/home") {
         stack.extend(h.flatten().map(|h| (h.path().join(".ssh"), 0)));
     }
+
     let mut budget = 20_000usize;
+
     while let Some((p, depth)) = stack.pop() {
         let Ok(md) = std::fs::symlink_metadata(&p) else { continue };
         budget = budget.saturating_sub(1);
+
         if budget == 0 {
             break;
         }
+
         if md.is_file() {
             out.insert((md.dev(), md.ino()));
         } else if md.is_dir()
@@ -417,6 +458,7 @@ pub(crate) fn protected_inodes(roots: &[&str], homes: bool) -> HashSet<(u64, u64
             stack.extend(rd.flatten().map(|e| (e.path(), depth + 1)));
         }
     }
+
     out
 }
 
@@ -429,6 +471,7 @@ mod tests {
         std::fs::write(dir.path().join("a"), b"1").unwrap_or_else(|e| panic!("{e}"));
         let before = super::protected_inodes(&[&root], false);
         assert_eq!(before.len(), 1);
+
         // A key written (or a file replaced) after the first check is covered.
         std::fs::write(dir.path().join("new-key"), b"2").unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(super::protected_inodes(&[&root], false).len(), 2);

@@ -34,15 +34,19 @@ pub fn well_known(sid: &str) -> Option<String> {
         "S-1-5-20" => Some("NT AUTHORITY\\NETWORK SERVICE"),
         _ => None,
     };
+
     if let Some(f) = fixed {
         return Some(f.to_owned());
     }
+
     // Per-session system accounts: `S-1-5-90-0-<n>` and `S-1-5-96-0-<n>`.
     let session =
         |prefix: &str| sid.strip_prefix(prefix).filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+
     if let Some(n) = session("S-1-5-90-0-") {
         return Some(format!("Window Manager\\DWM-{n}"));
     }
+
     session("S-1-5-96-0-").map(|n| format!("Font Driver Host\\UMFD-{n}"))
 }
 
@@ -65,17 +69,21 @@ pub fn account_name(uid: &sysinfo::Uid) -> String {
     if let Some(n) = well_known(&sid) {
         return n;
     }
+
     let Ok(mut a) = accounts().lock() else { return sid };
     if a.read.is_none_or(|t| t.elapsed() > USERS_TTL) {
         a.users.refresh();
         a.read = Some(Instant::now());
         a.names.clear();
     }
+
     if let Some(n) = a.names.get(&sid) {
         return n.clone();
     }
+
     let name = a.users.get_user_by_id(uid).map_or_else(|| sid.clone(), |u| u.name().to_owned());
     a.names.insert(sid, name.clone());
+
     name
 }
 
@@ -92,6 +100,7 @@ fn start_time_now(pid: u32) -> Option<u64> {
         true,
         sysinfo::ProcessRefreshKind::nothing(),
     );
+
     sys.process(p).map(sysinfo::Process::start_time)
 }
 
@@ -104,21 +113,27 @@ pub fn terminate(pid: u32, started: u64, force: bool) -> Result<bool, String> {
         Some(t) if t != started => return Err(super::processes::stale_message(pid)),
         Some(_) => {}
     }
+
     let mut args = vec!["/PID".to_owned(), pid.to_string()];
+
     if force {
         args.push("/F".to_owned());
     }
+
     let out = Command::new(system_root().join(r"System32\taskkill.exe"))
         .args(&args)
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("could not run taskkill: {e}"))?;
+
     if out.status.success() {
         return Ok(true);
     }
+
     if start_time_now(pid).is_none() {
         return Ok(false);
     }
+
     Err(format!("could not end process {pid}: {}", tool_message(&out)))
 }
 
@@ -158,6 +173,7 @@ pub fn set_priority_class(pid: u32, started: u64, class: PriorityClass) -> Resul
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("could not run PowerShell: {e}"))?;
+
     match out.status.code() {
         Some(0) => Ok(true),
         Some(4) => Ok(false),
@@ -211,6 +227,7 @@ mod tests {
         assert!(s.contains("Get-Process -Id 4242 "));
         assert!(s.contains("-ne 1700000000)"));
         assert!(s.ends_with("$p.PriorityClass = 'BelowNormal'"));
+
         for c in PriorityClass::ALL {
             assert!(ps_name(c).bytes().all(|b| b.is_ascii_alphabetic()));
         }

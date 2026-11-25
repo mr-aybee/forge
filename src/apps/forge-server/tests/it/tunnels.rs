@@ -25,6 +25,7 @@ async fn ws(base: &str, path: &str, token: &str) -> Socket {
     let url = format!("{}{path}", base.replacen("http", "ws", 1));
     let mut req = url.into_client_request().unwrap();
     req.headers_mut().insert("authorization", format!("Bearer {token}").parse().unwrap());
+
     tokio_tungstenite::connect_async(req).await.unwrap().0
 }
 
@@ -36,6 +37,7 @@ async fn echo() -> u16 {
         while let Ok((mut s, _)) = l.accept().await {
             tokio::spawn(async move {
                 let mut buf = vec![0u8; 64 * 1024];
+
                 while let Ok(n) = s.read(&mut buf).await {
                     if n == 0 || s.write_all(&buf[..n]).await.is_err() {
                         break;
@@ -44,6 +46,7 @@ async fn echo() -> u16 {
             });
         }
     });
+
     port
 }
 
@@ -52,8 +55,10 @@ pub(crate) async fn wait_online(c: &Client, id: &str) {
         if c.get(&format!("/api/v1/servers/{id}")).await.1["status"] == "online" {
             return;
         }
+
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+
     panic!("node never came online");
 }
 
@@ -74,9 +79,11 @@ pub(crate) async fn real_node(h: &Harness, admin: &Client) -> (String, tokio::sy
     .server_id;
     let (stop, rx) = tokio::sync::watch::channel(false);
     tokio::spawn(Agent::load(StatePaths::new(dir.path())).unwrap().run(rx));
+
     // The tempdir must outlive the agent task.
     std::mem::forget(dir);
     wait_online(admin, &node).await;
+
     (node, stop)
 }
 
@@ -112,6 +119,7 @@ async fn site_app(h: &Harness, admin: &Client, node: &str, port: u16) -> (String
         })
         .await
         .unwrap();
+
     (ns["id"].as_str().unwrap().to_owned(), service_id.to_string())
 }
 
@@ -119,14 +127,17 @@ async fn site_app(h: &Harness, admin: &Client, node: &str, port: u16) -> (String
 async fn api_key(c: &Client) -> String {
     let (s, key) = c.post("/api/v1/api-keys", json!({"name": "cli", "expires_days": 1})).await;
     assert_eq!(s, StatusCode::CREATED, "{key}");
+
     key["secret"].as_str().unwrap().to_owned()
 }
 
 fn open_app(ports: Option<u16>) -> Value {
     let mut target = json!({ "kind": "app", "ref": "site" });
+
     if let Some(p) = ports {
         target["ports"] = json!([p]);
     }
+
     json!({ "target": target, "bind": "127.0.0.1:18080" })
 }
 
@@ -177,37 +188,46 @@ async fn a_tunnel_reaches_a_catalogue_service_and_relays_bytes() {
     let mut conn = ws(&h.base, &format!("/api/v1/tunnels/{id}/connect"), &token).await;
     conn.send(Message::Binary(b"hello".to_vec().into())).await.unwrap();
     let mut got = Vec::new();
+
     while got.len() < 5 {
         match conn.next().await.unwrap().unwrap() {
             Message::Binary(b) => got.extend_from_slice(&b),
             other => panic!("unexpected {other:?}"),
         }
     }
+
     assert_eq!(got, b"hello");
     let big: Vec<u8> = (0..1024 * 1024).map(|i| (i % 251) as u8).collect();
     let (mut tx, mut rx) = conn.split();
+
     let send = {
         let big = big.clone();
         tokio::spawn(async move {
             for chunk in big.chunks(64 * 1024) {
                 tx.send(Message::Binary(chunk.to_vec().into())).await.unwrap();
             }
+
             tx
         })
     };
+
     let mut back = Vec::with_capacity(big.len());
+
     while back.len() < big.len() {
         match rx.next().await.unwrap().unwrap() {
             Message::Binary(b) => back.extend_from_slice(&b),
             other => panic!("unexpected {other:?}"),
         }
     }
+
     assert_eq!(back, big, "every byte, in order");
     let mut tx = send.await.unwrap();
+
     // Half-close: our side is done; the echo server sees EOF and its end
     // comes back as `eof`.
     tx.send(Message::Text(r#"{"type": "eof"}"#.into())).await.unwrap();
     let mut saw_eof = false;
+
     while let Some(Ok(m)) = rx.next().await {
         match m {
             Message::Text(t) if t.as_str().contains("eof") => {
@@ -218,6 +238,7 @@ async fn a_tunnel_reaches_a_catalogue_service_and_relays_bytes() {
             _ => {}
         }
     }
+
     assert!(saw_eof, "the node side's end arrives as eof");
 
     // Listed with its traffic, as a row too.
@@ -233,11 +254,13 @@ async fn a_tunnel_reaches_a_catalogue_service_and_relays_bytes() {
     let (s, _) = cli.call(reqwest::Method::DELETE, &format!("/api/v1/tunnels/{id}"), None).await;
     assert_eq!(s, StatusCode::NO_CONTENT);
     let mut reason = Value::Null;
+
     while let Some(Ok(m)) = control.next().await {
         if let Message::Text(t) = m {
             reason = serde_json::from_str(t.as_str()).unwrap();
         }
     }
+
     assert_eq!(reason["reason"], "closed", "{reason}");
     assert!(cli.get("/api/v1/tunnels").await.1["tunnels"].as_array().unwrap().is_empty());
     let (_, history) = cli.get("/api/v1/tunnels?state=closed").await;
@@ -248,9 +271,11 @@ async fn a_tunnel_reaches_a_catalogue_service_and_relays_bytes() {
 
     let (_, audit) = admin.get("/api/v1/audit?limit=100").await;
     let text = audit.to_string();
+
     for a in ["network.tunnel.open", "network.tunnel.close"] {
         assert!(text.contains(a), "{a} audited");
     }
+
     h.app.stop().await;
 }
 
@@ -276,6 +301,7 @@ async fn access_comes_from_a_environment_role_or_a_grant() {
     assert_eq!(s, StatusCode::CREATED, "{t}");
     let exp = t["expires_at"].as_i64().unwrap();
     assert!((exp - before - 8 * 3_600_000).abs() < 60_000, "default lifetime is 8 h: {t}");
+
     // The developer's own view, and not the admin's `all` list without the right.
     assert_eq!(dev.get("/api/v1/tunnels").await.1["tunnels"].as_array().unwrap().len(), 0, "unclaimed tunnels hide");
 
@@ -373,11 +399,13 @@ async fn access_comes_from_a_environment_role_or_a_grant() {
     let (s, _) = admin.call(reqwest::Method::DELETE, &format!("/api/v1/tunnel-grants/{grant_id}"), None).await;
     assert_eq!(s, StatusCode::NO_CONTENT);
     let mut reason = Value::Null;
+
     while let Some(Ok(m)) = tokio::time::timeout(Duration::from_secs(5), control.next()).await.ok().flatten() {
         if let Message::Text(t) = m {
             reason = serde_json::from_str(t.as_str()).unwrap();
         }
     }
+
     assert_eq!(reason["reason"], "access_withdrawn", "{reason}");
     let row = h.app.state.store.get_tunnel(&id).await.unwrap().unwrap();
     assert_eq!(row.close_reason.as_deref(), Some("access_withdrawn"));
@@ -386,6 +414,7 @@ async fn access_comes_from_a_environment_role_or_a_grant() {
     let (_, all) = admin.get("/api/v1/tunnel-grants?all=true").await;
     let revoked = all["grants"].as_array().unwrap().iter().find(|g| g["id"] == grant_id.as_str()).unwrap();
     assert_eq!(revoked["status"], "revoked", "{all}");
+
     // Active only: the guest's grant is still live, the auditor's is gone.
     let (_, active) = admin.get("/api/v1/tunnel-grants").await;
     let active = active["grants"].as_array().unwrap();
@@ -449,6 +478,7 @@ async fn tunnel_rows_survive_a_restart_as_closed_and_packages_are_listed() {
     assert_eq!(pg["id"], inst.id.to_string());
     assert_eq!(pg["port"], 5433, "the install parameter wins over the default");
     assert_eq!(pg["role"], "db");
+
     // The package is also reachable by package id or installation id.
     let (_, by_name) = admin.get("/api/v1/service-ports?service=postgresql").await;
     assert_eq!(by_name.as_array().unwrap().len(), 1);
@@ -477,6 +507,7 @@ async fn tunnel_rows_survive_a_restart_as_closed_and_packages_are_listed() {
     h.app.state.store.put_tunnel(&row).await.unwrap();
     let config = h.app.state.config.clone();
     h.app.stop().await;
+
     // A new server process over the same database.
     let state = forge_server::Services::build(config).await.unwrap();
     let after = state.store.get_tunnel(&row.id).await.unwrap().unwrap();

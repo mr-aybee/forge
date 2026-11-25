@@ -54,7 +54,9 @@ pub fn parse_command(v: &Value) -> Result<Command, String> {
             if !CONTAINER_READ.contains(&op.as_str()) && !CONTAINER_WRITE.contains(&op.as_str()) {
                 return Err(format!("unsupported container operation `{op}`"));
             }
+
             let tail = v.get("tail").and_then(Value::as_u64).map_or(0, |t| u32::try_from(t.min(5000)).unwrap_or(5000));
+
             // Values travel only for `inspect`, and only when asked.
             let reveal_env = op == "inspect" && reveals_env(v);
             Ok(Command::ContainerAction(ContainerAction {
@@ -74,9 +76,11 @@ pub fn parse_command(v: &Value) -> Result<Command, String> {
                 .iter()
                 .filter_map(|t| t.as_str().map(str::to_owned))
                 .collect();
+
             if targets.is_empty() || targets.len() > 32 || targets.iter().any(|t| t.len() > 260) {
                 return Err("probe: between 1 and 32 targets".into());
             }
+
             let count =
                 v.get("count").and_then(Value::as_u64).map_or(4, |c| u32::try_from(c.clamp(1, 10)).unwrap_or(4));
             Ok(Command::NetProbe(NetProbe { targets, count }))
@@ -106,12 +110,15 @@ pub fn parse_command(v: &Value) -> Result<Command, String> {
             if !matches!(action, "apply" | "remove" | "status" | "renew" | "clear_cache" | "access_log" | "error_log") {
                 return Err(format!("unsupported site action `{action}`"));
             }
+
             let spec: forge_catalog::SiteSpec = serde_json::from_value(v.get("spec").cloned().unwrap_or(Value::Null))
                 .map_err(|e| format!("invalid site: {e}"))?;
             spec.validate()?;
+
             if spec.material.is_some() {
                 return Err("certificate material is added by Forge, not by the caller".into());
             }
+
             Ok(Command::SiteAction(SiteAction {
                 action: action.to_owned(),
                 spec_json: serde_json::to_string(&spec).map_err(|e| e.to_string())?,
@@ -142,7 +149,9 @@ fn split_transient(payload: &Value, output: &mut Value) -> Option<Value> {
     if !reveals_container_env(payload) {
         return None;
     }
+
     let env = output.as_object_mut()?.remove("env")?;
+
     Some(json!({ "env": env }))
 }
 
@@ -156,6 +165,7 @@ pub const FROM_ENDPOINT: &str = "from_endpoint";
 fn has_static(spec: Option<&Value>) -> bool {
     let Some(spec) = spec else { return false };
     let is_static = |v: &Value| v.get("kind").and_then(Value::as_str) == Some("static");
+
     is_static(spec) || spec.get("rules").and_then(Value::as_array).is_some_and(|r| r.iter().any(is_static))
 }
 
@@ -184,9 +194,11 @@ impl AgentCommandJob {
     ) -> Result<(), StepError> {
         let mut spec: forge_catalog::SiteSpec =
             serde_json::from_str(&site.spec_json).map_err(|e| StepError::Fatal(e.to_string()))?;
+
         if spec.tls != forge_catalog::sites::Tls::Uploaded || site.action != "apply" {
             return Ok(());
         }
+
         // The runner authorized `certificate.use` on this edge (see
         // `required_action`); the site id proves the endpoint flow sent it.
         let Some(site_id) = from_site else {
@@ -194,9 +206,11 @@ impl AgentCommandJob {
                 "uploaded certificates are sent only by applying the endpoint (POST /sites/{id}/apply)".into(),
             ));
         };
+
         let id: forge_core::CertificateId =
             spec.cert_id.parse().map_err(|_| StepError::Fatal("invalid certificate id".into()))?;
         self.check_site_edge(site_id, ws, server, &spec.cert_id).await?;
+
         // Re-checked at every attempt: a revoked right stops the key here.
         let req = AccessRequest::new(
             job.principal.clone(),
@@ -219,6 +233,7 @@ impl AgentCommandJob {
         let key_pem = String::from_utf8(key).map_err(|_| StepError::Fatal("certificate key is not PEM".into()))?;
         spec.material = Some(forge_catalog::sites::CertMaterial { chain_pem: cert.chain_pem, key_pem });
         site.spec_json = serde_json::to_string(&spec).map_err(|e| StepError::Fatal(e.to_string()))?;
+
         Ok(())
     }
 
@@ -240,12 +255,15 @@ impl AgentCommandJob {
             .ok_or_else(|| StepError::Fatal("the endpoint no longer exists".into()))?;
         let edge =
             site.config["edges"].as_array().is_some_and(|e| e.iter().any(|v| v.as_str() == Some(&server.to_string())));
+
         if !edge {
             return Err(StepError::Fatal("this node is not an edge of the endpoint".into()));
         }
+
         if site.config.pointer("/spec/cert_id").and_then(Value::as_str) != Some(cert_id) {
             return Err(StepError::Fatal("the endpoint does not use this certificate".into()));
         }
+
         Ok(())
     }
 
@@ -263,10 +281,12 @@ impl AgentCommandJob {
         if server.status == AgentStatus::Revoked {
             return Err(StepError::Fatal("server is revoked".into()));
         }
+
         if let Command::SiteAction(site) = &mut command {
             let from_site = ctx.job.payload.get(ATTACH_CERTIFICATE).and_then(Value::as_str);
             self.attach_certificate(site, server.workspace_id, server_id, from_site, &ctx.job).await?;
         }
+
         let (body, signed) = self.signer.issue(
             &server_id.to_string(),
             &ctx.job.principal.to_string(),
@@ -276,6 +296,7 @@ impl AgentCommandJob {
         );
         self.hub.enqueue(server_id, &body.operation_id, signed).map_err(StepError::Retryable)?;
         ctx.set_state("operation_id", json!(body.operation_id));
+
         Ok(())
     }
 }
@@ -353,6 +374,7 @@ impl JobHandler for AgentCommandJob {
             0 => self.dispatch(ctx).await,
             _ => {
                 let op = ctx.state_value("operation_id").and_then(Value::as_str).map(str::to_owned);
+
                 // After a control-plane restart the in-memory waiter is gone:
                 // re-dispatch (commands are idempotent reads) and wait again.
                 let op = match op {
@@ -362,6 +384,7 @@ impl JobHandler for AgentCommandJob {
                         ctx.state_value("operation_id").and_then(Value::as_str).unwrap_or_default().to_owned()
                     }
                 };
+
                 // Image pulls can take a while; everything else is quick.
                 let pulling = ctx.job.payload.pointer("/command/op").and_then(Value::as_str) == Some("pull")
                     || ctx.job.payload.pointer("/command/action").and_then(Value::as_str) == Some("apply");
@@ -371,14 +394,18 @@ impl JobHandler for AgentCommandJob {
                     .wait(&op, wait)
                     .await
                     .ok_or_else(|| StepError::Retryable("agent did not respond in time".into()))?;
+
                 if !result.ok {
                     return Err(StepError::Fatal(format!("agent refused or failed: {}", result.error)));
                 }
+
                 let mut output: Value = serde_json::from_str(&result.output).unwrap_or(Value::String(result.output));
+
                 // Revealed environment values never reach the job table.
                 if let Some(secret) = split_transient(&ctx.job.payload, &mut output) {
                     self.hub.stash_transient(&ctx.job.id.to_string(), secret);
                 }
+
                 ctx.set_state("output", output);
                 Ok(())
             }
@@ -419,6 +446,7 @@ mod tests {
         assert_eq!(site("renew", json!({ "custom": "add_header X 1;" })), Action::ServerCommand);
         assert_eq!(site("apply", json!({ "tls": "uploaded", "custom": "x" })), Action::CertificateUse);
         assert_eq!(site("remove", json!({ "tls": "uploaded", "custom": "x" })), Action::ProxyManage);
+
         // Static directories: only the endpoint flow (which checked the
         // approved roots) gets away with proxy.manage.
         let st = json!({ "command": { "type": "site", "action": "apply", "spec": { "kind": "static" } } });

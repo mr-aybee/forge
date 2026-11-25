@@ -61,18 +61,23 @@ impl Frame {
             Frame::Exit(code) => (4, code.to_be_bytes().to_vec()),
             Frame::Error(m) => {
                 let mut end = m.len().min(MAX_PAYLOAD);
+
                 while !m.is_char_boundary(end) {
                     end -= 1;
                 }
+
                 (5, m.as_bytes()[..end].to_vec())
             }
             Frame::Ready => (6, Vec::new()),
         };
+
         let mut out = Vec::with_capacity(HEADER + payload.len());
         out.push(kind);
+
         // At most MAX_PAYLOAD, so it fits.
         out.extend_from_slice(&u32::try_from(payload.len()).unwrap_or(u32::MAX).to_be_bytes());
         out.extend_from_slice(&payload);
+
         out
     }
 }
@@ -81,9 +86,11 @@ impl Frame {
 #[must_use]
 pub fn encode_data(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len() + HEADER * (data.len() / MAX_PAYLOAD + 1));
+
     for chunk in data.chunks(MAX_PAYLOAD) {
         out.extend_from_slice(&Frame::Data(chunk.to_vec()).encode());
     }
+
     out
 }
 
@@ -108,6 +115,7 @@ impl Decoder {
             self.buf.drain(..self.pos);
             self.pos = 0;
         }
+
         self.buf.extend_from_slice(bytes);
     }
 
@@ -123,18 +131,23 @@ impl Decoder {
         if rest.len() < HEADER {
             return Ok(None);
         }
+
         let kind = rest[0];
         if !(1..=6).contains(&kind) {
             return Err(FrameError::UnknownKind(kind));
         }
+
         let len = u32::from_be_bytes([rest[1], rest[2], rest[3], rest[4]]) as usize;
         if len > MAX_PAYLOAD {
             return Err(FrameError::TooLarge(len));
         }
+
         if rest.len() < HEADER + len {
             return Ok(None);
         }
+
         let payload = &rest[HEADER..HEADER + len];
+
         let frame = match kind {
             1 => Frame::Data(payload.to_vec()),
             2 => match payload {
@@ -153,7 +166,9 @@ impl Decoder {
             3 => return Err(FrameError::Malformed("eof")),
             _ => return Err(FrameError::Malformed("ready")),
         };
+
         self.pos += HEADER + len;
+
         Ok(Some(frame))
     }
 }
@@ -176,15 +191,19 @@ mod tests {
             Frame::Exit(127),
         ];
         let wire: Vec<u8> = frames.iter().flat_map(Frame::encode).collect();
+
         for step in [1, 2, 3, 7, wire.len()] {
             let mut d = Decoder::new();
             let mut got = Vec::new();
+
             for piece in wire.chunks(step) {
                 d.push(piece);
+
                 while let Some(f) = d.next_frame().unwrap() {
                     got.push(f);
                 }
             }
+
             assert_eq!(got, frames, "pieces of {step}");
             assert!(d.is_empty());
         }
@@ -196,10 +215,12 @@ mod tests {
         let mut d = Decoder::new();
         d.push(&encode_data(&big));
         let mut back = Vec::new();
+
         while let Some(Frame::Data(x)) = d.next_frame().unwrap() {
             assert!(x.len() <= MAX_PAYLOAD);
             back.extend_from_slice(&x);
         }
+
         assert_eq!(back, big);
 
         let mut d = Decoder::new();
@@ -213,6 +234,7 @@ mod tests {
         let mut d = Decoder::new();
         d.push(&[2, 0, 0, 0, 1, 0]);
         assert_eq!(d.next_frame(), Err(FrameError::Malformed("resize")));
+
         // A cut error message stays valid UTF-8.
         let long = "é".repeat(MAX_PAYLOAD);
         let mut d = Decoder::new();

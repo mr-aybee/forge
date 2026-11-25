@@ -55,11 +55,13 @@ pub async fn challenge(
     if !state.config.security.login_challenge {
         return Ok(Json(json!({ "required": false })));
     }
+
     let ip = crate::throttle::client_ip(&headers, peer, &state.config.trusted_proxies());
     let c = state.login_challenges.issue(q.login.as_deref(), Some(ip)).ok_or_else(|| {
         ApiError::new(StatusCode::TOO_MANY_REQUESTS, "throttled", "too many sign-in attempts; try later")
     })?;
     let expires_at = state.clock.now().0 + i64::try_from(c.expires_in.as_millis()).unwrap_or(120_000);
+
     Ok(Json(json!({
         "required": true,
         "id": c.id,
@@ -84,12 +86,14 @@ pub async fn captcha(
     if !state.captchas.required(q.login.as_deref(), ip, threshold) {
         return Ok(Json(json!({ "required": false })));
     }
+
     let c = state.captchas.issue(ip).ok_or_else(|| {
         ApiError::new(StatusCode::TOO_MANY_REQUESTS, "throttled", "too many sign-in attempts; try later")
     })?;
     use base64::Engine as _;
     let image = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&c.png));
     let expires_at = state.clock.now().0 + i64::try_from(c.expires_in.as_millis()).unwrap_or(120_000);
+
     Ok(Json(json!({
         "required": true,
         "id": c.id,
@@ -105,13 +109,16 @@ fn check_captcha(state: &AppState, req: &LoginRequest, key: &str, ip: std::net::
     if !state.captchas.required(Some(key), ip, state.config.security.captcha_after_failures) {
         return Ok(());
     }
+
     let refused = |code: &'static str, m: &str| ApiError::new(StatusCode::BAD_REQUEST, code, m);
+
     let (Some(id), Some(answer)) = (req.captcha_id.as_deref(), req.captcha_answer.as_deref()) else {
         return Err(refused(
             "captcha_required",
             "after failed attempts, type the characters in the picture (GET /api/v1/auth/captcha)",
         ));
     };
+
     state.captchas.verify(id, answer, ip).map_err(|r| match r {
         crate::captcha::Refusal::Wrong => {
             refused("captcha_failed", "the characters did not match; try the new picture")
@@ -125,6 +132,7 @@ fn check_challenge(state: &AppState, req: &LoginRequest, key: &str, ip: std::net
     if !state.config.security.login_challenge {
         return Ok(());
     }
+
     let (Some(id), Some(nonce)) = (req.challenge_id.as_deref(), req.nonce.as_deref()) else {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
@@ -132,12 +140,14 @@ fn check_challenge(state: &AppState, req: &LoginRequest, key: &str, ip: std::net
             "solve a login challenge first (GET /api/v1/auth/challenge)",
         ));
     };
+
     state.login_challenges.verify(id, nonce, key, Some(ip)).map_err(|r| {
         let m = match r {
             crate::challenge::Refusal::Invalid => "the login challenge expired or was used; get a new one",
             crate::challenge::Refusal::TooEasy => "this sign-in needs a harder challenge; get a new one with ?login=",
             crate::challenge::Refusal::Wrong => "the login challenge was not solved",
         };
+
         ApiError::new(StatusCode::BAD_REQUEST, "challenge_failed", m)
     })
 }
@@ -148,12 +158,14 @@ fn with_cookies(mut resp: Response, cookies: [String; 2]) -> Response {
             resp.headers_mut().append(header::SET_COOKIE, v);
         }
     }
+
     resp
 }
 
 async fn audit_login(state: &AppState, actor: &str, outcome: AuditOutcome, method: &str) {
     let ev =
         AuditEvent::new(actor, "auth.login", EntityRef::platform(), outcome).with_details(json!({ "method": method }));
+
     if let Err(e) = state.audit.append(ev).await {
         tracing::error!(error = %e, "audit write failed");
     }
@@ -168,6 +180,7 @@ pub async fn login(
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<Response> {
     let key = req.login.trim().to_lowercase();
+
     // Limits per account-and-address, per address and per account (see
     // `throttle::login_keys`): spraying and lockouts of the real owner.
     let ip = crate::throttle::client_ip(&headers, peer, &state.config.trusted_proxies());
@@ -175,6 +188,7 @@ pub async fn login(
     if !limits.iter().all(|(k, max)| state.login_throttle.allowed_up_to(k, *max)) {
         return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "throttled", "too many failed attempts; try later"));
     }
+
     check_challenge(&state, &req, &key, ip)?;
     check_captcha(&state, &req, &key, ip)?;
     let outcome = state.identity.login_password(&key, &req.password, req.totp.as_deref()).await;
@@ -185,14 +199,18 @@ pub async fn login(
                 for (k, _) in &limits {
                     state.login_throttle.record_failure(k);
                 }
+
                 state.login_challenges.failed(&key, Some(ip));
                 state.captchas.failed(&key, ip);
                 audit_login(&state, &format!("login:{key}"), AuditOutcome::Denied, "password").await;
             }
+
             return Err(e.into());
         }
     };
+
     crate::access::refuse_service_account(&state, user.id).await?;
+
     // The address-wide count stays: one success does not clear spraying.
     state.login_throttle.reset(&limits[0].0);
     state.login_throttle.reset(&limits[1].0);
@@ -203,6 +221,7 @@ pub async fn login(
     record_admin_address(&state, user.id, &origin).await;
     let ttl = state.identity.config().web_session_ttl.as_secs();
     let body = Json(json!({ "user": user, "mfa": mfa, "csrf_token": tokens.csrf_token })).into_response();
+
     Ok(with_cookies(body, session_cookies(&tokens.session_token, &tokens.csrf_token, ttl, secure)))
 }
 
@@ -220,9 +239,11 @@ pub(crate) async fn record_admin_address(
         EntityRef::platform(),
         forge_core::AuthzContext { mfa: true },
     );
+
     if !state.authz.is_allowed(&req).await {
         return;
     }
+
     // Only a name this machine or its configuration vouches for: the Host
     // header is the client's, and this address feeds emails and webhooks.
     let local = match tokio::task::spawn_blocking(crate::public_address::LocalNames::read).await {
@@ -232,6 +253,7 @@ pub(crate) async fn record_admin_address(
             return;
         }
     };
+
     let runtime = state.public_address.runtime();
     let configured: Vec<&str> = state
         .config
@@ -242,10 +264,12 @@ pub(crate) async fn record_admin_address(
         .chain(state.config.node_public_url.as_deref())
         .chain(runtime.as_deref())
         .collect();
+
     if !crate::public_address::host_trusted(origin.host(), &local, &configured, &state.allowed_hosts) {
         tracing::debug!(host = origin.host(), "not recording an administrator address on an unconfigured name");
         return;
     }
+
     match crate::public_address::record_last_admin(
         &state.store,
         &state.public_address,
@@ -262,6 +286,7 @@ pub(crate) async fn record_admin_address(
                 AuditOutcome::Success,
             )
             .with_details(json!({ "from": change.from, "to": change.to }));
+
             if let Err(e) = state.audit.append(ev).await {
                 tracing::error!(error = %e, "audit write failed");
             }
@@ -278,6 +303,7 @@ pub async fn logout(
     headers: HeaderMap,
 ) -> ApiResult<Response> {
     let mut kind = "web";
+
     if let Some(token) = cookie(&headers, SESSION_COOKIE) {
         state.identity.logout(token).await?;
     } else if let Some(token) = crate::auth::bearer(&headers)
@@ -288,7 +314,9 @@ pub async fn logout(
         state.identity.logout(token).await?;
         kind = "bearer";
     }
+
     caller.audit("auth.logout", &EntityRef::platform(), None, json!({ "session": kind })).await;
+
     Ok(with_cookies(StatusCode::NO_CONTENT.into_response(), clear_cookies(secure)))
 }
 
@@ -325,16 +353,19 @@ pub async fn update_me(
 ) -> ApiResult<Json<serde_json::Value>> {
     let before = &caller.session.user;
     let target = EntityRef::new(EntityKind::User, before.id);
+
     // The username and email are sign-in names: changing them needs the same
     // proof of identity as changing a factor, so a stolen session or an API
     // key cannot take the account over. The display name alone does not.
     let norm = |v: Option<&str>| v.map(str::trim).filter(|v| !v.is_empty()).map(str::to_lowercase);
     let names_change = norm(req.username.as_deref()) != norm(before.username.as_deref())
         || norm(req.email.as_deref()) != norm(before.email.as_deref());
+
     if names_change {
         super::reauth::for_factor_change(&state, &caller, req.current_password.as_deref(), "user.profile.update")
             .await?;
     }
+
     let user = match state
         .identity
         .update_profile(before, req.username.as_deref(), req.email.as_deref(), &req.display_name)
@@ -346,6 +377,7 @@ pub async fn update_me(
             return Err(e.into());
         }
     };
+
     caller
         .audit(
             "user.profile.update",
@@ -358,6 +390,7 @@ pub async fn update_me(
             }),
         )
         .await;
+
     Ok(Json(json!({ "user": user })))
 }
 
@@ -376,9 +409,11 @@ pub async fn change_password(
 ) -> ApiResult<Response> {
     let user = &caller.session.user;
     let target = EntityRef::new(EntityKind::User, user.id);
+
     if caller.via_api_key() {
         return Err(ApiError::forbidden("API keys cannot change a password"));
     }
+
     let key = format!("password:{}", user.id);
     if !state.login_throttle.allowed(&key) {
         return Err(ApiError::new(
@@ -387,34 +422,43 @@ pub async fn change_password(
             "too many attempts; try again in 15 minutes",
         ));
     }
+
     if let Err(e) = state.identity.change_password(user, &req.current_password, &req.new_password).await {
         if matches!(e, forge_identity::IdentityError::InvalidCredentials) {
             state.login_throttle.record_failure(&key);
             caller.audit_denied("user.password.change", &target, None, "wrong current password").await;
+
             return Err(ApiError::new(
                 StatusCode::UNAUTHORIZED,
                 "invalid_password",
                 "the current password is not correct",
             ));
         }
+
         caller.audit_denied("user.password.change", &target, None, &e.to_string()).await;
+
         return Err(e.into());
     }
+
     state.login_throttle.reset(&key);
     crate::bootstrap::forget_initial_password(&state, user.id).await;
+
     // Every other sign-in ends: web sessions, app and connector tokens with
     // their refresh tokens. A browser session that made the change gets a
     // fresh session of the same kind (same MFA state); API keys stay.
     state.identity.revoke_all(user.id).await?;
     caller.audit("user.password.change", &target, None, json!({ "other_sessions_ended": true })).await;
+
     if caller.session.session.kind != SessionKind::Web {
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
+
     // With MFA not required every session counts as verified (auth.rs); store
     // only real verification, so turning MFA on later still asks for it.
     let mfa = caller.factor_verified();
     let tokens = state.identity.create_web_session(user.id, mfa).await?;
     let ttl = state.identity.config().web_session_ttl.as_secs();
+
     Ok(with_cookies(
         StatusCode::NO_CONTENT.into_response(),
         session_cookies(&tokens.session_token, &tokens.csrf_token, ttl, secure),
@@ -437,14 +481,17 @@ pub async fn step_up(
     Json(req): Json<StepUp>,
 ) -> ApiResult<Response> {
     let user = &caller.session.user;
+
     if caller.via_api_key() {
         return Err(ApiError::forbidden("API keys cannot be stepped up"));
     }
+
     if !user.mfa_enabled() {
         return Err(ApiError::bad_request(
             "set up an authenticator app in Profile → Password & security (/profile/security) first",
         ));
     }
+
     let key = format!("step-up:{}", user.id);
     if !state.login_throttle.allowed(&key) {
         return Err(ApiError::new(
@@ -453,12 +500,16 @@ pub async fn step_up(
             "too many attempts; try again in 15 minutes",
         ));
     }
+
     if state.identity.verify_step_up(user, req.code.trim()).is_err() {
         state.login_throttle.record_failure(&key);
         caller.audit_denied("auth.step_up", &EntityRef::new(EntityKind::User, user.id), None, "invalid code").await;
+
         return Err(ApiError::new(StatusCode::UNAUTHORIZED, "invalid_mfa", "that code is not valid"));
     }
+
     state.login_throttle.reset(&key);
+
     // Apps and the CLI: a new token pair with MFA replaces the bearer session.
     if caller.session.session.kind == SessionKind::Bearer {
         let tokens = state.identity.step_up_bearer(&caller.session.session).await?;
@@ -467,15 +518,20 @@ pub async fn step_up(
             .await;
         let mut resp = Json(tokens).into_response();
         resp.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+
         return Ok(resp);
     }
+
     let tokens = state.identity.create_web_session(user.id, true).await?;
+
     if let Some(old) = cookie(&headers, SESSION_COOKIE) {
         state.identity.logout(old).await?;
     }
+
     caller.audit("auth.step_up", &EntityRef::new(EntityKind::User, user.id), None, json!({})).await;
     let ttl = state.identity.config().web_session_ttl.as_secs();
     let body = Json(json!({ "mfa": true, "csrf_token": tokens.csrf_token })).into_response();
+
     Ok(with_cookies(body, session_cookies(&tokens.session_token, &tokens.csrf_token, ttl, secure)))
 }
 
@@ -508,6 +564,7 @@ pub async fn totp_confirm(
     let me = EntityRef::new(EntityKind::User, user.id);
     state.identity.confirm_totp(user.id, &req.secret, &req.code).await?;
     caller.audit("auth.totp.enroll", &me, None, json!({ "replaced": user.mfa_enabled() })).await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -537,33 +594,41 @@ pub async fn oauth_authorize(
     if q.response_type != "code" {
         return Err(ApiError::bad_request("response_type must be `code`"));
     }
+
     if !state.identity.is_first_party(&q.client_id) {
         // Registered connectors (MCP): always through the consent page.
         let next = format!("/oauth/authorize?{}", serde_urlencoded_query(&q));
         return super::connectors::connector_authorize(&state, &headers, &q, next).await;
     }
+
     if q.resource.is_some() {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid_target", "this client cannot request a resource"));
     }
+
     let session = match cookie(&headers, SESSION_COOKIE) {
         Some(t) => state.identity.authenticate(t, SessionKind::Web).await?,
         None => None,
     };
+
     let Some(session) = session else {
         let next = format!("/oauth/authorize?{}", serde_urlencoded_query(&q));
         let login =
             format!("/login?next={}", url::form_urlencoded::byte_serialize(next.as_bytes()).collect::<String>());
+
         return Ok(Redirect::to(&login).into_response());
     };
+
     let code = state
         .identity
         .authorize_code(&session, &q.client_id, &q.redirect_uri, &q.code_challenge, &q.code_challenge_method)
         .await?;
     let mut target = url::Url::parse(&q.redirect_uri).map_err(|_| ApiError::bad_request("bad redirect_uri"))?;
     target.query_pairs_mut().append_pair("code", &code);
+
     if let Some(s) = &q.state {
         target.query_pairs_mut().append_pair("state", s);
     }
+
     Ok(Redirect::to(target.as_str()).into_response())
 }
 
@@ -574,12 +639,15 @@ fn serde_urlencoded_query(q: &AuthorizeQuery) -> String {
         .append_pair("redirect_uri", &q.redirect_uri)
         .append_pair("code_challenge", &q.code_challenge)
         .append_pair("code_challenge_method", &q.code_challenge_method);
+
     if let Some(st) = &q.state {
         s.append_pair("state", st);
     }
+
     if let Some(r) = &q.resource {
         s.append_pair("resource", r);
     }
+
     s.finish()
 }
 
@@ -604,6 +672,7 @@ pub struct TokenRequest {
 /// `POST /oauth/token` (form-encoded, RFC 6749).
 pub async fn oauth_token(State(state): State<AppState>, Form(req): Form<TokenRequest>) -> ApiResult<Response> {
     let missing = |f: &str| ApiError::bad_request(format!("missing `{f}`"));
+
     let tokens = match req.grant_type.as_str() {
         "authorization_code" => {
             state
@@ -629,8 +698,10 @@ pub async fn oauth_token(State(state): State<AppState>, Form(req): Form<TokenReq
         }
         _ => return Err(ApiError::new(StatusCode::BAD_REQUEST, "unsupported_grant_type", "unsupported grant_type")),
     };
+
     let mut resp = Json(tokens).into_response();
     resp.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+
     Ok(resp)
 }
 
@@ -664,9 +735,11 @@ pub async fn oidc_login(
     let cookie = oidc_cookie(&csrf_state, OIDC_COOKIE_SECS, secure);
     state.oidc_pending.insert(csrf_state, pending)?;
     let mut resp = Redirect::to(&url).into_response();
+
     if let Ok(v) = HeaderValue::from_str(&cookie) {
         resp.headers_mut().append(header::SET_COOKIE, v);
     }
+
     Ok(resp)
 }
 
@@ -683,12 +756,14 @@ pub async fn oidc_callback(
     Query(q): Query<OidcCallback>,
 ) -> ApiResult<Response> {
     let provider = state.oidc.as_ref().ok_or_else(|| ApiError::not_found("SSO is not configured"))?;
+
     // The callback must come back to the browser that started the sign-in:
     // a callback link sent by someone else (login CSRF) has no matching cookie.
     if !oidc_state_bound(&headers, &q.state) {
         audit_login(&state, "oidc:unbound", AuditOutcome::Denied, "oidc").await;
         return Err(ApiError::bad_request("this sign-in was started in another browser; start it again here"));
     }
+
     let pending =
         state.oidc_pending.take(&q.state).ok_or_else(|| ApiError::bad_request("unknown or expired login state"))?;
     let claims = provider.complete(&q.code, pending).await?;
@@ -699,7 +774,9 @@ pub async fn oidc_callback(
             return Err(e.into());
         }
     };
+
     crate::access::refuse_service_account(&state, user.id).await?;
+
     // Do not assume the IdP performed MFA: without verified `amr` evidence the
     // session is not MFA-verified, so sensitive actions still need step-up.
     let tokens = state.identity.create_web_session(user.id, false).await?;
@@ -709,9 +786,11 @@ pub async fn oidc_callback(
         Redirect::to("/").into_response(),
         session_cookies(&tokens.session_token, &tokens.csrf_token, ttl, secure),
     );
+
     if let Ok(v) = HeaderValue::from_str(&oidc_cookie("", 0, secure)) {
         resp.headers_mut().append(header::SET_COOKIE, v);
     }
+
     Ok(resp)
 }
 

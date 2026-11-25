@@ -509,6 +509,7 @@ impl MinuteBucket {
         #[allow(clippy::cast_possible_truncation)] // reason: an average of f32 values fits f32
         let cpu_avg = (self.cpu_sum / f64::from(n)) as f32;
         let avg = |s: u128| u64::try_from(s / u128::from(n)).unwrap_or(u64::MAX);
+
         crate::spool::NodeMinuteRow {
             minute: self.minute,
             cpu_avg,
@@ -606,15 +607,19 @@ impl SpoolFileWriter for PerTableSpoolWriter {
         if !f.logs.is_empty() {
             self.0.write_logs(&f.logs).await?;
         }
+
         if !f.minutes.is_empty() {
             self.0.write_node_minutes(&f.minutes).await?;
         }
+
         if !f.processes.is_empty() {
             self.0.write_top_processes(&f.processes).await?;
         }
+
         if !f.containers.is_empty() {
             self.0.write_container_minutes(&f.containers).await?;
         }
+
         Ok(FileWrite::Stored)
     }
 }
@@ -637,8 +642,10 @@ pub struct ContainerRowOut {
 #[must_use]
 pub fn group_series(rows: impl IntoIterator<Item = ContainerRowOut>) -> Vec<ContainerSeries> {
     let mut out: Vec<ContainerSeries> = Vec::new();
+
     for r in rows {
         let stack = (!r.stack.is_empty()).then_some(r.stack);
+
         match out.last_mut() {
             Some(s) if s.container_name == r.container_name => {
                 s.container_id = r.container_id;
@@ -657,5 +664,6 @@ pub fn group_series(rows: impl IntoIterator<Item = ContainerRowOut>) -> Vec<Cont
             }),
         }
     }
+
     out
 }

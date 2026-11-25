@@ -32,10 +32,12 @@ pub struct ParsedToken {
 #[must_use]
 pub fn generate(ca_fingerprint: &str, server_key_sha256: Option<&str>) -> NewEnrollmentToken {
     let secret = random_token::<32>();
+
     let display = match server_key_sha256 {
         Some(key) => format!("{secret}.{key}.{ca_fingerprint}"),
         None => format!("{secret}.{ca_fingerprint}"),
     };
+
     NewEnrollmentToken { secret_hash: hash_secret(&secret), display }
 }
 
@@ -63,7 +65,9 @@ pub fn parse(token: &str) -> Option<ParsedToken> {
         Some((s, k)) => (s, Some(k)),
         None => (rest, None),
     };
+
     let ok = is_fingerprint(fp) && secret.len() >= 32 && key.is_none_or(is_fingerprint);
+
     ok.then(|| ParsedToken {
         secret: secret.to_owned(),
         ca_fingerprint: fp.to_lowercase(),
@@ -92,6 +96,7 @@ mod tests {
         let p = parse(&t.display).expect("parses");
         assert_eq!((p.ca_fingerprint.as_str(), p.server_key_sha256.as_deref()), (ca.as_str(), Some(&*"cd".repeat(32))));
         assert_eq!(hash_secret(&p.secret), t.secret_hash);
+
         // An old agent splits at the last dot and sends `<secret>.<key>`.
         let (old_secret, old_ca) = t.display.rsplit_once('.').expect("dot");
         assert_eq!(old_ca, ca);

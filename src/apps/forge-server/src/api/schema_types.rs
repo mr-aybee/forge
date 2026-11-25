@@ -23,6 +23,7 @@ impl AgentMode {
     #[must_use]
     pub const fn from_core(m: forge_core::model::AgentMode) -> Self {
         use forge_core::model::AgentMode as M;
+
         match m {
             M::ReadOnly => Self::ReadOnly,
             M::Ask => Self::Ask,
@@ -44,6 +45,7 @@ impl BucketAccess {
     #[must_use]
     pub const fn from_core(a: forge_core::storage::BucketAccess) -> Self {
         use forge_core::storage::BucketAccess as A;
+
         match a {
             A::Read => Self::Read,
             A::ReadWrite => Self::ReadWrite,
@@ -64,6 +66,7 @@ impl ArchiveFormat {
     #[must_use]
     pub const fn from_core(f: forge_core::files::ArchiveFormat) -> Self {
         use forge_core::files::ArchiveFormat as F;
+
         match f {
             F::Zip => Self::Zip,
             F::TarGz => Self::TarGz,
@@ -87,6 +90,7 @@ impl JobStatus {
     #[must_use]
     pub const fn from_core(s: forge_core::model::JobStatus) -> Self {
         use forge_core::model::JobStatus as S;
+
         match s {
             S::Queued => Self::Queued,
             S::Running => Self::Running,
@@ -110,6 +114,7 @@ impl RootKind {
     #[must_use]
     pub const fn from_core(k: forge_core::files::RootKind) -> Self {
         use forge_core::files::RootKind as K;
+
         match k {
             K::Node => Self::Node,
             K::Service => Self::Service,
@@ -211,7 +216,9 @@ mod tests {
                 .collect(),
             _ => Vec::new(),
         };
+
         out.sort();
+
         out
     }
 
@@ -219,6 +226,7 @@ mod tests {
         let mut out: Vec<String> =
             all.iter().filter_map(|x| serde_json::to_value(x).ok()?.as_str().map(str::to_owned)).collect();
         out.sort();
+
         out
     }
 
@@ -231,6 +239,7 @@ mod tests {
         assert_eq!(names::<JobStatus>(), wire(&[S::Queued, S::Running, S::Succeeded, S::Failed, S::Cancelled]));
         assert_eq!(names::<RootKind>(), wire(&[K::Node, K::Service, K::Container]));
         assert_eq!(names::<BucketAccess>(), wire(&forge_core::storage::BucketAccess::ALL));
+
         // Each mirror converts from every real variant (compile-time exhaustive).
         assert_eq!(BucketAccess::from_core(forge_core::storage::BucketAccess::ReadWrite), BucketAccess::ReadWrite);
         assert_eq!(AgentMode::from_core(M::Ask), AgentMode::Ask);
@@ -294,12 +303,14 @@ mod tests {
             authenticator_data: _,
             signature: _,
         } = a;
+
         for (name, fields) in [("NewGrant", 10), ("RegistrationResponse", 3), ("AssertionResponse", 4)] {
             let s = match name {
                 "NewGrant" => schemars::schema_for!(NewGrant),
                 "RegistrationResponse" => schemars::schema_for!(RegistrationResponse),
                 _ => schemars::schema_for!(AssertionResponse),
             };
+
             let n = s.as_value()["properties"].as_object().map_or(0, serde_json::Map::len);
             assert_eq!(n, fields, "{name}");
         }

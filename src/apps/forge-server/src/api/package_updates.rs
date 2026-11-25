@@ -83,15 +83,18 @@ fn line_for<'a>(releases: &'a [PackageRelease], catalog_line: &str, installed: &
     if let Some(r) = releases.iter().find(|r| r.line == catalog_line) {
         return Some(r);
     }
+
     let n = numbers(installed);
     let two = n.iter().take(2).map(u64::to_string).collect::<Vec<_>>().join(".");
     let one = n.first().map(u64::to_string).unwrap_or_default();
+
     releases.iter().find(|r| r.line == two).or_else(|| releases.iter().find(|r| r.line == one))
 }
 
 fn upstream_for(releases: &[PackageRelease], i: &Installation) -> Option<Upstream> {
     let v = i.versions.as_ref()?;
     let r = line_for(releases, &i.version, &v.installed)?;
+
     // endoflife.date lists the newest line first.
     let newest = releases.first().filter(|n| n.line != r.line).map(|n| n.line.clone());
     let best_node = if v.candidate.is_empty() { &v.installed } else { &v.candidate };
@@ -99,6 +102,7 @@ fn upstream_for(releases: &[PackageRelease], i: &Installation) -> Option<Upstrea
         let (vendor, node) = (numbers(&r.latest), numbers(best_node));
         !vendor.is_empty() && vendor > node[..node.len().min(vendor.len())].to_vec()
     };
+
     Some(Upstream {
         line: r.line.clone(),
         latest: r.latest.clone(),
@@ -115,6 +119,7 @@ fn row(i: &Installation, releases: &BTreeMap<String, Vec<PackageRelease>>) -> Op
     if !forge_catalog::updatable(pkg) {
         return None;
     }
+
     let v = i.versions.clone().unwrap_or_else(|| forge_core::model::PackageVersions {
         manager: String::new(),
         package: String::new(),
@@ -126,6 +131,7 @@ fn row(i: &Installation, releases: &BTreeMap<String, Vec<PackageRelease>>) -> Op
     let kind =
         (!v.installed.is_empty() && !v.candidate.is_empty()).then(|| classify(&v.installed, &v.candidate)).flatten();
     let upstream = releases.get(pkg.upstream).and_then(|r| upstream_for(r, i));
+
     Some(UpdateRow {
         installation_id: i.id,
         server_id: i.server_id,
@@ -149,13 +155,16 @@ fn row(i: &Installation, releases: &BTreeMap<String, Vec<PackageRelease>>) -> Op
 
 async fn releases_by_product(state: &AppState) -> BTreeMap<String, Vec<PackageRelease>> {
     let mut by: BTreeMap<String, Vec<PackageRelease>> = BTreeMap::new();
+
     for r in state.store.list_releases().await.unwrap_or_default() {
         by.entry(r.product.clone()).or_default().push(r);
     }
+
     // Newest line first (the store orders by text).
     for list in by.values_mut() {
         list.sort_by(|a, b| compare(&b.line, &a.line));
     }
+
     by
 }
 
@@ -168,6 +177,7 @@ pub async fn list(State(state): State<AppState>, caller: Caller) -> ApiResult<Js
     let all = state.store.list_installations(None).await?;
     let allowed = caller.can_many(Action::View, all.iter().map(|i| server_ref(i.server_id)).collect()).await;
     let releases = releases_by_product(&state).await;
+
     Ok(Json(all.iter().zip(allowed).filter(|(_, ok)| *ok).filter_map(|(i, _)| row(i, &releases)).collect()))
 }
 
@@ -180,11 +190,14 @@ pub async fn check(State(state): State<AppState>, caller: Caller) -> ApiResult<(
     let all: Vec<Installation> = state.store.list_installations(None).await?.into_iter().filter(checkable).collect();
     let allowed = caller.can_many(Action::ServerManage, all.iter().map(|i| server_ref(i.server_id)).collect()).await;
     let mut jobs = 0;
+
     for (i, _) in all.iter().zip(allowed).filter(|(_, ok)| *ok) {
         submit_as(&state, caller.principal(), caller.ctx(), i, "versions", None).await?;
         jobs += 1;
     }
+
     tokio::spawn(refresh_releases(state.clone(), false));
+
     Ok((StatusCode::ACCEPTED, Json(json!({ "checks": jobs }))))
 }
 
@@ -217,6 +230,7 @@ pub async fn update(
             }),
         )
         .await;
+
     Ok((StatusCode::ACCEPTED, Json(job)))
 }
 
@@ -231,12 +245,15 @@ async fn start_update(
 ) -> ApiResult<Job> {
     forge_catalog::validate(&inst.package, &inst.version, "upgrade", &BTreeMap::new())
         .map_err(ApiError::bad_request)?;
+
     if !forge_catalog::versions::valid_build(build) {
         return Err(ApiError::bad_request("invalid build"));
     }
+
     let Some(v) = inst.versions.as_ref() else {
         return Err(ApiError::conflict("check for updates first"));
     };
+
     if v.candidate != build {
         return Err(ApiError::conflict(format!(
             "{} offers {} on this node, not {build}; check for updates again",
@@ -244,16 +261,20 @@ async fn start_update(
             if v.candidate.is_empty() { "nothing" } else { &v.candidate }
         )));
     }
+
     if classify(&v.installed, build).is_none() {
         return Err(ApiError::conflict(format!("{build} is not newer than the installed {}", v.installed)));
     }
+
     if inst.status.ends_with("ing") {
         return Err(ApiError::conflict(format!("{} is {}; wait for it to finish", inst.package, inst.status)));
     }
+
     let mut busy = inst.clone();
     busy.status = "updating".into();
     busy.updated_at = state.clock.now();
     state.store.put_installation(&busy).await?;
+
     submit_as(state, principal, context, inst, "upgrade", Some(build)).await
 }
 
@@ -278,9 +299,11 @@ pub async fn set_policy(
     if !matches!(req.update_policy.as_str(), "notify" | "auto_patch") {
         return Err(ApiError::bad_request("update_policy must be `notify` or `auto_patch`"));
     }
+
     let mut inst =
         state.store.get_installation(id).await?.ok_or_else(|| ApiError::not_found("installation not found"))?;
     caller.authorize(Action::PackageManage, server_ref(inst.server_id)).await?;
+
     if req.update_policy == "auto_patch" {
         let by = super::fabric_reconcile::AppliedBy {
             principal: caller.principal(),
@@ -292,6 +315,7 @@ pub async fn set_policy(
     } else {
         state.store.delete_setting(&auto_patch_key(inst.id)).await?;
     }
+
     inst.update_policy = req.update_policy;
     inst.updated_at = state.clock.now();
     state.store.put_installation(&inst).await?;
@@ -303,6 +327,7 @@ pub async fn set_policy(
             json!({ "package": inst.package, "version": inst.version, "update_policy": inst.update_policy }),
         )
         .await;
+
     Ok(Json(inst))
 }
 
@@ -330,6 +355,7 @@ pub fn parse_releases(product: &str, doc: &Value, now: Timestamp) -> Vec<Package
                         Value::Number(n) => n.to_string(),
                         _ => return None,
                     };
+
                     Some(PackageRelease {
                         product: product.to_owned(),
                         line,
@@ -354,6 +380,7 @@ pub fn parse_releases(product: &str, doc: &Value, now: Timestamp) -> Vec<Package
 pub(crate) async fn refresh_releases(state: AppState, force: bool) {
     let now = state.clock.now();
     let stored = releases_by_product(&state).await;
+
     let Ok(client) = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .user_agent(concat!("orbyn-forge/", env!("CARGO_PKG_VERSION")))
@@ -361,15 +388,19 @@ pub(crate) async fn refresh_releases(state: AppState, force: bool) {
     else {
         return;
     };
+
     let mut products: Vec<&str> = forge_catalog::CATALOG.iter().map(|p| p.upstream).filter(|u| !u.is_empty()).collect();
     products.sort_unstable();
     products.dedup();
+
     for product in products {
         let fresh =
             stored.get(product).and_then(|r| r.first()).is_some_and(|r| now.0 - r.fetched_at.0 < RELEASES_MAX_AGE_MS);
+
         if fresh && !force {
             continue;
         }
+
         let doc = match client.get(format!("{RELEASES_URL}/{product}.json")).send().await {
             Ok(r) if r.status().is_success() => r.json::<Value>().await.ok(),
             Ok(r) => {
@@ -380,15 +411,18 @@ pub(crate) async fn refresh_releases(state: AppState, force: bool) {
                 // reqwest's Display hides the cause (DNS, TLS roots, …).
                 let mut chain = e.to_string();
                 let mut src = std::error::Error::source(&e);
+
                 while let Some(s) = src {
                     chain.push_str(": ");
                     chain.push_str(&s.to_string());
                     src = s.source();
                 }
+
                 tracing::warn!(product, error = %chain, "release data unavailable (outbound HTTPS needs the system CA bundle, e.g. ca-certificates)");
                 None
             }
         };
+
         let releases = doc.map(|d| parse_releases(product, &d, now)).unwrap_or_default();
         if !releases.is_empty()
             && let Err(e) = state.store.put_releases(product, &releases).await
@@ -407,6 +441,7 @@ async fn pass(state: &AppState) {
     let Ok(all) = state.store.list_installations(None).await else { return };
     let enabled_by: BTreeMap<String, String> =
         state.store.all_settings().await.unwrap_or_default().into_iter().collect();
+
     for i in all.iter().filter(|i| checkable(i)) {
         let Some(last) = i.last_job_id else { continue };
         let Ok(job) = state.store.get_job(last).await else { continue };
@@ -419,9 +454,11 @@ async fn pass(state: &AppState) {
         let owner = enabled_by
             .get(&auto_patch_key(i.id))
             .and_then(|v| serde_json::from_str::<super::fabric_reconcile::AppliedBy>(v).ok());
+
         if auto && owner.is_none() {
             tracing::warn!(installation = %i.id, "auto_patch has no recorded owner: set the update policy again");
         }
+
         // The person who enabled it must still exist and be enabled.
         let owner = match owner {
             Some(o) if auto => {
@@ -443,15 +480,18 @@ async fn pass(state: &AppState) {
                             "on_behalf_of": o.principal.to_string(),
                             "reason": format!("the person who enabled auto_patch was {why}: set the policy again"),
                         }));
+
                         if let Err(e) = state.audit.append(ev).await {
                             tracing::error!(error = %e, "audit write failed");
                         }
+
                         None
                     }
                 }
             }
             o => o,
         };
+
         if auto
             && let Some(owner) = owner
             && let Some(build) = i.versions.as_ref().map(|v| v.candidate.clone())
@@ -473,11 +513,14 @@ async fn pass(state: &AppState) {
                 "on_behalf_of": principal.to_string(),
                 "error": outcome.as_ref().err().map(|e| e.message.clone()),
             }));
+
             if let Err(e) = state.audit.append(ev).await {
                 tracing::error!(error = %e, "audit write failed");
             }
+
             continue;
         }
+
         if let Err(e) = submit_as(state, principal, context, i, "versions", None).await {
             tracing::warn!(installation = %i.id, error = %e.message, "cannot queue a version check");
         }
@@ -486,6 +529,7 @@ async fn pass(state: &AppState) {
 
 pub(crate) async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
     let mut wait = Duration::from_secs(90);
+
     loop {
         tokio::select! {
             () = tokio::time::sleep(wait) => {}

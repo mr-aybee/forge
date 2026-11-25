@@ -22,6 +22,7 @@ async fn a_second_workspace_makes_workspace_requests_fail_closed() {
     let (s, e) = admin.get("/api/v1/settings").await;
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "{e}");
     assert_eq!(e["title"], "multiple_workspaces", "{e}");
+
     // Routes without a workspace still answer.
     assert_eq!(admin.get("/api/v1/me").await.0, StatusCode::OK);
 }

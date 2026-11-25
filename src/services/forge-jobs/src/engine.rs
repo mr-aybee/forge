@@ -90,6 +90,7 @@ impl JobEngine {
             .registry
             .get(&job.kind)
             .ok_or_else(|| DomainError::Invalid(format!("unknown job kind `{}`", job.kind)))?;
+
         for action in [Action::JobCreate, handler.required_action(&job.payload)] {
             let req = AccessRequest::new(job.principal.clone(), action, job.resource.clone(), job.context);
             if let Err(e) = self.authz.authorize(&req).await {
@@ -105,6 +106,7 @@ impl JobEngine {
                 return Err(e);
             }
         }
+
         let (created, is_new) = self.repo.insert_job(job, self.clock.now()).await?;
         if is_new {
             self.audit_job_event(
@@ -119,6 +121,7 @@ impl JobEngine {
             self.emit(&created, None);
             self.wake.notify_one();
         }
+
         Ok(created)
     }
 
@@ -141,21 +144,26 @@ impl JobEngine {
             let mut j = job;
             j.status = JobStatus::Cancelled;
             self.emit(&j, None);
+
             // Stop the step now if it runs in this process.
             if let Some(n) = self.cancels.lock().ok().and_then(|c| c.get(&id).cloned()) {
                 n.notify_one();
             }
         }
+
         Ok(cancelled)
     }
 
     /// Claims and fully processes at most one job. Returns `true` if a job ran.
     pub async fn run_once(&self) -> DomainResult<bool> {
         let now = self.clock.now();
+
         let Some(job) = self.repo.claim_job(&self.config.worker_id, now, now.plus(self.config.lease)).await? else {
             return Ok(false);
         };
+
         self.execute(job).await;
+
         Ok(true)
     }
 
@@ -163,10 +171,12 @@ impl JobEngine {
     pub async fn run(self: Arc<Self>, mut shutdown: watch::Receiver<bool>) {
         let permits = Arc::new(Semaphore::new(self.config.concurrency.max(1)));
         tracing::info!(worker = %self.config.worker_id, "job engine started");
+
         loop {
             if *shutdown.borrow() {
                 break;
             }
+
             let Ok(permit) = permits.clone().acquire_owned().await else { break };
             let now = self.clock.now();
             match self.repo.claim_job(&self.config.worker_id, now, now.plus(self.config.lease)).await {
@@ -192,6 +202,7 @@ impl JobEngine {
                 }
             }
         }
+
         tracing::info!(worker = %self.config.worker_id, "job engine stopped");
     }
 
@@ -210,6 +221,7 @@ impl JobEngine {
             self.finish(&job, JobStatus::Failed, Some(&format!("no handler for kind `{}`", job.kind))).await;
             return;
         };
+
         let steps = handler.steps();
         let mut ctx = StepContext { state: job.state.clone(), job };
         let start = ctx.job.current_step as usize;
@@ -225,6 +237,7 @@ impl JobEngine {
                 ctx.job.resource.clone(),
                 ctx.job.context,
             );
+
             if let Err(e) = self.authz.authorize(&req).await {
                 let msg = format!("denied at step `{name}`: {e}");
                 self.audit_job_event(
@@ -237,6 +250,7 @@ impl JobEngine {
                 )
                 .await;
                 self.finish(&ctx.job, JobStatus::Failed, Some(&msg)).await;
+
                 return;
             }
 
@@ -245,6 +259,7 @@ impl JobEngine {
                 tracing::warn!(error = %e, "lost lease before step start");
                 return;
             }
+
             self.emit(&ctx.job, Some(name));
 
             let outcome = match self.run_step_with_lease(handler.as_ref(), index, &mut ctx, token).await {
@@ -266,12 +281,15 @@ impl JobEngine {
                     let delay = self.config.retry.delay(ctx.job.attempts, unit_random());
                     let next = self.clock.now().plus(delay);
                     tracing::info!(step = name, ?delay, error = %msg, "step failed, retrying");
+
                     if let Err(e) = self.repo.schedule_retry(id, token, next, &msg, self.clock.now()).await {
                         tracing::warn!(error = %e, "could not schedule retry");
                     }
+
                     let mut j = ctx.job.clone();
                     j.status = JobStatus::Queued;
                     self.emit(&j, Some(name));
+
                     return;
                 }
                 Err(StepError::Retryable(msg) | StepError::Fatal(msg)) => {
@@ -280,6 +298,7 @@ impl JobEngine {
                 }
             }
         }
+
         self.finish(&ctx.job, JobStatus::Succeeded, None).await;
     }
 
@@ -295,13 +314,16 @@ impl JobEngine {
         let id = ctx.job.id;
         let renew_every = self.config.lease / 3;
         let cancelled = Arc::new(Notify::new());
+
         if let Ok(mut c) = self.cancels.lock() {
             c.insert(id, cancelled.clone());
         }
+
         let step = handler.run_step(index, ctx);
         tokio::pin!(step);
         let mut ticker = tokio::time::interval(renew_every);
         ticker.tick().await; // first tick is immediate
+
         let out = loop {
             tokio::select! {
                 res = &mut step => break Ok(res),
@@ -314,9 +336,11 @@ impl JobEngine {
                 }
             }
         };
+
         if let Ok(mut c) = self.cancels.lock() {
             c.remove(&id);
         }
+
         out
     }
 
@@ -366,6 +390,7 @@ impl JobEngine {
         let ev = AuditEvent::new(actor, action, resource, outcome)
             .in_org(org)
             .with_details(serde_json::json!({ "kind": kind }));
+
         if let Err(e) = self.audit.record(ev).await {
             tracing::error!(error = %e, "failed to write audit entry");
         }
@@ -374,6 +399,7 @@ impl JobEngine {
 
 fn unit_random() -> f64 {
     let b = forge_secrets::crypto::random_bytes::<8>();
+
     // 53 random bits → [0, 1)
     #[allow(clippy::cast_precision_loss)]
     let v = (u64::from_le_bytes(b) >> 11) as f64 / (1u64 << 53) as f64;

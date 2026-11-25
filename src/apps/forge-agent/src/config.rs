@@ -81,16 +81,20 @@ impl AgentConfig {
     /// on removals stick.
     pub fn offer_new_commands(&mut self) -> Vec<String> {
         let mut added = Vec::new();
+
         for kind in default_allowed() {
             if self.offered_commands.contains(&kind) {
                 continue;
             }
+
             if !self.allowed_commands.contains(&kind) && !OPT_IN.contains(&kind.as_str()) {
                 self.allowed_commands.push(kind.clone());
                 added.push(kind.clone());
             }
+
             self.offered_commands.push(kind);
         }
+
         added
     }
 }
@@ -168,6 +172,7 @@ impl StatePaths {
     pub fn save_config(&self, c: &AgentConfig) -> anyhow::Result<()> {
         std::fs::create_dir_all(&self.dir)?;
         std::fs::write(self.config(), toml::to_string_pretty(c)?)?;
+
         Ok(())
     }
 
@@ -178,6 +183,7 @@ impl StatePaths {
     pub fn save_identity(&self, id: &AgentIdentity) -> anyhow::Result<()> {
         std::fs::create_dir_all(&self.dir)?;
         std::fs::write(self.identity(), serde_json::to_vec_pretty(id)?)?;
+
         Ok(())
     }
 
@@ -185,6 +191,7 @@ impl StatePaths {
     pub fn save_credentials(&self, key_pem: &str, cert_pem: &str) -> anyhow::Result<()> {
         forge_secrets::write_private(&self.key(), key_pem.as_bytes())?;
         std::fs::write(self.cert(), cert_pem)?;
+
         Ok(())
     }
 
@@ -212,17 +219,21 @@ mod tests {
         let added = old.offer_new_commands();
         assert!(added.contains(&"files".to_owned()));
         assert_eq!(old.offered_commands, default_allowed());
+
         // The operator removes `files`; the next update keeps it removed.
         old.allowed_commands.retain(|c| c != "files");
         assert!(old.offer_new_commands().is_empty());
         assert!(!old.allowed_commands.contains(&"files".to_owned()));
+
         // A kind added by a later release is offered once.
         old.offered_commands.retain(|c| c != "stack");
         old.allowed_commands.retain(|c| c != "stack");
         assert_eq!(old.offer_new_commands(), vec!["stack".to_owned()]);
+
         // Round trip through TOML keeps the record.
         let back: AgentConfig = toml::from_str(&toml::to_string_pretty(&old).unwrap()).unwrap();
         assert_eq!(back, old);
+
         // An old file without the field still parses.
         let legacy: AgentConfig = toml::from_str("server_url = \"x\"\nallowed_commands = [\"ping\"]\n").unwrap();
         assert!(legacy.offered_commands.is_empty());
@@ -246,6 +257,7 @@ mod tests {
             analytics_url: None,
         };
         assert!(!legacy.offer_new_commands().contains(&shell));
+
         // `container` does not admit shells.
         let only_containers = crate::policy::LocalPolicy::new(&["container".into()]);
         let cmd = forge_proto::Command::ContainerExecOpen(forge_proto::messages::ContainerExecOpen::default());
@@ -276,9 +288,11 @@ pub fn windows_data_dir() -> PathBuf {
 pub fn lock_windows_dir(dir: &Path) -> anyhow::Result<()> {
     use std::os::windows::fs::MetadataExt;
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
     if std::fs::symlink_metadata(dir).is_ok_and(|m| m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0) {
         anyhow::bail!("{} is a link (reparse point); remove it and run again", dir.display());
     }
+
     std::fs::create_dir_all(dir)?;
     let icacls = |args: &[&str]| -> anyhow::Result<()> {
         let out = std::process::Command::new("icacls.exe").arg(dir).args(args).output()?;
@@ -294,6 +308,7 @@ pub fn lock_windows_dir(dir: &Path) -> anyhow::Result<()> {
         }
     };
     icacls(&["/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F", "/Q"])?;
+
     icacls(&["/remove:g", "*S-1-1-0", "*S-1-5-11", "*S-1-5-32-545", "*S-1-3-0", "*S-1-3-4", "/Q"])
 }
 
@@ -303,9 +318,11 @@ pub fn lock_windows_dir(dir: &Path) -> anyhow::Result<()> {
 pub fn lock_windows_data(state_dir: &Path) -> anyhow::Result<()> {
     let data = windows_data_dir();
     lock_windows_dir(&data)?;
+
     if !state_dir.starts_with(&data) {
         lock_windows_dir(state_dir)?;
     }
+
     Ok(())
 }
 
@@ -325,9 +342,11 @@ mod windows_data_dir_tests {
         let icacls = |args: &[&str]| {
             std::process::Command::new("icacls.exe").arg(&dir).args(args).output().unwrap_or_else(|e| panic!("{e}"))
         };
+
         if let Err(e) = super::lock_windows_dir(&dir) {
             panic!("{e}");
         }
+
         // No inherited entries remain, and only SYSTEM and Administrators are granted.
         let sids = icacls(&["/save", &tmp.path().join("acl.txt").display().to_string()]);
         assert!(sids.status.success());
@@ -337,6 +356,7 @@ mod windows_data_dir_tests {
         assert!(sddl.contains("D:P"), "protected DACL: {sddl}");
         assert!(!sddl.contains(";BU)") && !sddl.contains(";WD)") && !sddl.contains(";AU)"), "{sddl}");
         assert!(sddl.contains(";SY)") && sddl.contains(";BA)"), "{sddl}");
+
         // Give access back so the temp folder can be removed.
         let _ = icacls(&["/reset", "/T", "/C", "/Q"]);
 
@@ -349,6 +369,7 @@ mod windows_data_dir_tests {
             .arg(&target)
             .output()
             .is_ok_and(|o| o.status.success());
+
         if made {
             let err = super::lock_windows_dir(&link).err().map(|e| e.to_string()).unwrap_or_default();
             assert!(err.contains("reparse point"), "{err}");

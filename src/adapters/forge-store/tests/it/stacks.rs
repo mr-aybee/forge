@@ -41,6 +41,7 @@ async fn seed() -> (Store, tempfile::TempDir, WorkspaceId, EnvironmentId, Server
         created_at: Timestamp(1),
     };
     s.create_server(&server).await.unwrap();
+
     (s, dir, org.id, ns.id, server.id)
 }
 
@@ -76,6 +77,7 @@ async fn stacks_revisions_and_nodes_round_trip() {
         updated_at: Timestamp(10),
     };
     store.create_stack(&stack, &rev(stack.id, "services: {}", 10)).await.unwrap();
+
     // Names are unique per environment.
     let mut dup = stack.clone();
     dup.id = StackId::new();
@@ -153,10 +155,12 @@ async fn concurrent_revisions_get_distinct_numbers() {
     store.create_stack(&stack, &rev(stack.id, "v1", 10)).await.unwrap();
     const N: i64 = 24;
     let mut tasks = Vec::new();
+
     for i in 0..N {
         let s = store.clone();
         let id = stack.id;
         tasks.push(tokio::spawn(async move { s.add_revision(&rev(id, &format!("v{}", i + 2), 100 + i)).await }));
+
         // Unrelated writers committing in between.
         let s = store.clone();
         let mut other = stack.clone();
@@ -165,13 +169,16 @@ async fn concurrent_revisions_get_distinct_numbers() {
             s.put_stack(&other).await.map(|()| -1)
         }));
     }
+
     let mut numbers = Vec::new();
+
     for t in tasks {
         let n = t.await.unwrap().unwrap();
         if n > 0 {
             numbers.push(n);
         }
     }
+
     numbers.sort_unstable();
     assert_eq!(numbers, (2..=N + 1).collect::<Vec<_>>());
     assert_eq!(store.get_stack(stack.id).await.unwrap().unwrap().revision, N + 1);
@@ -239,10 +246,12 @@ async fn delete_server_removes_node_data_and_frees_the_name() {
     };
     let shared = mk("shared");
     let alone = mk("alone");
+
     for s in [&shared, &alone] {
         store.create_stack(s, &rev(s.id, "services: {}", 1)).await.unwrap();
         store.put_node(&part(s.id, gone)).await.unwrap();
     }
+
     store.put_node(&part(shared.id, other.id)).await.unwrap();
     store.set_node_label(gone, ws, "lab-b", true, Timestamp(2)).await.unwrap();
     store.revoke_certificate("ab12", gone, Timestamp(3)).await.unwrap();
@@ -258,6 +267,7 @@ async fn delete_server_removes_node_data_and_frees_the_name() {
     assert!(store.get_stack(alone.id).await.unwrap().is_none());
     assert!(store.nodes_on_server(gone).await.unwrap().is_empty());
     assert!(store.list_node_labels(Some(ws)).await.unwrap().iter().all(|(id, _, _)| *id != gone));
+
     // A second delete finds nothing.
     assert!(store.delete_server(gone, Timestamp(10)).await.is_err());
 

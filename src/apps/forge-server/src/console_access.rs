@@ -107,16 +107,19 @@ pub async fn is_member(
     ws: WorkspaceId,
 ) -> DomainResult<bool> {
     let ws_ref = EntityRef::new(EntityKind::Workspace, ws);
+
     for b in bindings.list_bindings_for_user(user).await? {
         if b.scope.kind == EntityKind::Platform || b.scope == ws_ref {
             return Ok(true);
         }
+
         match resolver.resolve(&b.scope).await {
             Ok(r) if r.ancestors.contains(&ws_ref) => return Ok(true),
             Ok(_) | Err(DomainError::NotFound(_) | DomainError::Invalid(_)) => {}
             Err(e) => return Err(e),
         }
     }
+
     Ok(false)
 }
 
@@ -126,6 +129,7 @@ impl ConsoleAccess<'_> {
         let bindings = self.bindings.list_bindings_for_user(user).await?;
         let roles: HashSet<Role> = bindings.iter().map(|b| b.role).collect();
         let mut anywhere: HashSet<Action> = HashSet::new();
+
         for role in &roles {
             anywhere.extend(self.policy.role_actions(*role).map_err(DomainError::internal)?);
         }
@@ -140,6 +144,7 @@ impl ConsoleAccess<'_> {
                     Scope::Platform => EntityRef::platform(),
                     Scope::Workspace => ws_ref.clone(),
                 };
+
                 AccessRequest::new(Principal::User(user), *action, resource, ctx)
             })
             .collect();
@@ -148,6 +153,7 @@ impl ConsoleAccess<'_> {
         let any = |a: Action| anywhere.contains(&a);
 
         let access_manage = at(5);
+
         Ok(ConsoleCapabilities {
             fleet_view: any(Action::View),
             terminal: any(Action::TerminalOpen),

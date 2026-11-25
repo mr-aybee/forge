@@ -80,36 +80,46 @@ pub fn read(bytes: &[u8], node: ServerId, now: Timestamp, maps: &Indexed) -> Res
         let n =
             (&mut reader).take(MAX_ROW_BYTES as u64).read_line(line).map_err(|e| FileError::Decode(e.to_string()))?;
         total += n as u64;
+
         if total > MAX_RAW_BYTES {
             return Err(FileError::TooLarge);
         }
+
         Ok(n > 0)
     };
+
     if !next(&mut line)? {
         return Err(FileError::Header("the file is empty".into()));
     }
+
     let header: FileHeader = serde_json::from_str(&line).map_err(|e| FileError::Header(e.to_string()))?;
     if header.v != VERSION {
         return Err(FileError::Header(format!("version {} is not supported", header.v)));
     }
+
     let mut out = Imported::default();
     let services = maps.apps.get(&node);
+
     while next(&mut line)? {
         if line.trim().is_empty() {
             continue;
         }
+
         let Ok(row) = serde_json::from_str::<Row>(&line) else {
             out.skipped += 1;
             continue;
         };
+
         match row {
             Row::Log(l) => {
                 let Some(service) = key_service(maps, &l.key, node) else {
                     out.skipped += 1;
                     continue;
                 };
+
                 let cx =
                     IngestContext { service_id: service, server_id: Some(node), node_ts: Some(Timestamp(l.ts)), now };
+
                 match parse_batch(&l.body, cx) {
                     Ok(events) => out.logs.extend(events),
                     Err(_) => out.skipped += 1,
@@ -125,10 +135,12 @@ pub fn read(bytes: &[u8], node: ServerId, now: Timestamp, maps: &Indexed) -> Res
                     stack: a.stack,
                     now,
                 };
+
                 let stream = match c.stream {
                     spool::Stream::Stdout => LogStream::Stdout,
                     spool::Stream::Stderr => LogStream::Stderr,
                 };
+
                 out.logs.push(container_event(&cx, stream, c.ts, clip(&c.line, MAX_CONTAINER_LINE_BYTES)));
             }
             Row::NodeMinute(m) => out.minutes.push(NodeMinute::from_row(node, &m)),
@@ -147,6 +159,7 @@ pub fn read(bytes: &[u8], node: ServerId, now: Timestamp, maps: &Indexed) -> Res
                     out.skipped += 1;
                     continue;
                 }
+
                 let a = attribute(Some(&labels(&s.labels)), services);
                 out.containers.push(ContainerMinute {
                     server_id: node,
@@ -168,6 +181,7 @@ pub fn read(bytes: &[u8], node: ServerId, now: Timestamp, maps: &Indexed) -> Res
             }
         }
     }
+
     Ok(out)
 }
 
@@ -185,12 +199,15 @@ pub(crate) mod tests {
         let header = FileHeader { v: VERSION, node: node.into(), created: 1, counts: Counts::default() };
         serde_json::to_writer(&mut raw, &header).unwrap();
         raw.push(b'\n');
+
         for r in rows {
             serde_json::to_writer(&mut raw, r).unwrap();
             raw.push(b'\n');
         }
+
         let mut enc = zstd::stream::write::Encoder::new(Vec::new(), 1).unwrap();
         enc.write_all(&raw).unwrap();
+
         enc.finish().unwrap()
     }
 
@@ -229,6 +246,7 @@ pub(crate) mod tests {
             node_certs: vec![],
         })
         .unwrap();
+
         m.get()
     }
 
@@ -242,6 +260,7 @@ pub(crate) mod tests {
             container("prod/api", "{\"level\":\"error\",\"msg\":\"boom\"}"),
             container("prod/other", "plain"),
         ];
+
         // The file claims another node; the certificate's node wins.
         let got = read(&file(&other.to_string(), &rows), node, Timestamp(9), &m).unwrap();
         assert_eq!(got.logs.len(), 4);
@@ -263,6 +282,7 @@ pub(crate) mod tests {
         );
         assert_eq!((got.logs[2].level, &got.logs[2].message), (expected.level, &expected.message));
         assert_eq!(got.logs[3].service_id, None, "a service not placed here is not attributed");
+
         // The same key from a node where its service is not placed is refused.
         let elsewhere = read(&file("x", &rows[..1]), other, Timestamp(9), &m).unwrap();
         assert_eq!((elsewhere.logs.len(), elsewhere.skipped), (0, 1));

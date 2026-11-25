@@ -101,23 +101,31 @@ impl EdgeHealth {
         if !ok {
             self.last_error = error;
         }
+
         if ok == self.healthy {
             self.streak = 0;
+
             if ok {
                 self.last_error = None;
             }
+
             return false;
         }
+
         self.streak += 1;
+
         if self.streak >= HEALTH_THRESHOLD {
             self.healthy = ok;
             self.streak = 0;
             self.since = now_ms;
+
             if ok {
                 self.last_error = None;
             }
+
             return true;
         }
+
         false
     }
 }
@@ -220,18 +228,23 @@ impl NginxSettings {
         if !(64..=1_000_000).contains(&self.worker_connections) {
             return Err("worker connections: 64–1000000".into());
         }
+
         if self.keepalive_timeout_s > 3600 || self.proxy_read_timeout_s == 0 || self.proxy_read_timeout_s > 86_400 {
             return Err("timeouts out of range".into());
         }
+
         if self.client_max_body_mb == 0 || self.client_max_body_mb > 10_240 {
             return Err("max body size: 1–10240 MB".into());
         }
+
         if let Some(c) = self.real_ip_from.iter().find(|c| !valid_ipv4(c) && !valid_cidr(c, 0, 32)) {
             return Err(format!("trusted proxy `{c}` is not an IPv4 address or CIDR"));
         }
+
         if !matches!(self.access_log.as_str(), "combined" | "json" | "off") {
             return Err("access log: combined, json or off".into());
         }
+
         crate::sites::check_custom_block(&self.custom).map_err(|e| e.to_string())
     }
 
@@ -266,24 +279,31 @@ impl NginxSettings {
         o.push_str(&format!("proxy_read_timeout {}s;\n", self.proxy_read_timeout_s));
         o.push_str(&format!("client_max_body_size {}m;\n", self.client_max_body_mb));
         o.push_str(&format!("server_tokens {};\n", if self.server_tokens { "on" } else { "off" }));
+
         if self.gzip {
             o.push_str("gzip on;\ngzip_proxied any;\ngzip_types text/css application/javascript application/json image/svg+xml text/plain;\n");
         }
+
         if self.hsts {
             o.push_str("map $scheme $forge_hsts {\n    https \"max-age=31536000\";\n    default \"\";\n}\nadd_header Strict-Transport-Security $forge_hsts always;\n");
         }
+
         for c in &self.real_ip_from {
             o.push_str(&format!("set_real_ip_from {c};\n"));
         }
+
         if !self.real_ip_from.is_empty() {
             o.push_str("real_ip_header X-Forwarded-For;\nreal_ip_recursive on;\n");
         }
+
         if self.rate_limit > 0 {
             o.push_str(&format!("limit_req_zone $binary_remote_addr zone=forge_global:10m rate={}r/s;\nlimit_req zone=forge_global burst={} nodelay;\n", self.rate_limit, self.rate_limit * 2));
         }
+
         // Per-route throughput for the console (Ingress → Routing). Kept even
         // when the main access log is off; logrotate covers /var/log/nginx.
         o.push_str(TRAFFIC_LOG_CONF);
+
         match self.access_log.as_str() {
             // `access_log off` would cancel the traffic log too: point the
             // main log at /dev/null instead.
@@ -295,11 +315,13 @@ impl NginxSettings {
             ),
             _ => {}
         }
+
         if !self.custom.trim().is_empty() {
             o.push_str("# --- custom ---\n");
             o.push_str(self.custom.trim_end());
             o.push('\n');
         }
+
         o
     }
 }
@@ -307,13 +329,16 @@ impl NginxSettings {
 impl IngressSpec {
     pub fn validate(&self) -> Result<(), String> {
         self.nginx.validate()?;
+
         if self.edges.is_empty() {
             return Err("pick at least one edge node".into());
         }
+
         let mut seen = std::collections::HashSet::new();
         if self.edges.iter().any(|e| !seen.insert(&e.server_id)) {
             return Err("an edge node is listed twice".into());
         }
+
         match self.mode {
             IngressMode::Standalone if self.edges.len() != 1 => {
                 return Err("standalone uses exactly one edge node".into());
@@ -322,6 +347,7 @@ impl IngressSpec {
                 if self.edges.len() < 2 {
                     return Err("active-standby needs at least two edge nodes".into());
                 }
+
                 if self.edges.iter().filter(|e| e.role == EdgeRole::Primary).count() != 1 {
                     return Err("active-standby needs exactly one primary edge".into());
                 }
@@ -331,21 +357,26 @@ impl IngressSpec {
             }
             _ => {}
         }
+
         let bad_ip = |e: &&Edge| e.public_ip.as_deref().is_some_and(|i| i.parse::<std::net::IpAddr>().is_err());
         if let Some(e) = self.edges.iter().find(bad_ip) {
             return Err(format!("edge {}: invalid public IP", e.server_id));
         }
+
         if let Some(d) = &self.dns {
             if d.server_id.is_empty() {
                 return Err("DNS: choose the PowerDNS node".into());
             }
+
             if !(30..=86_400).contains(&d.ttl) {
                 return Err("DNS TTL: 30 s to 1 day".into());
             }
+
             if let Some(e) = self.edges.iter().find(|e| e.public_ip.is_none()) {
                 return Err(format!("DNS: edge {} needs its public IP", e.server_id));
             }
         }
+
         if self.mode != IngressMode::Standalone && self.failover == Failover::Vrrp {
             let v = self.vrrp.as_ref().ok_or("VRRP failover needs a virtual IP and an interface")?;
             let need = if self.mode == IngressMode::ActiveStandby { 1 } else { self.edges.len() };
@@ -356,16 +387,20 @@ impl IngressSpec {
                     format!("active-active with VRRP uses one virtual IP per edge ({need})")
                 });
             }
+
             if let Some(ip) = v.vips.iter().find(|i| !valid_vip(i)) {
                 return Err(format!("virtual IP `{ip}` is not a valid IPv4 address"));
             }
+
             if !valid_iface(&v.interface) {
                 return Err("interface name is invalid".into());
             }
+
             if v.router_id == 0 || usize::from(v.router_id) + v.vips.len() > 256 {
                 return Err("VRRP router id must be 1–255".into());
             }
         }
+
         Ok(())
     }
 
@@ -376,6 +411,7 @@ impl IngressSpec {
     #[must_use]
     pub fn dns_addresses(&self, healthy: impl Fn(&str) -> bool) -> Vec<String> {
         let ip = |e: &Edge| e.public_ip.clone();
+
         match self.mode {
             IngressMode::Standalone => self.edges.iter().take(1).filter_map(ip).collect(),
             IngressMode::ActiveActive => {
@@ -413,6 +449,7 @@ impl IngressSpec {
             "# Managed by Orbyn Forge — cluster ingress profile.\nglobal_defs {\n    enable_script_security\n    script_user root\n}\n\
              vrrp_script chk_nginx {\n    script \"/usr/bin/pgrep -x nginx\"\n    interval 2\n    fall 2\n    rise 2\n}\n",
         );
+
         for (n, vip) in v.vips.iter().enumerate() {
             // Active-standby: the primary owns the VIP. Active-active: edge n owns VIP n,
             // the others back it up with descending priority.
@@ -420,11 +457,13 @@ impl IngressSpec {
                 IngressMode::ActiveStandby => edge.role == EdgeRole::Primary,
                 _ => n == index,
             };
+
             let distance = if self.mode == IngressMode::ActiveStandby {
                 usize::from(!owner) + index
             } else {
                 (index + self.edges.len() - n) % self.edges.len()
             };
+
             let prio = 150usize.saturating_sub(distance * 10).max(1);
             let vid = usize::from(v.router_id) + n;
             o.push_str(&format!(
@@ -435,6 +474,7 @@ impl IngressSpec {
                 iface = v.interface,
             ));
         }
+
         Some(o)
     }
 }
@@ -444,6 +484,7 @@ impl ClusterProfile {
         if let Some(i) = &self.ingress {
             i.validate()?;
         }
+
         Ok(())
     }
 }
@@ -468,9 +509,11 @@ impl Target {
         match self {
             Self::Node { server_id, port } => {
                 let host = node_addr(server_id).ok_or_else(|| format!("node {server_id} has no known address"))?;
+
                 if *port == 0 {
                     return Err("port must be 1–65535".into());
                 }
+
                 Ok(if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") })
             }
             Self::App { service_id, .. } => Err(format!("service {service_id} is resolved from its placements")),
@@ -679,6 +722,7 @@ pub fn traffic(log: &str, now: f64, window: f64) -> std::collections::BTreeMap<S
     let mut out: std::collections::BTreeMap<String, SiteTraffic> = std::collections::BTreeMap::new();
     let mut times: std::collections::BTreeMap<(String, String), Vec<u64>> = std::collections::BTreeMap::new();
     let num = |s: &str| s.trim_matches(',').parse::<f64>().unwrap_or(0.0);
+
     for line in log.lines() {
         let all: Vec<&str> = line.split(' ').filter(|x| !x.is_empty()).collect();
         let us_at = all.iter().position(|x| x.starts_with("us="));
@@ -687,15 +731,19 @@ pub fn traffic(log: &str, now: f64, window: f64) -> std::collections::BTreeMap<S
             (Some(u), Some(r)) if u < r => (&all[..u], tagged(&all[u..r], "us="), tagged(&all[r..], "rt=")),
             _ => (&all[..], Vec::new(), Vec::new()),
         };
+
         if f.len() < 7 {
             continue;
         }
+
         let t = num(f[0]);
         if t < now - window || t > now + 5.0 {
             continue;
         }
+
         let site = out.entry(f[1].to_owned()).or_default();
         site.requests += 1;
+
         // The three upstream fields are comma-separated lists of equal length;
         // the request fields are the last two before them.
         let rest = &f[2..];
@@ -703,45 +751,55 @@ pub fn traffic(log: &str, now: f64, window: f64) -> std::collections::BTreeMap<S
         if n == 0 || rest.len() != 2 + 3 * n {
             continue;
         }
+
         let (addrs, tail) = rest.split_at(n);
         site.in_bps += num(tail[0]);
         site.out_bps += num(tail[1]);
+
         for (k, a) in addrs.iter().enumerate() {
             let a = a.trim_matches(',');
             if a == "-" || a.is_empty() {
                 continue;
             }
+
             let u = site.upstreams.entry(a.to_owned()).or_default();
             u.requests += 1;
             u.sent_bps += num(tail[2 + k]);
             u.received_bps += num(tail[2 + n + k]);
+
             if let Some(st) = statuses.get(k) {
                 // `502`, or `-` when no answer came (connection failed).
                 if st.starts_with('5') || *st == "-" {
                     u.errors += 1;
                 }
             }
+
             if let Some(ms) = rts.get(k).and_then(|t| t.parse::<f64>().ok()) {
                 times.entry((f[1].to_owned(), a.to_owned())).or_default().push((ms * 1000.0).round() as u64);
             }
         }
     }
+
     for ((site, addr), mut ts) in times {
         ts.sort_unstable();
         let at = (ts.len() * 95).div_ceil(100).saturating_sub(1);
+
         if let Some(u) = out.get_mut(&site).and_then(|s| s.upstreams.get_mut(&addr)) {
             u.p95_ms = ts.get(at).copied().unwrap_or(0);
         }
     }
+
     for s in out.values_mut() {
         s.rps = s.requests as f64 / window;
         s.in_bps /= window;
         s.out_bps /= window;
+
         for u in s.upstreams.values_mut() {
             u.sent_bps /= window;
             u.received_bps /= window;
         }
     }
+
     out
 }
 
@@ -752,13 +810,16 @@ pub fn take_over(conf: &str, names: &[&str]) -> String {
     let mut depth = 0i32;
     let mut in_http = false;
     let mut out = String::with_capacity(conf.len() + 128);
+
     for line in conf.split_inclusive('\n') {
         let t = line.trim_start();
         let first = t.split(|c: char| c.is_whitespace() || c == ';').next().unwrap_or("");
         let code = t.split('#').next().unwrap_or("");
+
         if depth == 0 && first == "http" {
             in_http = true;
         }
+
         if in_http && depth == 1 && !t.starts_with('#') && names.contains(&first) {
             let indent = &line[..line.len() - t.len()];
             out.push_str(indent);
@@ -767,11 +828,14 @@ pub fn take_over(conf: &str, names: &[&str]) -> String {
         } else {
             out.push_str(line);
         }
+
         depth += code.matches('{').count() as i32 - code.matches('}').count() as i32;
+
         if in_http && depth == 0 && code.contains('}') {
             in_http = false;
         }
     }
+
     out
 }
 
@@ -838,12 +902,15 @@ impl IngressOp {
         match self {
             Self::Apply { nginx, keepalived } => {
                 nginx.validate()?;
+
                 if let Some(k) = keepalived {
                     k.spec.validate()?;
+
                     if k.index >= k.spec.edges.len() || !k.spec.uses_vrrp() {
                         return Err("keepalived: invalid edge index or no VRRP in this profile".into());
                     }
                 }
+
                 Ok(())
             }
             Self::Remove => Ok(()),
@@ -851,6 +918,7 @@ impl IngressOp {
                 if vips.len() > 32 || vips.iter().any(|v| !valid_vip(v)) {
                     return Err("invalid virtual IPs".into());
                 }
+
                 Ok(())
             }
         }
@@ -880,6 +948,7 @@ mod traffic_tests {
         assert_eq!(shop.requests, 5);
         let (a, b) = (&shop.upstreams["a:1"], &shop.upstreams["b:2"]);
         assert_eq!((a.requests, a.errors, a.p95_ms), (3, 2, 300));
+
         // A failed connection (`-`) counts as an error; an old line counts as a request only.
         assert_eq!((b.requests, b.errors, b.p95_ms), (3, 1, 20));
     }

@@ -8,6 +8,7 @@ use serde_json::json;
 async fn store() -> (Store, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let s = Store::open_sqlite(&dir.path().join("forge.db")).await.unwrap();
+
     (s, dir)
 }
 
@@ -79,19 +80,23 @@ async fn one_active_alarm_per_series_and_history_after_it() {
     let r = rule(WorkspaceId::new());
     let a = alarm(&r, "fp-1", 10);
     s.open_alarm(&a, &ev(&a, "fired", 10)).await.unwrap();
+
     // A second firing alarm for the same series is refused by the store.
     let dup = alarm(&r, "fp-1", 11);
     assert!(matches!(s.open_alarm(&dup, &ev(&dup, "fired", 11)).await, Err(DomainError::Conflict(_))));
     assert_eq!(s.active_alarm("fp-1").await.unwrap().map(|x| x.id), Some(a.id));
+
     // Acknowledge does not resolve.
     let who = Principal::User(UserId::new());
     s.acknowledge(a.id, Some(&who), Timestamp(12), &ev(&a, "acknowledged", 12)).await.unwrap();
     let got = s.get_alarm(a.id).await.unwrap();
     assert_eq!((got.state, got.acknowledged_at), (AlarmState::Firing, Some(Timestamp(12))));
+
     // Resolve once; a second close is a no-op.
     assert!(s.close_alarm(a.id, AlarmState::Resolved, Timestamp(20), None, &ev(&a, "resolved", 20)).await.unwrap());
     assert!(!s.close_alarm(a.id, AlarmState::Ended, Timestamp(21), Some("x"), &ev(&a, "ended", 21)).await.unwrap());
     assert!(s.active_alarm("fp-1").await.unwrap().is_none());
+
     // A recurrence is a new episode linked to the last one.
     let mut again = alarm(&r, "fp-1", 30);
     again.previous = s.last_alarm("fp-1").await.unwrap().map(|x| x.id);
@@ -99,6 +104,7 @@ async fn one_active_alarm_per_series_and_history_after_it() {
     assert_eq!(s.get_alarm(again.id).await.unwrap().previous, Some(a.id));
     let kinds: Vec<String> = s.alarm_events(a.id).await.unwrap().into_iter().map(|e| e.kind).collect();
     assert_eq!(kinds, ["fired", "acknowledged", "resolved"]);
+
     // Filters.
     let f = AlarmFilter { workspaces: Some(vec![r.workspace_id]), active: true, ..AlarmFilter::default() };
     assert_eq!(s.list_alarms(&f, 50).await.unwrap().len(), 1);
@@ -135,22 +141,27 @@ async fn alarm_pages_follow_a_cursor() {
     let (s, _d) = store().await;
     let r = rule(WorkspaceId::new());
     let mut ids = Vec::new();
+
     for i in 0..5 {
         // Two alarms share each fired_at, so the id breaks ties.
         let a = alarm(&r, &format!("fp-{i}"), 100 + i / 2);
         s.open_alarm(&a, &ev(&a, "fired", a.fired_at.0)).await.unwrap();
         ids.push(a.id);
     }
+
     let mut f = AlarmFilter { workspaces: Some(vec![r.workspace_id]), ..AlarmFilter::default() };
     let mut seen = Vec::new();
+
     loop {
         let page = s.list_alarms(&f, 2).await.unwrap();
         if page.is_empty() {
             break;
         }
+
         f.before = page.last().map(|a| (a.fired_at, a.id));
         seen.extend(page.into_iter().map(|a| a.id));
     }
+
     assert_eq!(seen.len(), 5, "every alarm once");
     ids.sort();
     seen.sort();

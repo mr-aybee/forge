@@ -49,12 +49,14 @@ pub async fn list(State(state): State<AppState>, caller: Caller, Query(q): Query
     if caller.session.connection.is_some() {
         return Err(ApiError::forbidden("connectors read only their own requests (forge_approval_status)"));
     }
+
     let user = if q.all {
         caller.authorize(Action::UserManage, EntityRef::platform()).await?;
         None
     } else {
         Some(caller.session.user.id)
     };
+
     let now = state.clock.now().0;
     let items: Vec<Value> = state
         .store
@@ -64,6 +66,7 @@ pub async fn list(State(state): State<AppState>, caller: Caller, Query(q): Query
         .map(|a| view(a, now))
         .filter(|v| q.status.as_deref().is_none_or(|s| v["status"] == s))
         .collect();
+
     Ok(Json(json!({ "approvals": items })))
 }
 
@@ -71,12 +74,15 @@ async fn load(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Approval
     let a = state.store.get_approval(id).await?.ok_or_else(|| ApiError::not_found("approval not found"))?;
     let own = a.user_id == caller.session.user.id
         && caller.session.connection.as_ref().is_none_or(|c| a.connection_id.as_deref() == Some(c.id.as_str()));
+
     if own {
         return Ok(a);
     }
+
     if caller.session.connection.is_none() && caller.can(Action::UserManage, EntityRef::platform()).await {
         return Ok(a);
     }
+
     Err(ApiError::not_found("approval not found"))
 }
 
@@ -92,9 +98,11 @@ fn console_owner(caller: &Caller, a: &Approval) -> ApiResult<()> {
     if caller.session.session.kind != SessionKind::Web || caller.via_api_key() || caller.session.connection.is_some() {
         return Err(ApiError::forbidden("approve requests in the Forge console"));
     }
+
     if a.user_id != caller.session.user.id {
         return Err(ApiError::forbidden("only the person whose connector asked can approve it"));
     }
+
     Ok(())
 }
 
@@ -104,9 +112,11 @@ fn owner_not_connector(caller: &Caller, a: &Approval) -> ApiResult<()> {
     if caller.session.connection.is_some() {
         return Err(ApiError::forbidden("connectors cannot decide approvals"));
     }
+
     if a.user_id != caller.session.user.id {
         return Err(ApiError::forbidden("only the person whose connector asked can decide it"));
     }
+
     Ok(())
 }
 
@@ -132,18 +142,23 @@ async fn still_permitted(state: &AppState, a: &Approval) -> ApiResult<()> {
     if !state.config.mcp.enabled {
         return Err(ApiError::conflict("AI connectors are turned off on this Forge"));
     }
+
     let Some(conn_id) = a.connection_id.as_deref() else {
         return Err(ApiError::conflict("this request has no connection"));
     };
+
     let gone = || ApiError::conflict("the connector that asked was disconnected");
     let c = state.identity.get_connection(conn_id).await?.filter(|c| c.revoked_at.is_none()).ok_or_else(gone)?;
+
     // A revoked client ends its connections.
     if state.identity.connector_client(&c.client_id).await.is_err() {
         return Err(gone());
     }
+
     if !super::mcp::still_allowed(&a.action, c.mode.min(state.config.mcp.max_mode)) {
         return Err(ApiError::conflict("the connector's mode no longer allows this change"));
     }
+
     Ok(())
 }
 
@@ -153,13 +168,16 @@ pub async fn deny(State(state): State<AppState>, caller: Caller, Path(id): Path<
     if let Err(e) = owner_not_connector(&caller, &a) {
         return Err(refused(&caller, &a, e).await);
     }
+
     if !state.store.decide_approval(&id, "denied", caller.session.user.id, state.clock.now()).await? {
         return Err(refused(&caller, &a, ApiError::conflict("this request was already decided or expired")).await);
     }
+
     caller
         .audit_denied("mcp.approval.decide", &EntityRef::platform(), None, &format!("{} denied: {}", a.action, a.id))
         .await;
     let a = load(&state, &caller, &id).await?;
+
     Ok(Json(view(&a, state.clock.now().0)))
 }
 
@@ -175,9 +193,11 @@ pub async fn approve(
     if let Err(e) = console_owner(&caller, &a) {
         return Err(refused(&caller, &a, e).await);
     }
+
     if let Err(e) = still_permitted(&state, &a).await {
         return Err(refused(&caller, &a, e).await);
     }
+
     if a.mfa_required && state.config.mfa_required() && !caller.ctx().mfa {
         let e = ApiError::new(
             StatusCode::FORBIDDEN,
@@ -186,10 +206,12 @@ pub async fn approve(
         );
         return Err(refused(&caller, &a, e).await);
     }
+
     // Single use: only one approve wins, and only before it expires.
     if !state.store.decide_approval(&id, "approved", caller.session.user.id, state.clock.now()).await? {
         return Err(refused(&caller, &a, ApiError::conflict("this request was already decided or expired")).await);
     }
+
     caller
         .audit(
             "mcp.approval.decide",
@@ -198,12 +220,15 @@ pub async fn approve(
             json!({ "approval": a.id, "action": a.action, "approved": true, "requester": a.requester }),
         )
         .await;
+
     let (status, result, error) = match run(&router, &headers, &a).await {
         Ok(v) => ("executed", Some(v), None),
         Err(e) => ("failed", None, Some(e)),
     };
+
     state.store.finish_approval(&id, status, result.as_ref(), error.as_deref()).await?;
     let a = load(&state, &caller, &id).await?;
+
     Ok(Json(view(&a, state.clock.now().0)))
 }
 
@@ -214,12 +239,15 @@ async fn run(router: &McpRouter, headers: &HeaderMap, a: &Approval) -> Result<Va
     let method = a.request["method"].as_str().unwrap_or("POST");
     let uri = a.request["uri"].as_str().ok_or("the request has no target")?;
     let mut b = Request::builder().method(method).uri(uri);
+
     if let Some(c) = headers.get(header::COOKIE) {
         b = b.header(header::COOKIE, c);
     }
+
     if let Some(c) = headers.get(CSRF_HEADER) {
         b = b.header(CSRF_HEADER, c);
     }
+
     let body = match a.request.get("body") {
         Some(v) if !v.is_null() => {
             b = b.header(header::CONTENT_TYPE, "application/json");
@@ -227,12 +255,15 @@ async fn run(router: &McpRouter, headers: &HeaderMap, a: &Approval) -> Result<Va
         }
         _ => Body::empty(),
     };
+
     let mut req = b.body(body).map_err(|e| e.to_string())?;
     req.extensions_mut().insert(ApprovalExec { approval_id: a.id.clone(), requester: a.requester.clone() });
+
     let resp = match router.0.clone().oneshot(req).await {
         Ok(r) => r,
         Err(e) => match e {},
     };
+
     let status = resp.status();
     let bytes =
         axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.map_err(|_| "the result is too large".to_owned())?;

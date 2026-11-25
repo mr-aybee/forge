@@ -55,7 +55,9 @@ impl ConsentRequests {
         let Ok(mut m) = self.0.lock() else {
             return Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "consent store unavailable"));
         };
+
         m.retain(|_, v| v.at.elapsed() < CONSENT_TTL);
+
         if m.len() >= MAX_PENDING || m.values().filter(|v| v.user_id == p.user_id).count() >= MAX_PENDING_PER_USER {
             return Err(ApiError::new(
                 StatusCode::TOO_MANY_REQUESTS,
@@ -63,8 +65,10 @@ impl ConsentRequests {
                 "too many sign-in requests; try later",
             ));
         }
+
         let id = forge_secrets::crypto::random_token::<18>();
         m.insert(id.clone(), p);
+
         Ok(id)
     }
 
@@ -119,9 +123,11 @@ pub async fn authorization_server_metadata(State(state): State<AppState>) -> Api
         "token_endpoint_auth_methods_supported": ["none"],
         "authorization_response_iss_parameter_supported": true,
     });
+
     if state.config.mcp.enabled {
         m["registration_endpoint"] = json!(format!("{iss}/oauth/register"));
     }
+
     Ok(Json(m))
 }
 
@@ -140,6 +146,7 @@ pub async fn protected_resource_metadata(State(state): State<AppState>) -> ApiRe
 /// The `WWW-Authenticate` value for a 401 at `/mcp` (RFC 9728 §5.1).
 pub fn www_authenticate(state: &AppState, error: Option<&str>) -> ApiResult<String> {
     let meta = format!("{}/.well-known/oauth-protected-resource{MCP_PATH}", issuer(state)?);
+
     match error {
         Some(e) => Ok(format!("Bearer resource_metadata=\"{meta}\", error=\"{e}\"")),
         None => Ok(format!("Bearer resource_metadata=\"{meta}\"")),
@@ -173,16 +180,21 @@ fn register_error(code: &str, description: &str) -> Response {
 pub async fn register(State(state): State<AppState>, Json(req): Json<RegisterRequest>) -> ApiResult<Response> {
     enabled(&state)?;
     issuer(&state)?;
+
     if req.token_endpoint_auth_method.as_deref().is_some_and(|m| m != "none") {
         return Ok(register_error("invalid_client_metadata", "only public clients (token_endpoint_auth_method none)"));
     }
+
     if req.grant_types.as_ref().is_some_and(|g| g.iter().any(|t| t != "authorization_code" && t != "refresh_token")) {
         return Ok(register_error("invalid_client_metadata", "grant_types: authorization_code and refresh_token only"));
     }
+
     if req.response_types.as_ref().is_some_and(|r| r.iter().any(|t| t != "code")) {
         return Ok(register_error("invalid_client_metadata", "response_types: code only"));
     }
+
     let name = req.client_name.as_deref().unwrap_or("Unnamed connector");
+
     let client = match state
         .identity
         .register_client(name, &req.redirect_uris, None, state.config.mcp.registrations_per_hour)
@@ -197,6 +209,7 @@ pub async fn register(State(state): State<AppState>, Json(req): Json<RegisterReq
         }
         Err(e) => return Err(e.into()),
     };
+
     let hosts: Vec<String> = client.redirect_uris.iter().map(|u| forge_identity::redirect_host(u)).collect();
     audit(
         &state,
@@ -208,6 +221,7 @@ pub async fn register(State(state): State<AppState>, Json(req): Json<RegisterReq
         }),
     )
     .await;
+
     Ok((
         StatusCode::CREATED,
         Json(json!({
@@ -244,19 +258,23 @@ pub async fn connector_authorize(
             format!("the only resource is {resource}"),
         ));
     }
+
     let client = state
         .identity
         .check_connector_request(&q.client_id, &q.redirect_uri, &q.code_challenge, &q.code_challenge_method)
         .await?;
+
     let session = match cookie(headers, SESSION_COOKIE) {
         Some(t) => state.identity.authenticate(t, SessionKind::Web).await?,
         None => None,
     };
+
     let Some(session) = session else {
         let login =
             format!("/login?next={}", url::form_urlencoded::byte_serialize(login_next.as_bytes()).collect::<String>());
         return Ok(Redirect::to(&login).into_response());
     };
+
     let id = state.consents.insert(PendingConsent {
         user_id: session.user.id,
         client_id: client.client_id,
@@ -267,6 +285,7 @@ pub async fn connector_authorize(
         resource,
         at: Instant::now(),
     })?;
+
     Ok(Redirect::to(&format!("/connect?request={id}")).into_response())
 }
 
@@ -276,9 +295,11 @@ fn consent_caller(caller: &Caller, p: &PendingConsent) -> ApiResult<()> {
     if caller.session.session.kind != SessionKind::Web || caller.via_api_key() {
         return Err(ApiError::forbidden("approve connectors in the Forge console"));
     }
+
     if caller.session.user.id != p.user_id {
         return Err(ApiError::not_found("sign-in request not found or expired"));
     }
+
     Ok(())
 }
 
@@ -299,6 +320,7 @@ pub async fn consent_get(
     let p = state.consents.get(&id).ok_or_else(|| ApiError::not_found("sign-in request not found or expired"))?;
     consent_caller(&caller, &p)?;
     let client = state.identity.connector_client(&p.client_id).await?;
+
     Ok(Json(json!({
         "request_id": id,
         "client": { "client_id": client.client_id, "name": client.name, "registered_at": client.created_at },
@@ -334,15 +356,20 @@ pub async fn consent_decide(
     let p = state.consents.take(&id).ok_or_else(|| ApiError::not_found("sign-in request not found or expired"))?;
     let mut target = url::Url::parse(&p.redirect_uri).map_err(|_| ApiError::bad_request("bad redirect_uri"))?;
     let resource = EntityRef::platform();
+
     if !d.approve {
         target.query_pairs_mut().append_pair("error", "access_denied");
+
         if let Some(s) = &p.state {
             target.query_pairs_mut().append_pair("state", s);
         }
+
         target.query_pairs_mut().append_pair("iss", &iss);
         caller.audit_denied("connector.approve", &resource, None, &format!("{} was not approved", p.client_name)).await;
+
         return Ok(Json(json!({ "redirect": target.as_str() })));
     }
+
     let mode = d.mode.unwrap_or_else(|| AgentMode::Ask.min(state.config.mcp.max_mode));
     if !allowed_modes(&state).contains(&mode) {
         return Err(ApiError::forbidden(format!(
@@ -350,14 +377,17 @@ pub async fn consent_decide(
             state.config.mcp.max_mode.as_str()
         )));
     }
+
     let (connection, code) = state
         .identity
         .approve_connection(caller.session.user.id, &p.client_id, &p.redirect_uri, &p.code_challenge, &p.resource, mode)
         .await?;
     target.query_pairs_mut().append_pair("code", &code);
+
     if let Some(s) = &p.state {
         target.query_pairs_mut().append_pair("state", s);
     }
+
     target.query_pairs_mut().append_pair("iss", &iss);
     caller
         .audit(
@@ -370,6 +400,7 @@ pub async fn consent_decide(
             }),
         )
         .await;
+
     Ok(Json(json!({ "redirect": target.as_str() })))
 }
 
@@ -404,7 +435,9 @@ pub async fn connections(
     } else {
         Some(caller.session.user.id)
     };
+
     let list = state.identity.list_connections(user).await?;
+
     Ok(Json(json!({ "connections": list.iter().map(connection_view).collect::<Vec<_>>() })))
 }
 
@@ -419,6 +452,7 @@ pub async fn revoke_connection(
     if c.user_id != caller.session.user.id {
         caller.authorize(Action::UserManage, EntityRef::platform()).await?;
     }
+
     state.identity.revoke_connection(&id).await?;
     caller
         .audit(
@@ -429,6 +463,7 @@ pub async fn revoke_connection(
         )
         .await;
     let cancelled = cancel_approvals(&state, &caller, &c).await?;
+
     Ok(Json(json!({ "revoked": c.id, "cancelled_approvals": cancelled })))
 }
 
@@ -437,6 +472,7 @@ pub async fn revoke_connection(
 async fn cancel_approvals(state: &AppState, caller: &Caller, c: &AgentConnection) -> ApiResult<usize> {
     use forge_core::ports::ApprovalRepository;
     let ids = state.store.cancel_pending_approvals(&c.id, caller.session.user.id, state.clock.now()).await?;
+
     for id in &ids {
         caller
             .audit(
@@ -447,6 +483,7 @@ async fn cancel_approvals(state: &AppState, caller: &Caller, c: &AgentConnection
             )
             .await;
     }
+
     Ok(ids.len())
 }
 
@@ -475,9 +512,11 @@ pub async fn revoke_client(
         )
         .await;
     let mut cancelled = 0;
+
     for c in state.identity.list_connections(None).await?.iter().filter(|c| c.client_id == id) {
         cancelled += cancel_approvals(&state, &caller, c).await?;
     }
+
     Ok(Json(json!({ "revoked": id, "cancelled_approvals": cancelled })))
 }
 

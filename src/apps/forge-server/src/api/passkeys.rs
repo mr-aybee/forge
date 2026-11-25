@@ -58,6 +58,7 @@ fn with_cookies(mut resp: Response, cookies: [String; 2]) -> Response {
             resp.headers_mut().append(header::SET_COOKIE, v);
         }
     }
+
     resp
 }
 
@@ -108,6 +109,7 @@ pub async fn register_begin(
     let me = EntityRef::new(EntityKind::User, user.id);
     let options = state.passkeys.register_begin(user, &relying_party(&origin)?).await.map_err(err)?;
     caller.audit("auth.passkey.add_begin", &me, None, json!({})).await;
+
     Ok(Json(options))
 }
 
@@ -119,9 +121,11 @@ pub async fn register_finish(
     Json(req): Json<RegistrationResponse>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let user = &caller.session.user;
+
     if caller.via_api_key() {
         return Err(ApiError::forbidden("passkeys are added in the console"));
     }
+
     match state.passkeys.register_finish(user, &req, &relying_party(&origin)?).await {
         Ok(p) => {
             caller
@@ -181,7 +185,9 @@ pub async fn remove(State(state): State<AppState>, caller: Caller, Path(id): Pat
         caller.audit_denied("auth.passkey.remove", &EntityRef::new(EntityKind::User, user), None, "not found").await;
         return Err(ApiError::not_found("passkey not found"));
     }
+
     caller.audit("auth.passkey.remove", &EntityRef::new(EntityKind::User, user), None, json!({ "passkey": id })).await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -195,6 +201,7 @@ fn begin_allowed() -> bool {
     static W: Mutex<Option<(Instant, u32)>> = Mutex::new(None);
     let Ok(mut w) = W.lock() else { return false };
     let now = Instant::now();
+
     match w.as_mut() {
         Some((start, n)) if now.duration_since(*start) < Duration::from_secs(10) => {
             *n += 1;
@@ -216,6 +223,7 @@ pub async fn login_begin(State(state): State<AppState>, origin: RequestOrigin) -
             "too many sign-ins right now; try again",
         ));
     }
+
     Ok(Json(state.passkeys.login_begin(&relying_party(&origin)?).await.map_err(err)?))
 }
 
@@ -231,13 +239,16 @@ pub async fn login_finish(
     Json(req): Json<AssertionResponse>,
 ) -> ApiResult<Response> {
     let generic = || ApiError::new(StatusCode::UNAUTHORIZED, "invalid_passkey", "passkey sign-in failed; try again");
+
     if req.credential_id.is_empty() || req.credential_id.len() > MAX_CREDENTIAL_ID_B64 {
         return Err(generic());
     }
+
     let key = format!("passkey:{}", req.credential_id);
     if !state.login_throttle.allowed(&key) {
         return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "throttled", "too many failed attempts; try later"));
     }
+
     let (user, passkey) = match state.passkeys.login_finish(&req, &relying_party(&origin)?).await {
         Ok(u) => u,
         Err(e) => {
@@ -252,6 +263,7 @@ pub async fn login_finish(
             ) {
                 state.login_throttle.record_failure(&key);
             }
+
             let cred: String = req.credential_id.chars().take(24).collect();
             audit_anon(
                 &state,
@@ -261,12 +273,14 @@ pub async fn login_finish(
                 json!({ "method": "passkey", "credential": cred, "reason": e.to_string() }),
             )
             .await;
+
             return Err(match e {
                 PasskeyError::Domain(d) if !matches!(d, forge_core::DomainError::NotFound(_)) => d.into(),
                 _ => generic(),
             });
         }
     };
+
     state.login_throttle.reset(&key);
     crate::access::refuse_service_account(&state, user.id).await?;
     let tokens = state.identity.create_web_session(user.id, true).await?;
@@ -281,6 +295,7 @@ pub async fn login_finish(
     super::session::record_admin_address(&state, user.id, &origin).await;
     let ttl = state.identity.config().web_session_ttl.as_secs();
     let body = Json(json!({ "user": user, "mfa": true, "csrf_token": tokens.csrf_token })).into_response();
+
     Ok(with_cookies(body, session_cookies(&tokens.session_token, &tokens.csrf_token, ttl, secure)))
 }
 
@@ -293,6 +308,7 @@ pub async fn step_up_begin(
     if caller.via_api_key() {
         return Err(ApiError::forbidden("API keys cannot be stepped up"));
     }
+
     Ok(Json(state.passkeys.step_up_begin(&caller.session.user, &relying_party(&origin)?).await.map_err(err)?))
 }
 
@@ -306,9 +322,11 @@ pub async fn step_up_finish(
     Json(req): Json<AssertionResponse>,
 ) -> ApiResult<Response> {
     let user = &caller.session.user;
+
     if caller.via_api_key() {
         return Err(ApiError::forbidden("API keys cannot be stepped up"));
     }
+
     let key = format!("step-up:{}", user.id);
     if !state.login_throttle.allowed(&key) {
         return Err(ApiError::new(
@@ -317,15 +335,19 @@ pub async fn step_up_finish(
             "too many attempts; try again in 15 minutes",
         ));
     }
+
     let passkey = match state.passkeys.step_up_finish(user, &req, &relying_party(&origin)?).await {
         Ok(p) => p,
         Err(e) => {
             state.login_throttle.record_failure(&key);
             caller.audit_denied("auth.step_up", &EntityRef::new(EntityKind::User, user.id), None, &e.to_string()).await;
+
             return Err(err(e));
         }
     };
+
     state.login_throttle.reset(&key);
+
     // Apps and the CLI: a new token pair with MFA replaces the bearer session
     // (as a code step-up does), instead of a second, browser session.
     if caller.session.session.kind == forge_core::model::SessionKind::Bearer {
@@ -340,12 +362,16 @@ pub async fn step_up_finish(
             .await;
         let mut resp = Json(tokens).into_response();
         resp.headers_mut().insert(axum::http::header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-store"));
+
         return Ok(resp);
     }
+
     let tokens = state.identity.create_web_session(user.id, true).await?;
+
     if let Some(old) = cookie(&headers, SESSION_COOKIE) {
         state.identity.logout(old).await?;
     }
+
     caller
         .audit(
             "auth.step_up",
@@ -356,6 +382,7 @@ pub async fn step_up_finish(
         .await;
     let ttl = state.identity.config().web_session_ttl.as_secs();
     let body = Json(json!({ "mfa": true, "csrf_token": tokens.csrf_token })).into_response();
+
     Ok(with_cookies(body, session_cookies(&tokens.session_token, &tokens.csrf_token, ttl, secure)))
 }
 
@@ -372,6 +399,7 @@ pub async fn remove_all(
     use forge_core::ports::UserRepository;
     let target = EntityRef::new(EntityKind::User, id);
     caller.authorize(Action::UserManage, EntityRef::platform()).await?;
+
     if !caller.ctx().mfa {
         caller.audit_denied("auth.passkey.remove_all", &target, Some(ws), "an MFA session is required").await;
         return Err(ApiError::new(
@@ -380,8 +408,10 @@ pub async fn remove_all(
             "removing someone's passkeys needs an MFA session",
         ));
     }
+
     state.store.get_user(id).await.map_err(|_| ApiError::not_found("user not found"))?;
     let n = state.passkeys.remove_all(id).await.map_err(err)?;
+
     // Sessions created with a removed (perhaps stolen) passkey end too, and
     // the API keys such a session may have made.
     state.identity.revoke_all(id).await?;
@@ -395,5 +425,6 @@ pub async fn remove_all(
             json!({ "removed": n, "sessions_revoked": true, "api_keys_revoked": keys }),
         )
         .await;
+
     Ok(Json(json!({ "removed": n, "api_keys_revoked": keys })))
 }

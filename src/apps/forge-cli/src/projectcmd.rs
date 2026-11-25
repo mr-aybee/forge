@@ -81,6 +81,7 @@ fn row(group: &Value) -> Value {
     let names: Vec<&str> =
         group["environments"].as_array().into_iter().flatten().filter_map(|e| e["name"].as_str()).collect();
     r["environment_names"] = json!(if names.is_empty() { "-".to_owned() } else { names.join(", ") });
+
     r
 }
 
@@ -89,13 +90,17 @@ fn update_body(name: Option<&str>, description: Option<&str>) -> Result<Value> {
     if name.is_none() && description.is_none() {
         return Err(CliError::usage("pass --name and/or --description"));
     }
+
     let mut body = serde_json::Map::new();
+
     if let Some(n) = name {
         body.insert("name".into(), json!(n));
     }
+
     if let Some(d) = description {
         body.insert("description".into(), json!(d));
     }
+
     Ok(Value::Object(body))
 }
 
@@ -106,6 +111,7 @@ async fn resolve(api: &mut Api, needle: &str) -> Result<Value> {
 pub async fn run(g: &Global, cmd: ProjectsCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         ProjectsCmd::List { paging } => {
             let v = api.get(BASE).await?;
@@ -166,13 +172,17 @@ mod tests {
         else {
             panic!("create")
         };
+
         assert_eq!((name.as_str(), description.as_str()), ("shop", "Web shop"));
+
         let ProjectsCmd::Update { project, name, description, yes } =
             parse(&["forge", "projects", "update", "shop", "--name", "store", "--yes"])
         else {
             panic!("update")
         };
+
         assert_eq!((project.as_str(), name.as_deref(), description, yes), ("shop", Some("store"), None, true));
+
         // `get` stays an alias of `show`.
         assert!(matches!(parse(&["forge", "projects", "get", "shop"]), ProjectsCmd::Show { .. }));
     }

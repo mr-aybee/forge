@@ -35,6 +35,7 @@ fn key_cols(k: &ObservationKey) -> (String, String, String, String) {
 fn key_of(r: &AnyRow) -> DomainResult<ObservationKey> {
     let kind: EntityKind = parsed(r, "resource_type")?;
     let server = text(r, "server_id")?;
+
     Ok(ObservationKey {
         resource: EntityRef::new(kind, text(r, "resource_id")?),
         server: if server.is_empty() {
@@ -99,6 +100,7 @@ const KEY_WHERE: &str = "resource_type = $1 AND resource_id = $2 AND server_id =
 impl ObservationStore for Store {
     async fn latest_for(&self, keys: &[ObservationKey]) -> DomainResult<Vec<Latest>> {
         let mut out = Vec::with_capacity(keys.len());
+
         // One statement per 50 keys (200 placeholders), each key a lookup on
         // the primary key, instead of one statement per key.
         for chunk in keys.chunks(50) {
@@ -116,14 +118,17 @@ impl ObservationStore for Store {
                 .collect();
             let sql = format!("SELECT * FROM observations_latest WHERE {}", clauses.join(" OR "));
             let mut q = sqlx::query(&sql);
+
             for k in chunk {
                 let (rt, rid, sid, subj) = key_cols(k);
                 q = q.bind(rt).bind(rid).bind(sid).bind(subj);
             }
+
             for r in &q.fetch_all(self.pool()).await.map_err(db_err)? {
                 out.push(latest_of(r, false)?);
             }
         }
+
         Ok(out)
     }
 
@@ -152,6 +157,7 @@ impl ObservationStore for Store {
         .fetch_all(self.pool())
         .await
         .map_err(db_err)?;
+
         rows.iter().map(|r| latest_of(r, false)).collect()
     }
 
@@ -159,9 +165,11 @@ impl ObservationStore for Store {
         if batch.is_empty() {
             return Ok(Vec::new());
         }
+
         // Held until the commit: see `Store::observation_writes`.
         let _writes = self.observation_writes.lock().await;
         let mut tx = self.pool().begin().await.map_err(db_err)?;
+
         for l in &batch.latest {
             let (rt, rid, sid, subj) = key_cols(&l.key);
             sqlx::query(
@@ -195,6 +203,7 @@ impl ObservationStore for Store {
             .await
             .map_err(db_err)?;
         }
+
         for h in &batch.history {
             let (rt, rid, sid, subj) = key_cols(&h.key);
             sqlx::query(
@@ -221,6 +230,7 @@ impl ObservationStore for Store {
             .await
             .map_err(db_err)?;
         }
+
         for k in &batch.stale_noted {
             let (rt, rid, sid, subj) = key_cols(k);
             sqlx::query(&format!("UPDATE observations_latest SET stale_noted = 1 WHERE {KEY_WHERE}"))
@@ -232,7 +242,9 @@ impl ObservationStore for Store {
                 .await
                 .map_err(db_err)?;
         }
+
         let mut stored = Vec::with_capacity(batch.transitions.len());
+
         // The next number, read once: the lock above keeps it ours.
         let mut seq = if batch.transitions.is_empty() {
             0
@@ -243,6 +255,7 @@ impl ObservationStore for Store {
                 .map_err(db_err)?;
             int(&next, "n")?
         };
+
         for t in &batch.transitions {
             let (rt, rid, sid, subj) = key_cols(&t.key);
             let inserted = sqlx::query(
@@ -267,12 +280,15 @@ impl ObservationStore for Store {
             .await
             .map_err(db_err)?
             .rows_affected();
+
             if inserted == 1 {
                 stored.push(Transition { seq, ..t.clone() });
                 seq += 1;
             }
         }
+
         tx.commit().await.map_err(db_err)?;
+
         Ok(stored)
     }
 }
@@ -282,16 +298,19 @@ impl ObservationQuery for Store {
     async fn latest(&self, filter: &ObservationFilter, limit: u32) -> DomainResult<Vec<Latest>> {
         let mut sql = String::from("SELECT * FROM observations_latest WHERE 1 = 1");
         let mut binds: Vec<String> = Vec::new();
+
         if let Some(r) = &filter.resource {
             binds.push(r.kind.as_str().to_owned());
             sql.push_str(&format!(" AND resource_type = ${}", binds.len()));
             binds.push(r.id.clone());
             sql.push_str(&format!(" AND resource_id = ${}", binds.len()));
         }
+
         if let Some(s) = filter.server {
             binds.push(s.to_string());
             sql.push_str(&format!(" AND server_id = ${}", binds.len()));
         }
+
         if let Some(p) = &filter.subject_prefix {
             // Subjects are validated to [a-z0-9._-], so no LIKE wildcards can
             // come from a stored subject; escape the prefix anyway.
@@ -299,12 +318,16 @@ impl ObservationQuery for Store {
             binds.push(format!("{escaped}%"));
             sql.push_str(&format!(" AND subject LIKE ${} ESCAPE '\\'", binds.len()));
         }
+
         sql.push_str(&format!(" ORDER BY resource_type, resource_id, server_id, subject LIMIT ${}", binds.len() + 1));
         let mut q = sqlx::query(&sql);
+
         for v in binds {
             q = q.bind(v);
         }
+
         let rows = q.bind(i64::from(limit)).fetch_all(self.pool()).await.map_err(db_err)?;
+
         rows.iter().map(|r| latest_of(r, false)).collect()
     }
 
@@ -323,6 +346,7 @@ impl ObservationQuery for Store {
         .fetch_all(self.pool())
         .await
         .map_err(db_err)?;
+
         rows.iter().map(|r| latest_of(r, true)).collect()
     }
 }
@@ -357,6 +381,7 @@ impl ObservationRetention for Store {
             .await
             .map_err(db_err)?
             .rows_affected();
+
         // The newest row always stays, so MAX(seq) + 1 never restarts and
         // consumers' cursors stay valid.
         let t = sqlx::query(
@@ -368,11 +393,13 @@ impl ObservationRetention for Store {
         .await
         .map_err(db_err)?
         .rows_affected();
+
         Ok(h + t)
     }
 
     async fn delete_orphans(&self) -> DomainResult<u64> {
         let mut n = 0;
+
         for table in ["observations_latest", "observation_history"] {
             n += sqlx::query(&format!(
                 "DELETE FROM {table} WHERE
@@ -385,6 +412,7 @@ impl ObservationRetention for Store {
             .map_err(db_err)?
             .rows_affected();
         }
+
         Ok(n)
     }
 }

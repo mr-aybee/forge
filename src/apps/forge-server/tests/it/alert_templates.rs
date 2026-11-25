@@ -22,12 +22,15 @@ where
     Fut: std::future::Future<Output = Option<Value>>,
 {
     let end = std::time::Instant::now() + Duration::from_secs(secs);
+
     while std::time::Instant::now() < end {
         if let Some(v) = f().await {
             return v;
         }
+
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
+
     panic!("timed out waiting for {what}");
 }
 
@@ -45,6 +48,7 @@ fn from_template(t: &Value, scope_ids: &[String]) -> Value {
 async fn template(admin: &Client, id: &str) -> Value {
     let (s, all) = admin.get("/api/v1/alert-rule-templates").await;
     assert_eq!(s, StatusCode::OK, "{all}");
+
     all.as_array().unwrap().iter().find(|t| t["id"] == id).cloned().unwrap_or_else(|| panic!("no template {id}"))
 }
 
@@ -171,6 +175,7 @@ async fn the_database_stopped_template_fires_on_a_stopped_installation() {
 async fn a_disk_rule_fires_from_the_volumes_an_agent_reports() {
     let h = start().await;
     let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+
     // The disk-filling template with its threshold below 0 %: any local
     // volume fires, so the test proves the path from volumes to alarm.
     let mut body = from_template(&template(&admin, "node-disk-filling").await, &[]);

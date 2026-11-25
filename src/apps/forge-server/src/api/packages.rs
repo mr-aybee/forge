@@ -74,6 +74,7 @@ pub async fn list(
 ) -> ApiResult<Json<Vec<Installation>>> {
     let all = state.store.list_installations(q.server_id).await?;
     let allowed = caller.can_many(Action::View, all.iter().map(|i| server_ref(i.server_id)).collect()).await;
+
     Ok(Json(all.into_iter().zip(allowed).filter_map(|(i, ok)| ok.then_some(i)).collect()))
 }
 
@@ -110,9 +111,11 @@ pub(crate) async fn submit_as(
     build: Option<&str>,
 ) -> ApiResult<Job> {
     let mut params = i.params.clone();
+
     if let Some(b) = build {
         params.insert(forge_catalog::BUILD_PARAM.to_owned(), b.to_owned());
     }
+
     Ok(state
         .jobs
         .submit(NewJob {
@@ -148,12 +151,15 @@ pub async fn install(
 pub(crate) async fn start_install(state: &AppState, caller: &Caller, req: InstallRequest) -> ApiResult<Vec<Started>> {
     let v =
         forge_catalog::validate(&req.package, &req.version, "install", &req.params).map_err(ApiError::bad_request)?;
+
     if req.server_ids.is_empty() || req.server_ids.len() > 100 {
         return Err(ApiError::bad_request("choose between 1 and 100 nodes"));
     }
+
     // Check every node before starting anything, so a request either starts
     // everywhere or nowhere.
     let mut targets = Vec::new();
+
     for &id in &req.server_ids {
         caller.authorize(Action::PackageManage, server_ref(id)).await?;
         let server = state.store.get_server(id).await.map_err(|_| ApiError::not_found("server not found"))?;
@@ -163,7 +169,9 @@ pub(crate) async fn start_install(state: &AppState, caller: &Caller, req: Instal
                 v.package.name, server.os, server.hostname
             )));
         }
+
         let installed = state.store.list_installations(Some(id)).await?;
+
         for dep in v.package.requires {
             if !installed.iter().any(|i| i.package == *dep && i.status == "installed") {
                 let dep_name = forge_catalog::find(dep).map_or(*dep, |p| p.name);
@@ -173,6 +181,7 @@ pub(crate) async fn start_install(state: &AppState, caller: &Caller, req: Instal
                 )));
             }
         }
+
         if let Some(busy) =
             installed.iter().find(|i| i.package == v.package.id && i.version == v.version && i.status.ends_with("ing"))
         {
@@ -181,8 +190,10 @@ pub(crate) async fn start_install(state: &AppState, caller: &Caller, req: Instal
                 v.package.name, busy.status, server.hostname
             )));
         }
+
         targets.push((server, installed));
     }
+
     // Only non-secret, validated parameters are stored (packages generate
     // their passwords on the node).
     let params: BTreeMap<String, String> = v
@@ -193,6 +204,7 @@ pub(crate) async fn start_install(state: &AppState, caller: &Caller, req: Instal
         .collect();
     let now = state.clock.now();
     let mut started = Vec::new();
+
     for (server, installed) in targets {
         let mut inst = installed
             .into_iter()
@@ -229,6 +241,7 @@ pub(crate) async fn start_install(state: &AppState, caller: &Caller, req: Instal
             .await;
         started.push(Started { server_id: server.id, installation: inst, job });
     }
+
     Ok(started)
 }
 
@@ -245,15 +258,19 @@ pub async fn action(
 ) -> ApiResult<(StatusCode, Json<Job>)> {
     let inst = state.store.get_installation(id).await?.ok_or_else(|| ApiError::not_found("installation not found"))?;
     forge_catalog::validate(&inst.package, &inst.version, &req.action, &inst.params).map_err(ApiError::bad_request)?;
+
     if req.action == "upgrade" {
         return Err(ApiError::bad_request("use POST /installations/{id}/update to update a package"));
     }
+
     let read_only = forge_catalog::READ_ONLY_ACTIONS.contains(&req.action.as_str());
     let needed = if read_only { Action::ServerManage } else { Action::PackageManage };
     caller.authorize(needed, server_ref(inst.server_id)).await?;
+
     if inst.status.ends_with("ing") && !read_only {
         return Err(ApiError::conflict(format!("{} is {}; wait for it to finish", inst.package, inst.status)));
     }
+
     // Show the action as in progress right away (the job confirms it). A
     // status check keeps the current status, e.g. `failed`.
     if !read_only {
@@ -262,7 +279,9 @@ pub async fn action(
         busy.updated_at = state.clock.now();
         state.store.put_installation(&busy).await?;
     }
+
     let job = submit(&state, &caller, &inst, &req.action).await?;
+
     if !read_only {
         caller
             .audit(
@@ -273,5 +292,6 @@ pub async fn action(
             )
             .await;
     }
+
     Ok((StatusCode::ACCEPTED, Json(job)))
 }

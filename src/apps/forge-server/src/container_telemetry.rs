@@ -53,6 +53,7 @@ impl ContainerTelemetrySettings {
     /// Trimmed, de-duplicated and checked.
     pub fn normalized(mut self) -> Result<Self, TelemetryError> {
         let mut seen = Vec::with_capacity(self.exclude.len());
+
         for e in self.exclude.drain(..) {
             let e = e.trim().to_owned();
             if e.is_empty() || e.len() > MAX_CONTAINER_FIELD_BYTES || e.chars().any(char::is_control) {
@@ -60,14 +61,18 @@ impl ContainerTelemetrySettings {
                     "an exclude entry is 1 to 256 characters, without control characters",
                 ));
             }
+
             if !seen.contains(&e) {
                 seen.push(e);
             }
         }
+
         if seen.len() > MAX_CONTAINER_EXCLUDES {
             return Err(TelemetryError::Invalid("at most 64 exclude entries"));
         }
+
         self.exclude = seen;
+
         Ok(self)
     }
 }
@@ -87,6 +92,7 @@ fn parse_settings(rows: Vec<(String, String)>) -> HashMap<ServerId, ContainerTel
     rows.into_iter()
         .filter_map(|(k, v)| {
             let id = k.strip_prefix(SETTINGS_PREFIX)?.strip_suffix(SETTINGS_SUFFIX)?.parse().ok()?;
+
             match serde_json::from_str(&v) {
                 Ok(s) => Some((id, s)),
                 Err(e) => {
@@ -139,6 +145,7 @@ impl ContainerTelemetry {
         if g.is_none() {
             *g = Some(parse_settings(self.settings.all_settings().await?));
         }
+
         Ok(g.as_ref().and_then(|m| m.get(&server).cloned()).unwrap_or_default())
     }
 
@@ -152,9 +159,11 @@ impl ContainerTelemetry {
         let old = self.settings(server).await?;
         let json = serde_json::to_string(&new).map_err(|e| DomainError::Internal(e.to_string()))?;
         self.settings.put_setting(&settings_key(server), &json, self.clock.now()).await?;
+
         if let Some(m) = self.node_settings.lock().await.as_mut() {
             m.insert(server, new.clone());
         }
+
         Ok((old, new))
     }
 
@@ -169,6 +178,7 @@ impl ContainerTelemetry {
                 ContainerTelemetrySettings::default()
             }
         };
+
         ContainerTelemetryConfig { enabled: s.enabled && self.analytics_enabled, exclude: s.exclude }
     }
 }
@@ -202,6 +212,7 @@ mod tests {
     async fn telemetry(dir: &std::path::Path) -> ContainerTelemetry {
         let url = format!("sqlite://{}?mode=rwc", dir.join("t.db").display());
         let store = forge_store::Store::connect(&url).await.unwrap();
+
         ContainerTelemetry::new(TelemetryDeps {
             settings: Arc::new(store),
             clock: Arc::new(forge_core::SystemClock),
@@ -220,6 +231,7 @@ mod tests {
             .await
             .unwrap();
         assert!(old.enabled && !new.enabled);
+
         // A fresh instance reads it back from the store.
         let again = telemetry(dir.path()).await;
         assert_eq!(again.settings(node).await.unwrap().exclude, vec!["db".to_owned()]);

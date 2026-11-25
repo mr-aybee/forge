@@ -66,7 +66,9 @@ fn default_summaries(app: &Service, p: &HealthPolicy) -> Vec<CheckSummary> {
     if !p.default_checks {
         return Vec::new();
     }
+
     let port = app.spec.get("listen_port").and_then(Value::as_u64);
+
     let what = match app.runtime.as_str() {
         "systemd" => match port {
             Some(port) => format!("systemd unit active and TCP connect to port {port}"),
@@ -75,6 +77,7 @@ fn default_summaries(app: &Service, p: &HealthPolicy) -> Vec<CheckSummary> {
         "container" => "container running, plus its image HEALTHCHECK if it has one".to_owned(),
         _ => return Vec::new(),
     };
+
     let line = |purpose, summary: String| CheckSummary {
         purpose,
         name: "default".into(),
@@ -83,9 +86,11 @@ fn default_summaries(app: &Service, p: &HealthPolicy) -> Vec<CheckSummary> {
         default: true,
     };
     let mut out = vec![line(Purpose::Liveness, format!("{what}, every 10 s; unhealthy after 3 failures."))];
+
     if p.readiness.is_empty() {
         out.push(line(Purpose::Readiness, "Same as the default liveness check.".into()));
     }
+
     out
 }
 
@@ -122,15 +127,19 @@ pub struct HealthView {
 /// default TCP check is off there, and nothing may be wired to that port.
 async fn warnings(state: &AppState, app: &Service) -> ApiResult<Vec<HealthWarning>> {
     let Some(port) = app.spec.get("listen_port").and_then(Value::as_u64) else { return Ok(Vec::new()) };
+
     if app.runtime != "systemd" {
         return Ok(Vec::new());
     }
+
     let mine: Vec<forge_core::ServerId> =
         state.store.list_instances(app.id).await?.iter().map(|i| i.server_id).collect();
     let mut out = Vec::new();
     let all = state.store.list_all_instances(None).await?;
+
     for server in mine {
         let mut others = Vec::new();
+
         for i in all.iter().filter(|i| i.server_id == server && i.service_id != app.id) {
             if let Some(o) = state.store.get_service(i.service_id).await?
                 && o.runtime == "systemd"
@@ -139,6 +148,7 @@ async fn warnings(state: &AppState, app: &Service) -> ApiResult<Vec<HealthWarnin
                 others.push(o.name);
             }
         }
+
         if !others.is_empty() {
             others.sort();
             out.push(HealthWarning {
@@ -151,12 +161,14 @@ async fn warnings(state: &AppState, app: &Service) -> ApiResult<Vec<HealthWarnin
             });
         }
     }
+
     Ok(out)
 }
 
 async fn view(state: &AppState, caller: &Caller, app: &Service, policy: HealthPolicy) -> ApiResult<HealthView> {
     let mut sums = summaries(&policy);
     sums.extend(default_summaries(app, &policy));
+
     Ok(HealthView {
         summaries: sums,
         legacy_healthcheck: app.spec.get("healthcheck").cloned().filter(|v| !v.is_null()),
@@ -178,6 +190,7 @@ pub async fn get(
     let app = super::services::load_own(&state, id).await?;
     caller.authorize(Action::HealthView, app_ref(id)).await?;
     let policy = crate::app_health_status::policy_of(&app);
+
     Ok(Json(view(&state, &caller, &app, policy).await?))
 }
 /// Most services one `GET /services/health-summary` covers.
@@ -224,6 +237,7 @@ pub async fn summary_list(
     let visible: Vec<&Service> = apps.iter().zip(allowed).filter(|(_, ok)| *ok).map(|(a, _)| a).collect();
     let truncated = visible.len() > SUMMARY_MAX_APPS;
     let mut items = Vec::with_capacity(visible.len().min(SUMMARY_MAX_APPS));
+
     for app in visible.into_iter().take(SUMMARY_MAX_APPS) {
         let policy = crate::app_health_status::policy_of(app);
         let instances =
@@ -234,6 +248,7 @@ pub async fn summary_list(
                 .collect();
         items.push(AppHealthSummary { service_id: app.id, instances });
     }
+
     Ok(Json(HealthSummaryList { items, truncated }))
 }
 
@@ -256,12 +271,15 @@ pub struct ValidateResult {
 /// Host names and fabric addresses of every node: probes may not target them.
 async fn fleet_targets(state: &AppState) -> HashSet<String> {
     let mut out = HashSet::new();
+
     for s in state.store.list_servers(None).await.unwrap_or_default() {
         out.insert(s.hostname.to_ascii_lowercase());
+
         if let Some(d) = s.display_name {
             out.insert(d.to_ascii_lowercase());
         }
     }
+
     for f in state.store.list_fabrics(None).await.unwrap_or_default() {
         for lease in f.leases.as_array().into_iter().flatten() {
             if let Some(ip) = lease.get("cidr").and_then(Value::as_str).and_then(|c| c.split('/').next()) {
@@ -269,6 +287,7 @@ async fn fleet_targets(state: &AppState) -> HashSet<String> {
             }
         }
     }
+
     out
 }
 
@@ -276,12 +295,14 @@ async fn fleet_targets(state: &AppState) -> HashSet<String> {
 async fn check(state: &AppState, p: &HealthPolicy) -> Vec<FieldError> {
     let mut errs = p.validate();
     let fleet = fleet_targets(state).await;
+
     for (purpose, list) in
         [(Purpose::Startup, &p.startup), (Purpose::Readiness, &p.readiness), (Purpose::Liveness, &p.liveness)]
     {
         for (i, c) in list.iter().enumerate() {
             let Some(host) = c.probe.remote_host() else { continue };
             let h = host.trim_end_matches('.').to_ascii_lowercase();
+
             // `::ffff:<node-ip>` and NAT64 forms compare as the node's IPv4.
             let h = h.parse::<std::net::IpAddr>().map_or(h, |ip| forge_catalog::health::canonical(ip).to_string());
             let short = h.strip_suffix(".local").unwrap_or(&h);
@@ -293,6 +314,7 @@ async fn check(state: &AppState, p: &HealthPolicy) -> Vec<FieldError> {
             }
         }
     }
+
     errs
 }
 
@@ -304,6 +326,7 @@ pub async fn validate(
 ) -> ApiResult<Json<ValidateResult>> {
     super::services::load_own(&state, id).await?;
     caller.authorize(Action::HealthView, app_ref(id)).await?;
+
     let policy = match serde_json::from_value::<HealthPolicy>(input.policy) {
         Ok(p) => p,
         Err(e) => {
@@ -315,8 +338,10 @@ pub async fn validate(
             }));
         }
     };
+
     let input = UpdateInput { policy, expected_updated_at: None };
     let errors = check(&state, &input.policy).await;
+
     Ok(Json(ValidateResult {
         valid: errors.is_empty(),
         summaries: summaries(&input.policy),
@@ -347,6 +372,7 @@ fn vault_refs(p: &HealthPolicy) -> Vec<String> {
         .collect();
     out.sort();
     out.dedup();
+
     out
 }
 
@@ -367,6 +393,7 @@ fn audit_view(p: &HealthPolicy) -> Value {
                 Probe::Exec(e) => ("exec", json!({ "program": e.argv.first() })),
                 Probe::Shell(s) => ("shell", json!({ "interpreter": s.interpreter, "script_bytes": s.script.len() })),
             };
+
             json!({ "purpose": purpose, "name": c.name, "enabled": c.enabled, "type": kind, "target": target })
         })
         .collect();
@@ -381,9 +408,11 @@ pub async fn update(
 ) -> ApiResult<Json<HealthView>> {
     let mut app = super::services::load_own(&state, id).await?;
     caller.authorize(Action::HealthConfigure, app_ref(id)).await?;
+
     if input.policy.runs_code() {
         caller.authorize(Action::HealthCommand, app_ref(id)).await?;
     }
+
     // Using a vault item in a probe header sends it to the probe target, so
     // it needs the same right as revealing it (and the item must exist). The
     // node checks again when the probe runs.
@@ -394,22 +423,27 @@ pub async fn update(
             .ok_or_else(|| ApiError::bad_request(format!("`{r}` is not a vault item reference")))?;
         super::vault::authorize_item_use(&state, &caller, app.workspace_id, id, "service.health.update").await?;
     }
+
     if let Some(expected) = input.expected_updated_at
         && expected != app.updated_at.0
     {
         return Err(ApiError::conflict("the service changed since you opened it; reload and apply again"));
     }
+
     let errors = check(&state, &input.policy).await;
     if !errors.is_empty() {
         let text: Vec<String> = errors.iter().map(|e| format!("{}: {}", e.field, e.message)).collect();
         return Err(ApiError::new(axum::http::StatusCode::UNPROCESSABLE_ENTITY, "invalid", text.join("; ")));
     }
+
     let before = crate::app_health_status::policy_of(&app);
+
     let value = if input.policy.is_empty() {
         Value::Null
     } else {
         serde_json::to_value(&input.policy).map_err(forge_core::DomainError::internal)?
     };
+
     if let Some(spec) = app.spec.as_object_mut() {
         if value.is_null() {
             spec.remove("health");
@@ -417,7 +451,9 @@ pub async fn update(
             spec.insert("health".into(), value);
         }
     }
+
     app.updated_at = state.clock.now();
+
     // The policy and who saved it (D-111: a node's vault-header requests
     // are answered on that person's authority, for this revision only) are
     // written atomically, in one transaction. A failure changes nothing
@@ -434,6 +470,7 @@ pub async fn update(
             .await;
         return Err(e.into());
     }
+
     caller
         .audit(
             "service.health.update",
@@ -442,10 +479,13 @@ pub async fn update(
             json!({ "service": app.name, "before": audit_view(&before), "after": audit_view(&input.policy) }),
         )
         .await;
+
     // The nodes run the new policy without a redeploy.
     for inst in state.store.list_instances(app.id).await? {
         crate::health_ingest::push(&state, &app, inst.server_id, true);
     }
+
     let policy = input.policy;
+
     Ok(Json(view(&state, &caller, &app, policy).await?))
 }

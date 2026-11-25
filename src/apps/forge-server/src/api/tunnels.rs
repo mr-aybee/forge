@@ -111,9 +111,11 @@ fn person(caller: &Caller, origin: &RequestOrigin, headers: &HeaderMap, state: &
     if caller.session.session.connection_id.is_some() {
         return Err(ApiError::forbidden("AI connectors cannot open port tunnels"));
     }
+
     if !crate::request_origin::origin_header_ok(state, origin, headers) {
         return Err(ApiError::forbidden("origin not allowed"));
     }
+
     Ok(())
 }
 
@@ -126,6 +128,7 @@ async fn refreshed(state: &AppState, caller: &Caller, text: &str) -> Option<Stri
     if v["type"] != "refresh" {
         return None;
     }
+
     let token = v["token"].as_str().filter(|t| t.len() <= 512)?;
     let hash = forge_secrets::crypto::sha256_hex(token.as_bytes());
     let s = state.store.get_session(&hash).await.ok()??;
@@ -133,6 +136,7 @@ async fn refreshed(state: &AppState, caller: &Caller, text: &str) -> Option<Stri
         && s.expires_at > state.clock.now()
         && s.connection_id.is_none()
         && s.mfa == caller.session.session.mfa;
+
     same.then_some(hash)
 }
 
@@ -140,6 +144,7 @@ async fn refreshed(state: &AppState, caller: &Caller, text: &str) -> Option<Stri
 async fn session_alive(state: &AppState, caller: &Caller, session: &str) -> bool {
     use forge_core::ports::{ApiKeyRepository, SessionRepository};
     let now = state.clock.now();
+
     match session.strip_prefix("apikey:") {
         Some(key) => {
             let user = caller.session.user.id;
@@ -197,12 +202,15 @@ pub async fn allowance(
         },
         TunnelTargetKind::Package => caller.can(Action::NetworkTunnel, server_ref(server)).await,
     };
+
     if by_role {
         return Some(Allowance { grant: None });
     }
+
     let now = state.clock.now();
     let user = caller.session.user.id;
     let grants = state.store.list_tunnel_grants(Some(user)).await.ok()?;
+
     grants
         .into_iter()
         .find(|g| g.covers(user, kind, target_ref, server, port, now))
@@ -215,7 +223,9 @@ async fn still_allowed(state: &AppState, caller: &Caller, session: &str, t: &Tun
     if !session_alive(state, caller, session).await {
         return false;
     }
+
     let tg = &t.target;
+
     allowance(state, caller, tg.kind, &tg.target_ref, tg.environment_id, t.server_id, t.port).await.is_some()
 }
 
@@ -263,11 +273,14 @@ fn ports_field<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<u16>
             .map(|p| p.trim().parse::<u16>().map_err(|_| serde::de::Error::custom(format!("bad port {p:?}"))))
             .collect::<Result<Vec<u16>, _>>()?,
     };
+
     if ports.contains(&0) {
         return Err(serde::de::Error::custom("ports are 1 to 65535"));
     }
+
     ports.sort_unstable();
     ports.dedup();
+
     Ok(Some(ports))
 }
 
@@ -277,12 +290,14 @@ async fn node_of(state: &AppState, ws: WorkspaceId, spec: &TargetSpec) -> ApiRes
     if let Some(id) = spec.server_id.or_else(|| spec.target.parse().ok()) {
         return state.store.get_server(id).await.map_err(|_| ApiError::not_found("server not found"));
     }
+
     let mut servers = state.store.list_servers(Some(ws)).await?;
     servers.retain(|s| s.status != AgentStatus::Revoked);
     let refs: Vec<&forge_core::model::Server> = servers.iter().collect();
     let labels = crate::names::node_labels(&refs, &crate::names::stored_labels(state, ws).await.map_err(internal)?);
     let found =
         servers.iter().find(|s| labels.get(&s.id).is_some_and(|l| l.label == spec.target) || s.hostname == spec.target);
+
     found.cloned().ok_or_else(|| ApiError::not_found(format!("no node named {:?}", spec.target)))
 }
 
@@ -303,6 +318,7 @@ fn ambiguous(choices: &[ServicePort]) -> Response {
     let mut resp = (StatusCode::CONFLICT, Json(body)).into_response();
     resp.headers_mut()
         .insert(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("application/problem+json"));
+
     resp
 }
 
@@ -324,6 +340,7 @@ async fn resolve(
         if ports.is_empty() {
             return Err(ApiError::bad_request("a raw target needs `ports`"));
         }
+
         return Ok(ports
             .into_iter()
             .map(|port| ServicePort {
@@ -345,13 +362,16 @@ async fn resolve(
             })
             .collect());
     }
+
     let q = match (&spec.kind, &spec.service) {
         (TunnelTargetKind::Stack, Some(svc)) if !spec.target.contains('/') => format!("{}/{svc}", spec.target),
         _ => spec.target.clone(),
     };
+
     if q.trim().is_empty() {
         return Err(ApiError::bad_request("`ref` names the service or node"));
     }
+
     let all = crate::service_ports::catalogue(state, ws).await.map_err(internal)?;
     let mut hits: Vec<ServicePort> = all
         .into_iter()
@@ -359,15 +379,19 @@ async fn resolve(
         .filter(|e| spec.server_id.is_none_or(|s| e.server_id == s))
         .filter(|e| spec.ports.as_ref().is_none_or(|p| p.is_empty() || p.contains(&e.port)))
         .collect();
+
     if hits.is_empty() {
         return Err(ApiError::not_found(format!("no {} named {q:?} with those ports or on that node", spec.kind)));
     }
+
     if online_only {
         hits.retain(|e| e.online);
+
         if hits.is_empty() {
             return Err(ApiError::conflict(format!("{q} runs on no node that is online")));
         }
     }
+
     Ok(hits)
 }
 
@@ -389,6 +413,7 @@ async fn expiry(
 ) -> ApiResult<Timestamp> {
     let t = &state.config.tunnels;
     let now = state.clock.now();
+
     let wanted = if never {
         if !t.allow_never_expiry {
             caller.audit_denied(audit_action, resource, Some(ws), "never-expiring tunnels are disabled").await;
@@ -396,6 +421,7 @@ async fn expiry(
                 "tunnels that never expire are disabled; an administrator can enable `[tunnels] allow_never_expiry`",
             ));
         }
+
         caller.authorize(Action::AccessManage, ws_ref(ws)).await?;
         NEVER_EXPIRES
     } else {
@@ -406,8 +432,10 @@ async fn expiry(
                 t.max_lifetime_hours
             )));
         }
+
         Timestamp(now.0.saturating_add(m * 60_000))
     };
+
     Ok(cap.map_or(wanted, |c| wanted.min(c)))
 }
 
@@ -508,6 +536,7 @@ pub async fn end_tunnel(state: &AppState, id: &str, reason: &'static str) -> Opt
     if let Err(e) = state.store.close_tunnel(id, state.clock.now(), reason, up, down).await {
         tracing::warn!(error = %e, tunnel = id, "tunnel row not closed");
     }
+
     Some(t)
 }
 
@@ -548,6 +577,7 @@ pub async fn open(
     let server = state.store.get_server(entry.server_id).await.map_err(|_| ApiError::not_found("server not found"))?;
     let resource = server_ref(server.id);
     let raw = entry.kind == TunnelTargetKind::Raw;
+
     let Some(allowed) =
         allowance(&state, &caller, entry.kind, &entry.id, entry.environment_id, entry.server_id, entry.port).await
     else {
@@ -559,6 +589,7 @@ pub async fn open(
                 entry.label
             ),
         };
+
         caller
             .audit_denied(
                 "network.tunnel.open",
@@ -567,8 +598,10 @@ pub async fn open(
                 &format!("{} port {}: {why}", entry.label, entry.port),
             )
             .await;
+
         return Err(ApiError::forbidden(why));
     };
+
     let expires_at = expiry(
         &state,
         &caller,
@@ -580,9 +613,11 @@ pub async fn open(
         allowed.cap(),
     )
     .await?;
+
     if req.direct {
         direct_endpoint(&state, server.id).await?;
     }
+
     let bind: String = req.bind.chars().filter(|c| !c.is_control()).take(64).collect();
     let u = &caller.session.user;
     let name = u.username.clone().or_else(|| u.email.clone()).unwrap_or_else(|| u.id.to_string());
@@ -616,10 +651,12 @@ pub async fn open(
             limits(&state),
         )
         .map_err(|r| refusal(&r))?;
+
     if let Err(e) = state.store.put_tunnel(&record(&t)).await {
         state.tunnels.close_with(&t.id, "closed");
         return Err(e.into());
     }
+
     caller
         .audit(
             "network.tunnel.open",
@@ -632,6 +669,7 @@ pub async fn open(
             }),
         )
         .await;
+
     Ok((StatusCode::CREATED, Json(view(&t))).into_response())
 }
 
@@ -655,6 +693,7 @@ async fn direct_endpoint(state: &AppState, server: ServerId) -> ApiResult<forge_
             facts.get(&server).is_some_and(|(v, _)| v.get("ssh_tunnel").and_then(Value::as_bool) == Some(true)),
         )
     };
+
     // Stored facts can predate the node's setup (they are refreshed daily
     // and on agent updates, which race the helper): ask the node once more.
     let mut is_ready = ready().await?;
@@ -662,13 +701,16 @@ async fn direct_endpoint(state: &AppState, server: ServerId) -> ApiResult<forge_
         if let Err(e) = crate::facts::collect(state, server).await {
             tracing::debug!(error = %e, "facts refresh for a direct tunnel failed");
         }
+
         is_ready = ready().await?;
     }
+
     if !is_ready {
         return Err(ApiError::conflict(
             "this node is not set up for direct tunnels (it needs the browser terminal and a current agent); open the tunnel without --direct",
         ));
     }
+
     state.store.get_ssh_endpoint(server).await?.ok_or_else(|| {
         ApiError::conflict("this node has no SSH endpoint with a pinned host key; set one on the node's Terminal page")
     })
@@ -705,9 +747,11 @@ pub async fn ssh_cert(
     if !t.direct {
         return Err(ApiError::conflict("this tunnel relays through the server; it was not opened with --direct"));
     }
+
     if !t.claimed {
         return Err(ApiError::conflict("hold the tunnel's control socket first"));
     }
+
     let resource = server_ref(t.server_id);
     let session = caller.session.session.id_hash.clone();
     if state.clock.now() >= t.expires_at || !still_allowed(&state, &caller, &session, &t).await {
@@ -721,6 +765,7 @@ pub async fn ssh_cert(
             .await;
         return Err(ApiError::forbidden("this tunnel is no longer allowed"));
     }
+
     let endpoint = direct_endpoint(&state, t.server_id).await?;
     let ip: std::net::IpAddr =
         t.target.dial_ip.parse().map_err(|_| ApiError::conflict("this target has no address to forward to"))?;
@@ -739,6 +784,7 @@ pub async fn ssh_cert(
             }),
         )
         .await;
+
     Ok(Json(DirectCert {
         host: endpoint.host,
         port: endpoint.port,
@@ -769,17 +815,21 @@ pub async fn control(
     ws: WebSocketUpgrade,
 ) -> ApiResult<Response> {
     person(&caller, &origin, &headers, &state)?;
+
     if caller.session.session.kind != SessionKind::Bearer {
         return Err(ApiError::forbidden("tunnels are opened with the forge CLI"));
     }
+
     let t = owned(&state, &caller, &id)?;
     let mut revoked = state.tunnels.claim(&id).ok_or_else(|| ApiError::conflict("this tunnel is already held"))?;
+
     Ok(ws.max_message_size(MAX_FRAME).on_upgrade(move |mut socket| async move {
         let idle_ms = i64::from(state.config.tunnels.idle_timeout_secs) * 1000;
         let mut session = caller.session.session.id_hash.clone();
         let mut recheck = tokio::time::interval(RECHECK);
         recheck.tick().await;
         let _ = socket.send(Message::Text(json!({ "type": "open", "tunnel": view(&t) }).to_string().into())).await;
+
         let reason: &'static str = loop {
             let remaining = Duration::from_millis(u64::try_from(t.expires_at.0 - state.clock.now().0).unwrap_or(0));
             let deadline = tokio::time::Instant::now() + remaining.min(MAX_SLEEP);
@@ -826,6 +876,7 @@ pub async fn control(
                 },
             }
         };
+
         let closed = end_tunnel(&state, &id, reason).await.unwrap_or(t);
         let (up, down) = closed.bytes();
         let _ = socket.send(Message::Text(json!({ "type": "closed", "reason": reason }).to_string().into())).await;
@@ -862,6 +913,7 @@ pub async fn connect(
     let t = owned(&state, &caller, &id)?;
     let slot = state.tunnels.connect(&id, limits(&state)).map_err(|r| refusal(&r))?;
     let mut revoked = state.tunnels.watch(&id).ok_or_else(|| ApiError::not_found("no open tunnel with this id"))?;
+
     Ok(ws.max_message_size(MAX_FRAME).on_upgrade(move |socket| async move {
         let _slot = slot;
         let (mut tx, mut rx) = socket.split();
@@ -884,11 +936,14 @@ pub async fn connect(
             now,
             Duration::from_secs(60),
         );
+
         if let Err(e) = state.hub.enqueue(t.server_id, &body.operation_id, signed) {
             let _ = tx.send(Message::Close(None)).await;
             tracing::debug!(error = %e, "tunnel command not queued");
+
             return;
         }
+
         // The node dials back, or reports why it could not.
         let mut node_rx = node_rx;
         let node = tokio::select! {
@@ -902,10 +957,12 @@ pub async fn connect(
                 _ => tokio::time::timeout(DIAL_WAIT, node_rx).await.ok().and_then(Result::ok),
             },
         };
+
         let Some(node) = node else {
             let _ = tx.send(Message::Close(None)).await;
             return;
         };
+
         // Each direction ends on its own (half-close): `{"type": "eof"}` from
         // the CLI ends the stream to the node; the end of the node's stream is
         // passed on as `eof`. The connection closes when both have ended.
@@ -913,6 +970,7 @@ pub async fn connect(
         let mut from_node = node.from_node.into_data_stream();
         let (up, down, last) = (t.bytes_up.clone(), t.bytes_down.clone(), t.last_activity.clone());
         let (mut client_done, mut node_done) = (false, false);
+
         while !(client_done && node_done) {
             tokio::select! {
                 _ = revoked.changed() => break,
@@ -955,6 +1013,7 @@ pub async fn connect(
                 },
             }
         }
+
         drop(to_node);
         let _ = tx.send(Message::Close(None)).await;
     }))
@@ -992,6 +1051,7 @@ async fn node_names(state: &AppState) -> std::collections::HashMap<ServerId, Str
         Some(ws) => crate::names::stored_labels(state, ws).await.unwrap_or_default(),
         None => Default::default(),
     };
+
     crate::names::node_labels(&refs, &stored).into_iter().map(|(id, l)| (id, l.label)).collect()
 }
 
@@ -1000,18 +1060,23 @@ pub async fn list(State(state): State<AppState>, caller: Caller, Query(q): Query
     if q.all {
         caller.authorize(Action::UserManage, EntityRef::platform()).await?;
     }
+
     let me = caller.session.user.id;
     let which = q.state.as_deref().unwrap_or("open");
     if !matches!(which, "open" | "closed" | "all") {
         return Err(ApiError::bad_request("state is open, closed or all"));
     }
+
     let mut items: Vec<Value> = Vec::new();
+
     if which != "closed" {
         items.extend(state.tunnels.list().iter().filter(|t| t.claimed && (q.all || t.user_id == me)).map(view));
     }
+
     if which != "open" {
         let rows = state.store.list_tunnels((!q.all).then_some(me), HISTORY_LIMIT).await?;
         let (users, nodes) = (user_names(&state).await, node_names(&state).await);
+
         for r in rows {
             if r.closed_at.is_none() {
                 // Open in the store but gone from the registry: never claimed
@@ -1020,13 +1085,16 @@ pub async fn list(State(state): State<AppState>, caller: Caller, Query(q): Query
                     let _ =
                         state.store.close_tunnel(&r.id, state.clock.now(), "unclaimed", r.bytes_up, r.bytes_down).await;
                 }
+
                 continue;
             }
+
             let user = users.get(&r.user_id).cloned().unwrap_or_else(|| r.user_id.to_string());
             let node = nodes.get(&r.server_id).cloned().unwrap_or_default();
             items.push(row_view(&r, &user, &node));
         }
     }
+
     Ok(Json(json!({ "tunnels": items, "settings": settings_view(&state) })))
 }
 
@@ -1036,6 +1104,7 @@ pub async fn close(State(state): State<AppState>, caller: Caller, Path(id): Path
     if t.user_id != caller.session.user.id && !caller.can(Action::UserManage, EntityRef::platform()).await {
         return Err(ApiError::not_found("no open tunnel with this id"));
     }
+
     end_tunnel(&state, &id, "closed").await;
     caller
         .audit(
@@ -1045,6 +1114,7 @@ pub async fn close(State(state): State<AppState>, caller: Caller, Path(id): Path
             json!({ "tunnel": id, "owner": t.user, "target": target_json(&t.target), "port": t.port }),
         )
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1100,6 +1170,7 @@ pub async fn list_grants(
     if !admin && q.user.is_some_and(|u| u != me) {
         return Err(ApiError::forbidden("listing other people's grants needs `access.manage`"));
     }
+
     let now = state.clock.now();
     let grants = state.store.list_tunnel_grants(user).await?;
     let (users, names) = (user_names(&state).await, target_names(&state, ws).await);
@@ -1111,6 +1182,7 @@ pub async fn list_grants(
             grant_view(g, &user, names.get(&g.target_ref).map(String::as_str), now)
         })
         .collect();
+
     Ok(Json(json!({
         "grants": items,
         "allow_never_expiry": state.config.tunnels.allow_never_expiry,
@@ -1150,13 +1222,16 @@ pub async fn create_grant(
     Json(req): Json<NewGrantRequest>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     caller.authorize(Action::AccessManage, ws_ref(ws)).await?;
+
     if !req.target.kind.grantable() {
         return Err(ApiError::bad_request("raw ports cannot be granted; they need `network.tunnel.any`"));
     }
+
     let grantee = state.store.get_user(req.user_id).await.map_err(|_| ApiError::not_found("user not found"))?;
     if grantee.disabled {
         return Err(ApiError::conflict("the user is disabled"));
     }
+
     // Resolve the target by name; every node it runs on unless one is named.
     let hits = resolve(&state, ws, &req.target, false).await?;
     let first = &hits[0];
@@ -1172,6 +1247,7 @@ pub async fn create_grant(
             })),
         ));
     }
+
     let note: String = req.note.chars().filter(|c| !c.is_control()).take(200).collect();
     let expires_at = expiry(
         &state,
@@ -1212,6 +1288,7 @@ pub async fn create_grant(
             }),
         )
         .await;
+
     Ok((StatusCode::CREATED, Json(grant_view(&g, &user, Some(&first.name), now))))
 }
 
@@ -1230,15 +1307,19 @@ pub async fn revoke_grant(
         .await?
         .filter(|g| g.workspace_id == ws)
         .ok_or_else(|| ApiError::not_found("grant not found"))?;
+
     if g.revoked_at.is_none() {
         g.revoked_at = Some(state.clock.now());
         state.store.put_tunnel_grant(&g).await?;
     }
+
     let live: Vec<String> =
         state.tunnels.list().into_iter().filter(|t| t.target.grant_id == Some(id)).map(|t| t.id).collect();
+
     for t in &live {
         end_tunnel(&state, t, "access_withdrawn").await;
     }
+
     caller
         .audit(
             "network.tunnel.grant.revoke",
@@ -1247,6 +1328,7 @@ pub async fn revoke_grant(
             json!({ "grant": id, "user_id": g.user_id, "target": { "kind": g.target_kind, "ref": g.target_ref }, "tunnels_closed": live }),
         )
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 

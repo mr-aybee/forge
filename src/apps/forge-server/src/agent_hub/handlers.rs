@@ -44,10 +44,12 @@ pub(super) async fn enroll(
     ) {
         return reject(StatusCode::TOO_MANY_REQUESTS, "too many enrollment attempts; try again in a minute");
     }
+
     let Ok(req) = EnrollRequest::decode(body) else { return reject(StatusCode::BAD_REQUEST, "malformed request") };
     if req.hostname.is_empty() || req.hostname.len() > 253 || req.os.len() > 32 || req.arch.len() > 32 {
         return reject(StatusCode::BAD_REQUEST, "invalid host facts");
     }
+
     let now = state.clock.now();
     let server_id = ServerId::new();
     let hash = forge_pki::enrollment::hash_secret(&req.token_secret);
@@ -71,6 +73,7 @@ pub(super) async fn enroll(
             return reject(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
         }
     };
+
     let issued = match state.ca.issue_agent_certificate(
         &req.csr_pem,
         &server_id.to_string(),
@@ -83,15 +86,18 @@ pub(super) async fn enroll(
             return reject(StatusCode::BAD_REQUEST, "invalid CSR");
         }
     };
+
     // The agent running on the Forge host itself becomes the control node
     // (D-016). Loopback cannot be spoofed by remote agents.
     let role =
         if addr.ip().is_loopback() && !has_control_node(&state).await { NodeRole::Control } else { NodeRole::Worker };
+
     // The cluster chosen when the token was created (manual installs).
     let cluster_id = match state.store.get_enrollment_target(&token.id).await {
         Ok(Some((cluster, _))) => cluster,
         _ => None,
     };
+
     let server = Server {
         id: server_id,
         role,
@@ -109,20 +115,24 @@ pub(super) async fn enroll(
         cert_not_after: Some(issued.not_after),
         created_at: now,
     };
+
     if let Err(e) = state.store.create_server(&server).await {
         tracing::error!(error = %e, "could not register server");
         return reject(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
     }
+
     // Give the new member a fabric address in its cluster.
     if let Some(c) = cluster_id
         && let Err(e) = crate::api::fabric::reallocate(&state, c).await
     {
         tracing::warn!(error = ?e, cluster = %c, "could not plan the fabric address of a new node");
     }
+
     // Existing members add the new node as soon as it reports its key (#24).
     if let Some(c) = cluster_id {
         crate::api::fabric_reconcile::membership_changed(&state, &[c]).await;
     }
+
     audit(
         &state,
         &token.created_by.to_string(),
@@ -133,6 +143,7 @@ pub(super) async fn enroll(
         serde_json::json!({ "hostname": req.hostname, "token_id": token.id, "cert_serial": issued.serial_hex }),
     )
     .await;
+
     // The terminal account the installer created (D-078) is saved for the
     // node's terminal, as the person who created the token.
     let account = req.terminal_account.trim();
@@ -153,7 +164,9 @@ pub(super) async fn enroll(
         )
         .await;
     }
+
     state.publish(ServerEvent::server(server_id, AgentStatus::Pending));
+
     proto(&EnrollResponse {
         server_id: server_id.to_string(),
         cert_pem: issued.cert_pem,
@@ -171,13 +184,16 @@ pub(super) async fn enroll(
 /// with leading zero bytes, so those forms are looked up too.
 async fn is_revoked(state: &AppState, serial: &str) -> forge_core::DomainResult<bool> {
     let mut s = forge_pki::canonical_serial(serial);
+
     loop {
         if state.store.is_certificate_revoked(&s).await? {
             return Ok(true);
         }
+
         if s.len() >= 32 {
             return Ok(false);
         }
+
         s.insert_str(0, "00");
     }
 }
@@ -187,22 +203,27 @@ pub(crate) async fn authenticated_server(state: &AppState, peer: &AgentPeer) -> 
     let Some(id) = &peer.0 else {
         return Err(Box::new(reject(StatusCode::UNAUTHORIZED, "client certificate required")));
     };
+
     let Ok(server_id) = id.common_name.parse::<ServerId>() else {
         return Err(Box::new(reject(StatusCode::FORBIDDEN, "not an agent certificate")));
     };
+
     match is_revoked(state, &id.serial_hex).await {
         Ok(false) => {}
         Ok(true) => return Err(Box::new(reject(StatusCode::FORBIDDEN, "certificate revoked"))),
         Err(_) => return Err(Box::new(reject(StatusCode::INTERNAL_SERVER_ERROR, "internal error"))),
     }
+
     let server = state
         .store
         .get_server(server_id)
         .await
         .map_err(|_| Box::new(reject(StatusCode::FORBIDDEN, "unknown agent")))?;
+
     if server.status == AgentStatus::Revoked {
         return Err(Box::new(reject(StatusCode::FORBIDDEN, "agent revoked")));
     }
+
     Ok(server)
 }
 
@@ -216,29 +237,37 @@ pub(super) async fn heartbeat(
         Ok(s) => s,
         Err(r) => return *r,
     };
+
     let Ok(hb) = Heartbeat::decode(body) else { return reject(StatusCode::BAD_REQUEST, "malformed heartbeat") };
     let now = state.clock.now();
     if let Err(e) = state.store.record_heartbeat(server.id, now, &hb.agent_version).await {
         tracing::error!(error = %e, "heartbeat write failed");
     }
+
     if server.status != AgentStatus::Online {
         state.publish(ServerEvent::server(server.id, AgentStatus::Online));
     }
+
     crate::facts::note_address(server.id, peer_addr.0.ip());
+
     // The control-plane keys this agent pins: its acknowledgement of the
     // next key (D-167). Never fails the heartbeat.
     if let Err(e) = state.agent_keys.record_ack(&server.id.to_string(), &hb.pinned_server_keys, now).await {
         tracing::warn!(server = %server.id, error = %e, "recording the agent's pinned keys failed");
     }
+
     // OS, kernel and CPU facts: collected on connect, daily and right after
     // the agent changes version (facts.rs).
     crate::facts::maybe_collect(&state, server.id, server.agent_version != hb.agent_version);
+
     // The fleet's names (D-084): on change, on reconnect and every few minutes.
     crate::names::on_heartbeat(&state, server.id, server.status != AgentStatus::Online);
+
     if let Some(m) = &hb.metrics {
         state.telemetry.record(server.id, crate::metrics::Sample::from_wire(now, m));
         state.telemetry.set_volumes(server.id, crate::metrics::volumes_from_wire(m));
         state.telemetry.set_traffic(server.id, now.0, m.traffic.clone());
+
         // CPU, memory and root disk as observations for alert rules (#11, D-085
         // amendment). In the background: a heartbeat stays cheap, and a
         // recorder error never fails it.
@@ -253,21 +282,27 @@ pub(super) async fn heartbeat(
             });
         }
     }
+
     // Agents with a spool upload node history and container data to the
     // analytics worker themselves (D-142). Older agents still send them
     // here; they are forwarded to the worker as received.
     let container_logs_ack = if hb.spool.is_some() { 0 } else { forward_telemetry(&state, server.id, now, &hb).await };
+
     // Health check results of the apps on this node (D-085).
     crate::health_ingest::ingest(&state, server.id, hb.health);
+
     for p in &hb.progress {
         state.hub.append_progress(server.id, &p.operation_id, &p.text);
     }
+
     for r in hb.results {
         let op = r.operation_id.clone();
+
         if !state.hub.resolve(server.id, r) {
             tracing::debug!(server = %server.id, operation = %op, "result for an operation not sent to this node dropped");
         }
     }
+
     // An agent that restarted after taking commands will never answer them.
     let lost = state.hub.agent_uptime(server.id, Duration::from_secs(hb.uptime_secs));
     if !lost.is_empty() {
@@ -279,8 +314,10 @@ pub(super) async fn heartbeat(
     if commands.is_empty() {
         let notify = state.hub.notifier(server.id);
         let hold = Duration::from_secs(u64::from(state.config.heartbeat_hold_secs));
+
         // Someone is watching this node's live charts: answer sooner.
         let hold = if state.telemetry.is_watched(server.id) { hold.min(crate::metrics::LIVE_HOLD) } else { hold };
+
         // A command is streaming output: come back within a second.
         let hold = if hb.streaming { hold.min(Duration::from_secs(1)) } else { hold };
         let _ = tokio::time::timeout(hold, notify.notified()).await;
@@ -289,6 +326,7 @@ pub(super) async fn heartbeat(
 
     let renew = peer.0.as_ref().is_some_and(|p| forge_pki::renewal_due(p.not_before, p.not_after, now));
     let container_telemetry = Some(state.container_telemetry.config_for(server.id).await);
+
     proto(&HeartbeatResponse {
         commands,
         next_interval_secs: 0,
@@ -306,6 +344,7 @@ fn analytics_config(state: &AppState, server: ServerId) -> Option<forge_proto::m
     if !state.analytics_enabled {
         return None;
     }
+
     Some(forge_proto::messages::AnalyticsAgentConfig {
         url: state.config.worker_agent_url(),
         spool: Some(state.config.analytics.spool.wire()),
@@ -321,6 +360,7 @@ fn analytics_port(state: &AppState) -> u32 {
     if !state.analytics_enabled {
         return 0;
     }
+
     state.config.worker_agent_port().map_or(0, u32::from)
 }
 
@@ -333,11 +373,13 @@ async fn forward_telemetry(state: &AppState, server: ServerId, now: forge_core::
     if !state.analytics_enabled {
         return 0;
     }
+
     let metrics = hb.metrics.as_ref().map(Message::encode_to_vec).unwrap_or_default();
     let logs = hb.container_logs.as_ref().map(Message::encode_to_vec).unwrap_or_default();
     if metrics.is_empty() && logs.is_empty() {
         return 0;
     }
+
     let t = forge_core::analytics::NodeTelemetry { server, now, metrics: &metrics, container_logs: &logs };
     match state.telemetry_sink.forward_telemetry(t).await {
         Ok(ack) => ack,
@@ -360,11 +402,14 @@ pub(super) async fn health_secrets(
         Ok(s) => s,
         Err(r) => return *r,
     };
+
     let Ok(req) = forge_proto::messages::HealthSecretsRequest::decode(body) else {
         return reject(StatusCode::BAD_REQUEST, "malformed request");
     };
+
     let mut resp = proto(&state.health_secrets.resolve(server.id, &req).await);
     resp.headers_mut().insert(header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-store"));
+
     resp
 }
 
@@ -377,13 +422,16 @@ pub(super) async fn renew(
         Ok(s) => s,
         Err(r) => return *r,
     };
+
     let Ok(req) = RenewRequest::decode(body) else { return reject(StatusCode::BAD_REQUEST, "malformed request") };
     let now = state.clock.now();
+
     // Only the node's current certificate renews, and only once renewal is
     // due: an older (or copied) certificate of the node cannot mint new ones.
     let Some(presented) = peer.0.as_ref() else {
         return reject(StatusCode::UNAUTHORIZED, "client certificate required");
     };
+
     // Compared in DER form: a serial recorded before D-145 may carry a
     // leading zero byte the presented certificate does not.
     let current = server
@@ -403,9 +451,12 @@ pub(super) async fn renew(
             serde_json::json!({ "serial": presented.serial_hex, "reason": reason }),
         )
         .await;
+
         return reject(StatusCode::FORBIDDEN, reason);
     }
+
     let previous = presented.serial_hex.clone();
+
     let issued = match state.ca.issue_agent_certificate(
         &req.csr_pem,
         &server.id.to_string(),
@@ -415,10 +466,12 @@ pub(super) async fn renew(
         Ok(c) => c,
         Err(_) => return reject(StatusCode::BAD_REQUEST, "invalid CSR"),
     };
+
     if let Err(e) = state.store.set_certificate(server.id, &issued.serial_hex, issued.not_after).await {
         tracing::error!(error = %e, "could not store renewed certificate");
         return reject(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
     }
+
     // The replaced certificate stops working now rather than at its expiry.
     let revoked = match state.store.revoke_certificate(&forge_pki::canonical_serial(&previous), server.id, now).await {
         Ok(()) => true,
@@ -427,6 +480,7 @@ pub(super) async fn renew(
             false
         }
     };
+
     // The analytics worker learns the new serial now, not at the next
     // periodic push, so uploads with the new certificate are not refused.
     state.analytics_maps.nudge();
@@ -440,6 +494,7 @@ pub(super) async fn renew(
         serde_json::json!({ "serial": issued.serial_hex, "previous": previous, "previous_revoked": revoked }),
     )
     .await;
+
     proto(&RenewResponse { cert_pem: issued.cert_pem })
 }
 

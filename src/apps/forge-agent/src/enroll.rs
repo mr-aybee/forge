@@ -40,18 +40,23 @@ impl HostFacts {
 fn save_pins(paths: &StatePaths, token_key: Option<&str>, resp: &EnrollResponse) -> anyhow::Result<()> {
     let now = forge_core::Clock::now(&forge_core::SystemClock);
     let mut set = crate::pins::PinSet::default();
+
     if let Some(key) = token_key {
         set.add(key, crate::pins::LABEL_ENROLLMENT, now.0)?;
     }
+
     if let Some(signed) = &resp.server_keys {
         let keys = forge_proto::verify_server_keys(&resp.command_public_key, signed, &resp.server_id, now)
             .map_err(|e| anyhow::anyhow!("the server's key announcement is invalid: {e}"))?;
         set.apply_verified(&keys, now.0)?;
     }
+
     if set.is_empty() {
         return Ok(());
     }
+
     let path = crate::pins::enrollment_target(&paths.dir, running_as_root());
+
     crate::pins::save(&path, &set).with_context(|| format!("writing {}", path.display()))
 }
 
@@ -94,6 +99,7 @@ pub async fn enroll_with(
     // 1. Fetch the CA and check it against the fingerprint pinned in the token.
     let mut bootstrap = Link::new(endpoint.clone(), tls::ca_bootstrap()?, timeout);
     let downloaded = String::from_utf8(bootstrap.request(http::Method::GET, forge_proto::paths::CA, vec![]).await?)?;
+
     // Only the pinned certificate is trusted and saved; extra certificates are refused.
     let ca_pem = tls::pinned_ca_pem(&downloaded, &parsed.ca_fingerprint)?;
 
@@ -101,10 +107,12 @@ pub async fn enroll_with(
     // control-plane key the token pins (D-167), so any address of the
     // server works; with an older token, by the CA and the host name.
     let csr = AgentCsr::generate(&facts.hostname)?;
+
     let enroll_tls = match &parsed.server_key_sha256 {
         Some(key) => tls::anonymous_pinned(std::slice::from_ref(key), &endpoint.authority())?,
         None => tls::anonymous(&ca_pem)?,
     };
+
     let mut link = Link::new(endpoint.clone(), enroll_tls, timeout);
     let req = EnrollRequest {
         token_secret: parsed.secret,
@@ -135,5 +143,6 @@ pub async fn enroll_with(
     config.analytics_url = Some(analytics).filter(|u| !u.is_empty());
     paths.save_config(&config)?;
     tracing::info!(server_id = %identity.server_id, "enrolled");
+
     Ok(identity)
 }

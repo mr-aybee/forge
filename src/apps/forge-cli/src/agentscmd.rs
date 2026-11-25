@@ -66,6 +66,7 @@ pub enum AgentsCmd {
 pub async fn run(g: &Global, cmd: AgentsCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         AgentsCmd::AutoUpdate { enable, disable, days, start, end, batch, yes } => {
             let cur = api.get("/api/v1/agents/auto-update").await?;
@@ -74,6 +75,7 @@ pub async fn run(g: &Global, cmd: AgentsCmd) -> Result<()> {
                 out::result(g.output, &cur, None);
                 return Ok(());
             }
+
             let enabled = if enable {
                 true
             } else if disable {
@@ -81,6 +83,7 @@ pub async fn run(g: &Global, cmd: AgentsCmd) -> Result<()> {
             } else {
                 cur["enabled"].as_bool().unwrap_or(false)
             };
+
             let body = json!({
                 "enabled": enabled,
                 "days": days.unwrap_or_else(|| {
@@ -115,6 +118,7 @@ pub async fn run(g: &Global, cmd: AgentsCmd) -> Result<()> {
             if outdated && let Value::Array(rows) = &mut nodes {
                 rows.retain(|n| n["outdated"] == true);
             }
+
             if g.output == Format::Table {
                 eprintln!("control plane: {} · {} outdated", v["target"].as_str().unwrap_or("?"), v["outdated"]);
                 out::result(
@@ -136,10 +140,13 @@ pub async fn run(g: &Global, cmd: AgentsCmd) -> Result<()> {
             if nodes.is_empty() && !all {
                 return Err(CliError::usage("name the nodes to update, or pass --all"));
             }
+
             let mut ids = Vec::new();
+
             for n in &nodes {
                 ids.push(resolve_node(&mut api, n).await?["id"].as_str().unwrap_or_default().to_owned());
             }
+
             let what = if all { "every outdated online Linux node".to_owned() } else { nodes.join(", ") };
             let how = canary.map(|n| format!(" in batches of {n} (canary first)")).unwrap_or_default();
             confirm(
@@ -150,13 +157,16 @@ pub async fn run(g: &Global, cmd: AgentsCmd) -> Result<()> {
                     t.server
                 ),
             )?;
+
             if let Some(batch) = canary {
                 let r = api.post("/api/v1/agents/rollouts", &json!({ "server_ids": ids, "batch": batch })).await?;
                 let job = r["job"]["id"].as_str().unwrap_or_default().to_owned();
+
                 if !wait {
                     out::result(g.output, &r, None);
                     return Ok(());
                 }
+
                 let done = crate::cmds::wait_jobs(
                     &mut api,
                     std::slice::from_ref(&job),
@@ -164,13 +174,17 @@ pub async fn run(g: &Global, cmd: AgentsCmd) -> Result<()> {
                 )
                 .await?;
                 out::result(g.output, &json!({ "target": r["target"], "rollout": done.first() }), None);
+
                 return Ok(());
             }
+
             let r = api.post("/api/v1/agents/update", &json!({ "server_ids": ids })).await?;
+
             if !wait {
                 out::result(g.output, &r, None);
                 return Ok(());
             }
+
             let jobs: Vec<String> = r["jobs"]
                 .as_array()
                 .into_iter()
@@ -179,6 +193,7 @@ pub async fn run(g: &Global, cmd: AgentsCmd) -> Result<()> {
                 .collect();
             let deadline = Instant::now() + Duration::from_secs(wait_timeout_secs);
             let mut results = Vec::new();
+
             for id in &jobs {
                 loop {
                     let j = api.get(&format!("/api/v1/jobs/{id}")).await?;
@@ -187,19 +202,24 @@ pub async fn run(g: &Global, cmd: AgentsCmd) -> Result<()> {
                         results.push(json!({ "job_id": id, "status": s, "error": j["last_error"] }));
                         break;
                     }
+
                     if Instant::now() >= deadline {
                         return Err(CliError::new(Exit::Timeout, format!("job {id} is still {s}; it keeps running")));
                     }
+
                     tokio::time::sleep(Duration::from_secs(3)).await;
                 }
             }
+
             let failed = results.iter().filter(|r| r["status"] != "succeeded").count();
             out::result(g.output, &json!({ "target": r["target"], "results": results, "refused": r["refused"] }), None);
+
             if failed > 0 {
                 return Err(CliError::new(Exit::JobFailed, format!("{failed} update(s) did not succeed"))
                     .with_code("partial_failure"));
             }
         }
     }
+
     Ok(())
 }

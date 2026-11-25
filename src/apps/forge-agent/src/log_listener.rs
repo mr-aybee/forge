@@ -105,6 +105,7 @@ impl Gate {
             .take(forge_proto::messages::MAX_INGEST_KEYS)
             .filter_map(|k| <[u8; 32]>::try_from(k.hash.as_slice()).ok())
             .collect();
+
         // Buckets of keys that are gone are forgotten.
         self.buckets.lock().unwrap_or_else(PoisonError::into_inner).retain(|h, _| v.contains(h));
         *self.keys.write().unwrap_or_else(PoisonError::into_inner) = v;
@@ -126,9 +127,11 @@ impl Gate {
         let h = forge_secrets::crypto::sha256(key.as_bytes());
         let keys = self.keys.read().unwrap_or_else(PoisonError::into_inner);
         let mut found = false;
+
         for k in keys.iter() {
             found |= forge_secrets::crypto::constant_time_eq(k, &h);
         }
+
         found.then_some(h)
     }
 
@@ -140,9 +143,11 @@ impl Gate {
         if !buckets.contains_key(&key) && buckets.len() >= MAX_BUCKETS {
             buckets.clear();
         }
+
         let b = buckets.entry(key).or_insert(Bucket { tokens: burst, at: now });
         b.tokens = (b.tokens + now.duration_since(b.at).as_secs_f64() * rate).min(burst);
         b.at = now;
+
         if b.tokens >= 1.0 {
             b.tokens -= 1.0;
             true
@@ -158,6 +163,7 @@ impl Gate {
         if (!local.is_loopback() || l.rate_on_loopback) && !self.take(hash, l.rate_per_sec, now) {
             return Err(Refusal::RateLimited);
         }
+
         Ok(hash)
     }
 }
@@ -169,16 +175,19 @@ impl Gate {
 pub fn addresses(gateway: Option<IpAddr>, extra: Option<IpAddr>) -> Vec<SocketAddr> {
     let mut v = vec![SocketAddr::from((Ipv4Addr::LOCALHOST, PORT))];
     let usable = |ip: &IpAddr| !ip.is_unspecified() && !ip.is_multicast() && !ip.is_loopback();
+
     let private = |ip: &IpAddr| match ip {
         IpAddr::V4(v4) => v4.is_private(),
         IpAddr::V6(_) => false,
     };
+
     for ip in [gateway.filter(|g| usable(g) && private(g)), extra.filter(usable)].into_iter().flatten() {
         let a = SocketAddr::new(ip, PORT);
         if !v.contains(&a) {
             v.push(a);
         }
     }
+
     v
 }
 
@@ -186,6 +195,7 @@ fn reply(status: StatusCode, body: &'static str) -> Response<Full<Bytes>> {
     let mut r = Response::new(Full::new(Bytes::from_static(body.as_bytes())));
     *r.status_mut() = status;
     r.headers_mut().insert(http::header::CONTENT_TYPE, http::HeaderValue::from_static("application/json"));
+
     r
 }
 
@@ -200,9 +210,11 @@ pub async fn handle(spool: &Arc<Spool>, gate: &Gate, local: IpAddr, req: Request
     if req.uri().path() != PATH {
         return reply(StatusCode::NOT_FOUND, r#"{"Error":"not found"}"#);
     }
+
     if req.method() != Method::POST {
         return reply(StatusCode::METHOD_NOT_ALLOWED, r#"{"Error":"POST only"}"#);
     }
+
     let key = req.headers().get(KEY_HEADER).and_then(|v| v.to_str().ok());
     let hash = match gate.admit(key, local, Instant::now()) {
         Ok(h) => h,
@@ -214,11 +226,14 @@ pub async fn handle(spool: &Arc<Spool>, gate: &Gate, local: IpAddr, req: Request
             return reply(StatusCode::TOO_MANY_REQUESTS, r#"{"Error":"rate limited"}"#);
         }
     };
+
     if spool.accepting().is_err() {
         spool.count_refused();
         return reply(StatusCode::TOO_MANY_REQUESTS, r#"{"Error":"the node's log spool is full"}"#);
     }
+
     let cap = usize::try_from(gate.limits().max_body_bytes).unwrap_or(usize::MAX);
+
     if req
         .headers()
         .get(http::header::CONTENT_LENGTH)
@@ -227,16 +242,20 @@ pub async fn handle(spool: &Arc<Spool>, gate: &Gate, local: IpAddr, req: Request
     {
         return reply(StatusCode::PAYLOAD_TOO_LARGE, r#"{"Error":"body too large"}"#);
     }
+
     let body = match Limited::new(req.into_body(), cap).collect().await {
         Ok(b) => b.to_bytes(),
         Err(_) => return reply(StatusCode::PAYLOAD_TOO_LARGE, r#"{"Error":"body too large"}"#),
     };
+
     let Ok(text) = String::from_utf8(body.to_vec()) else {
         return reply(StatusCode::BAD_REQUEST, r#"{"Error":"the body is not UTF-8"}"#);
     };
+
     if text.trim().is_empty() {
         return reply(StatusCode::CREATED, r#"{"MinimumLevelAccepted":null}"#);
     }
+
     let (spool2, key_hex) = (spool.clone(), hex::encode(hash));
     let r = tokio::task::spawn_blocking(move || spool2.append_app_log(&key_hex, &text, now_ms())).await;
     match r {
@@ -273,6 +292,7 @@ async fn serve(
             },
             _ = stop.changed() => return,
         };
+
         // Over the connection limit the new connection is closed at once.
         let Ok(permit) = slots.clone().try_acquire_owned() else { continue };
         let local = tcp.local_addr().map_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED), |a| a.ip());
@@ -329,8 +349,10 @@ impl Retries {
         if e.kind() == std::io::ErrorKind::AddrNotAvailable {
             self.0.remove(&a);
             self.1.insert(a);
+
             return BindLog::NotHere;
         }
+
         if self.failed(a, now) { BindLog::Warn } else { BindLog::Debug }
     }
 
@@ -339,6 +361,7 @@ impl Retries {
         let n = self.0.get(&a).map_or(0, |(n, _)| *n).saturating_add(1);
         let wait = RETRY_FIRST.saturating_mul(1 << (n - 1).min(4)).min(RETRY_MAX);
         self.0.insert(a, (n, now + wait));
+
         n == 1
     }
 
@@ -372,6 +395,7 @@ pub async fn run(
     let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     let mut bound: HashMap<SocketAddr, watch::Sender<bool>> = HashMap::new();
     let mut retries = Retries::default();
+
     loop {
         let want = wanted.borrow_and_update().clone();
         bound.retain(|a, stop| {
@@ -380,14 +404,17 @@ pub async fn run(
                 let _ = stop.send(true);
                 tracing::info!(addr = %a, "log listener stopped");
             }
+
             keep
         });
         retries.keep(&want);
         let now = Instant::now();
+
         for a in want.iter().filter(|a| !a.ip().is_unspecified()) {
             if bound.contains_key(a) || !retries.due(a, now) {
                 continue;
             }
+
             match TcpListener::bind(a).await {
                 Ok(l) => {
                     let (tx, rx) = watch::channel(false);
@@ -409,6 +436,7 @@ pub async fn run(
                 },
             }
         }
+
         let wake = retries.next().map_or(RETRY_MAX, |at| at.saturating_duration_since(Instant::now()));
         tokio::select! {
             r = wanted.changed() => if r.is_err() { break },
@@ -416,6 +444,7 @@ pub async fn run(
             () = tokio::time::sleep(wake) => {}
         }
     }
+
     for stop in bound.values() {
         let _ = stop.send(true);
     }
@@ -437,6 +466,7 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
         );
+
         g
     }
 
@@ -445,9 +475,11 @@ mod tests {
         let (mut send, conn) = hyper::client::conn::http1::handshake(TokioIo::new(tcp)).await.unwrap();
         tokio::spawn(conn);
         let mut req = Request::post(PATH).header(http::header::HOST, "forge-node");
+
         if let Some(k) = key {
             req = req.header("X-Seq-ApiKey", k);
         }
+
         send.send_request(req.body(Full::new(Bytes::from(body))).unwrap()).await.unwrap().status()
     }
 
@@ -471,6 +503,7 @@ mod tests {
         assert!(spool.buffered() > clef.len(), "appended unparsed");
         assert_eq!(post(addr, Some("good"), vec![b'x'; 2048]).await, StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(post(addr, Some("good"), vec![0xff, 0xfe]).await, StatusCode::BAD_REQUEST);
+
         // At the spool's cap the app gets 429 and retries later.
         spool.set_limits(crate::spool::Limits { max_bytes: 1, ..limits });
         assert_eq!(post(addr, Some("good"), clef).await, StatusCode::TOO_MANY_REQUESTS);
@@ -487,12 +520,14 @@ mod tests {
         assert!(!r.due(&a, t + Duration::from_secs(59)) && r.due(&a, t + RETRY_FIRST));
         let mut at = t + RETRY_FIRST;
         let mut waits = Vec::new();
+
         for _ in 0..6 {
             assert!(!r.failed(a, at), "later failures are quiet");
             let next = r.next().unwrap();
             waits.push((next - at).as_secs());
             at = next;
         }
+
         assert_eq!(waits, [120, 240, 480, 900, 900, 900], "doubling, capped at 15 minutes");
         r.clear(&a);
         assert!(r.due(&a, t) && r.failed(a, t), "after a bind the next failure warns again");
@@ -511,6 +546,7 @@ mod tests {
         let lo: SocketAddr = "127.0.0.1:5341".parse().unwrap();
         assert_eq!(r.on_error(lo, &busy, t), BindLog::Warn, "a taken port is transient");
         assert_eq!(r.on_error(lo, &busy, t + RETRY_FIRST), BindLog::Debug);
+
         // Docker reports another gateway: the old address is forgotten, the new one tried.
         let other: SocketAddr = "172.18.0.1:5341".parse().unwrap();
         r.keep(&[lo, other]);
@@ -534,19 +570,23 @@ mod tests {
         .unwrap();
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let lo = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+
         // TEST-NET-1: never assigned to this host.
         let missing = SocketAddr::from((Ipv4Addr::new(192, 0, 2, 1), port));
         let (_want_tx, want) = watch::channel(vec![missing, lo]);
         let (stop_tx, stop) = watch::channel(false);
         let task = tokio::spawn(run(Arc::new(spool), Arc::new(gate(&["good"])), want, stop));
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+
         loop {
             if tokio::net::TcpStream::connect(lo).await.is_ok() {
                 break;
             }
+
             assert!(tokio::time::Instant::now() < deadline, "loopback never listened");
             tokio::task::yield_now().await;
         }
+
         let clef = br#"{"@mt":"hi"}"#.to_vec();
         assert_eq!(post(lo, Some("good"), clef).await, StatusCode::CREATED);
         stop_tx.send(true).unwrap();
@@ -576,9 +616,11 @@ mod tests {
         assert_eq!(g.admit(Some("bad"), lo, t), Err(Refusal::Unauthorized));
         assert!(g.admit(Some("good"), lo, t).is_ok());
         g.set_limits(Limits { rate_per_sec: 2, ..Limits::default() });
+
         for _ in 0..100 {
             assert!(g.admit(Some("good"), lo, t).is_ok(), "no cap on loopback by default");
         }
+
         let ok = (0..10).filter(|_| g.admit(Some("good"), gw, t).is_ok()).count();
         assert_eq!(ok, 4, "burst of twice the rate");
         assert!(g.admit(Some("good"), gw, t + Duration::from_secs(1)).is_ok(), "refills over time");

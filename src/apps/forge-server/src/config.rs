@@ -681,6 +681,7 @@ fn read_password(env: &str, file: Option<&std::path::Path>) -> anyhow::Result<Op
     if let Ok(v) = std::env::var(env) {
         return Ok(Some(v));
     }
+
     match file {
         Some(p) => {
             let raw = std::fs::read_to_string(p)
@@ -698,10 +699,13 @@ pub fn compose_url(base: &str, name: &str, password: Option<&str>) -> anyhow::Re
     if u.password().is_some() {
         anyhow::bail!("put the database password in password_file or the environment, not in the url");
     }
+
     if let Some(p) = password {
         u.set_password(Some(p)).map_err(|()| anyhow::anyhow!("this url cannot carry a password"))?;
     }
+
     u.set_path(&format!("/{name}"));
+
     Ok(u.to_string())
 }
 
@@ -748,11 +752,13 @@ pub fn check_reachable_url(url: &str) -> anyhow::Result<()> {
         Some(url::Host::Domain(_)) => false,
         None => true,
     };
+
     if unspecified {
         anyhow::bail!(
             "`{url}` is a listen-everywhere address, not one a browser can open; use this machine's name or IP, or leave public_url unset"
         );
     }
+
     Ok(())
 }
 
@@ -804,77 +810,101 @@ impl ServerConfig {
             Some(p) => anyhow::bail!("config file {} not found", p.display()),
             None => Self::default(),
         };
+
         if let Ok(v) = std::env::var("FORGE_DATA_DIR") {
             cfg.data_dir = v.into();
         }
+
         if let Ok(v) = std::env::var("FORGE_DATABASE_URL") {
             cfg.database_url = Some(v);
         }
+
         cfg.database.password = read_password("FORGE_DATABASE_PASSWORD", cfg.database.password_file.as_deref())?;
         cfg.analytics.password = read_password("FORGE_ANALYTICS_PASSWORD", cfg.analytics.password_file.as_deref())?;
+
         if let Some(base) = &cfg.database.url {
             compose_url(base, cfg.database_name(), None)?;
         }
+
         if let Some(base) = &cfg.analytics.url {
             compose_url(base, &cfg.analytics_name(), None)?;
         }
+
         if let Ok(v) = std::env::var("FORGE_API_LISTEN") {
             cfg.api_listen = v.parse()?;
         }
+
         if let Ok(v) = std::env::var("FORGE_AGENT_LISTEN") {
             cfg.agent_listen = v.parse()?;
         }
+
         if let Ok(v) = std::env::var("FORGE_PUBLIC_URL") {
             cfg.public_url = Some(v).filter(|v| !v.trim().is_empty());
         }
+
         if let Ok(v) = std::env::var("FORGE_COOKIE_SECURE") {
             cfg.cookie_secure = v != "false" && v != "0";
         }
+
         if let Ok(v) = std::env::var("FORGE_STORAGE_ALLOW_LOOPBACK") {
             cfg.storage_allow_loopback = v == "true" || v == "1";
         }
+
         if let Ok(v) = std::env::var("FORGE_MCP_ENABLED") {
             cfg.mcp.enabled = v == "true" || v == "1";
         }
+
         if let Ok(v) = std::env::var("FORGE_MCP_MAX_MODE") {
             cfg.mcp.max_mode = forge_core::model::AgentMode::parse(&v)
                 .ok_or_else(|| anyhow::anyhow!("FORGE_MCP_MAX_MODE: read_only, ask or auto"))?;
         }
+
         if let Ok(v) = std::env::var("FORGE_SFTP_LISTEN") {
             cfg.sftp.listen = v.parse().map_err(|e| anyhow::anyhow!("FORGE_SFTP_LISTEN: {e}"))?;
             cfg.sftp.enabled = true;
         }
+
         if let Ok(v) = std::env::var("FORGE_NAMES_SUFFIX") {
             cfg.names.suffix = v;
         }
+
         if let Ok(v) = std::env::var("FORGE_ENVIRONMENT") {
             cfg.environment = v.parse()?;
         }
+
         if let Ok(v) = std::env::var("FORGE_DEV_SKIP_MFA") {
             cfg.dev_skip_mfa = v == "true" || v == "1";
         }
+
         if let Ok(v) = std::env::var("FORGE_REQUIRE_MFA") {
             cfg.security.require_mfa = !matches!(v.trim(), "false" | "0" | "off" | "no");
         }
+
         if let Ok(v) = std::env::var("FORGE_ALLOW_ELEVATED_TOKENS") {
             cfg.security.allow_elevated_tokens = !matches!(v.trim(), "false" | "0" | "off" | "no");
         }
+
         if let Ok(v) = std::env::var("FORGE_LOGIN_CHALLENGE") {
             cfg.security.login_challenge = !matches!(v.trim(), "false" | "0" | "off" | "no");
         }
+
         if let Ok(v) = std::env::var("FORGE_CAPTCHA_AFTER_FAILURES") {
             cfg.security.captcha_after_failures =
                 v.trim().parse().map_err(|e| anyhow::anyhow!("FORGE_CAPTCHA_AFTER_FAILURES: {e}"))?;
         }
+
         if cfg.dev_skip_mfa {
             tracing::warn!("dev_skip_mfa is deprecated: use [security] require_mfa = false (`forge-server mfa off`)");
             cfg.security.require_mfa = false;
         }
+
         if cfg.remote_access.is_some() {
             tracing::warn!("[remote_access] is ignored: WireGuard remote access was replaced by port tunnels (D-100)");
         }
+
         cfg.config_path = path.map(std::path::Path::to_path_buf);
         cfg.validate()?;
+
         Ok(cfg)
     }
 
@@ -884,29 +914,37 @@ impl ServerConfig {
         if limit != 0 && limit < 128 {
             anyhow::bail!("[analytics] worker_memory_limit_mb must be 0 (no limit) or at least 128");
         }
+
         if self.analytics.spool.zstd_level > 3 {
             anyhow::bail!("[analytics.spool] zstd_level must be 0 (default) or 1 to 3");
         }
+
         let (min_up, max_up) = (forge_analytics_proto::config::MIN_UPLOADS, forge_analytics_proto::config::MAX_UPLOADS);
         if !(min_up..=max_up).contains(&self.analytics.max_uploads()) {
             anyhow::bail!("[analytics] worker_max_uploads must be {min_up} to {max_up}");
         }
+
         if !(1..=365).contains(&self.security.refresh_token_days) {
             anyhow::bail!("[security] refresh_token_days must be 1 to 365");
         }
+
         if let Some(u) = &self.public_url {
             check_reachable_url(u).map_err(|e| anyhow::anyhow!("public_url: {e}"))?;
         }
+
         for p in &self.security.trusted_proxies {
             let net = p
                 .parse::<crate::throttle::TrustedNet>()
                 .map_err(|e| anyhow::anyhow!("[security] trusted_proxies: {e}"))?;
+
             // Trusting everyone would let any client set X-Forwarded-*.
             if net.prefix() == 0 {
                 anyhow::bail!("[security] trusted_proxies: `{p}` trusts every address; list your proxies");
             }
         }
+
         let a = &self.security.access;
+
         for (key, list) in [
             ("allow", &a.allow),
             ("deny", &a.deny),
@@ -918,14 +956,17 @@ impl ServerConfig {
                     .map_err(|e| anyhow::anyhow!("[security.access] {key}: {e}"))?;
             }
         }
+
         let r = &self.security.rate_limit;
         if r.enabled && r.per_ip_per_minute < 60 {
             anyhow::bail!("[security.rate_limit] per_ip_per_minute is at least 60");
         }
+
         // Never lock out the machine itself: with an allow list, loopback
         // and the trusted proxies must be in it.
         if !a.allow.is_empty() {
             let lists = self.access_lists();
+
             for must in ["127.0.0.1", "::1"].into_iter().map(str::to_owned).chain(self.security.trusted_proxies.clone())
             {
                 let ip = must.split('/').next().unwrap_or(&must);
@@ -936,14 +977,18 @@ impl ServerConfig {
                 }
             }
         }
+
         forge_catalog::names::check_suffix(&self.names.suffix).map_err(|e| anyhow::anyhow!("[names] suffix: {e}"))?;
+
         if !(1..=10_000).contains(&self.alerts.max_rules_per_workspace) {
             anyhow::bail!("[alerts] max_rules_per_workspace must be 1 to 10000");
         }
+
         let a = &self.alerts;
         if !(1..=20).contains(&a.delivery_attempts) {
             anyhow::bail!("[alerts] delivery_attempts must be 1 to 20");
         }
+
         if !(1..=3600).contains(&a.delivery_retry_base_secs)
             || !(a.delivery_retry_base_secs..=86_400).contains(&a.delivery_retry_max_secs)
         {
@@ -951,31 +996,39 @@ impl ServerConfig {
                 "[alerts] delivery_retry_base_secs must be 1 to 3600, and delivery_retry_max_secs from it to 86400"
             );
         }
+
         if !(100..=3_600_000).contains(&a.evaluate_interval_ms) || !(100..=3_600_000).contains(&a.deliver_interval_ms) {
             anyhow::bail!("[alerts] evaluate_interval_ms and deliver_interval_ms must be 100 to 3600000");
         }
+
         if !(1..=300).contains(&self.container_shell_open_secs) {
             anyhow::bail!("container_shell_open_secs must be 1 to 300");
         }
+
         let k = &self.agent_tls;
         if k.rotate_days > 3650 || k.grace_days > 365 || (k.rotate_days > 0 && k.grace_days >= k.rotate_days) {
             anyhow::bail!(
                 "[agent_tls] rotate_days must be 0 to 3650 and grace_days 0 to 365, less than rotate_days when it is set"
             );
         }
+
         let t = &self.tunnels;
         if t.max_per_user == 0 || t.max_connections_per_node == 0 || t.max_connections == 0 {
             anyhow::bail!("[tunnels] limits must be at least 1");
         }
+
         if !(60..=86_400).contains(&t.idle_timeout_secs) {
             anyhow::bail!("[tunnels] idle_timeout_secs must be 60 to 86400");
         }
+
         if !(1..=168).contains(&t.max_lifetime_hours) {
             anyhow::bail!("[tunnels] max_lifetime_hours must be 1 to 168");
         }
+
         if !(1..=t.max_lifetime_hours).contains(&t.default_lifetime_hours) {
             anyhow::bail!("[tunnels] default_lifetime_hours must be 1 to max_lifetime_hours");
         }
+
         Ok(())
     }
 
@@ -984,6 +1037,7 @@ impl ServerConfig {
     pub fn access_lists(&self) -> crate::net_access::Lists {
         let parse = |v: &[String]| v.iter().filter_map(|p| p.parse().ok()).collect();
         let a = &self.security.access;
+
         crate::net_access::Lists {
             allow: parse(&a.allow),
             deny: parse(&a.deny),
@@ -1018,12 +1072,14 @@ impl ServerConfig {
         if let Some(u) = &self.database_url {
             return u.clone();
         }
+
         if let Some(base) = &self.database.url {
             // `load` validated it, so composing cannot fail here.
             if let Ok(u) = compose_url(base, self.database_name(), self.database.password.as_deref()) {
                 return u;
             }
         }
+
         format!("sqlite:{}?mode=rwc", self.data_dir.join("forge.db").display().to_string().replace('\\', "/"))
     }
 
@@ -1053,6 +1109,7 @@ impl ServerConfig {
             (AnalyticsEngine::Postgres, None) => self.database.password.as_deref(),
             _ => None,
         });
+
         compose_url(base, &self.analytics_name(), pw).ok()
     }
 
@@ -1090,6 +1147,7 @@ impl ServerConfig {
         if let Some(u) = &self.analytics.worker_agent_url {
             return u.clone();
         }
+
         let port = self.analytics.worker_agent_listen.port();
         let rest = self.agent_public_url.strip_prefix("https://").unwrap_or(&self.agent_public_url);
         let authority = rest.split('/').next().unwrap_or_default();
@@ -1097,6 +1155,7 @@ impl ServerConfig {
             Some((h, p)) if p.bytes().all(|b| b.is_ascii_digit()) && (!h.ends_with(']') || h.starts_with('[')) => h,
             _ => authority,
         };
+
         format!("https://{host}:{port}")
     }
 
@@ -1145,12 +1204,15 @@ pub fn is_loopback_url(url: &str) -> bool {
     if authority.contains('@') {
         return false;
     }
+
     let host = if let Some(v6) = authority.strip_prefix('[') {
         v6.split(']').next().unwrap_or_default()
     } else {
         authority.rsplit_once(':').map_or(authority, |(h, _)| h)
     };
+
     let host = host.to_ascii_lowercase();
+
     host == "localhost"
         || host.ends_with(".localhost")
         || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
@@ -1165,6 +1227,7 @@ mod dev_tests {
         for ok in ["http://localhost:8090", "http://127.0.0.1", "http://[::1]:8080/x", "http://forge.localhost"] {
             assert!(is_loopback_url(ok), "{ok}");
         }
+
         for bad in [
             "https://forge.example.com",
             "http://10.0.0.5:8080",
@@ -1233,6 +1296,7 @@ mod environment_tests {
             ..ServerConfig::default()
         };
         assert!(on.mfa_required(), "an operator can still require it");
+
         for environment in
             [DeploymentMode::Production, DeploymentMode::Staging, DeploymentMode::Development, DeploymentMode::Test]
         {
@@ -1245,6 +1309,7 @@ mod environment_tests {
             let alias = ServerConfig { environment, dev_skip_mfa: true, ..ServerConfig::default() };
             assert!(alias.validate().is_ok() && !alias.mfa_required(), "dev_skip_mfa is an alias for off");
         }
+
         assert_eq!("DEV".parse::<DeploymentMode>().ok(), Some(DeploymentMode::Development));
         assert!("prd2".parse::<DeploymentMode>().is_err());
     }
@@ -1268,6 +1333,7 @@ mod database_tests {
         assert_eq!(c.analytics.max_uploads(), 32, "duckdb");
         c.analytics.engine = AnalyticsEngine::Embedded;
         assert_eq!(c.analytics.max_uploads(), 8);
+
         for (n, ok) in [(7, false), (8, true), (32, true), (33, false)] {
             c.analytics.worker_max_uploads = Some(n);
             assert_eq!(c.validate().is_ok(), ok, "worker_max_uploads = {n}");
@@ -1280,6 +1346,7 @@ mod database_tests {
     fn public_url_is_optional_and_reachable_and_proxies_are_not_everyone() {
         let mut c = ServerConfig::default();
         assert!(c.public_url.is_none() && c.validate().is_ok(), "unset means auto");
+
         for (url, ok) in [
             ("https://forge.example.com", true),
             ("http://192.0.2.1:3880", true),
@@ -1292,7 +1359,9 @@ mod database_tests {
             c.public_url = Some(url.into());
             assert_eq!(c.validate().is_ok(), ok, "{url}");
         }
+
         c.public_url = None;
+
         for (p, ok) in [("10.0.0.0/8", true), ("0.0.0.0/0", false), ("::/0", false), ("192.0.2.1", true)] {
             c.security.trusted_proxies = vec![p.into()];
             assert_eq!(c.validate().is_ok(), ok, "{p}");
@@ -1315,6 +1384,7 @@ mod database_tests {
         assert_eq!(c.analytics_name(), "ops_analytics");
         c.analytics.engine = AnalyticsEngine::Postgres;
         assert_eq!(c.analytics_url().as_deref(), Some("postgres://forge@db1:5432/ops_analytics"));
+
         // The older one-line form wins.
         c.database_url = Some("sqlite:x.db".into());
         assert_eq!(c.database_url(), "sqlite:x.db");

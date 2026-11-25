@@ -158,9 +158,11 @@ impl AlertRepository for Store {
         .execute(self.pool())
         .await
         .map_err(db_err)?;
+
         if done.rows_affected() == 0 {
             return Err(DomainError::NotFound(format!("alert rule {}", r.id)));
         }
+
         Ok(())
     }
 
@@ -170,9 +172,11 @@ impl AlertRepository for Store {
             .execute(self.pool())
             .await
             .map_err(db_err)?;
+
         if done.rows_affected() == 0 {
             return Err(DomainError::NotFound(format!("alert rule {id}")));
         }
+
         Ok(())
     }
 
@@ -196,6 +200,7 @@ impl AlertRepository for Store {
             None => sqlx::query("SELECT * FROM alert_rules ORDER BY name").fetch_all(self.pool()).await,
         }
         .map_err(db_err)?;
+
         rows.iter().map(rule_row).collect()
     }
 
@@ -228,6 +233,7 @@ impl AlertRepository for Store {
         insert_event(&mut *tx, event).await?;
         insert_transition(&mut *tx, a.id, &a.workspace_id.to_string(), "fired", a.fired_at).await?;
         tx.commit().await.map_err(db_err)?;
+
         Ok(())
     }
 
@@ -242,6 +248,7 @@ impl AlertRepository for Store {
         if state == AlarmState::Firing {
             return Err(DomainError::Invalid("an alarm closes as resolved or ended".into()));
         }
+
         let mut tx = self.pool().begin().await.map_err(db_err)?;
         let done = sqlx::query(
             "UPDATE alarms SET state = $2, resolved_at = $3, end_reason = $4 WHERE id = $1 AND state = 'firing'",
@@ -253,9 +260,11 @@ impl AlertRepository for Store {
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
+
         if done.rows_affected() == 0 {
             return Ok(false);
         }
+
         insert_event(&mut *tx, event).await?;
         let row = sqlx::query("SELECT workspace_id FROM alarms WHERE id = $1")
             .bind(id.to_string())
@@ -264,6 +273,7 @@ impl AlertRepository for Store {
             .map_err(db_err)?;
         insert_transition(&mut *tx, id, &text(&row, "workspace_id")?, state_str(state), at).await?;
         tx.commit().await.map_err(db_err)?;
+
         Ok(true)
     }
 
@@ -282,11 +292,14 @@ impl AlertRepository for Store {
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
+
         if done.rows_affected() == 0 {
             return Err(DomainError::NotFound(format!("alarm {id}")));
         }
+
         insert_event(&mut *tx, event).await?;
         tx.commit().await.map_err(db_err)?;
+
         Ok(())
     }
 
@@ -312,45 +325,57 @@ impl AlertRepository for Store {
             I(i64),
         }
         let mut binds: Vec<B> = Vec::new();
+
         if f.active {
             sql.push_str(" AND state = 'firing'");
         }
+
         if let Some(r) = f.rule {
             binds.push(B::S(r.to_string()));
             sql.push_str(&format!(" AND rule_id = ${}", binds.len()));
         }
+
         if let Some(res) = &f.resource {
             binds.push(B::S(res.kind.as_str().to_owned()));
             sql.push_str(&format!(" AND resource_kind = ${}", binds.len()));
             binds.push(B::S(res.id.clone()));
             sql.push_str(&format!(" AND resource_id = ${}", binds.len()));
         }
+
         if let Some(ws) = &f.workspaces {
             if ws.is_empty() {
                 return Ok(Vec::new());
             }
+
             let mut marks = Vec::new();
+
             for w in ws.iter().take(500) {
                 binds.push(B::S(w.to_string()));
                 marks.push(format!("${}", binds.len()));
             }
+
             sql.push_str(&format!(" AND workspace_id IN ({})", marks.join(", ")));
         }
+
         if let Some((at, id)) = f.before {
             binds.push(B::I(at.0));
             let t = binds.len();
             binds.push(B::S(id.to_string()));
             sql.push_str(&format!(" AND (fired_at < ${t} OR (fired_at = ${t} AND id < ${}))", binds.len()));
         }
+
         sql.push_str(&format!(" ORDER BY fired_at DESC, id DESC LIMIT {}", limit.clamp(1, 1000)));
         let mut q = sqlx::query(&sql);
+
         for b in binds {
             q = match b {
                 B::S(s) => q.bind(s),
                 B::I(i) => q.bind(i),
             };
         }
+
         let rows = q.fetch_all(self.pool()).await.map_err(db_err)?;
+
         rows.iter().map(alarm_row).collect()
     }
 
@@ -398,6 +423,7 @@ impl AlertStateRepository for Store {
         at: Timestamp,
     ) -> DomainResult<()> {
         let mut tx = self.pool().begin().await.map_err(db_err)?;
+
         for (fp, rule, rev, state) in rows {
             sqlx::query(
                 "INSERT INTO alert_trackers (fingerprint, rule_id, rule_revision, state, updated_at) VALUES ($1, $2, $3, $4, $5)
@@ -412,7 +438,9 @@ impl AlertStateRepository for Store {
             .await
             .map_err(db_err)?;
         }
+
         tx.commit().await.map_err(db_err)?;
+
         Ok(())
     }
 
@@ -424,6 +452,7 @@ impl AlertStateRepository for Store {
                 .await
                 .map_err(db_err)?;
         }
+
         Ok(())
     }
 

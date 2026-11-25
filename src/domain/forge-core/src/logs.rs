@@ -304,41 +304,54 @@ impl LogFilter {
         let mut text: Vec<String> = Vec::new();
         let chars: Vec<char> = input.chars().collect();
         let mut i = 0;
+
         while i < chars.len() {
             if chars[i].is_whitespace() {
                 i += 1;
                 continue;
             }
+
             // Read one token, honouring a double-quoted value after `=`.
             let start = i;
             let mut name_end = None;
             let mut value = String::new();
             let mut quoted = false;
+
             while i < chars.len() && !chars[i].is_whitespace() {
                 if chars[i] == '=' && name_end.is_none() {
                     name_end = Some(i);
                     i += 1;
+
                     if i < chars.len() && chars[i] == '"' {
                         quoted = true;
                         i += 1;
+
                         while i < chars.len() && chars[i] != '"' {
                             if chars[i] == '\\' && i + 1 < chars.len() {
                                 i += 1;
                             }
+
                             value.push(chars[i]);
                             i += 1;
                         }
+
                         i += 1; // closing quote
+
                         break;
                     }
+
                     continue;
                 }
+
                 if name_end.is_some() {
                     value.push(chars[i]);
                 }
+
                 i += 1;
             }
+
             let token: String = chars[start..i.min(chars.len())].iter().collect();
+
             match name_end {
                 Some(e) if props.len() < MAX_PROPERTY_FILTERS => {
                     let name: String = chars[start..e].iter().collect();
@@ -351,14 +364,18 @@ impl LogFilter {
                 _ => text.push(token),
             }
         }
+
         let mut text = text.join(" ");
         if text.len() > MAX_FILTER_TEXT {
             let mut cut = MAX_FILTER_TEXT;
+
             while !text.is_char_boundary(cut) {
                 cut -= 1;
             }
+
             text.truncate(cut);
         }
+
         Self { text: (!text.is_empty()).then_some(text), properties: props }
     }
 }
@@ -418,6 +435,7 @@ pub fn parse_batch(body: &str, cx: IngestContext) -> Result<Vec<LogEvent>, ClefE
         if events.len() > MAX_BATCH_EVENTS {
             return Err(ClefError::TooManyEvents(MAX_BATCH_EVENTS));
         }
+
         return events
             .into_iter()
             .enumerate()
@@ -427,32 +445,40 @@ pub fn parse_batch(body: &str, cx: IngestContext) -> Result<Vec<LogEvent>, ClefE
             })
             .collect();
     }
+
     let mut out = Vec::new();
+
     for (n, line) in body.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
+
         if out.len() >= MAX_BATCH_EVENTS {
             return Err(ClefError::TooManyEvents(MAX_BATCH_EVENTS));
         }
+
         match serde_json::from_str::<Value>(line) {
             Ok(Value::Object(o)) => out.push(from_clef(o, cx.into())),
             _ => return Err(ClefError::NotAnObject(n + 1)),
         }
     }
+
     Ok(out)
 }
 
 fn clip(mut s: String) -> String {
     if s.len() > MAX_FIELD_BYTES {
         let mut cut = MAX_FIELD_BYTES;
+
         while !s.is_char_boundary(cut) {
             cut -= 1;
         }
+
         s.truncate(cut);
         s.push('…');
     }
+
     s
 }
 
@@ -471,35 +497,45 @@ pub fn parse_rfc3339_ms(s: &str) -> Option<i64> {
     let b = s.trim().as_bytes();
     let num = |r: std::ops::Range<usize>| -> Option<i64> {
         let mut v = 0i64;
+
         for &c in b.get(r)? {
             if !c.is_ascii_digit() {
                 return None;
             }
+
             v = v * 10 + i64::from(c - b'0');
         }
+
         Some(v)
     };
     let (y, mo, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
+
     if !matches!(b.get(10), Some(b'T' | b't' | b' ')) {
         return None;
     }
+
     let (h, mi, sec) = (num(11..13)?, num(14..16)?, num(17..19)?);
     let mut i = 19;
     let mut ms = 0i64;
+
     if b.get(i) == Some(&b'.') {
         i += 1;
         let mut digits = 0;
+
         while let Some(c) = b.get(i).filter(|c| c.is_ascii_digit()) {
             if digits < 3 {
                 ms = ms * 10 + i64::from(c - b'0');
             }
+
             digits += 1;
             i += 1;
         }
+
         for _ in digits..3 {
             ms *= 10;
         }
     }
+
     let offset_min = match b.get(i) {
         None | Some(b'Z' | b'z') => 0,
         Some(sign @ (b'+' | b'-')) => {
@@ -510,9 +546,11 @@ pub fn parse_rfc3339_ms(s: &str) -> Option<i64> {
         }
         _ => return None,
     };
+
     if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || sec > 60 {
         return None;
     }
+
     // Days from civil (Howard Hinnant's algorithm).
     let yy = if mo <= 2 { y - 1 } else { y };
     let era = yy.div_euclid(400);
@@ -521,6 +559,7 @@ pub fn parse_rfc3339_ms(s: &str) -> Option<i64> {
     let doy = (153 * mp + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146_097 + doe - 719_468;
+
     Some(((days * 86_400 + h * 3_600 + mi * 60 + sec) - offset_min * 60) * 1_000 + ms)
 }
 
@@ -528,10 +567,12 @@ pub fn parse_rfc3339_ms(s: &str) -> Option<i64> {
 #[must_use]
 pub fn template_hash(template: &str) -> u32 {
     let mut h: u32 = 0x811c_9dc5;
+
     for b in template.bytes() {
         h ^= u32::from(b);
         h = h.wrapping_mul(0x0100_0193);
     }
+
     h
 }
 
@@ -551,19 +592,24 @@ fn display(v: &Value) -> String {
 pub fn render_template(template: &str, props: &Map<String, Value>) -> String {
     let mut out = String::with_capacity(template.len() + 32);
     let mut rest = template;
+
     while let Some(i) = rest.find(['{', '}']) {
         out.push_str(&rest[..i]);
         let tail = &rest[i..];
         if tail.starts_with("{{") || tail.starts_with("}}") {
             out.push(tail.as_bytes()[0] as char);
             rest = &tail[2..];
+
             continue;
         }
+
         if let Some(after) = tail.strip_prefix('}') {
             out.push('}');
             rest = after;
+
             continue;
         }
+
         match tail.find('}') {
             Some(end) => {
                 let hole = &tail[1..end];
@@ -573,6 +619,7 @@ pub fn render_template(template: &str, props: &Map<String, Value>) -> String {
                     Some(v) => out.push_str(&display(v)),
                     None => out.push_str(&tail[..=end]),
                 }
+
                 rest = &tail[end + 1..];
             }
             None => {
@@ -581,7 +628,9 @@ pub fn render_template(template: &str, props: &Map<String, Value>) -> String {
             }
         }
     }
+
     out.push_str(rest);
+
     out
 }
 
@@ -627,6 +676,7 @@ fn finish(cx: Base, p: Parts) -> LogEvent {
     let template = template.or_else(|| message.clone()).unwrap_or_default();
     let message = message.unwrap_or_else(|| render_template(&template, &props));
     let mut props = props;
+
     // Keep the bag bounded: drop the largest values until it fits.
     if Value::Object(props.clone()).to_string().len() > MAX_FIELD_BYTES {
         props = props
@@ -637,6 +687,7 @@ fn finish(cx: Base, p: Parts) -> LogEvent {
             })
             .collect();
     }
+
     LogEvent {
         id: uuid::Uuid::now_v7(),
         service_id: cx.service_id,
@@ -670,6 +721,7 @@ fn from_clef(mut o: Map<String, Value>, cx: Base) -> LogEvent {
     let trace = take_str(&mut o, "@tr");
     let span = take_str(&mut o, "@sp");
     o.remove("@r"); // renderings: the rendered message is computed here
+
     // `@@name` escapes a property that starts with `@`.
     let props: Map<String, Value> = o
         .into_iter()
@@ -683,6 +735,7 @@ fn from_clef(mut o: Map<String, Value>, cx: Base) -> LogEvent {
             }
         })
         .collect();
+
     finish(cx, Parts { ts, level, template, message, exception, event_id, trace_id: trace, span_id: span, props })
 }
 
@@ -692,10 +745,12 @@ fn from_raw(mut o: Map<String, Value>, cx: IngestContext) -> LogEvent {
     let template = take_str(&mut o, "MessageTemplate");
     let message = take_str(&mut o, "RenderedMessage");
     let exception = take_str(&mut o, "Exception");
+
     let props = match o.remove("Properties") {
         Some(Value::Object(p)) => p,
         _ => Map::new(),
     };
+
     finish(
         cx.into(),
         Parts { ts, level, template, message, exception, event_id: None, trace_id: None, span_id: None, props },
@@ -752,6 +807,7 @@ fn plain_prefix(line: &str) -> (Option<LogLevel>, &str) {
             rest = rest[end..].trim_start();
         }
     }
+
     let (tok, end) = next(rest);
     let word = tok.trim_matches(|c: char| matches!(c, '[' | ']' | '(' | ')' | ':' | '|'));
     match LogLevel::parse_lenient(word) {
@@ -772,10 +828,12 @@ fn plain_prefix(line: &str) -> (Option<LogLevel>, &str) {
 pub fn container_event(cx: &ContainerContext, stream: LogStream, ts_ms: i64, line: &str) -> LogEvent {
     let base =
         Base { service_id: cx.service_id, server_id: Some(cx.server_id), node_ts: Some(Timestamp(ts_ms)), now: cx.now };
+
     let fallback = match stream {
         LogStream::Stdout => LogLevel::Information,
         LogStream::Stderr => LogLevel::Warning,
     };
+
     let trimmed = line.trim();
     let object = if trimmed.starts_with('{') {
         match serde_json::from_str::<Value>(trimmed) {
@@ -785,17 +843,21 @@ pub fn container_event(cx: &ContainerContext, stream: LogStream, ts_ms: i64, lin
     } else {
         None
     };
+
     let mut e = match object {
         Some(o) if o.contains_key("@t") || o.contains_key("@mt") || o.contains_key("@m") => {
             let (has_level, has_ts) = (o.contains_key("@l"), o.contains_key("@t"));
             let mut e = from_clef(o, base);
+
             if !has_level {
                 e.level = fallback;
             }
+
             // A CLEF line without `@t` happened when Docker read it.
             if !has_ts {
                 e.ts = Timestamp(ts_ms);
             }
+
             e
         }
         Some(mut o) => {
@@ -803,11 +865,13 @@ pub fn container_event(cx: &ContainerContext, stream: LogStream, ts_ms: i64, lin
                 Some(Value::String(s)) => LogLevel::parse_lenient(s),
                 _ => None,
             });
+
             for k in JSON_LEVEL_KEYS {
                 if level.is_some() {
                     o.remove(k);
                 }
             }
+
             let message =
                 JSON_MESSAGE_KEYS.iter().find_map(|k| take_str(&mut o, k)).unwrap_or_else(|| trimmed.to_owned());
             let mut e = finish(
@@ -847,11 +911,13 @@ pub fn container_event(cx: &ContainerContext, stream: LogStream, ts_ms: i64, lin
             e
         }
     };
+
     e.source = LogSource::Container;
     e.container_id = Some(cx.container_id.clone());
     e.container_name = Some(cx.container_name.clone());
     e.stack = cx.stack.clone();
     e.stream = Some(stream);
+
     e
 }
 

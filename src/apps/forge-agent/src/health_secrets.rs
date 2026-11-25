@@ -137,6 +137,7 @@ const NO_ANSWER: Denied =
 fn entry_of(answer: Option<HealthSecretsResponse>, revision: i64, now: Instant) -> Entry {
     let Some(resp) = answer else { return Entry { revision, until: now + RETRY, answer: Err(NO_ANSWER) } };
     let ttl = Duration::from_secs(u64::from(resp.ttl_secs)).max(MIN_TTL);
+
     if resp.granted && resp.headers.len() <= MAX_HEALTH_SECRET_HEADERS {
         let headers = resp.headers.into_iter().map(|h| ResolvedHeader::new(h.name, h.value)).collect();
         Entry { revision, until: now + ttl.min(MAX_TTL), answer: Ok(Arc::new(headers)) }
@@ -179,21 +180,27 @@ impl Secrets {
     /// what the check reports instead of running.
     pub async fn resolve(&self, req: HealthSecretsRequest) -> Result<Arc<Vec<ResolvedHeader>>, Outcome> {
         let key: Key = (req.environment.clone(), req.app.clone(), req.purpose.clone(), req.check.clone());
+
         // Every refusal here passes on its own or with a new save: transient.
         let unknown = |d: Denied| Outcome::unknown(crate::health_probe::Unknown::Transient, d.reason, d.detail);
+
         if let Some(answer) = self.held(&key, req.policy_revision, Instant::now()) {
             return answer.map_err(unknown);
         }
+
         let control = self.control.lock().ok().and_then(|c| c.clone());
         let answer = match control {
             Some(c) => fetch(c, &req).await,
             None => None,
         };
+
         let entry = entry_of(answer, req.policy_revision, Instant::now());
         let answer = entry.answer.clone();
+
         if let Ok(mut c) = self.cache.lock() {
             c.insert(key, entry);
         }
+
         answer.map_err(unknown)
     }
 }
@@ -248,9 +255,11 @@ mod tests {
         let h = ResolvedHeader::new("Authorization", "Bearer s3cret");
         let s = Secrets::default();
         s.cache.lock().unwrap().insert(key(), entry_of(Some(granted(300)), 1, Instant::now()));
+
         for text in [format!("{h:?}"), format!("{s:?}"), format!("{:?}", granted(300))] {
             assert!(!text.contains("s3cret"), "{text}");
         }
+
         assert_eq!(h.value(), "Bearer s3cret");
     }
 
@@ -262,12 +271,15 @@ mod tests {
         assert!(s.held(&key(), 4, now).unwrap().is_ok());
         assert!(s.held(&key(), 5, now).is_none(), "another policy revision asks again");
         assert!(s.held(&key(), 4, now + Duration::from_secs(301)).is_none(), "expired");
+
         // Forge cannot make the node keep a value for long.
         s.cache.lock().unwrap().insert(key(), entry_of(Some(granted(86_400)), 4, now));
         assert!(s.held(&key(), 4, now + MAX_TTL + Duration::from_secs(1)).is_none());
+
         // Removed checks are forgotten.
         s.retain(|_| false);
         assert!(s.held(&key(), 4, now).is_none());
+
         // Time alone removes a value too, whether or not anyone asks again.
         s.cache.lock().unwrap().insert(key(), entry_of(Some(granted(300)), 4, now));
         s.purge(now + Duration::from_secs(299));
@@ -293,6 +305,7 @@ mod tests {
         assert_eq!(refused("something-new").reason, "location_unavailable");
         let silent = entry_of(None, 1, now);
         assert_eq!((silent.answer.unwrap_err(), silent.until), (NO_ANSWER, now + RETRY));
+
         // More headers than a check can have is not an answer to trust.
         let mut many = granted(300);
         many.headers = vec![many.headers[0].clone(); MAX_HEALTH_SECRET_HEADERS + 1];
@@ -304,6 +317,7 @@ mod tests {
         let s = Secrets::default();
         let o = s.resolve(req(1)).await.unwrap_err();
         assert_eq!((o.verdict, o.reason), (crate::health_probe::Verdict::Unknown, "location_unavailable"));
+
         // The miss is remembered briefly instead of asked again every period.
         assert!(s.held(&key(), 1, Instant::now()).is_some_and(|a| a.is_err()));
     }

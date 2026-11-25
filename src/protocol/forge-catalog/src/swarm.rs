@@ -211,6 +211,7 @@ fn cidr_ok(c: &str) -> bool {
     let Some((ip, len)) = c.split_once('/') else { return false };
     let Ok(ip) = ip.parse::<IpAddr>() else { return false };
     let max = if ip.is_ipv4() { 32 } else { 128 };
+
     len.parse::<u8>().is_ok_and(|n| (8..=max).contains(&n))
 }
 
@@ -251,38 +252,47 @@ impl SwarmOp {
                 if !addr_ok(advertise_addr.as_deref()) {
                     return Err("the advertise address must be a reachable IP address or an interface name".into());
                 }
+
                 if *port < 1024 {
                     return Err("the swarm port must be 1024 or higher".into());
                 }
+
                 if default_addr_pool.len() > MAX_POOLS || !default_addr_pool.iter().all(|c| cidr_ok(c)) {
                     return Err("address pools must be CIDR ranges (at most 8)".into());
                 }
+
                 Ok(())
             }
             Self::Join { remote_addrs, join_token, advertise_addr } => {
                 if remote_addrs.is_empty() || remote_addrs.len() > 7 || !remote_addrs.iter().all(|a| remote_ok(a)) {
                     return Err("managers must be 1 to 7 `ip:port` addresses".into());
                 }
+
                 if !token_ok(join_token) {
                     return Err("not a swarm join token".into());
                 }
+
                 if !addr_ok(advertise_addr.as_deref()) {
                     return Err("the advertise address must be a reachable IP address or an interface name".into());
                 }
+
                 Ok(())
             }
             Self::NodeUpdate { node_id, labels, role, availability } => {
                 if !node_id_ok(node_id) {
                     return Err("invalid swarm node id".into());
                 }
+
                 if let Some(l) = labels
                     && (l.len() > MAX_LABELS || !l.iter().all(|(k, v)| label_ok(k, v)))
                 {
                     return Err("labels: keys of letters, digits and . - _ /, at most 64".into());
                 }
+
                 if role.is_none() && availability.is_none() && labels.is_none() {
                     return Err("nothing to change".into());
                 }
+
                 Ok(())
             }
             Self::NodeRemove { node_id, .. } => {
@@ -316,6 +326,7 @@ impl SwarmOp {
                 if registry_auth.as_ref().is_some_and(|a| !a.valid()) {
                     return Err("invalid registry credentials".into());
                 }
+
                 def.validate()
             }
             Self::Status {} | Self::Leave { .. } | Self::JoinTokens {} | Self::Nodes {} => Ok(()),

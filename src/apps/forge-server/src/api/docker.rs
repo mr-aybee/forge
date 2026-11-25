@@ -227,6 +227,7 @@ async fn check(
 ) -> ApiResult<Json<EndpointView>> {
     caller.authorize(Action::ServerManage, server_ref(id)).await?;
     let ep = state.docker.check(id).await?;
+
     Ok(Json(view(Some(&ep))))
 }
 
@@ -278,17 +279,21 @@ async fn enable(
     let resource = server_ref(id);
     caller.authorize(Action::ServerCommand, resource.clone()).await?;
     let server = state.docker.server(id).await.map_err(|_| ApiError::not_found("server not found"))?;
+
     let host = match req.host {
         Some(h) => h,
         None => default_host(&state, id).await?,
     };
+
     if !valid_host(&host) {
         return Err(ApiError::bad_request("`host` must be an IP address or a DNS name"));
     }
+
     let port = req.port.unwrap_or(forge_catalog::docker_tls::DEFAULT_PORT);
     if port < 1024 {
         return Err(ApiError::bad_request("`port` must be 1024 or higher"));
     }
+
     let payload = json!({
         "server_id": id, "host": host, "port": port, "listen": req.listen,
         "acknowledge_restart": req.acknowledge_restart,
@@ -309,6 +314,7 @@ async fn enable(
     caller
         .audit(AUDIT_ENABLE, &resource, Some(server.workspace_id), json!({ "job_id": job.id, "request": payload }))
         .await;
+
     Ok((StatusCode::ACCEPTED, Json(JobStarted { job_id: job.id.to_string() })))
 }
 
@@ -336,9 +342,11 @@ async fn disable(
     let resource = server_ref(id);
     caller.authorize(Action::ServerCommand, resource.clone()).await?;
     let server = state.docker.server(id).await.map_err(|_| ApiError::not_found("server not found"))?;
+
     if state.docker.endpoint(id).await?.is_none() {
         return Err(ApiError::conflict("this node's Docker API endpoint is not enabled"));
     }
+
     let payload = json!({ "server_id": id, "force": q.force });
     let job = state
         .jobs
@@ -356,6 +364,7 @@ async fn disable(
     caller
         .audit(AUDIT_DISABLE, &resource, Some(server.workspace_id), json!({ "job_id": job.id, "force": q.force }))
         .await;
+
     Ok((StatusCode::ACCEPTED, Json(JobStarted { job_id: job.id.to_string() })))
 }
 
@@ -412,12 +421,14 @@ async fn forward(
     if query.len() > MAX_QUERY {
         return Err(ApiError::bad_request("query string too long"));
     }
+
     let endpoint = matched.endpoint;
     let resource = server_ref(id);
 
     // 1. Read an inspected body and look for host access.
     let mut inspected: Option<Bytes> = None;
     let mut reasons: Vec<&'static str> = Vec::new();
+
     if endpoint.transfer == Transfer::Inspect {
         let body = std::mem::take(req.body_mut());
         let bytes = http_body_util::Limited::new(body, MAX_INSPECTED)
@@ -425,13 +436,16 @@ async fn forward(
             .await
             .map_err(|_| docker_error(StatusCode::PAYLOAD_TOO_LARGE, "body_too_large", "request body over 1 MiB"))?
             .to_bytes();
+
         if !bytes.is_empty() {
             let v: Value = serde_json::from_slice(&bytes)
                 .map_err(|e| ApiError::bad_request(format!("the request body is not JSON: {e}")))?;
             reasons = guard::host_access(endpoint.op, &v);
         }
+
         inspected = Some(bytes);
     }
+
     let class = guard::effective_class(endpoint.class, &reasons);
 
     // 2. Authorize (denials are audited by `authorize_with`).
@@ -447,23 +461,28 @@ async fn forward(
 
     // 4. Build the upstream request.
     let version = matched.version.as_deref().map(|v| format!("/{v}")).unwrap_or_default();
+
     let uri = if query.is_empty() {
         format!("http://docker{version}{}", matched.path)
     } else {
         format!("http://docker{version}{}?{query}", matched.path)
     };
+
     let mut builder = axum::http::Request::builder().method(method.as_str()).uri(uri).header(header::HOST, "docker");
     if let Some(h) = builder.headers_mut() {
         copy_headers(req.headers(), h, REQUEST_HEADERS);
     }
+
     let hijack = endpoint.transfer == Transfer::Hijack;
     let client_upgrade = if hijack {
         let upgrade = req.headers().get(header::UPGRADE).cloned();
+
         let Some(upgrade) = upgrade else {
             return Err(ApiError::bad_request(
                 "this endpoint upgrades the connection: send `Connection: Upgrade` and `Upgrade: tcp` (or a WebSocket)",
             ));
         };
+
         builder = builder.header(header::CONNECTION, "Upgrade").header(header::UPGRADE, upgrade);
         Some(req.extensions_mut().remove::<hyper::upgrade::OnUpgrade>().ok_or_else(|| {
             ApiError::bad_request("this connection cannot be upgraded (HTTP/2 or a proxy that drops Upgrade)")
@@ -471,10 +490,12 @@ async fn forward(
     } else {
         None
     };
+
     let body = match inspected {
         Some(b) => Body::from(b),
         None => Body::new(http_body_util::Limited::new(std::mem::take(req.body_mut()), MAX_UPLOAD)),
     };
+
     let upstream = builder.body(body).map_err(|e| ApiError::bad_request(e.to_string()))?;
 
     // 5. Send it.
@@ -485,16 +506,20 @@ async fn forward(
             "status": status, "class": class_name(class), "host_access": reasons,
         })
     };
+
     let resp = match target.send(upstream).await {
         Ok(r) => r,
         Err(e) => {
             if audit {
                 caller.audit_failed(AUDIT_API, &resource, Some(server.workspace_id), details(0), &e.to_string()).await;
             }
+
             return Err(docker_error(StatusCode::BAD_GATEWAY, "docker_unreachable", e.to_string()));
         }
     };
+
     let status = resp.status();
+
     if audit {
         caller.audit(AUDIT_API, &resource, Some(server.workspace_id), details(status.as_u16())).await;
     }
@@ -507,24 +532,29 @@ async fn forward(
             // The daemon refused (no such container, …): pass its answer on.
             return Ok(passthrough(&parts, Body::new(body)));
         }
+
         let mut out = passthrough(&parts, Body::empty());
+
         for n in [header::CONNECTION, header::UPGRADE] {
             if let Some(v) = parts.headers.get(&n) {
                 out.headers_mut().insert(n, v.clone());
             }
         }
+
         let upstream_upgrade = hyper::upgrade::on(axum::http::Response::from_parts(parts, body));
         tokio::spawn(async move {
             let (Ok(up), Ok(down)) = (upstream_upgrade.await, client_upgrade.await) else {
                 tracing::debug!("docker upgrade did not complete");
                 return;
             };
+
             let mut up = hyper_util::rt::TokioIo::new(up);
             let mut down = hyper_util::rt::TokioIo::new(down);
             if let Err(e) = tokio::io::copy_bidirectional(&mut up, &mut down).await {
                 tracing::debug!(error = %e, "docker stream ended");
             }
         });
+
         return Ok(out);
     }
 
@@ -544,8 +574,10 @@ async fn forward(
         let mut out =
             passthrough(&parts, Body::from(serde_json::to_vec(&v).map_err(forge_core::DomainError::internal)?));
         out.headers_mut().insert("x-forge-redacted", HeaderValue::from_static("Config.Env"));
+
         return Ok(out);
     }
+
     Ok(passthrough(&parts, Body::new(body)))
 }
 
@@ -554,6 +586,7 @@ fn passthrough(parts: &axum::http::response::Parts, body: Body) -> Response {
     let mut out = Response::new(body);
     *out.status_mut() = parts.status;
     copy_headers(&parts.headers, out.headers_mut(), RESPONSE_HEADERS);
+
     out
 }
 

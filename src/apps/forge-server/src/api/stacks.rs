@@ -59,6 +59,7 @@ async fn ns_name(state: &AppState, id: EnvironmentId) -> ApiResult<String> {
     if !valid_stack_name(&slug) {
         return Err(ApiError::bad_request(format!("environment `{}` has no usable short name", ns.name)));
     }
+
     Ok(slug)
 }
 
@@ -108,19 +109,24 @@ pub async fn list(
 ) -> ApiResult<Json<Vec<Value>>> {
     let stacks = state.store.list_stacks(q.environment_id).await?;
     let mut out = Vec::new();
+
     for s in stacks {
         if !caller.can(Action::View, ns_ref(s.environment_id)).await {
             continue;
         }
+
         let nodes = state.store.list_nodes(s.id).await?;
+
         if let Some(server) = q.server_id
             && !nodes.iter().any(|n| n.server_id == server)
             && s.default_server != server
         {
             continue;
         }
+
         out.push(json!({ "stack": s, "nodes": nodes }));
     }
+
     Ok(Json(out))
 }
 
@@ -131,6 +137,7 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Path(id): Path<S
         state.store.get_revision(id, stack.revision).await?.ok_or_else(|| ApiError::not_found("revision missing"))?;
     let ns = ns_name(&state, stack.environment_id).await?;
     let env = open_env(&state.envelope, id, stack.env_sealed.as_deref()).map_err(internal)?;
+
     // A stack whose nodes or placement changed still opens; the preview says why.
     let p = plan(
         &deps(&state),
@@ -146,6 +153,7 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Path(id): Path<S
     .await
     .map_or_else(|e| json!({ "error": e }), |p| preview(&p));
     let nodes = state.store.list_nodes(id).await?;
+
     Ok(Json(json!({
         "stack": stack,
         "content": rev.content,
@@ -162,6 +170,7 @@ pub async fn revisions(
 ) -> ApiResult<Json<Vec<StackRevision>>> {
     let stack = load(&state, id).await?;
     caller.authorize(Action::View, ns_ref(stack.environment_id)).await?;
+
     Ok(Json(state.store.list_revisions(id).await?))
 }
 
@@ -172,6 +181,7 @@ pub async fn revision(
 ) -> ApiResult<Json<StackRevision>> {
     let stack = load(&state, id).await?;
     caller.authorize(Action::View, ns_ref(stack.environment_id)).await?;
+
     Ok(Json(state.store.get_revision(id, n).await?.ok_or_else(|| ApiError::not_found("revision not found"))?))
 }
 
@@ -201,6 +211,7 @@ pub async fn preview_stack(
     Json(input): Json<PreviewInput>,
 ) -> ApiResult<Json<Value>> {
     caller.authorize(Action::StackManage, ns_ref(input.environment_id)).await?;
+
     // As for create: the node must be in the environment's organization and
     // the caller must manage it (a preview reveals its placement and roots).
     let environment = state.store.get_environment(input.environment_id).await?;
@@ -208,6 +219,7 @@ pub async fn preview_stack(
     if server.workspace_id != environment.workspace_id {
         return Err(ApiError::bad_request("the node is in another organization"));
     }
+
     caller.authorize(Action::ServerManage, EntityRef::new(EntityKind::Server, server.id)).await?;
     let ns = ns_name(&state, input.environment_id).await?;
     let env = env_input(input.env.as_deref())?.unwrap_or_default();
@@ -216,6 +228,7 @@ pub async fn preview_stack(
     let p = plan_for(&state, server.workspace_id, server.id, &ns, &name, dir.as_deref(), &input.content, &env).await?;
     let mut v = preview(&p);
     v["can_privileged"] = json!(caller.can(Action::StackPrivileged, ns_ref(input.environment_id)).await);
+
     Ok(Json(v))
 }
 
@@ -244,27 +257,34 @@ async fn create_stack(
     env: BTreeMap<String, String>,
 ) -> ApiResult<(Stack, Plan)> {
     caller.authorize(Action::StackManage, ns_ref(input.environment_id)).await?;
+
     if !valid_stack_name(&input.name) {
         return Err(ApiError::bad_request("stack names use a-z, 0-9, `-` and `_` (up to 63)"));
     }
+
     let ns = state.store.get_environment(input.environment_id).await?;
     let ns_s = ns_name(state, ns.id).await?;
     let server = state.store.get_server(input.server_id).await.map_err(|_| ApiError::not_found("node not found"))?;
     if server.workspace_id != ns.workspace_id {
         return Err(ApiError::bad_request("the node is in another organization"));
     }
+
     caller.authorize(Action::ServerManage, EntityRef::new(EntityKind::Server, server.id)).await?;
+
     if state.store.stack_by_name(ns.id, &input.name).await?.is_some() {
         return Err(ApiError::conflict(format!("a stack named `{}` exists in this environment", input.name)));
     }
+
     let dir = check_dir(input.dir.as_deref())?;
     let p =
         plan_for(state, ns.workspace_id, server.id, &ns_s, &input.name, dir.as_deref(), &input.content, &env).await?;
+
     if let Some(f) = p.report.findings.iter().find(|f| f.severity == cat::Severity::Blocked) {
         return Err(ApiError::bad_request(
             cat::Report { findings: vec![f.clone()], privileged: false }.ensure(true).err().unwrap_or_default(),
         ));
     }
+
     let now = state.clock.now();
     let id = StackId::new();
     let stack = Stack {
@@ -305,6 +325,7 @@ async fn create_stack(
             }),
         )
         .await;
+
     Ok((stack, p))
 }
 
@@ -315,6 +336,7 @@ pub async fn create(
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let env = env_input(input.env.as_deref())?.unwrap_or_default();
     let (stack, p) = create_stack(&state, &caller, input, StackKind::Compose, env).await?;
+
     Ok((StatusCode::CREATED, Json(json!({ "stack": stack, "preview": preview(&p) }))))
 }
 
@@ -362,6 +384,7 @@ pub async fn from_template(
         dir: None,
         note: Some(format!("from the {} template", t.title)),
     };
+
     create(State(state), caller, Json(stack_input)).await
 }
 
@@ -403,11 +426,13 @@ pub async fn create_container(
         note: Some("Create container".into()),
     };
     let (stack, p) = create_stack(&state, &caller, create, StackKind::Container, env).await?;
+
     let jobs = if input.start {
         deploy_jobs(&state, &caller, &stack, &p, stack.revision, &[], true).await?
     } else {
         Vec::new()
     };
+
     Ok((StatusCode::CREATED, Json(json!({ "stack": stack, "preview": preview(&p), "jobs": jobs }))))
 }
 
@@ -448,24 +473,30 @@ pub async fn update(
 ) -> ApiResult<Json<Value>> {
     let mut stack = load(&state, id).await?;
     caller.authorize(Action::StackManage, ns_ref(stack.environment_id)).await?;
+
     if input.version.is_some_and(|v| v != stack.updated_at.0) {
         return Err(stale_version());
     }
+
     let ns = ns_name(&state, stack.environment_id).await?;
     let current =
         state.store.get_revision(id, stack.revision).await?.ok_or_else(|| ApiError::not_found("revision missing"))?;
+
     let env = match env_input(input.env.as_deref())? {
         Some(e) => e,
         None => open_env(&state.envelope, id, stack.env_sealed.as_deref()).map_err(internal)?,
     };
+
     if input.dir.is_some() {
         let deployed = !state.store.list_nodes(id).await?.is_empty();
         let dir = check_dir(input.dir.as_deref())?;
         if deployed && dir != stack.dir {
             return Err(ApiError::conflict("take the stack down before moving its folder"));
         }
+
         stack.dir = dir;
     }
+
     let content = input.content.unwrap_or_else(|| current.content.clone());
     let p = plan_for(
         &state,
@@ -478,11 +509,13 @@ pub async fn update(
         &env,
     )
     .await?;
+
     if let Some(f) = p.report.findings.iter().find(|f| f.severity == cat::Severity::Blocked) {
         return Err(ApiError::bad_request(
             cat::Report { findings: vec![f.clone()], privileged: false }.ensure(true).err().unwrap_or_default(),
         ));
     }
+
     // Claim the edit atomically: of two saves that read the same stack,
     // only one gets past this; the other answers 409. The new timestamp is
     // always later than the one read, so the version changes.
@@ -490,7 +523,9 @@ pub async fn update(
     if !state.store.claim_stack_edit(id, stack.updated_at, now).await? {
         return Err(stale_version());
     }
+
     let mut new_rev = None;
+
     if content != current.content {
         let rev = StackRevision {
             stack_id: id,
@@ -505,6 +540,7 @@ pub async fn update(
         new_rev = Some((n, rev.sha256));
         stack.revision = n;
     }
+
     stack.env_sealed = seal_env(&state.envelope, id, &env).map_err(internal)?;
     stack.env_keys = env.keys().cloned().collect();
     stack.updated_at = now;
@@ -520,19 +556,23 @@ pub async fn update(
             }),
         )
         .await;
+
     Ok(Json(json!({ "stack": stack, "preview": preview(&p) })))
 }
 
 pub async fn delete(State(state): State<AppState>, caller: Caller, Path(id): Path<StackId>) -> ApiResult<StatusCode> {
     let stack = load(&state, id).await?;
     caller.authorize(Action::StackManage, ns_ref(stack.environment_id)).await?;
+
     if !state.store.list_nodes(id).await?.is_empty() {
         return Err(ApiError::conflict("take the stack down on its nodes first"));
     }
+
     state.store.delete_stack(id).await?;
     caller
         .audit("stack.delete", &ns_ref(stack.environment_id), Some(stack.workspace_id), json!({ "stack": stack.name }))
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -569,17 +609,21 @@ async fn deploy_jobs(
     if let Some(bad) = services.iter().find(|s| !p.services().contains(*s)) {
         return Err(ApiError::bad_request(format!("unknown service `{bad}`")));
     }
+
     let privileged = p.report.privileged;
     if privileged {
         // Host-access settings: administrators with MFA only.
         caller.authorize(Action::StackPrivileged, ns_ref(stack.environment_id)).await?;
     }
+
     let wanted = cat::with_dependencies(&p.interpolated, services);
     let mut jobs = Vec::new();
+
     for n in &p.nodes {
         if !services.is_empty() && !n.services.iter().any(|s| wanted.contains(s)) {
             continue;
         }
+
         caller.authorize(Action::ServerManage, EntityRef::new(EntityKind::Server, n.server_id)).await?;
         let payload = json!({
             "stack_id": stack.id, "server_id": n.server_id, "op": "deploy", "revision": revision,
@@ -587,6 +631,7 @@ async fn deploy_jobs(
         });
         jobs.push(submit(state, caller, stack, payload).await?);
     }
+
     if services.is_empty() {
         for old in state.store.list_nodes(stack.id).await? {
             if p.node(old.server_id).is_none() {
@@ -596,9 +641,11 @@ async fn deploy_jobs(
             }
         }
     }
+
     if jobs.is_empty() {
         return Err(ApiError::bad_request("none of the chosen services has a node"));
     }
+
     Ok(jobs)
 }
 
@@ -639,9 +686,11 @@ pub async fn deploy(
         &env,
     )
     .await?;
+
     if let Err(e) = p.report.ensure(true) {
         return Err(ApiError::bad_request(e));
     }
+
     let jobs = deploy_jobs(&state, &caller, &stack, &p, revision, &input.services, input.pull).await?;
     caller
         .audit(
@@ -657,6 +706,7 @@ pub async fn deploy(
             }),
         )
         .await;
+
     Ok((StatusCode::ACCEPTED, Json(jobs)))
 }
 
@@ -679,13 +729,16 @@ pub async fn services(
 ) -> ApiResult<(StatusCode, Json<Job>)> {
     let stack = load(&state, id).await?;
     caller.authorize(Action::StackManage, ns_ref(stack.environment_id)).await?;
+
     if !matches!(input.action.as_str(), "start" | "stop" | "restart" | "pull") {
         return Err(ApiError::bad_request("action: start, stop, restart or pull"));
     }
+
     let node = node_of(&state, id, input.server_id).await?;
     if let Some(bad) = input.services.iter().find(|s| !node.services.contains(*s)) {
         return Err(ApiError::bad_request(format!("`{bad}` does not run on this node")));
     }
+
     let payload = json!({ "stack_id": id, "server_id": input.server_id, "op": "service", "action": input.action, "services": input.services });
     let job = submit(&state, &caller, &stack, payload).await?;
     caller
@@ -696,6 +749,7 @@ pub async fn services(
             json!({ "stack": stack.name, "server_id": input.server_id, "action": input.action, "services": input.services }),
         )
         .await;
+
     Ok((StatusCode::ACCEPTED, Json(job)))
 }
 
@@ -718,11 +772,13 @@ pub async fn refresh(
     let stack = load(&state, id).await?;
     caller.authorize(Action::View, ns_ref(stack.environment_id)).await?;
     let mut jobs = Vec::new();
+
     for n in state.store.list_nodes(id).await? {
         jobs.push(
             submit(&state, &caller, &stack, json!({ "stack_id": id, "server_id": n.server_id, "op": "ps" })).await?,
         );
     }
+
     Ok((StatusCode::ACCEPTED, Json(jobs)))
 }
 
@@ -749,9 +805,11 @@ pub async fn logs(
     if !node.services.contains(&q.service) {
         return Err(ApiError::bad_request("this service does not run on this node"));
     }
+
     let payload = json!({ "stack_id": id, "server_id": q.server_id, "op": "logs", "service": q.service, "tail": q.tail.unwrap_or(200).min(10_000) });
     let job = submit(&state, &caller, &stack, payload).await?;
     let deadline = tokio::time::Instant::now() + QUICK_WAIT;
+
     loop {
         let j = state.store.get_job(job.id).await?;
         match j.status {
@@ -790,16 +848,20 @@ pub async fn down(
     let stack = load(&state, id).await?;
     caller.authorize(Action::StackManage, ns_ref(stack.environment_id)).await?;
     let mut jobs = Vec::new();
+
     for n in state.store.list_nodes(id).await? {
         if input.server_id.is_some_and(|s| s != n.server_id) {
             continue;
         }
+
         let payload = json!({ "stack_id": id, "server_id": n.server_id, "op": "down", "volumes": input.volumes });
         jobs.push(submit(&state, &caller, &stack, payload).await?);
     }
+
     if jobs.is_empty() {
         return Err(ApiError::conflict("the stack is not deployed"));
     }
+
     caller
         .audit(
             "stack.down",
@@ -808,6 +870,7 @@ pub async fn down(
             json!({ "stack": stack.name, "volumes_removed": input.volumes, "nodes": jobs.len() }),
         )
         .await;
+
     Ok((StatusCode::ACCEPTED, Json(jobs)))
 }
 
@@ -851,9 +914,11 @@ pub async fn expose(
     caller.authorize(Action::StackManage, ns_ref(stack.environment_id)).await?;
     let nodes: Vec<StackNode> =
         state.store.list_nodes(id).await?.into_iter().filter(|n| n.services.contains(&input.service)).collect();
+
     if nodes.is_empty() {
         return Err(ApiError::conflict("deploy the service before exposing it"));
     }
+
     let app = forge_core::ports::ServiceRepository::list_services(&state.store, Some(stack.environment_id))
         .await?
         .into_iter()
@@ -873,8 +938,10 @@ pub async fn expose(
                 "this node has no cluster network, so the service listens on 127.0.0.1 only: choose the service's own node as the only edge (with Nginx), or set up the cluster network",
             ));
         }
+
         json!({ "kind": "external", "address": format!("127.0.0.1:{}", input.port) })
     };
+
     let site = json!({
         "name": format!("{}-{}", stack.name, input.service),
         "domains": input.domains,
@@ -892,5 +959,6 @@ pub async fn expose(
     let (status, Json(created)) =
         super::sites::create(State(state.clone()), caller.clone(), ws, Json(site_input)).await?;
     caller.audit("stack.expose", &ns_ref(stack.environment_id), Some(stack.workspace_id), audit).await;
+
     Ok((status, Json(json!({ "site": created, "next": "Apply the site on its edges from Sites" }))))
 }

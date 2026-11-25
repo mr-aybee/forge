@@ -27,12 +27,14 @@ impl Instance {
         );
         let config = dir.join("forge.toml");
         std::fs::write(&config, toml).unwrap();
+
         (Self { config }, format!("http://127.0.0.1:{api}"))
     }
 
     fn command(&self) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_forge-server"));
         c.arg("--config").arg(&self.config).env("RUST_LOG", "warn").stdout(Stdio::null()).stderr(Stdio::null());
+
         c
     }
 
@@ -48,12 +50,15 @@ impl Instance {
 
     async fn serve(&self, base: &str) -> Child {
         let mut child = self.command().arg("serve").spawn().unwrap();
+
         for _ in 0..100 {
             if reqwest::get(format!("{base}/api/health")).await.is_ok_and(|r| r.status().is_success()) {
                 return child;
             }
+
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+
         let _ = child.kill();
         let _ = child.wait();
         panic!("server did not become healthy");
@@ -86,13 +91,17 @@ async fn job_survives_control_plane_kill_and_resumes() {
 
     // Wait until step 0 has completed and step 1 is running, then hard-kill.
     let mut before = Vec::new();
+
     for _ in 0..100 {
         before = steps(&client, &id).await;
+
         if before.len() == 2 && before[0]["status"] == "succeeded" && before[1]["status"] == "running" {
             break;
         }
+
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+
     assert_eq!(before.len(), 2, "did not reach step 1: {before:?}");
     first.kill().unwrap();
     first.wait().unwrap();

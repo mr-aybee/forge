@@ -38,6 +38,7 @@ const LONG: Duration = Duration::from_secs(30 * 60);
 /// Runs one stack operation (validated first).
 pub async fn run_op(op: &StackOp) -> Result<Value, String> {
     op.validate()?;
+
     match op {
         StackOp::Deploy { part, services, pull } => deploy(part, services, *pull).await,
         StackOp::Ps { project, dir } => ps(project, dir).await.map(|s| json!({ "services": s })),
@@ -63,21 +64,26 @@ pub async fn run_op(op: &StackOp) -> Result<Value, String> {
 /// `docker compose -p <project> --project-directory <dir> -f <dir>/compose.yaml <args>`.
 async fn compose(project: &str, dir: &str, args: &[&str], timeout: Duration) -> Result<String, String> {
     let file = format!("{dir}/{COMPOSE_FILE}");
+
     // Not `is_file`: that follows links, and Compose runs as root.
     let regular = |p: &str| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_file());
     if !regular(&file) {
         return Err(format!("this stack is not deployed on the node ({file} is missing or not a regular file)"));
     }
+
     let mut argv: Vec<&str> =
         vec!["compose", "--ansi", "never", "-p", project, "--project-directory", dir, "-f", &file];
     let env_file = format!("{dir}/{ENV_FILE}");
     if std::fs::symlink_metadata(&env_file).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(format!("{env_file} is a symbolic link; deploy the stack again"));
     }
+
     if regular(&env_file) {
         argv.extend(["--env-file", &env_file]);
     }
+
     argv.extend_from_slice(args);
+
     run("docker", &argv, timeout).await
 }
 
@@ -97,6 +103,7 @@ async fn run(cmd: &str, args: &[&str], timeout: Duration) -> Result<String, Stri
         .map_err(|_| format!("docker {} timed out", args.iter().find(|a| !a.starts_with('-')).unwrap_or(&"")))?
         .map_err(|e| format!("{cmd}: {e}"))?;
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+
     if out.status.success() {
         Ok(stdout)
     } else {
@@ -111,6 +118,7 @@ async fn run(cmd: &str, args: &[&str], timeout: Duration) -> Result<String, Stri
 fn compose_error(stderr: &str) -> String {
     let messages: Vec<&str> =
         stderr.lines().filter(|l| !l.is_empty() && !l.starts_with(char::is_whitespace)).map(str::trim_end).collect();
+
     if messages.is_empty() {
         last_lines(stderr.trim(), 20)
     } else {
@@ -137,11 +145,13 @@ fn ensure_dir(dir: &str) -> Result<(), String> {
             std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o755)).map_err(|e| format!("{d}: {e}"))?;
         }
     }
+
     std::fs::create_dir_all(dir).map_err(|e| format!("{dir}: {e}"))?;
     let real = std::fs::canonicalize(dir).map_err(|e| format!("{dir}: {e}"))?;
     if real != Path::new(dir) {
         return Err(format!("the stack folder {dir} passes through a symlink"));
     }
+
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o750)).map_err(|e| format!("{dir}: {e}"))
 }
 
@@ -159,6 +169,7 @@ fn write_private(path: &str, content: &str) -> Result<(), String> {
         .map_err(|e| format!("{tmp}: {e}"))?;
     f.write_all(content.as_bytes()).and_then(|()| f.sync_all()).map_err(|e| format!("{tmp}: {e}"))?;
     drop(f);
+
     std::fs::rename(&tmp, path).map_err(|e| format!("{path}: {e}"))
 }
 
@@ -180,13 +191,16 @@ pub fn walk_host_path(path: &str, create: bool) -> Result<bool, String> {
     if !path.starts_with('/') || comps.contains(&"..") {
         return Err(format!("{path}: the path must be absolute without `..`"));
     }
+
     let flags = OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let mut fd = rfs::open("/", flags, Mode::empty()).map_err(|e| format!("/: {e}"))?;
     let mut cur = String::new();
+
     for (i, c) in comps.iter().enumerate() {
         let parent_is_root = cur.is_empty();
         cur = format!("{cur}/{c}");
         let last = i + 1 == comps.len();
+
         let st = match rfs::statat(&fd, *c, AtFlags::SYMLINK_NOFOLLOW) {
             Ok(st) => st,
             Err(Errno::NOENT) if create => {
@@ -194,18 +208,22 @@ pub fn walk_host_path(path: &str, create: bool) -> Result<bool, String> {
                     Ok(()) | Err(Errno::EXIST) => {}
                     Err(e) => return Err(format!("{cur}: {e}")),
                 }
+
                 rfs::statat(&fd, *c, AtFlags::SYMLINK_NOFOLLOW).map_err(|e| format!("{cur}: {e}"))?
             }
             Err(Errno::NOENT) => return Ok(false),
             Err(e) => return Err(format!("{cur}: {e}")),
         };
+
         let link = FileType::from_raw_mode(st.st_mode as _) == FileType::Symlink;
         if link && !(st.st_uid as u32 == 0 && (parent_is_root || is_system_path(&cur))) {
             return Err(format!("{path}: {cur} is a symbolic link; bind sources must be real folders"));
         }
+
         if last {
             break;
         }
+
         // Trusted system links are followed; everything else is opened as is.
         let open_flags = if link { flags.difference(OFlags::NOFOLLOW) } else { flags };
         fd = rfs::openat(&fd, *c, open_flags, Mode::empty()).map_err(|e| match e {
@@ -213,6 +231,7 @@ pub fn walk_host_path(path: &str, create: bool) -> Result<bool, String> {
             e => format!("{cur}: {e}"),
         })?;
     }
+
     Ok(true)
 }
 
@@ -221,11 +240,13 @@ pub fn walk_host_path(path: &str, create: bool) -> Result<bool, String> {
 /// resolved path must pass the policy too.
 fn recheck_links(tree: &Value, part: &StackPart) -> Result<(), String> {
     let sources: Vec<String> = binds(tree, &part.dir).into_iter().map(|b| b.path).collect();
+
     for p in host_paths(tree, &part.dir) {
         let socket = p.ends_with(".sock");
         if !walk_host_path(&p, sources.contains(&p) && !socket)? {
             continue;
         }
+
         let real = std::fs::canonicalize(&p).map_err(|e| format!("{p}: {e}"))?;
         let real = real.to_string_lossy();
         if real != p {
@@ -233,6 +254,7 @@ fn recheck_links(tree: &Value, part: &StackPart) -> Result<(), String> {
             r.ensure(part.policy.allow_privileged).map_err(|e| format!("{p} resolves to {real}: {e}"))?;
         }
     }
+
     Ok(())
 }
 
@@ -251,6 +273,7 @@ async fn deploy(part: &StackPart, services: &[String], pull: bool) -> Result<Val
     let up = compose(&project, &part.dir, &args, LONG).await;
     let status = ps(&project, &part.dir).await.unwrap_or_default();
     up.map_err(|e| format!("{e}\n{}", summary(&status)))?;
+
     Ok(json!({ "services": status, "ports": ports }))
 }
 
@@ -284,6 +307,7 @@ pub fn parse_ps(out: &str) -> Vec<Value> {
         Ok(v @ Value::Object(_)) => vec![v],
         _ => out.lines().filter_map(|l| serde_json::from_str(l.trim()).ok()).collect(),
     };
+
     raw.into_iter()
         .map(|c| {
             json!({
@@ -304,18 +328,23 @@ async fn down(project: &str, dir: &str, volumes: bool) -> Result<Value, String> 
     let file = format!("{dir}/{COMPOSE_FILE}");
     if Path::new(&file).is_file() {
         let mut args = vec!["down", "--remove-orphans"];
+
         if volumes {
             args.push("--volumes");
         }
+
         compose(project, dir, &args, LONG).await?;
     }
+
     for f in [COMPOSE_FILE, ENV_FILE] {
         let _ = std::fs::remove_file(format!("{dir}/{f}"));
     }
+
     // Forge's own folder goes when empty; data in a chosen folder stays.
     if dir.starts_with(STACKS_DIR) {
         let _ = std::fs::remove_dir(dir);
     }
+
     Ok(json!({ "down": true, "volumes_removed": volumes }))
 }
 
@@ -326,9 +355,11 @@ mod tests {
     #[test]
     fn compose_error_keeps_the_reason_not_the_progress() {
         let mut err = String::new();
+
         for i in 0..60 {
             err.push_str(&format!(" {i:012x} Extracting 1B\n"));
         }
+
         err.push_str(" Container p-web-1 Started \n Container p-web-1 Waiting \ncontainer p-web-1 is unhealthy\n");
         assert_eq!(compose_error(&err), "container p-web-1 is unhealthy");
         let only_progress = " Network p_default Creating \n Network p_default Created \n";

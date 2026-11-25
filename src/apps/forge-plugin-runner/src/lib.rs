@@ -41,10 +41,12 @@ impl ResourceLimiter for Limits {
         if self.used.saturating_add(grow) > self.total {
             wasmtime::bail!("forcing trap when growing memory to {desired} bytes: total budget {} bytes", self.total);
         }
+
         let ok = self.inner.memory_growing(current, desired, maximum)?;
         if ok {
             self.used = self.used.saturating_add(grow);
         }
+
         Ok(ok)
     }
 
@@ -91,7 +93,9 @@ impl State {
             self.output_exceeded = true;
             wasmtime::bail!("output budget exceeded");
         }
+
         self.output_left -= n;
+
         Ok(())
     }
 
@@ -111,6 +115,7 @@ fn engine() -> wasmtime::Result<Engine> {
     config.wasm_component_model(true);
     config.consume_fuel(true);
     config.epoch_interruption(true);
+
     Engine::new(&config)
 }
 
@@ -129,6 +134,7 @@ fn linker(engine: &Engine) -> wasmtime::Result<Linker<State>> {
         let v = state.forward(host_functions::SERVER_ONLINE, json!({ "hostname": hostname }))?;
         Ok((v.as_bool().unwrap_or(false),))
     })?;
+
     Ok(linker)
 }
 
@@ -166,6 +172,7 @@ fn execute_inner(req: &RunRequest, bytes: &[u8], channel: Box<dyn HostChannel>) 
 
     // Wall-clock ticker for epoch interruption.
     let done = Arc::new(AtomicBool::new(false));
+
     let ticker = {
         let engine = engine.clone();
         let done = done.clone();
@@ -188,6 +195,7 @@ fn execute_inner(req: &RunRequest, bytes: &[u8], channel: Box<dyn HostChannel>) 
     let _ = ticker.join();
 
     let fuel_used = req.fuel.saturating_sub(store.get_fuel().unwrap_or(0));
+
     Ok(match result {
         Ok(output) => RunnerMessage::Done { output, fuel_used },
         Err(e) => {
@@ -201,20 +209,25 @@ fn classify(err: &wasmtime::Error, state: &State) -> (FailureKind, String) {
     if let Some(reason) = &state.denied {
         return (FailureKind::Denied, reason.clone());
     }
+
     if state.output_exceeded {
         return (FailureKind::OutputExceeded, "output budget exceeded".into());
     }
+
     if let Some(trap) = err.downcast_ref::<Trap>() {
         let kind = match trap {
             Trap::OutOfFuel => FailureKind::FuelExhausted,
             Trap::Interrupt => FailureKind::Timeout,
             _ => FailureKind::Trap,
         };
+
         return (kind, trap.to_string());
     }
+
     let text = format!("{err:#}");
     if text.contains("growing memory") || text.contains("memory limits") || text.contains("exceeds memory") {
         return (FailureKind::MemoryExceeded, text);
     }
+
     (FailureKind::Trap, text)
 }

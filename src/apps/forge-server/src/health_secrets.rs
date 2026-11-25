@@ -183,6 +183,7 @@ fn references(policy: &HealthPolicy, purpose: &str, check: &str) -> Option<Vec<(
         .filter_map(|hd| hd.secret.as_deref().map(|s| (hd.name.as_str(), s)))
         .map(|(name, s)| Some((name.to_owned(), s.strip_prefix("vault:")?.parse().ok()?)))
         .collect();
+
     refs.filter(|r| !r.is_empty())
 }
 
@@ -191,10 +192,13 @@ fn admit(w: &mut Window, minute: i64) -> bool {
     if w.minute != minute {
         *w = Window { minute, count: 0 };
     }
+
     if w.count >= RATE_LIMIT {
         return false;
     }
+
     w.count += 1;
+
     true
 }
 
@@ -225,6 +229,7 @@ impl HealthSecrets {
             saved_at: self.ports.clock.now(),
             revision,
         });
+
         self.ports.authority.save_health_policy(app, saved.as_ref()).await
     }
 
@@ -234,6 +239,7 @@ impl HealthSecrets {
         if !self.within_rate(server, now) {
             return self.refuse_quietly(server, Denial::RateLimited, now);
         }
+
         let placed = match self.ports.apps.list_server_services(server).await {
             Ok(p) => p,
             Err(e) => {
@@ -241,10 +247,12 @@ impl HealthSecrets {
                 return refuse(Denial::Internal);
             }
         };
+
         let wanted = match Self::wanted(&placed, req) {
             Ok(w) => w,
             Err(denial) => return self.refuse_quietly(server, denial, now),
         };
+
         let authority = match self.ports.authority.get_health_authority(wanted.app.id).await {
             Ok(a) => a,
             Err(e) => {
@@ -252,16 +260,19 @@ impl HealthSecrets {
                 return refuse(Denial::Internal);
             }
         };
+
         // The authority holds for the revision that person saved only.
         let saver = authority.filter(|a| a.revision == wanted.revision).map(|a| a.saved_by);
         let answer = match &saver {
             Some(saver) => self.decide(&wanted, saver).await,
             None => Err(Denial::NoAuthority),
         };
+
         // Audit first: no value leaves on an answer that was not recorded.
         if self.audit(server, &wanted, req, answer.as_ref().err().copied(), saver, now).await.is_err() {
             return refuse(Denial::Internal);
         }
+
         match answer {
             Ok(headers) => HealthSecretsResponse {
                 granted: true,
@@ -280,6 +291,7 @@ impl HealthSecrets {
         if rates.len() >= MAX_REMEMBERED {
             rates.retain(|_, w| w.minute == minute);
         }
+
         admit(rates.entry(server).or_insert(Window { minute, count: 0 }), minute)
     }
 
@@ -287,8 +299,10 @@ impl HealthSecrets {
     /// minute with the count since the last line.
     fn refuse_quietly(&self, server: ServerId, denial: Denial, now: Timestamp) -> HealthSecretsResponse {
         let minute = now.0.div_euclid(MINUTE_MS);
+
         if let Ok(mut u) = self.unaudited.lock() {
             u.count += 1;
+
             if u.logged_minute != minute {
                 tracing::warn!(
                     count = u.count,
@@ -299,6 +313,7 @@ impl HealthSecrets {
                 *u = Unaudited { count: 0, logged_minute: minute };
             }
         }
+
         refuse(denial)
     }
 
@@ -315,7 +330,9 @@ impl HealthSecrets {
         if spec.revision != req.policy_revision {
             return Err(Denial::StalePolicy);
         }
+
         let headers = references(&spec.policy, &req.purpose, &req.check).ok_or(Denial::NoSuchCheck)?;
+
         Ok(Wanted { app, revision: spec.revision, headers })
     }
 
@@ -327,19 +344,23 @@ impl HealthSecrets {
             Denial::Internal
         };
         let Principal::User(uid) = saver;
+
         let user = match p.users.get_user(*uid).await {
             Ok(u) => u,
             Err(DomainError::NotFound(_)) => return Err(Denial::SaverGone),
             Err(e) => return Err(internal(e)),
         };
+
         if user.disabled {
             return Err(Denial::SaverDisabled);
         }
+
         // The vault is for platform administrators, as in the vault API.
         let bindings = p.bindings.list_bindings_for_user(*uid).await.map_err(internal)?;
         if !bindings.iter().any(|b| b.role == Role::PlatformAdmin) {
             return Err(Denial::NotAllowed);
         }
+
         // `secret.read` has an MFA guardrail. A probe has no session: the
         // save that named this person passed it with an MFA-verified
         // session, and what is checked again here is what they may do now.
@@ -348,12 +369,15 @@ impl HealthSecrets {
         if !p.authz.is_allowed(&ask).await {
             return Err(Denial::NotAllowed);
         }
+
         let mut headers = Vec::with_capacity(w.headers.len());
+
         for (name, id) in &w.headers {
             let item = match p.vault.get_vault_item(*id).await.map_err(internal)? {
                 Some(i) if i.workspace_id == w.app.workspace_id => i,
                 _ => return Err(Denial::ItemMissing),
             };
+
             let plain = p.envelope.open(&item.sealed, &crate::jobs::storage::vault_aad(*id)).map_err(|_| {
                 tracing::error!(app = %w.app.name, item = %id, "a vault item for a health check could not be opened");
                 Denial::Internal
@@ -361,6 +385,7 @@ impl HealthSecrets {
             let value = String::from_utf8(plain).map_err(|_| Denial::ItemMissing)?;
             headers.push(HealthSecretHeader { name: name.clone(), value });
         }
+
         Ok(headers)
     }
 
@@ -379,6 +404,7 @@ impl HealthSecrets {
         if denial.is_some_and(|d| !d.audited()) {
             return Ok(());
         }
+
         let on_behalf_of = saver.as_ref().map(ToString::to_string);
         let entry = Audited {
             outcome: denial.map_or("granted", Denial::code),
@@ -390,6 +416,7 @@ impl HealthSecrets {
         if self.audited.lock().map_err(|_| ())?.get(&key) == Some(&entry) {
             return Ok(());
         }
+
         let items: Vec<String> = w.headers.iter().map(|(_, id)| id.to_string()).collect();
         let details = serde_json::json!({
             "service": w.app.name,
@@ -405,16 +432,20 @@ impl HealthSecrets {
         let event = AuditEvent::new(format!("agent:{server}"), AUDIT_SECRET_USE, resource, outcome)
             .in_org(Some(w.app.workspace_id))
             .with_details(details);
+
         if let Err(e) = self.ports.audit.record(event).await {
             tracing::error!(error = %e, "audit write failed; the vault value is not released");
             return Err(());
         }
+
         let mut seen = self.audited.lock().map_err(|_| ())?;
         if seen.len() >= MAX_REMEMBERED {
             // Forgetting costs one more audit entry per check, never a miss.
             seen.clear();
         }
+
         seen.insert(key, entry);
+
         Ok(())
     }
 
@@ -465,6 +496,7 @@ mod tests {
         }));
         let refs = references(&p, "readiness", "api").unwrap();
         assert_eq!(refs, vec![("Authorization".to_owned(), a), ("X-Api-Key".to_owned(), b)]);
+
         for (purpose, name) in [
             ("readiness", "plain"),
             ("readiness", "off"),
@@ -474,6 +506,7 @@ mod tests {
         ] {
             assert!(references(&p, purpose, name).is_none(), "{purpose}.{name}");
         }
+
         // A reference that is not an item id names nothing.
         let odd = policy(serde_json::json!({ "liveness": [{ "name": "x", "probe": { "type": "http", "port": 1,
             "headers": [{ "name": "Authorization", "secret": "vault:not-an-id" }] } }] }));
@@ -485,11 +518,13 @@ mod tests {
         for d in [Denial::NotPlaced, Denial::StalePolicy, Denial::NoSuchCheck, Denial::RateLimited] {
             assert!(!d.audited(), "{d:?}");
         }
+
         for d in
             [Denial::NoAuthority, Denial::SaverGone, Denial::SaverDisabled, Denial::NotAllowed, Denial::ItemMissing]
         {
             assert!(d.audited(), "{d:?}");
         }
+
         let r = refuse(Denial::NotAllowed);
         assert!(!r.granted && r.headers.is_empty() && r.denial == "not_allowed" && r.ttl_secs == 60);
     }
@@ -497,9 +532,11 @@ mod tests {
     #[test]
     fn a_node_gets_a_bounded_number_of_answers_per_minute() {
         let mut w = Window { minute: 7, count: 0 };
+
         for _ in 0..RATE_LIMIT {
             assert!(admit(&mut w, 7));
         }
+
         assert!(!admit(&mut w, 7) && !admit(&mut w, 7), "over the limit in the same minute");
         assert!(admit(&mut w, 8), "the next minute starts over");
         assert_eq!(w.count, 1);

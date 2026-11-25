@@ -65,15 +65,18 @@ impl IdempotencyRepository for Store {
         .await
         .map_err(db_err)?
         .rows_affected();
+
         if inserted == 1 {
             return Ok(IdempotencyBegin::Started);
         }
+
         let r = sqlx::query("SELECT * FROM idempotency_keys WHERE principal = $1 AND idem_key = $2")
             .bind(principal)
             .bind(key)
             .fetch_optional(self.pool())
             .await
             .map_err(db_err)?;
+
         match r {
             Some(r) => Ok(IdempotencyBegin::Existing(record(&r)?)),
             // Deleted between the insert and the read: treat as in flight.

@@ -50,6 +50,7 @@ async fn record(
         tag,
         source_ip: ip.to_owned(),
     };
+
     if let Err(e) = state.webhooks.repo.add_delivery(&d).await {
         tracing::warn!(webhook = %w.id, error = %e, "recording a webhook delivery failed");
     }
@@ -80,6 +81,7 @@ pub async fn fire(
     if !state.webhooks.allow_ip(ip) {
         return answer(StatusCode::TOO_MANY_REQUESTS, "too many requests");
     }
+
     let w = match state.webhooks.by_token(&token).await {
         Ok(Some(w)) => w,
         Ok(None) => return answer(StatusCode::NOT_FOUND, "no such webhook"),
@@ -88,12 +90,15 @@ pub async fn fire(
             return answer(StatusCode::SERVICE_UNAVAILABLE, "try again later");
         }
     };
+
     let ip_text = ip.to_string();
     let tag = requested_tag(&q, &body);
+
     if !state.webhooks.allow_hook(w.id) {
         record(&state, &w, DeliveryOutcome::RateLimited, "rate limited", None, tag, &ip_text).await;
         return answer(StatusCode::TOO_MANY_REQUESTS, "too many deliveries; slow down");
     }
+
     let h = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
     let sig = SignatureHeaders {
         hub_signature_256: h("x-hub-signature-256"),
@@ -103,10 +108,12 @@ pub async fn fire(
         forge_signature: h("x-forge-signature"),
         forge_timestamp: h("x-forge-timestamp"),
     };
+
     let tag = match state.webhooks.verify(&w, &sig, &body, q.tag.as_deref()).await {
         Ok(t) => t,
         Err(r) => {
             record(&state, &w, DeliveryOutcome::Rejected, &r.to_string(), None, tag, &ip_text).await;
+
             let status = match r {
                 Rejection::BadSignature | Rejection::Stale => StatusCode::UNAUTHORIZED,
                 Rejection::MissingDeliveryId => StatusCode::BAD_REQUEST,
@@ -115,9 +122,11 @@ pub async fn fire(
                 Rejection::Replayed => StatusCode::CONFLICT,
                 Rejection::TagNotAllowed | Rejection::TagRefused => StatusCode::UNPROCESSABLE_ENTITY,
             };
+
             return answer(status, &r.to_string());
         }
     };
+
     let caller = match crate::auth::webhook_caller(&state, &w.created_by, w.id).await {
         Ok(Some(c)) => c,
         Ok(None) => {
@@ -138,6 +147,7 @@ pub async fn fire(
             return answer(StatusCode::SERVICE_UNAVAILABLE, "try again later");
         }
     };
+
     match deploy(&state, &caller, &w, tag.as_deref()).await {
         Ok(jobs) => {
             let first = jobs.first().copied();
@@ -186,12 +196,15 @@ async fn deploy(
     match w.target {
         WebhookTarget::Service { id } => {
             let app = super::services::load_own(state, id).await?;
+
             let Some(t) = tag else {
                 let (_, Json(jobs)) = super::services::deploy(State(state.clone()), caller.clone(), Path(id)).await?;
                 return Ok(jobs.into_iter().map(|j| j.id).collect());
             };
+
             caller.authorize(forge_core::Action::Deploy, super::services::svc_ref(id)).await?;
             state.webhooks.set_tag(&app, t).await?;
+
             // Compensating, not atomic: the deploy reads the stored spec, so
             // the new image is saved first; when the deploy fails, the old
             // spec is put back so a refused delivery changes nothing.
@@ -211,6 +224,7 @@ async fn deploy(
                     if let Err(r) = state.webhooks.restore(&app).await {
                         tracing::error!(service = %id, error = %r, "restoring the image after a failed webhook deploy failed");
                     }
+
                     Err(e)
                 }
             }
@@ -219,6 +233,7 @@ async fn deploy(
             if tag.is_some() {
                 return Err(crate::error::ApiError::bad_request("a stack webhook cannot change a tag"));
             }
+
             let input = super::stacks::DeployInput { revision: None, services: Vec::new(), pull: true };
             let (_, Json(jobs)) =
                 super::stacks::deploy(State(state.clone()), caller.clone(), Path(id), Json(input)).await?;
@@ -237,6 +252,7 @@ pub async fn job(
     if !state.webhooks.allow_ip(ip) {
         return answer(StatusCode::TOO_MANY_REQUESTS, "too many requests");
     }
+
     let w = match state.webhooks.by_token(&token).await {
         Ok(Some(w)) => w,
         Ok(None) => return answer(StatusCode::NOT_FOUND, "no such webhook"),
@@ -245,6 +261,7 @@ pub async fn job(
             return answer(StatusCode::SERVICE_UNAVAILABLE, "try again later");
         }
     };
+
     match state.webhooks.job_status(&w, job).await {
         Ok(v) => Json(v).into_response(),
         Err(forge_core::DomainError::NotFound(_)) => answer(StatusCode::NOT_FOUND, "no such job for this webhook"),

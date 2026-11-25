@@ -62,12 +62,14 @@ fn restrictions(r: &AnyRow) -> DomainResult<Option<Vec<forge_core::permissions::
     let Some(raw) = opt_text(r, "restrictions")? else { return Ok(None) };
     let stored: Vec<Stored> = serde_json::from_str(&raw).map_err(DomainError::internal)?;
     let mut out = Vec::with_capacity(stored.len());
+
     for s in stored {
         out.push(forge_core::permissions::TokenGrant {
             scope: forge_core::permissions::parse_scope(&s.scope)?,
             actions: forge_core::permissions::load_actions(&s.actions)?,
         });
     }
+
     Ok(Some(out))
 }
 

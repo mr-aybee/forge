@@ -32,6 +32,7 @@ impl Cidr {
         if prefix > 32 {
             return Err(format!("prefix /{prefix} is out of range"));
         }
+
         Ok(Self { base: u32::from(addr) & mask(prefix), prefix })
     }
     pub fn prefix(&self) -> u8 {
@@ -61,7 +62,9 @@ impl Cidr {
         if prefix < self.prefix || prefix > 32 {
             return None;
         }
+
         let count = 1u64 << (prefix - self.prefix);
+
         (n < count).then(|| Cidr { base: self.base.wrapping_add((n * (1u64 << (32 - prefix))) as u32), prefix })
     }
     fn is_private(&self) -> bool {
@@ -82,6 +85,7 @@ impl FromStr for Cidr {
         let (a, p) = s.trim().split_once('/').ok_or_else(|| format!("{s:?} is not in CIDR form (a.b.c.d/n)"))?;
         let addr: Ipv4Addr = a.parse().map_err(|_| format!("{a:?} is not an IPv4 address"))?;
         let prefix: u8 = p.parse().map_err(|_| format!("{p:?} is not a prefix length"))?;
+
         Cidr::new(addr, prefix)
     }
 }
@@ -144,13 +148,16 @@ impl FabricSpec {
         if self.mode != FabricMode::Mesh {
             return Err("routed mode is not supported; use \"mesh\" (the encrypted WireGuard mesh)".into());
         }
+
         let p = self.subnet.prefix();
         if !(16..=24).contains(&p) {
             return Err("the cluster subnet must be between /16 and /24".into());
         }
+
         if !self.subnet.is_private() {
             return Err("the cluster subnet must be a private range (10/8, 172.16/12, 192.168/16 or 100.64/10)".into());
         }
+
         let d = &self.domain;
         let label_ok = |l: &str| {
             !l.is_empty()
@@ -159,15 +166,19 @@ impl FabricSpec {
                 && !l.starts_with('-')
                 && !l.ends_with('-')
         };
+
         if d.len() > 200 || !d.contains('.') || !d.split('.').all(label_ok) {
             return Err(format!("{d:?} is not a valid domain"));
         }
+
         if self.port < 1024 {
             return Err("the WireGuard port must be 1024 or higher".into());
         }
+
         for (node, ep) in &self.endpoints {
             valid_endpoint(ep).map_err(|e| format!("endpoint of {node}: {e}"))?;
         }
+
         Ok(())
     }
 
@@ -197,6 +208,7 @@ pub struct Layout {
 impl Layout {
     pub fn of(subnet: Cidr) -> Self {
         let size = subnet.size();
+
         if subnet.prefix() <= 20 {
             // Large: first /24 = reserved + nodes, second /24 = services, /24 per node from the 10th.
             let blocks = size / 256;
@@ -291,10 +303,12 @@ pub fn allocate(
     if nodes.len() as u64 > l.max_nodes() {
         return Err(format!("{} nodes do not fit in {} (at most {})", nodes.len(), spec.subnet, l.max_nodes()));
     }
+
     let wanted = |kind: LeaseKind, owner: &str| match kind {
         LeaseKind::Node | LeaseKind::Block => nodes.iter().any(|n| n == owner),
         LeaseKind::Service => services.iter().any(|s| s == owner),
     };
+
     let fits = |le: &Lease| -> bool {
         match le.kind {
             LeaseKind::Node => {
@@ -317,6 +331,7 @@ pub fn allocate(
         if !wanted(p.kind, &p.owner) {
             continue;
         }
+
         if !fits(p) {
             return Err(format!(
                 "{} for {} is outside the {} range of {}",
@@ -326,14 +341,18 @@ pub fn allocate(
                 spec.subnet
             ));
         }
+
         if clash(&out, &p.cidr) {
             return Err(format!("{} is assigned twice", p.cidr));
         }
+
         if out.iter().any(|x| x.kind == p.kind && x.owner == p.owner) {
             return Err(format!("{} has two manual {} assignments", p.owner, p.kind.as_str()));
         }
+
         out.push(Lease { pinned: true, ..p.clone() });
     }
+
     let has = |out: &[Lease], k: LeaseKind, o: &str| out.iter().any(|x| x.kind == k && x.owner == o);
 
     // 2. Keep previous leases that are still wanted, valid and free.
@@ -345,6 +364,7 @@ pub fn allocate(
 
     // 3. New owners take the lowest free slot.
     let host = |o: u64| l.subnet.nth(o).and_then(|ip| Cidr::new(ip, 32).ok());
+
     for n in nodes {
         if !has(&out, LeaseKind::Node, n) {
             let c = (l.nodes.0..=l.nodes.1)
@@ -353,12 +373,14 @@ pub fn allocate(
                 .ok_or("no free node address left")?;
             out.push(Lease { kind: LeaseKind::Node, owner: n.clone(), cidr: c, pinned: false });
         }
+
         if !has(&out, LeaseKind::Block, n) {
             let c =
                 (0..l.blocks).filter_map(|i| l.block(i)).find(|c| !clash(&out, c)).ok_or("no free node block left")?;
             out.push(Lease { kind: LeaseKind::Block, owner: n.clone(), cidr: c, pinned: false });
         }
     }
+
     for s in services {
         if !has(&out, LeaseKind::Service, s) {
             let c = (l.services.0..=l.services.1)
@@ -368,7 +390,9 @@ pub fn allocate(
             out.push(Lease { kind: LeaseKind::Service, owner: s.clone(), cidr: c, pinned: false });
         }
     }
+
     out.sort_by_key(|a| (a.kind, a.cidr));
+
     Ok(out)
 }
 
@@ -377,7 +401,9 @@ pub fn suggest_subnet(pool: Cidr, prefix: u8, taken: &[Cidr]) -> Option<Cidr> {
     if prefix < pool.prefix() {
         return None;
     }
+
     let count = 1u64 << (prefix - pool.prefix()).min(24);
+
     (0..count).filter_map(|i| pool.subnet(prefix, i)).find(|c| !taken.iter().any(|t| t.overlaps(c)))
 }
 
@@ -402,6 +428,7 @@ fn valid_iface(s: &str) -> Result<(), String> {
     if s.is_empty() || s.len() > 15 || !s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
         return Err(format!("{s:?} is not a valid interface name"));
     }
+
     Ok(())
 }
 
@@ -410,9 +437,11 @@ fn valid_iface(s: &str) -> Result<(), String> {
 /// other WireGuard interfaces such as remote-access gateways (`fgacc…`).
 fn valid_fabric_iface(s: &str) -> Result<(), String> {
     valid_iface(s)?;
+
     if !s.starts_with("forge") {
         return Err(format!("{s:?} is not a Forge network interface"));
     }
+
     Ok(())
 }
 
@@ -422,9 +451,11 @@ pub fn valid_endpoint(s: &str) -> Result<(), String> {
     if p.parse::<u16>().map_err(|_| format!("{p:?} is not a port"))? == 0 {
         return Err("port 0 is not a usable port".into());
     }
+
     if h.is_empty() || h.len() > 253 || !h.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-') {
         return Err(format!("{h:?} is not a host name or IPv4 address"));
     }
+
     Ok(())
 }
 
@@ -436,6 +467,7 @@ pub fn valid_key(s: &str) -> Result<(), String> {
     {
         return Err("not a WireGuard public key".into());
     }
+
     Ok(())
 }
 
@@ -528,21 +560,27 @@ impl MeshConfig {
         let (ip, prefix) = self.address.split_once('/').ok_or("address needs a prefix")?;
         ip.parse::<Ipv4Addr>().map_err(|_| "address is not IPv4")?;
         prefix.parse::<u8>().ok().filter(|p| (16..=32).contains(p)).ok_or("bad address prefix")?;
+
         if self.port < 1024 || !(1280..=1500).contains(&self.mtu) {
             return Err("port or MTU out of range".into());
         }
+
         for p in &self.peers {
             valid_key(&p.public_key)?;
+
             if let Some(e) = &p.endpoint {
                 valid_endpoint(e)?;
             }
         }
+
         if self.hosts.len() > 4096 {
             return Err("too many host names".into());
         }
+
         if let Some(h) = self.hosts.iter().find(|h| !valid_hostname(&h.name)) {
             return Err(format!("invalid host name `{}`", h.name));
         }
+
         Ok(())
     }
 
@@ -553,17 +591,22 @@ impl MeshConfig {
             "# Managed by Orbyn Forge. Changes are overwritten.\n[Interface]\nPrivateKey = {private_key}\nAddress = {}\nListenPort = {}\nMTU = {}\n",
             self.address, self.port, self.mtu
         );
+
         for p in &self.peers {
             s.push_str(&format!("\n[Peer]\nPublicKey = {}\n", p.public_key));
+
             if let Some(e) = &p.endpoint {
                 s.push_str(&format!("Endpoint = {e}\n"));
             }
+
             let ips: Vec<String> = p.allowed_ips.iter().map(ToString::to_string).collect();
             s.push_str(&format!("AllowedIPs = {}\n", ips.join(", ")));
+
             if let Some(k) = p.keepalive {
                 s.push_str(&format!("PersistentKeepalive = {k}\n"));
             }
         }
+
         s
     }
 }
@@ -598,12 +641,14 @@ pub fn plan_mesh(
             unreachable.push(p.id.clone());
             continue;
         };
+
         let allowed = vec![p.mesh_ip, p.block];
         let direct = p.is_public() || me_node.is_public() || same_lan(me_node, p);
         if direct {
             let endpoint = (p.is_public() || same_lan(me_node, p)).then(|| p.endpoint_or(spec.port));
             let keepalive = (!me_node.is_public()).then_some(NAT_KEEPALIVE);
             peers.push((p.id.clone(), Peer { public_key: key.clone(), endpoint, allowed_ips: allowed, keepalive }));
+
             // The relay forwards for NATed nodes that cannot reach each other.
             if relay.is_some_and(|r| r.id == me) && !p.is_public() {
                 forward = true;
@@ -614,6 +659,7 @@ pub fn plan_mesh(
             unreachable.push(p.id.clone());
         }
     }
+
     if !via_relay.is_empty() {
         let r = relay.ok_or("no relay")?;
         match peers.iter_mut().find(|(id, _)| *id == r.id) {
@@ -621,6 +667,7 @@ pub fn plan_mesh(
             None => unreachable.push(r.id.clone()),
         }
     }
+
     let config = MeshConfig {
         iface: iface.to_owned(),
         address: format!("{}/{}", me_node.mesh_ip.first(), spec.subnet.prefix()),
@@ -630,6 +677,7 @@ pub fn plan_mesh(
         forward,
         hosts: Vec::new(),
     };
+
     Ok((config, unreachable))
 }
 
@@ -682,6 +730,7 @@ mod tests {
     fn fabric_ops_touch_only_forge_interfaces() {
         let op = |iface: &str| FabricOp::Status { iface: iface.into() }.validate();
         assert!(op(&interface_name("01a1d3c6-2bb3")).is_ok());
+
         for other in ["fgacc01a1d3", "wg0", "eth0", "tailscale0"] {
             assert!(op(other).is_err(), "{other}");
             assert!(FabricOp::Remove { iface: other.into() }.validate().is_err(), "{other}");
@@ -750,17 +799,20 @@ mod tests {
     fn allocation_is_stable_and_respects_pins() {
         let s = spec("10.64.0.0/16");
         let first = allocate(&s, &ids(3, "n"), &[], &[], &[]).unwrap();
+
         // n0 leaves: n1/n2 keep their addresses, a new node takes the freed slot.
         let again = allocate(&s, &["n1".into(), "n2".into(), "n9".into()], &[], &first, &[]).unwrap();
         let addr = |v: &[Lease], o: &str| v.iter().find(|l| l.kind == LeaseKind::Node && l.owner == o).unwrap().cidr;
         assert_eq!(addr(&first, "n1"), addr(&again, "n1"));
         assert_eq!(addr(&again, "n9").to_string(), "10.64.0.16/32");
+
         // A pin wins over a previous lease and is kept.
         let pin =
             Lease { kind: LeaseKind::Node, owner: "n1".into(), cidr: "10.64.0.100/32".parse().unwrap(), pinned: false };
         let pinned = allocate(&s, &["n1".into()], &[], &first, &[pin]).unwrap();
         assert_eq!(addr(&pinned, "n1").to_string(), "10.64.0.100/32");
         assert!(pinned.iter().any(|l| l.pinned));
+
         // Pins outside their range, or twice the same address, are refused.
         let bad =
             Lease { kind: LeaseKind::Node, owner: "n1".into(), cidr: "10.64.1.5/32".parse().unwrap(), pinned: true };

@@ -94,6 +94,7 @@ fn delivery_row(r: &AnyRow) -> DomainResult<Delivery> {
         }),
         _ => None,
     };
+
     Ok(Delivery {
         id: parsed(r, "id")?,
         workspace_id: parsed(r, "workspace_id")?,
@@ -177,6 +178,7 @@ where
     .execute(ex)
     .await
     .map_err(db_err)?;
+
     Ok(done.rows_affected() > 0)
 }
 
@@ -231,9 +233,11 @@ impl NotificationRepository for Store {
             .execute(self.pool())
             .await
             .map_err(db_err)?;
+
         if done.rows_affected() == 0 {
             return Err(DomainError::NotFound(format!("notification channel {id}")));
         }
+
         Ok(())
     }
 
@@ -295,6 +299,7 @@ impl NotificationRepository for Store {
             None => sqlx::query("SELECT * FROM notification_policies ORDER BY name, id").fetch_all(self.pool()).await,
         }
         .map_err(db_err)?;
+
         rows.iter().map(policy_row).collect()
     }
 
@@ -304,9 +309,11 @@ impl NotificationRepository for Store {
             .execute(self.pool())
             .await
             .map_err(db_err)?;
+
         if done.rows_affected() == 0 {
             return Err(DomainError::NotFound(format!("notification policy {id}")));
         }
+
         Ok(())
     }
 
@@ -349,14 +356,19 @@ impl NotificationRepository for Store {
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
+
         if marked.rows_affected() == 0 {
             return Ok(0);
         }
+
         let mut added = 0;
+
         for d in deliveries {
             added += usize::from(insert_delivery(&mut *tx, d).await?);
         }
+
         tx.commit().await.map_err(db_err)?;
+
         Ok(added)
     }
 
@@ -391,16 +403,20 @@ impl NotificationRepository for Store {
         .await
         .map_err(db_err)?;
         tx.commit().await.map_err(db_err)?;
+
         Ok(given_up.rows_affected() > 0)
     }
 
     async fn add_deliveries(&self, deliveries: &[Delivery]) -> DomainResult<usize> {
         let mut tx = self.pool().begin().await.map_err(db_err)?;
         let mut added = 0;
+
         for d in deliveries {
             added += usize::from(insert_delivery(&mut *tx, d).await?);
         }
+
         tx.commit().await.map_err(db_err)?;
+
         Ok(added)
     }
 
@@ -449,6 +465,7 @@ impl NotificationRepository for Store {
             AttemptResult::Retry(t) => (DeliveryStatus::Pending, Some(t.0), None),
             AttemptResult::Failed => (DeliveryStatus::Failed, None, Some(a.at.0)),
         };
+
         // Atomic: the attempt row and the delivery's state change together.
         // Fenced on the attempt number: an attempt that reports after its
         // lease ran out and another attempt started changes nothing.
@@ -468,9 +485,11 @@ impl NotificationRepository for Store {
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
+
         if held.rows_affected() == 0 {
             return Ok(false);
         }
+
         sqlx::query(
             "INSERT INTO notification_attempts (delivery_id, number, at, ok, http_status, error, duration_ms)
              VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (delivery_id, number) DO NOTHING",
@@ -486,6 +505,7 @@ impl NotificationRepository for Store {
         .await
         .map_err(db_err)?;
         tx.commit().await.map_err(db_err)?;
+
         Ok(true)
     }
 
@@ -568,6 +588,7 @@ impl NotificationRepository for Store {
     async fn hold_suppressed(&self, ids: &[DeliveryId], silence: SilenceId, why: &str) -> DomainResult<()> {
         // Atomic: the deliveries of one alarm move together.
         let mut tx = self.pool().begin().await.map_err(db_err)?;
+
         for id in ids {
             sqlx::query(
                 "UPDATE notification_deliveries SET silence_id = $2, detail = $3
@@ -580,7 +601,9 @@ impl NotificationRepository for Store {
             .await
             .map_err(db_err)?;
         }
+
         tx.commit().await.map_err(db_err)?;
+
         Ok(())
     }
 
@@ -595,6 +618,7 @@ impl NotificationRepository for Store {
         // therefore adds nothing.
         let mut tx = self.pool().begin().await.map_err(db_err)?;
         let mut settled = 0;
+
         for id in ids {
             let done = sqlx::query(
                 "UPDATE notification_deliveries SET released_at = $2
@@ -607,14 +631,19 @@ impl NotificationRepository for Store {
             .map_err(db_err)?;
             settled += done.rows_affected();
         }
+
         if settled == 0 {
             return Ok(0);
         }
+
         let mut added = 0;
+
         for d in follow_ups {
             added += usize::from(insert_delivery(&mut *tx, d).await?);
         }
+
         tx.commit().await.map_err(db_err)?;
+
         Ok(added)
     }
 
@@ -645,21 +674,26 @@ impl NotificationRepository for Store {
         text_filter(&mut sql, "alarm_id", f.alarm.map(|a| a.to_string()));
         text_filter(&mut sql, "channel_id", f.channel.map(|c| c.to_string()));
         text_filter(&mut sql, "status", f.status.map(|s| s.as_str().to_owned()));
+
         if let Some((at, id)) = f.before {
             binds.push(B::I(at.0));
             let t = binds.len();
             binds.push(B::S(id.to_string()));
             sql.push_str(&format!(" AND (created_at < ${t} OR (created_at = ${t} AND id < ${}))", binds.len()));
         }
+
         sql.push_str(&format!(" ORDER BY created_at DESC, id DESC LIMIT {}", limit.clamp(1, 1000)));
         let mut q = sqlx::query(&sql);
+
         for bind in binds {
             q = match bind {
                 B::S(s) => q.bind(s),
                 B::I(i) => q.bind(i),
             };
         }
+
         let rows = q.fetch_all(self.pool()).await.map_err(db_err)?;
+
         rows.iter().map(delivery_row).collect()
     }
 
@@ -677,6 +711,7 @@ impl NotificationRepository for Store {
         // silence: the message that follows the silence is planned from it.
         const OLD: &str = "created_at < $1 AND (status IN ('sent', 'failed', 'cancelled')
              OR (status = 'suppressed' AND released_at IS NOT NULL))";
+
         // Atomic: attempts never outlive their delivery.
         let mut tx = self.pool().begin().await.map_err(db_err)?;
         sqlx::query(&format!(
@@ -697,6 +732,7 @@ impl NotificationRepository for Store {
             .await
             .map_err(db_err)?;
         tx.commit().await.map_err(db_err)?;
+
         Ok(done.rows_affected())
     }
 }

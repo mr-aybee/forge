@@ -150,6 +150,7 @@ impl BucketGrants {
         if name.is_empty() {
             return Err(DomainError::Invalid("user: a user id, username or email".into()));
         }
+
         let found = if let Ok(id) = name.parse::<UserId>() {
             match self.users.get_user(id).await {
                 Ok(u) => Some(u),
@@ -163,6 +164,7 @@ impl BucketGrants {
                 None => self.users.find_user_by_email(&lower).await?,
             }
         };
+
         found.filter(|u| !u.disabled).ok_or_else(|| DomainError::NotFound(UNKNOWN_USER.into()))
     }
 
@@ -188,6 +190,7 @@ impl BucketGrants {
         }));
         ids.sort_unstable();
         ids.dedup();
+
         Ok(self.users.get_users(&ids).await?.iter().map(|u| (u.id, login(u))).collect())
     }
 
@@ -196,6 +199,7 @@ impl BucketGrants {
             Ok(Principal::User(id)) => names.get(&id).cloned(),
             _ => None,
         };
+
         GrantView {
             id: g.id,
             store_id: g.store_id,
@@ -223,9 +227,11 @@ impl BucketGrants {
         if new.bucket.is_empty() {
             return Err(DomainError::Invalid("bucket: the name of a bucket of this store".into()));
         }
+
         let person = self.person(&new.user).await?;
         let now = self.clock.now();
         let expires_at = self.expires_at(new.expiry, now)?;
+
         // Checked, then written: two requests at the same moment can both
         // pass and leave two grants. Each is listed and revoked on its own,
         // and neither gives more than was asked for.
@@ -239,6 +245,7 @@ impl BucketGrants {
                 g.id
             )));
         }
+
         let grant = BucketGrant {
             id: BucketGrantId::new(),
             workspace_id: store.workspace_id,
@@ -254,6 +261,7 @@ impl BucketGrants {
         };
         self.grants.put_bucket_grant(&grant).await?;
         let names = self.names(std::slice::from_ref(&grant)).await?;
+
         Ok(self.view(&grant, &store.name, &names, now))
     }
 
@@ -264,13 +272,16 @@ impl BucketGrants {
     pub async fn revoke_bucket(&self, store: &ObjectStore, bucket: &str) -> DomainResult<Vec<GrantView>> {
         let now = self.clock.now();
         let mut grants = self.grants.list_live_grants_of_bucket(store.id, bucket, now).await?;
+
         // One write per grant. A failure in between leaves the rest live;
         // the caller reports it, and the next call revokes what remains.
         for g in &mut grants {
             g.revoked_at = Some(now);
             self.grants.put_bucket_grant(g).await?;
         }
+
         let names = self.names(&grants).await?;
+
         Ok(grants.iter().map(|g| self.view(g, &store.name, &names, now)).collect())
     }
 
@@ -284,11 +295,14 @@ impl BucketGrants {
             .filter(|g| g.store_id == store.id)
             .ok_or_else(|| DomainError::NotFound("grant not found".into()))?;
         let now = self.clock.now();
+
         if grant.revoked_at.is_none() {
             grant.revoked_at = Some(now);
             self.grants.put_bucket_grant(&grant).await?;
         }
+
         let names = self.names(std::slice::from_ref(&grant)).await?;
+
         Ok(self.view(&grant, &store.name, &names, now))
     }
 
@@ -299,6 +313,7 @@ impl BucketGrants {
         let now = self.clock.now();
         let rows = self.grants.list_store_bucket_grants(store.id, (!all).then_some(now), limit).await?;
         let names = self.names(&rows).await?;
+
         Ok(rows.iter().filter(|g| all || g.is_active(now)).map(|g| self.view(g, &store.name, &names, now)).collect())
     }
 
@@ -310,10 +325,13 @@ impl BucketGrants {
             Ok(_) | Err(DomainError::NotFound(_)) => return Ok(Vec::new()),
             Err(e) => return Err(e),
         }
+
         let now = self.clock.now();
         let mut grants = self.grants.list_live_bucket_grants(user, now).await?;
+
         // The store filters by time already; the rule itself decides.
         grants.retain(|g| g.user_id == user && g.is_active(now));
+
         Ok(grants)
     }
 
@@ -321,6 +339,7 @@ impl BucketGrants {
     pub async fn held_on(&self, user: UserId, store: ObjectStoreId) -> DomainResult<Vec<BucketGrant>> {
         let mut grants = self.held(user).await?;
         grants.retain(|g| g.store_id == store);
+
         Ok(grants)
     }
 
@@ -344,9 +363,11 @@ impl BucketGrants {
         if grants.is_empty() {
             return Ok(Vec::new());
         }
+
         let stores: HashMap<ObjectStoreId, String> =
             self.stores.list_object_stores(Some(workspace)).await?.into_iter().map(|s| (s.id, s.name)).collect();
         let now = self.clock.now();
+
         Ok(grants
             .iter()
             .filter_map(|g| {
@@ -445,6 +466,7 @@ mod tests {
         let clock = Arc::new(ManualClock::new(Timestamp(1_000_000)));
         let shared = Arc::new(store.clone());
         let grants = BucketGrants::new(shared.clone(), shared.clone(), shared, clock.clone());
+
         Fixture { grants, store, clock, media, ada, admin: Principal::User(root.id), _dir: dir }
     }
 
@@ -480,6 +502,7 @@ mod tests {
         assert_eq!(f.may("photos", WRITE).await, None, "read does not upload or delete");
         assert_eq!(f.may("videos", READ).await, None, "another bucket");
         assert_eq!(f.may("Photos", READ).await, None, "bucket names are exact");
+
         // Another store with a bucket of the same name, and another person.
         let logs = object_store(f.media.workspace_id, "Logs");
         f.store.put_object_store(&logs).await.unwrap();
@@ -509,10 +532,12 @@ mod tests {
         assert_eq!(f.may("photos", READ).await, None, "expired at its end");
         assert!(f.grants.held(f.ada.id).await.unwrap().is_empty());
         assert!(f.grants.mine(f.ada.id, f.media.workspace_id).await.unwrap().is_empty());
+
         // The store's list keeps it for the record, as expired.
         assert!(f.grants.on_store(&f.media, false, None).await.unwrap().is_empty());
         let all = f.grants.on_store(&f.media, true, None).await.unwrap();
         assert_eq!(all.iter().map(|v| (v.id, v.status)).collect::<Vec<_>>(), [(g.id, GrantStatus::Expired)]);
+
         // An expired grant no longer stands in the way of a new one.
         f.grants.issue(&f.media, f.ask("ada", "photos", READ, Expiry::Never)).await.unwrap();
     }
@@ -540,6 +565,7 @@ mod tests {
         let f = fixture().await;
         let g = f.grants.issue(&f.media, f.ask("ada", "photos", READ, Expiry::Never)).await.unwrap();
         assert_eq!(f.may("photos", READ).await, Some(g.id));
+
         // Written directly: only service accounts have a switch for it.
         sqlx::query("UPDATE users SET disabled = 1 WHERE id = $1")
             .bind(f.ada.id.to_string())
@@ -550,6 +576,7 @@ mod tests {
         assert!(f.grants.held(f.ada.id).await.unwrap().is_empty());
         assert!(f.grants.mine(f.ada.id, f.media.workspace_id).await.unwrap().is_empty());
         assert_eq!(f.grants.on_store(&f.media, false, None).await.unwrap().len(), 1, "administrators still see it");
+
         // And nobody hands a new grant to a disabled account. The answer is
         // the one an unknown account gets.
         let refused = f.grants.issue(&f.media, f.ask("ada", "videos", READ, Expiry::Never)).await;
@@ -566,10 +593,12 @@ mod tests {
         assert!(matches!(unknown, Err(DomainError::NotFound(_))), "{unknown:?}");
         let unknown = issue(f.ask(&UserId::new().to_string(), "photos", READ, Expiry::Never)).await;
         assert!(matches!(unknown, Err(DomainError::NotFound(_))), "{unknown:?}");
+
         for bad in [Expiry::At(Timestamp(1_000_000)), Expiry::At(NEVER_EXPIRES), Expiry::In { minutes: 0 }] {
             let r = issue(f.ask("ada", "photos", READ, bad)).await;
             assert!(matches!(r, Err(DomainError::Invalid(_))), "{bad:?}: {r:?}");
         }
+
         let r = issue(f.ask("ada", "", READ, Expiry::Never)).await;
         assert!(matches!(r, Err(DomainError::Invalid(_))), "{r:?}");
         let r = issue(f.ask(" ", "photos", READ, Expiry::Never)).await;
@@ -581,6 +610,7 @@ mod tests {
         assert_eq!(g.expires_at, Some(Timestamp(2_000_000)));
         assert_eq!(g.note.chars().count(), MAX_NOTE);
         assert!(!g.note.contains('\n'), "control characters are dropped");
+
         // One live grant per person and bucket.
         let twice = issue(f.ask("ada", "photos", WRITE, Expiry::Never)).await;
         assert!(matches!(twice, Err(DomainError::Conflict(_))), "{twice:?}");
@@ -614,6 +644,7 @@ mod tests {
         assert!(revoked.iter().any(|v| v.user == "bob"), "the views name the holders");
         assert_eq!(f.may("photos", READ).await, None);
         assert_eq!(f.may("videos", READ).await, Some(videos.id), "another bucket keeps its grants");
+
         // Nothing live is left: a second call, as when the bucket is created
         // again, finds nothing, and a new grant can be issued.
         assert!(f.grants.revoke_bucket(&f.media, "photos").await.unwrap().is_empty());

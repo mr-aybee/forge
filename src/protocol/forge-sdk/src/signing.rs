@@ -27,6 +27,7 @@ fn message(manifest: &[u8], artifact: &[u8]) -> Vec<u8> {
     let mut m = DOMAIN.to_vec();
     m.extend_from_slice(&sha256(manifest));
     m.extend_from_slice(&sha256(artifact));
+
     m
 }
 
@@ -46,6 +47,7 @@ impl PublisherKey {
     pub fn generate() -> Result<(Self, Vec<u8>), SignatureError> {
         let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).map_err(|_| SignatureError::Malformed)?;
         let key = Self::from_pkcs8(pkcs8.as_ref())?;
+
         Ok((key, pkcs8.as_ref().to_vec()))
     }
 
@@ -80,6 +82,7 @@ impl TrustStore {
     pub fn trust(&mut self, publisher: &str, public_key_b64: &str) -> Result<(), SignatureError> {
         let key = b64url_decode(public_key_b64).filter(|k| k.len() == 32).ok_or(SignatureError::Malformed)?;
         self.keys.entry(publisher.to_owned()).or_default().push(key);
+
         Ok(())
     }
 
@@ -94,6 +97,7 @@ impl TrustStore {
         let keys = self.keys.get(publisher).ok_or_else(|| SignatureError::UntrustedPublisher(publisher.to_owned()))?;
         let sig = b64url_decode(signature_b64).ok_or(SignatureError::Malformed)?;
         let msg = message(manifest, artifact);
+
         keys.iter()
             .any(|k| UnparsedPublicKey::new(&ED25519, k).verify(&msg, &sig).is_ok())
             .then_some(())

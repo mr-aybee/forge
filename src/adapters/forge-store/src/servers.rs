@@ -76,9 +76,11 @@ impl ServerRepository for Store {
             .execute(self.pool())
             .await
             .map_err(db_err)?;
+
         if r.rows_affected() == 0 {
             return Err(DomainError::NotFound(format!("server {id}")));
         }
+
         Ok(())
     }
 
@@ -102,6 +104,7 @@ impl ServerRepository for Store {
             None => sqlx::query("SELECT * FROM servers ORDER BY hostname").fetch_all(self.pool()).await,
         }
         .map_err(db_err)?;
+
         rows.iter().map(server_row).collect()
     }
 
@@ -148,9 +151,11 @@ impl ServerRepository for Store {
             .fetch_optional(&mut *tx)
             .await
             .map_err(db_err)?;
+
         if exists.is_none() {
             return Err(DomainError::NotFound(format!("server {id}")));
         }
+
         // Stacks whose default node this is move to another of their nodes;
         // a stack on this node alone goes with it.
         sqlx::query(
@@ -167,6 +172,7 @@ impl ServerRepository for Store {
         .await
         .map_err(db_err)?;
         let orphan_stacks = "SELECT id FROM stacks WHERE default_server_id = $1";
+
         // Alarms of the node, with their history and dedupe trackers.
         let node_alarms = "SELECT id FROM alarms WHERE server_id = $1";
         let statements: Vec<String> = vec![
@@ -202,14 +208,17 @@ impl ServerRepository for Store {
             "DELETE FROM role_bindings WHERE scope_kind = 'server' AND scope_id = $1".into(),
             "UPDATE enrollment_tokens SET server_id = NULL WHERE server_id = $1".into(),
         ];
+
         for sql in &statements {
             sqlx::query(sql).bind(&sid).execute(&mut *tx).await.map_err(db_err)?;
         }
+
         for sql in
             ["DELETE FROM profile_assignments WHERE scope = $1", "DELETE FROM group_assignments WHERE scope = $1"]
         {
             sqlx::query(sql).bind(&scope).execute(&mut *tx).await.map_err(db_err)?;
         }
+
         sqlx::query(
             "UPDATE jobs SET status = 'cancelled', lease_owner = NULL, lease_expires_at = NULL,
                  last_error = 'node removed', updated_at = $1
@@ -222,6 +231,7 @@ impl ServerRepository for Store {
         .map_err(db_err)?;
         sqlx::query("DELETE FROM servers WHERE id = $1").bind(&sid).execute(&mut *tx).await.map_err(db_err)?;
         tx.commit().await.map_err(db_err)?;
+
         Ok(())
     }
 
@@ -306,6 +316,7 @@ impl ServerRepository for Store {
             None => sqlx::query("SELECT server_id, label, explicit FROM node_names").fetch_all(self.pool()).await,
         }
         .map_err(db_err)?;
+
         rows.iter()
             .map(|r| {
                 let id: String = r.try_get("server_id").map_err(DomainError::internal)?;

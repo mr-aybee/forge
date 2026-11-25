@@ -53,8 +53,10 @@ pub async fn metrics(
     caller.authorize(Action::View, server_ref(id)).await?;
     let node = state.store.get_server(id).await.map_err(|_| ApiError::not_found("server not found"))?;
     state.telemetry.watch(id);
+
     // Wake a parked long-poll so the faster pace starts immediately.
     state.hub.notifier(id).notify_one();
+
     Ok(Json(MetricsResponse {
         server_id: id,
         online: node.status == AgentStatus::Online,
@@ -87,6 +89,7 @@ pub async fn history(
 ) -> ApiResult<Json<forge_core::analytics::NodeHistory>> {
     caller.authorize(Action::View, server_ref(id)).await?;
     let (from, to) = window(&state, &q);
+
     Ok(Json(state.analytics.node_history(id, from, to).await?))
 }
 
@@ -100,6 +103,7 @@ pub async fn report(
 ) -> ApiResult<Json<forge_core::analytics::NodeReport>> {
     caller.authorize(Action::View, server_ref(id)).await?;
     let (from, to) = window(&state, &q);
+
     Ok(Json(state.analytics.node_report(id, from, to).await?))
 }
 
@@ -118,6 +122,7 @@ pub async fn analytics_status(
 /// watched.
 pub async fn latest(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
     let mut out = serde_json::Map::new();
+
     for s in state.store.list_servers(None).await? {
         if let Some(sample) = state.telemetry.latest(s.id)
             && caller.can(Action::View, server_ref(s.id)).await
@@ -125,6 +130,7 @@ pub async fn latest(State(state): State<AppState>, caller: Caller) -> ApiResult<
             out.insert(s.id.to_string(), serde_json::to_value(sample).unwrap_or(Value::Null));
         }
     }
+
     Ok(Json(Value::Object(out)))
 }
 
@@ -144,16 +150,20 @@ pub struct Peer {
 /// node. Limited to what the caller may see.
 async fn peers(state: &AppState, caller: &Caller, node: &Server) -> ApiResult<Vec<Peer>> {
     let mut out = Vec::new();
+
     for s in state.store.list_servers(None).await? {
         let member = node.role == NodeRole::Control
             || s.role == NodeRole::Control
             || (node.cluster_id.is_some() && s.cluster_id == node.cluster_id);
+
         if s.id == node.id || !member || s.status == AgentStatus::Revoked {
             continue;
         }
+
         if !caller.can(Action::View, server_ref(s.id)).await {
             continue;
         }
+
         let target = match state.store.get_ssh_endpoint(s.id).await? {
             Some(e) if e.host.contains(':') => format!("[{}]:{}", e.host, e.port),
             Some(e) => format!("{}:{}", e.host, e.port),
@@ -163,9 +173,12 @@ async fn peers(state: &AppState, caller: &Caller, node: &Server) -> ApiResult<Ve
             }
             None => s.hostname.clone(),
         };
+
         out.push(Peer { server_id: s.id, hostname: s.hostname, role: s.role, status: s.status, target });
     }
+
     out.sort_by(|a, b| (a.role != NodeRole::Control, &a.hostname).cmp(&(b.role != NodeRole::Control, &b.hostname)));
+
     Ok(out)
 }
 
@@ -176,6 +189,7 @@ fn agent_endpoint(url: &str) -> Option<String> {
     if authority.is_empty() || authority.contains('@') {
         return None;
     }
+
     Some(if authority.contains(':') && !authority.ends_with(']') {
         authority.to_owned()
     } else {
@@ -191,6 +205,7 @@ pub async fn connectivity(
     caller.authorize(Action::View, server_ref(id)).await?;
     let node = state.store.get_server(id).await.map_err(|_| ApiError::not_found("server not found"))?;
     let peers = peers(&state, &caller, &node).await?;
+
     Ok(Json(json!({ "peers": peers, "runs": state.telemetry.probes(id) })))
 }
 
@@ -213,10 +228,12 @@ pub async fn probe(
     if node.status != AgentStatus::Online {
         return Err(ApiError::bad_request("the node's agent must be online to run checks"));
     }
+
     let peers = peers(&state, &caller, &node).await?;
     if peers.is_empty() {
         return Err(ApiError::bad_request("this node has no peers: add it to a cluster first"));
     }
+
     let count = body.and_then(|b| b.0.count).unwrap_or(4).clamp(1, 10);
     let targets: Vec<&str> = peers.iter().map(|p| p.target.as_str()).collect();
     let r = super::sites::run_on_node(
@@ -227,9 +244,11 @@ pub async fn probe(
         Duration::from_secs(40),
     )
     .await?;
+
     if r.get("status").and_then(Value::as_str) != Some("succeeded") {
         return Ok(Json(r));
     }
+
     // Attach the peer identity to each result.
     let results: Vec<Value> = r
         .pointer("/result/results")
@@ -244,6 +263,7 @@ pub async fn probe(
                         o.insert("hostname".into(), json!(p.hostname));
                         o.insert("role".into(), json!(p.role));
                     }
+
                     v
                 })
                 .collect()
@@ -251,5 +271,6 @@ pub async fn probe(
         .unwrap_or_default();
     let run = ProbeRun { t: state.clock.now().0, results: Value::Array(results) };
     state.telemetry.record_probe(id, run.clone());
+
     Ok(Json(json!({ "status": "succeeded", "job_id": r.get("job_id"), "run": run })))
 }

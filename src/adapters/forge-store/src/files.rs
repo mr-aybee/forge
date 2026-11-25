@@ -30,6 +30,7 @@ fn root_row(r: &AnyRow) -> DomainResult<ApprovedRoot> {
         "container" => RootKind::Container,
         _ => RootKind::Node,
     };
+
     Ok(ApprovedRoot {
         id: text(r, "id")?,
         workspace_id: parsed(r, "workspace_id")?,
@@ -225,6 +226,7 @@ impl FileGrantRepository for Store {
         .execute(self.pool())
         .await
         .map_err(db_err)?;
+
         Ok(())
     }
 

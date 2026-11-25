@@ -1084,8 +1084,10 @@ mod oneof_tests {
         for c in [RefusalCode::Unsupported, RefusalCode::Busy, RefusalCode::Downgrade] {
             assert_eq!(RefusalCode::parse(c.as_str()), Some(c));
         }
+
         assert_eq!(RefusalCode::parse(""), None);
         assert_eq!(RefusalCode::parse("other"), None);
+
         // A result from an older agent (no field 5) decodes with no code.
         let old = CommandResult { operation_id: "op".into(), ok: false, error: "no".into(), ..Default::default() };
         let back = CommandResult::decode(old.encode_to_vec().as_slice()).unwrap();
@@ -1151,6 +1153,7 @@ mod oneof_tests {
                 lifetime_secs: 43_200,
             }),
         ];
+
         for c in cmds {
             let body = CommandBody { operation_id: "op".into(), command: Some(c.clone()), ..Default::default() };
             let back = CommandBody::decode(body.encode_to_vec().as_slice()).unwrap();

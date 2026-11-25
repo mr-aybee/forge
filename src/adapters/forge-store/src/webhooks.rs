@@ -118,6 +118,7 @@ impl WebhookRepository for Store {
     async fn delete_webhook(&self, id: WebhookId) -> DomainResult<()> {
         // Deliveries go with the hook, in one transaction.
         let mut tx = self.pool().begin().await.map_err(db_err)?;
+
         for sql in [
             "DELETE FROM webhook_deliveries WHERE webhook_id = $1",
             "DELETE FROM webhook_replay_markers WHERE webhook_id = $1",
@@ -125,6 +126,7 @@ impl WebhookRepository for Store {
         ] {
             sqlx::query(sql).bind(id.to_string()).execute(&mut *tx).await.map_err(db_err)?;
         }
+
         tx.commit().await.map_err(db_err)
     }
 
@@ -161,6 +163,7 @@ impl WebhookRepository for Store {
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
+
         tx.commit().await.map_err(db_err)
     }
 
@@ -201,6 +204,7 @@ impl WebhookRepository for Store {
         .await
         .map_err(db_err)?;
         tx.commit().await.map_err(db_err)?;
+
         Ok(done.rows_affected() == 1)
     }
 }

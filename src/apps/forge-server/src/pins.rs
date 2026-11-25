@@ -41,6 +41,7 @@ pub enum PinError {
 impl From<PinError> for ApiError {
     fn from(e: PinError) -> Self {
         use axum::http::StatusCode;
+
         match e {
             PinError::BadId(_) => ApiError::bad_request(e.to_string()),
             PinError::NotFound(_) => ApiError::not_found(e.to_string()),
@@ -148,6 +149,7 @@ impl PinService {
                             Some(c) => missing(self.clusters.get_cluster(c).await)?.map(|c| c.name),
                             None => None,
                         };
+
                         Some(Target {
                             entity: EntityRef::new(EntityKind::Server, nid),
                             label: s.display_name.filter(|n| !n.trim().is_empty()).unwrap_or(s.hostname),
@@ -176,6 +178,7 @@ impl PinService {
     /// most [`MAX_PINS`], so resolving each one is bounded.
     pub async fn list(&self, user: UserId) -> Result<Vec<ResolvedPin>, PinError> {
         let mut out = Vec::new();
+
         for pin in self.pins.list_pins(user).await? {
             match self.resolve(pin.kind, &pin.entity_id).await {
                 Ok(Some(target)) => out.push(ResolvedPin { pin, target }),
@@ -184,6 +187,7 @@ impl PinService {
                 Err(e) => return Err(e),
             }
         }
+
         Ok(out)
     }
 
@@ -207,6 +211,7 @@ impl PinService {
         let current = self.pins.list_pins(user).await?;
         let order = reorder(&current, wanted);
         self.pins.set_pin_order(user, &order).await?;
+
         Ok(())
     }
 }

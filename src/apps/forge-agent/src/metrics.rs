@@ -59,9 +59,11 @@ impl Sampler {
         let mut mounts = HashSet::new();
         let (mut disk_total, mut disk_avail) = (0u64, 0u64);
         let mut volumes = Vec::new();
+
         for d in self.disks.list() {
             let fs = d.file_system().to_string_lossy().into_owned();
             let mount = d.mount_point().to_string_lossy().into_owned();
+
             // Skip pseudo file systems and bind-mounted files (e.g. /etc/hosts in containers).
             if d.total_space() > 0
                 && !matches!(fs.as_str(), "tmpfs" | "devtmpfs" | "squashfs" | "proc" | "sysfs" | "nsfs")
@@ -79,20 +81,26 @@ impl Sampler {
                     removable: d.is_removable(),
                 });
             }
+
             if d.is_removable() || d.total_space() == 0 || !seen.insert((d.name().to_owned(), d.total_space())) {
                 continue;
             }
+
             disk_total = disk_total.saturating_add(d.total_space());
             disk_avail = disk_avail.saturating_add(d.available_space());
         }
+
         let (mut rx, mut tx) = (0u64, 0u64);
+
         for (name, n) in &self.nets {
             if name == "lo" || name.starts_with("Loopback") {
                 continue;
             }
+
             rx = rx.saturating_add(n.received());
             tx = tx.saturating_add(n.transmitted());
         }
+
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
         let per_sec = |b: u64| (b as f64 / elapsed) as u64;
         #[allow(clippy::cast_possible_truncation)]
@@ -100,6 +108,7 @@ impl Sampler {
         // In a container (or a systemd slice with a memory limit) report the
         // limit, not the host's memory.
         let (mut mem_total, mut mem_used) = (self.sys.total_memory(), self.sys.used_memory());
+
         if let Some(l) = self.sys.cgroup_limits()
             && l.total_memory > 0
             && l.total_memory < mem_total
@@ -107,6 +116,7 @@ impl Sampler {
             mem_total = l.total_memory;
             mem_used = l.total_memory.saturating_sub(l.free_memory);
         }
+
         NodeMetrics {
             cpu_percent: self.sys.global_cpu_usage().clamp(0.0, 100.0),
             mem_total_bytes: mem_total,
@@ -136,7 +146,9 @@ impl Sampler {
         if self.last_top.is_some_and(|t| t.elapsed() < TOP_EVERY) {
             return Vec::new();
         }
+
         self.last_top = Some(Instant::now());
+
         crate::processes::top(TOP_N)
     }
 }

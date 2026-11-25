@@ -31,17 +31,21 @@ pub(crate) type Ws = WebSocketStream<Box<dyn Io>>;
 
 fn tls_config(ca_file: Option<&str>) -> Result<rustls::ClientConfig> {
     let mut roots = rustls::RootCertStore::empty();
+
     for cert in rustls_native_certs::load_native_certs().certs {
         let _ = roots.add(cert);
     }
+
     if let Some(path) = ca_file {
         use rustls_pki_types::pem::PemObject;
         let pem = std::fs::read(path).map_err(|e| CliError::usage(format!("CA file {path}: {e}")))?;
+
         for c in rustls_pki_types::CertificateDer::pem_slice_iter(&pem) {
             let c = c.map_err(|e| CliError::usage(format!("CA file {path}: {e}")))?;
             roots.add(c).map_err(|e| CliError::usage(format!("CA file {path}: {e}")))?;
         }
     }
+
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let mut cfg = rustls::ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
@@ -49,6 +53,7 @@ fn tls_config(ca_file: Option<&str>) -> Result<rustls::ClientConfig> {
         .with_root_certificates(roots)
         .with_no_client_auth();
     cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
+
     Ok(cfg)
 }
 
@@ -67,6 +72,7 @@ pub(crate) async fn ws_connect(t: &Target, token: &str, path: &str) -> Result<Ws
         "http" => false,
         other => return Err(CliError::usage(format!("unsupported scheme {other}"))),
     };
+
     let host = url.host_str().ok_or_else(|| CliError::usage("server URL has no host"))?.to_owned();
     let port = url.port_or_known_default().unwrap_or(if tls { 443 } else { 80 });
     let mut ws_url = url.clone();
@@ -84,6 +90,7 @@ pub(crate) async fn ws_connect(t: &Target, token: &str, path: &str) -> Result<Ws
         .await
         .map_err(|e| CliError::new(Exit::Transport, format!("{host}:{port}: {e}")))?;
     let _ = tcp.set_nodelay(true);
+
     let stream: Box<dyn Io> = if tls {
         let name = rustls_pki_types::ServerName::try_from(host.clone())
             .map_err(|_| CliError::usage(format!("invalid server name {host}")))?;
@@ -92,8 +99,10 @@ pub(crate) async fn ws_connect(t: &Target, token: &str, path: &str) -> Result<Ws
     } else {
         Box::new(tcp)
     };
+
     let (ws, _) = tokio_tungstenite::client_async(req, stream).await.map_err(|e| {
         use tokio_tungstenite::tungstenite::Error as E;
+
         match e {
             E::Http(resp) => {
                 let status = resp.status().as_u16();
@@ -104,6 +113,7 @@ pub(crate) async fn ws_connect(t: &Target, token: &str, path: &str) -> Result<Ws
             other => CliError::new(Exit::Transport, other.to_string()),
         }
     })?;
+
     Ok(ws)
 }
 
@@ -112,7 +122,9 @@ async fn pick_login(api: &mut Api, node_id: &str, login: Option<String>) -> Resu
     if let Some(l) = login {
         return Ok(l);
     }
+
     let v = api.get(&format!("/api/v1/servers/{node_id}/logins")).await.unwrap_or(Value::Null);
+
     Ok(v["logins"].as_array().and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("root").to_owned())
 }
 
@@ -167,6 +179,7 @@ fn spawn_input() -> tokio::sync::mpsc::Receiver<Input> {
         tokio::spawn(async move {
             let mut stdin = tokio::io::stdin();
             let mut buf = vec![0u8; 8192];
+
             loop {
                 match stdin.read(&mut buf).await {
                     Ok(0) | Err(_) => {
@@ -184,11 +197,13 @@ fn spawn_input() -> tokio::sync::mpsc::Receiver<Input> {
         tokio::spawn(async move {
             let mut last = term_size();
             let mut tick = tokio::time::interval(std::time::Duration::from_millis(400));
+
             loop {
                 tick.tick().await;
                 let now = term_size();
                 if now != last {
                     last = now;
+
                     if tx.send(Input::Resize(now.0, now.1)).await.is_err() {
                         break;
                     }
@@ -200,6 +215,7 @@ fn spawn_input() -> tokio::sync::mpsc::Receiver<Input> {
     {
         std::thread::spawn(move || {
             use crossterm::event::{Event, KeyEventKind, read};
+
             loop {
                 let msg = match read() {
                     Ok(Event::Key(k)) if k.kind != KeyEventKind::Release => match keys::encode(&k) {
@@ -210,6 +226,7 @@ fn spawn_input() -> tokio::sync::mpsc::Receiver<Input> {
                     Ok(_) => continue,
                     Err(_) => Input::Closed,
                 };
+
                 let closed = matches!(msg, Input::Closed);
                 if tx.blocking_send(msg).is_err() || closed {
                     break;
@@ -229,6 +246,7 @@ mod keys {
     pub fn encode(k: &KeyEvent) -> Option<Vec<u8>> {
         let alt = k.modifiers.contains(KeyModifiers::ALT);
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+
         let mut out: Vec<u8> = match k.code {
             KeyCode::Char(c) if ctrl => {
                 let l = c.to_ascii_lowercase();
@@ -276,9 +294,11 @@ mod keys {
             },
             _ => return None,
         };
+
         if alt {
             out.insert(0, 0x1b);
         }
+
         Some(out)
     }
 
@@ -313,6 +333,7 @@ pub async fn terminal(g: &Global, node: &str, login: Option<String>) -> Result<(
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return Err(CliError::usage("`forge nodes terminal` needs a terminal; use `forge nodes exec` in scripts"));
     }
+
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
     let n = resolve_node(&mut api, node).await?;
@@ -333,6 +354,7 @@ pub async fn terminal(g: &Global, node: &str, login: Option<String>) -> Result<(
     let mut input = spawn_input();
     let mut stdout = std::io::stdout();
     let mut outcome: std::result::Result<String, CliError> = Ok("closed".into());
+
     loop {
         tokio::select! {
             msg = ws.next() => match msg {
@@ -374,8 +396,10 @@ pub async fn terminal(g: &Global, node: &str, login: Option<String>) -> Result<(
             },
         }
     }
+
     let _ = ws.close(None).await;
     drop(raw);
+
     match outcome {
         Ok(reason) => {
             match reason.as_str() {
@@ -383,6 +407,7 @@ pub async fn terminal(g: &Global, node: &str, login: Option<String>) -> Result<(
                 "revoked" => return Err(CliError::new(Exit::General, "the session was revoked").with_code("revoked")),
                 other => eprintln!("\r\nConnection closed ({other})."),
             }
+
             Ok(())
         }
         Err(e) => Err(e),
@@ -406,6 +431,7 @@ pub async fn exec(
     if argv.is_empty() {
         return Err(CliError::usage("name the command after `--`, e.g. `forge nodes exec web-01 -- uptime`"));
     }
+
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
     let n = resolve_node(&mut api, node).await?;
@@ -423,14 +449,17 @@ pub async fn exec(
     let (mut out_buf, mut err_buf) = (Vec::new(), Vec::new());
     let mut code: Option<u32> = None;
     let mut session = Value::Null;
+
     // Stdin: piped input is forwarded, then end-of-file; a terminal sends none.
     let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<Option<Vec<u8>>>(16);
+
     if std::io::stdin().is_terminal() {
         let _ = stdin_tx.send(None).await;
     } else {
         tokio::spawn(async move {
             let mut stdin = tokio::io::stdin();
             let mut buf = vec![0u8; 64 * 1024];
+
             loop {
                 match stdin.read(&mut buf).await {
                     Ok(0) | Err(_) => {
@@ -446,8 +475,10 @@ pub async fn exec(
             }
         });
     }
+
     let mut ready = false;
     let mut stdin_open = true;
+
     let reason = loop {
         tokio::select! {
             msg = ws.next() => match msg {
@@ -500,14 +531,19 @@ pub async fn exec(
             },
         }
     };
+
     let _ = ws.close(None).await;
+
     if reason == "revoked" {
         return Err(CliError::new(Exit::General, "the session was revoked").with_code("revoked"));
     }
+
     if code.is_none() && reason != "exited" {
         return Err(CliError::new(Exit::General, format!("the command did not finish ({reason})")).with_code(reason));
     }
+
     let status = code.unwrap_or(255);
+
     if json_mode {
         out::result(
             g.output,
@@ -521,9 +557,11 @@ pub async fn exec(
     } else if status != 0 && !propagate {
         eprintln!("forge: the remote command exited with status {status}");
     }
+
     if propagate && status != 0 {
         std::process::exit(i32::try_from(status.min(255)).unwrap_or(255));
     }
+
     Ok(())
 }
 
@@ -550,6 +588,7 @@ pub enum SessionsCmd {
 pub async fn sessions(g: &Global, cmd: SessionsCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         SessionsCmd::List { all, paging } => {
             let v =

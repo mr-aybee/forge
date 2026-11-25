@@ -50,10 +50,12 @@ pub(crate) fn pick(all: &Value, fields: &[&str], what: &str, needle: &str) -> Re
     if let Some(hit) = items.iter().find(|i| i["id"].as_str() == Some(needle)) {
         return Ok((*hit).clone());
     }
+
     let m: Vec<&&Value> = items
         .iter()
         .filter(|i| fields.iter().any(|f| i[*f].as_str().is_some_and(|s| s.eq_ignore_ascii_case(needle))))
         .collect();
+
     match m.as_slice() {
         [one] => Ok((**one).clone()),
         [] => Err(CliError::new(Exit::NotFound, format!("no {what} `{needle}` that you can see"))),
@@ -74,6 +76,7 @@ pub(crate) async fn cluster_id(api: &mut Api, c: &str) -> Result<String> {
     if looks_like_id(c) {
         return Ok(c.to_owned());
     }
+
     Ok(id_of(&resolve(api, "/api/v1/clusters", "", &["name", "abbr"], "cluster", c).await?))
 }
 
@@ -82,6 +85,7 @@ async fn project_id(api: &mut Api, g: &str) -> Result<String> {
     if looks_like_id(g) {
         return Ok(g.to_owned());
     }
+
     Ok(id_of(&resolve(api, "/api/v1/projects", "", &["name"], "project", g).await?))
 }
 
@@ -94,6 +98,7 @@ pub(crate) async fn node_id(api: &mut Api, n: &str) -> Result<String> {
 /// ids stay.
 pub(crate) async fn add_node_names(api: &mut Api, rows: &mut [Value], field: &str) {
     let names = node_names(api).await;
+
     for r in rows {
         let id = r[field].as_str().unwrap_or_default().to_owned();
         r["node"] = json!(names.get(&id).cloned().unwrap_or(id));
@@ -123,6 +128,7 @@ pub(crate) fn read_json(spec: &str) -> Result<Value> {
         }
         s => std::fs::read_to_string(s).map_err(|e| CliError::usage(format!("{s}: {e}")))?,
     };
+
     serde_json::from_str(&text).map_err(|e| CliError::usage(format!("{spec} is not valid JSON: {e}")))
 }
 
@@ -132,6 +138,7 @@ pub(crate) fn read_json(spec: &str) -> Result<Value> {
 pub(crate) async fn file_body(api: &mut Api, method: &str, path: &str, file: &str) -> Result<Value> {
     let body = read_json(file)?;
     check_body(api, method, path, &body).await?;
+
     Ok(body)
 }
 
@@ -141,6 +148,7 @@ pub(crate) async fn check_body(api: &mut Api, method: &str, path: &str, body: &V
     if let Ok(doc) = api.get("/api/openapi.json").await {
         crate::schemacheck::validate(&doc, method, path, body)?;
     }
+
     Ok(())
 }
 
@@ -152,12 +160,14 @@ fn secret_from_stdin(what: &str) -> Result<String> {
             "pipe the {what} on stdin (it is never taken from a flag), e.g. `… --password-stdin < file`"
         )));
     }
+
     let mut s = String::new();
     std::io::stdin().read_to_string(&mut s)?;
     let s = s.strip_suffix('\n').map(|t| t.strip_suffix('\r').unwrap_or(t)).unwrap_or(&s).to_owned();
     if s.is_empty() {
         return Err(CliError::usage(format!("the {what} on stdin is empty")));
     }
+
     Ok(s)
 }
 
@@ -212,20 +222,25 @@ pub async fn approvals(g: &Global, cmd: ApprovalsCmd) -> Result<()> {
         .with_code("approval_in_console"));
     }
     let mut api = connect(g, &t).await?;
+
     match cmd {
         ApprovalsCmd::List { status, all, paging } => {
             let mut q = Vec::new();
+
             if let Some(s) = status {
                 q.push(format!("status={}", enc(&s)));
             }
+
             if all {
                 q.push("all=true".to_owned());
             }
+
             let path = if q.is_empty() {
                 "/api/v1/approvals".to_owned()
             } else {
                 format!("/api/v1/approvals?{}", q.join("&"))
             };
+
             let v = api.get(&path).await?;
             out::list_value(g.output, v, "/approvals", Some(APPROVAL_COLS), paging);
             Ok(())
@@ -279,6 +294,7 @@ pub(crate) async fn user_id(api: &mut Api, u: &str) -> Result<String> {
 pub async fn users(g: &Global, cmd: UsersCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         UsersCmd::List { paging } => {
             let v = api.get("/api/v1/users").await?;
@@ -363,6 +379,7 @@ pub enum AccessCmd {
 pub async fn access(g: &Global, cmd: AccessCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         AccessCmd::List { paging } => {
             let v = api.get("/api/v1/role-bindings").await?;
@@ -383,10 +400,12 @@ pub async fn access(g: &Global, cmd: AccessCmd) -> Result<()> {
         }
         AccessCmd::Grant { user, role, scope, yes } => {
             let uid = user_id(&mut api, &user).await?;
+
             let scope = match scope.split_once(':') {
                 Some(("cluster", c)) => format!("cluster:{}", cluster_id(&mut api, c).await?),
                 _ => scope,
             };
+
             confirm(g, yes, &format!("Give {user} the role {role} on {scope} at {}?", t.server))?;
             let v = api.post("/api/v1/role-bindings", &json!({ "user_id": uid, "role": role, "scope": scope })).await?;
             show(g, &v, None)
@@ -461,6 +480,7 @@ pub enum ApiKeysCmd {
 pub async fn api_keys(g: &Global, cmd: ApiKeysCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         ApiKeysCmd::List { user, paging } => {
             let path =
@@ -485,24 +505,31 @@ pub async fn api_keys(g: &Global, cmd: ApiKeysCmd) -> Result<()> {
         }
         ApiKeysCmd::Create { name, expires_days, never_expires, elevated, allow } => {
             let mut body = json!({ "name": name, "expires_days": expires_days, "never_expires": never_expires });
+
             if elevated {
                 body["elevated"] = json!(true);
             }
+
             if let Some(r) = restrictions(&mut api, &allow).await? {
                 body["restrictions"] = r;
             }
+
             let v = api.post("/api/v1/api-keys", &body).await?;
+
             if g.output == out::Format::Table {
                 eprintln!("Store this secret now; Forge shows it only once.");
             }
+
             show(g, &v, None)
         }
         ApiKeysCmd::Delete { id, user, yes } => {
             confirm(g, yes, &format!("Delete API key {id}? Scripts using it stop working."))?;
+
             let path = match user {
                 Some(u) => format!("/api/v1/users/{}/api-keys/{}", enc(&u), enc(&id)),
                 None => format!("/api/v1/api-keys/{}", enc(&id)),
             };
+
             let v = api.call(Method::DELETE, &path, None).await?;
             show(g, &v, None)
         }
@@ -543,6 +570,7 @@ pub enum ConnectorsCmd {
 pub async fn connectors(g: &Global, cmd: ConnectorsCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         ConnectorsCmd::List { all, paging } => {
             let v = api.get(if all { "/api/v1/connected-apps?all=true" } else { "/api/v1/connected-apps" }).await?;
@@ -639,9 +667,11 @@ const ADDRESS_COLUMNS: &[(&str, &str)] =
 pub async fn settings(g: &Global, cmd: SettingsCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         SettingsCmd::List => {
             let v = api.get("/api/v1/settings").await?;
+
             match g.output {
                 out::Format::Table => show(g, &rows(&v, "/values"), Some(&[("KEY", "/key"), ("VALUE", "/value")])),
                 _ => show(g, &v, None),
@@ -691,6 +721,7 @@ pub enum TenantsCmd {
 pub async fn tenants(g: &Global, cmd: TenantsCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         TenantsCmd::List => {
             let v = api.get("/api/v1/tenants").await?;
@@ -742,20 +773,25 @@ pub enum EnvironmentsCmd {
 pub async fn environments(g: &Global, cmd: EnvironmentsCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         EnvironmentsCmd::List { cluster, project, paging } => {
             let mut query = Vec::new();
+
             if let Some(c) = cluster {
                 query.push(format!("cluster_id={}", cluster_id(&mut api, &c).await?));
             }
+
             if let Some(a) = project {
                 query.push(format!("project_id={}", project_id(&mut api, &a).await?));
             }
+
             let path = if query.is_empty() {
                 "/api/v1/environments".to_owned()
             } else {
                 format!("/api/v1/environments?{}", query.join("&"))
             };
+
             let v = api.get(&path).await?;
             out::list_value(
                 g.output,
@@ -828,6 +864,7 @@ pub enum ClusterAdminCmd {
 pub async fn cluster_admin(g: &Global, cmd: ClusterAdminCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         ClusterAdminCmd::Create { file } => {
             let body = file_body(&mut api, "POST", "/api/v1/clusters", &file).await?;
@@ -855,9 +892,11 @@ pub async fn cluster_admin(g: &Global, cmd: ClusterAdminCmd) -> Result<()> {
         ClusterAdminCmd::Routing { cluster } => {
             let id = cluster_id(&mut api, &cluster).await?;
             let v = api.get(&format!("/api/v1/clusters/{id}/routing")).await?;
+
             if g.output.is_machine() {
                 return show(g, &v, None);
             }
+
             let rows: Vec<Value> = v["endpoints"].as_array().into_iter().flatten().map(routing_row).collect();
             let mut text = out::render_human(
                 &Value::Array(rows),
@@ -870,14 +909,17 @@ pub async fn cluster_admin(g: &Global, cmd: ClusterAdminCmd) -> Result<()> {
                     ("UPSTREAMS", "/upstreams"),
                 ]),
             );
+
             if v["profile"] == false {
                 text.push_str(
                     "no ingress profile on this cluster: only sites with explicit edges on its nodes are listed\n",
                 );
             }
+
             if text.lines().count() <= 1 {
                 text = "no sites route through this cluster\n".to_owned();
             }
+
             out::emit(&text);
             Ok(())
         }
@@ -900,11 +942,13 @@ fn routing_row(e: &Value) -> Value {
             format!("{}{who}", u["address"].as_str().unwrap_or("?"))
         })
     });
+
     let source = match (e["source"].as_str(), e["linked"].as_bool()) {
         (Some("edges"), _) | (_, Some(false)) => "edges (not linked)".to_owned(),
         (Some(s), _) => s.to_owned(),
         (None, _) => "profile".to_owned(),
     };
+
     json!({
         "name": e["name"],
         "domains": e["domains"],
@@ -992,10 +1036,13 @@ fn site_result(g: &Global, what: &str, site: &str, v: &Value) -> Result<()> {
     if failed.is_empty() && !not_ok {
         return show(g, v, None);
     }
+
     if g.output == out::Format::Table {
         show(g, v, None)?;
     }
+
     let why = if failed.is_empty() { v["error"].as_str().unwrap_or("failed").to_owned() } else { failed.join("; ") };
+
     Err(CliError::new(Exit::JobFailed, format!("{what} of site {site} failed: {why}")).with_code("site_failed"))
 }
 
@@ -1010,12 +1057,15 @@ fn preview_text(input: &Value, v: &Value) -> String {
     let mut out = format!("# Nginx config ({variant}{})\n", if variant == "http" { ", tls off" } else { "" });
     out.push_str(config.trim_end());
     out.push('\n');
+
     if let Some(custom) = v["custom"].as_str().filter(|c| !c.trim().is_empty()) {
         out.push_str("\n# Custom config\n");
         out.push_str(custom.trim_end());
         out.push('\n');
     }
+
     let mut lines = Vec::new();
+
     for t in v["targets"].as_array().into_iter().flatten() {
         let target = match &t["target"] {
             Value::Object(m) => m
@@ -1026,6 +1076,7 @@ fn preview_text(input: &Value, v: &Value) -> String {
             Value::String(s) => s.clone(),
             other => other.to_string(),
         };
+
         let ups: Vec<String> = t["upstreams"]
             .as_array()
             .into_iter()
@@ -1035,6 +1086,7 @@ fn preview_text(input: &Value, v: &Value) -> String {
                 if let Some(st) = u["state"].as_str().filter(|s| !s.is_empty()) {
                     s.push_str(&format!(" ({st})"));
                 }
+
                 s
             })
             .collect();
@@ -1044,6 +1096,7 @@ fn preview_text(input: &Value, v: &Value) -> String {
             if ups.is_empty() { "(none)".to_owned() } else { ups.join(", ") }
         ));
     }
+
     if lines.is_empty() {
         for (list, standby) in [(&v["upstreams"], ""), (&v["standby"], " [standby]")] {
             for u in list.as_array().into_iter().flatten() {
@@ -1056,14 +1109,18 @@ fn preview_text(input: &Value, v: &Value) -> String {
             }
         }
     }
+
     out.push_str("\n# Upstreams\n");
+
     if lines.is_empty() {
         out.push_str("  (none)\n");
     }
+
     for l in lines {
         out.push_str(&l);
         out.push('\n');
     }
+
     out
 }
 
@@ -1074,6 +1131,7 @@ async fn site_id(api: &mut Api, s: &str) -> Result<String> {
 pub async fn sites(g: &Global, cmd: SitesCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         SitesCmd::List { paging } => {
             let v = api.get("/api/v1/sites").await?;
@@ -1103,9 +1161,11 @@ pub async fn sites(g: &Global, cmd: SitesCmd) -> Result<()> {
         SitesCmd::Preview { file } => {
             let body = file_body(&mut api, "POST", "/api/v1/sites/preview", &file).await?;
             let v = api.post("/api/v1/sites/preview", &body).await?;
+
             if g.output.is_machine() {
                 return show(g, &v, None);
             }
+
             out::emit(&preview_text(&body, &v));
             Ok(())
         }
@@ -1162,6 +1222,7 @@ pub enum CertificatesCmd {
 pub async fn certificates(g: &Global, cmd: CertificatesCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         CertificatesCmd::List { paging } => {
             let v = api.get("/api/v1/certificates").await?;
@@ -1409,6 +1470,7 @@ const MY_GRANT_COLS: &[Col] =
 /// `granted_by`. A holder's own list does not say who granted what.
 fn bucket_grant_rows(v: &Value, with_issuer: bool) -> Value {
     let mut list = rows(v, "/grants").as_array().cloned().unwrap_or_default();
+
     for r in &mut list {
         let expires = match (r["status"].as_str(), r["expires_at"].is_null()) {
             (Some("active") | None, true) => "never".to_owned(),
@@ -1417,12 +1479,15 @@ fn bucket_grant_rows(v: &Value, with_issuer: bool) -> Value {
             }
             _ => "-".to_owned(),
         };
+
         r["expires"] = json!(expires);
+
         if with_issuer {
             r["granted_by"] =
                 r["created_by_name"].as_str().or(r["created_by"].as_str()).map_or(Value::Null, |n| json!(n));
         }
     }
+
     Value::Array(list)
 }
 
@@ -1468,6 +1533,7 @@ fn test_result(store: &str, v: &Value) -> Result<()> {
         )
         .with_code("store_unreachable"));
     }
+
     Ok(())
 }
 
@@ -1485,10 +1551,12 @@ fn download_target(key: &str, out: Option<&str>) -> Result<Dest> {
         Some(p) if !p.is_empty() => Ok(Dest::File(p.into())),
         _ => {
             let name = key.rsplit('/').next().unwrap_or_default();
+
             // A key may hold anything; only a plain file name is used unasked.
             if name.is_empty() || name == "." || name == ".." || name.contains(['\\', ':']) {
                 return Err(CliError::usage(format!("the key `{key}` gives no file name; pass --out <path>")));
             }
+
             Ok(Dest::File(name.into()))
         }
     }
@@ -1504,25 +1572,30 @@ fn file_exists(path: &std::path::Path) -> CliError {
 async fn save_body(mut resp: reqwest::Response, dest: &Dest, force: bool) -> Result<u64> {
     use tokio::io::AsyncWriteExt as _;
     let broken = |e: reqwest::Error| CliError::new(Exit::Transport, format!("the download broke off: {e}"));
+
     match dest {
         Dest::Stdout => {
             let mut stdout = tokio::io::stdout();
             let mut size = 0u64;
+
             while let Some(chunk) = resp.chunk().await.map_err(broken)? {
                 stdout.write_all(&chunk).await?;
                 size += chunk.len() as u64;
             }
+
             stdout.flush().await?;
             Ok(size)
         }
         Dest::File(path) => {
             let mut open = tokio::fs::OpenOptions::new();
             open.write(true);
+
             if force {
                 open.create(true).truncate(true);
             } else {
                 open.create_new(true);
             }
+
             let mut file = open.open(path).await.map_err(|e| {
                 if e.kind() == std::io::ErrorKind::AlreadyExists {
                     file_exists(path)
@@ -1532,19 +1605,24 @@ async fn save_body(mut resp: reqwest::Response, dest: &Dest, force: bool) -> Res
             })?;
             let written = async {
                 let mut size = 0u64;
+
                 while let Some(chunk) = resp.chunk().await.map_err(broken)? {
                     file.write_all(&chunk).await?;
                     size += chunk.len() as u64;
                 }
+
                 file.flush().await?;
                 Result::Ok(size)
             }
             .await;
+
             if written.is_err() {
                 drop(file);
+
                 // Best effort: the error that broke the download is what the person needs to see.
                 let _ = tokio::fs::remove_file(path).await;
             }
+
             written
         }
     }
@@ -1554,6 +1632,7 @@ pub async fn storage(g: &Global, cmd: StorageCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
     let base = "/api/v1/object-stores";
+
     match cmd {
         StorageCmd::List { paging } => {
             let v = api.get(base).await?;
@@ -1595,31 +1674,37 @@ pub async fn storage(g: &Global, cmd: StorageCmd) -> Result<()> {
             if delete_data && action != "uninstall" {
                 return Err(CliError::usage("--delete-data applies to `uninstall` only"));
             }
+
             let s = store_of(&mut api, &store).await?;
             let (id, name) = (id_of(&s), s["name"].as_str().unwrap_or(&store).to_owned());
+
             let what = if delete_data {
                 format!("Uninstall object store {name} AND DELETE ITS DATA on every node (cannot be undone)?")
             } else {
                 format!("Run `{action}` on object store {name}?")
             };
+
             confirm(g, yes, &what)?;
             show(g, &api.post(&format!("{base}/{id}/actions"), &action_body(&action, delete_data, &name)).await?, None)
         }
         StorageCmd::Owner { store, environment, clear: _, force, yes } => {
             let s = store_of(&mut api, &store).await?;
             let (id, name) = (id_of(&s), s["name"].as_str().unwrap_or(&store).to_owned());
+
             let ns = match &environment {
                 Some(e) => {
                     Some(id_of(&resolve(&mut api, "/api/v1/environments", "", &["name"], "environment", e).await?))
                 }
                 None => None,
             };
+
             let what = match &environment {
                 Some(e) => format!(
                     "Give object store {name} to environment {e}? Its roles then reach every bucket of the store."
                 ),
                 None => format!("Make object store {name} a shared store? The roles of its environment lose it."),
             };
+
             confirm(g, yes, &what)?;
             let v =
                 api.call(Method::PUT, &format!("{base}/{id}/owner"), Some(&owner_body(ns.as_deref(), force))).await?;
@@ -1640,6 +1725,7 @@ pub async fn storage(g: &Global, cmd: StorageCmd) -> Result<()> {
         }
         StorageCmd::ObjectDownload { store, bucket, key, out, force } => {
             let dest = download_target(&key, out.as_deref())?;
+
             // Checked before the request, so a refused download is not audited as one.
             if let Dest::File(path) = &dest
                 && !force
@@ -1647,10 +1733,12 @@ pub async fn storage(g: &Global, cmd: StorageCmd) -> Result<()> {
             {
                 return Err(file_exists(path));
             }
+
             let id = store_id(&mut api, &store).await?;
             api.set_request_timeout(Some(TRANSFER_TIMEOUT));
             let resp = api.send(Method::GET, &object_path(&id, &bucket, &key), None).await?;
             let size = save_body(resp, &dest, force).await?;
+
             match dest {
                 // The object went to stdout: nothing else may be printed there.
                 Dest::Stdout => Ok(()),
@@ -1687,33 +1775,42 @@ pub async fn storage(g: &Global, cmd: StorageCmd) -> Result<()> {
             let mut objects = Vec::new();
             let mut prefixes = Vec::new();
             let mut next = token;
+
             loop {
                 let mut q = vec![format!("limit={limit}")];
+
                 if let Some(p) = &prefix {
                     q.push(format!("prefix={}", enc(p)));
                 }
+
                 if let Some(t) = &next {
                     q.push(format!("token={}", enc(t)));
                 }
+
                 let v = api.get(&format!("{base}/{id}/buckets/{}/objects?{}", enc(&bucket), q.join("&"))).await?;
                 objects.extend(rows(&v, "/objects").as_array().cloned().unwrap_or_default());
                 prefixes.extend(rows(&v, "/prefixes").as_array().cloned().unwrap_or_default());
                 next = v["next_token"].as_str().map(str::to_owned);
+
                 if !all || next.is_none() {
                     break;
                 }
             }
+
             if g.output.is_machine() {
                 return show(g, &json!({ "objects": objects, "prefixes": prefixes, "next_token": next }), None);
             }
+
             show(
                 g,
                 &Value::Array(objects),
                 Some(&[("KEY", "/key"), ("SIZE", "/size"), ("MODIFIED", "/last_modified")]),
             )?;
+
             if let Some(t) = next {
                 eprintln!("More objects: add --token {t} (or --all).");
             }
+
             Ok(())
         }
         StorageCmd::Keys { store } => {
@@ -1731,12 +1828,14 @@ pub async fn storage(g: &Global, cmd: StorageCmd) -> Result<()> {
             let v = api
                 .post(&format!("{base}/{id}/keys"), &json!({ "name": name, "bucket": bucket, "access": access }))
                 .await?;
+
             if g.output == out::Format::Table {
                 eprintln!(
                     "The secret is in the vault: `forge vault reveal {}`.",
                     v["vault_item_id"].as_str().unwrap_or("<vault-item>")
                 );
             }
+
             show(g, &v, None)
         }
         StorageCmd::KeyRotate { store, access_key, yes } => {
@@ -1759,13 +1858,17 @@ pub async fn storage(g: &Global, cmd: StorageCmd) -> Result<()> {
             let minutes = crate::tunnelcmd::parse_lifetime(&lifetime)?;
             let id = store_id(&mut api, &store).await?;
             let mut body = json!({ "user": user, "bucket": bucket, "access": access });
+
             if let Some(m) = minutes {
                 body["lifetime_minutes"] = json!(m);
             }
+
             if let Some(n) = note {
                 body["note"] = json!(n);
             }
+
             let v = api.post(&format!("{base}/{id}/grants"), &body).await?;
+
             if !g.output.is_machine() {
                 eprintln!(
                     "{} may open bucket {} of {store} ({}) through Forge · {}",
@@ -1775,6 +1878,7 @@ pub async fn storage(g: &Global, cmd: StorageCmd) -> Result<()> {
                     crate::tunnelcmd::expiry_text(&v)
                 );
             }
+
             show(g, &v, None)
         }
         StorageCmd::GrantRevoke { store, grant_id, yes } => {
@@ -1844,6 +1948,7 @@ pub async fn vault(g: &Global, cmd: VaultCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
     let base = "/api/v1/vault/items";
+
     match cmd {
         VaultCmd::List { paging } => {
             let v = api.get(base).await?;
@@ -1939,6 +2044,7 @@ pub enum SystemCmd {
 pub async fn system(g: &Global, cmd: SystemCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         SystemCmd::Update => show(g, &api.get("/api/v1/system/update").await?, None),
         SystemCmd::Check => show(g, &api.post("/api/v1/system/update/check", &json!({})).await?, None),
@@ -1966,6 +2072,7 @@ pub async fn system(g: &Global, cmd: SystemCmd) -> Result<()> {
                         })?
                 }
             };
+
             let then = if agents == "rollout" { ", then its agents follow" } else { "" };
             confirm(g, yes, &format!("Update the Forge server at {} to {version}{then}? It restarts.", t.server))?;
             let body = json!({ "version": version, "agents": agents, "batch": batch });
@@ -2049,6 +2156,7 @@ const INSTALLED_COLS: &[Col] = &[
 pub async fn packages(g: &Global, cmd: PackagesCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         PackagesCmd::Catalog { paging } => {
             let v = api.get("/api/v1/catalog").await?;
@@ -2073,10 +2181,13 @@ pub async fn packages(g: &Global, cmd: PackagesCmd) -> Result<()> {
                 Some(n) => format!("/api/v1/installations?server_id={}", node_id(&mut api, n).await?),
                 None => "/api/v1/installations".to_owned(),
             };
+
             let mut rows = crate::cmds::rows_of(api.get(&path).await?);
+
             if let Some(p) = &package {
                 rows.retain(|r| r["package"].as_str().is_some_and(|x| x.eq_ignore_ascii_case(p)));
             }
+
             add_node_names(&mut api, &mut rows, "server_id").await;
             out::list(g.output, rows, Some(INSTALLED_COLS), paging.into(), out::Total::Rows);
             Ok(())
@@ -2124,6 +2235,7 @@ pub async fn packages(g: &Global, cmd: PackagesCmd) -> Result<()> {
                         })?
                 }
             };
+
             confirm(g, yes, &format!("Update installation {installation} to {build}?"))?;
             let v = api
                 .post(&format!("/api/v1/installations/{}/update", enc(&installation)), &json!({ "build": build }))
@@ -2173,14 +2285,18 @@ pub async fn packages(g: &Global, cmd: PackagesCmd) -> Result<()> {
 pub async fn metrics(g: &Global, node: Option<String>) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     if let Some(n) = node {
         let id = node_id(&mut api, &n).await?;
         return show(g, &api.get(&format!("/api/v1/servers/{id}/metrics")).await?, None);
     }
+
     let v = api.get("/api/v1/metrics/latest").await?;
+
     if g.output.is_machine() {
         return show(g, &v, None);
     }
+
     let names: std::collections::HashMap<String, String> = api
         .get("/api/v1/servers")
         .await?
@@ -2189,10 +2305,12 @@ pub async fn metrics(g: &Global, node: Option<String>) -> Result<()> {
         .flatten()
         .map(|s| (id_of(s), s["hostname"].as_str().unwrap_or("?").to_owned()))
         .collect();
+
     let pct = |used: &Value, total: &Value| match (used.as_f64(), total.as_f64()) {
         (Some(u), Some(t)) if t > 0.0 => json!(format!("{:.0}%", u * 100.0 / t)),
         _ => Value::Null,
     };
+
     let list: Vec<Value> = v
         .as_object()
         .into_iter()
@@ -2207,6 +2325,7 @@ pub async fn metrics(g: &Global, node: Option<String>) -> Result<()> {
             })
         })
         .collect();
+
     show(
         g,
         &Value::Array(list),
@@ -2220,6 +2339,7 @@ fn check_subject_text(s: &str, what: &str) -> Result<()> {
     if s.is_empty() || !s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b)) {
         return Err(CliError::usage(format!("{what} `{s}` must use lowercase letters, digits, `.`, `-` and `_`")));
     }
+
     Ok(())
 }
 
@@ -2234,14 +2354,17 @@ pub async fn health(
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
     let id = node_id(&mut api, &node).await?;
+
     if let Some(subject) = history {
         check_subject_text(&subject, "subject")?;
         let v = api
             .get(&format!("/api/v1/observations/history?resource=server:{id}&subject={subject}&limit={limit}"))
             .await?;
+
         if g.output.is_machine() {
             return show(g, &v, None);
         }
+
         let rows: Vec<Value> = v["entries"]
             .as_array()
             .into_iter()
@@ -2255,21 +2378,27 @@ pub async fn health(
                 })
             })
             .collect();
+
         return show(
             g,
             &Value::Array(rows),
             Some(&[("RECEIVED (MS)", "/at"), ("STATE", "/state"), ("REASON", "/reason"), ("DETAIL", "/detail")]),
         );
     }
+
     let mut path = format!("/api/v1/observations?resource=server:{id}&limit={limit}");
+
     if let Some(p) = prefix {
         check_subject_text(&p, "prefix")?;
         path.push_str(&format!("&subject_prefix={p}"));
     }
+
     let v = api.get(&path).await?;
+
     if g.output.is_machine() {
         return show(g, &v, None);
     }
+
     let rows: Vec<Value> = v["observations"]
         .as_array()
         .into_iter()
@@ -2284,6 +2413,7 @@ pub async fn health(
             })
         })
         .collect();
+
     show(
         g,
         &Value::Array(rows),
@@ -2435,7 +2565,9 @@ async fn process_start(api: &mut Api, id: &str, pid: u32, given: Option<u64>) ->
     if let Some(t) = given {
         return Ok((t, format!("pid {pid}")));
     }
+
     let v = api.get(&format!("/api/v1/servers/{id}/processes?sort=pid&limit=500")).await?;
+
     v["processes"]
         .as_array()
         .into_iter()
@@ -2457,6 +2589,7 @@ fn window(hours: u32) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
     let from = now - i64::from(hours.clamp(1, 9600)) * 3_600_000;
+
     format!("from={from}&to={now}")
 }
 
@@ -2470,30 +2603,38 @@ pub async fn node_extra(g: &Global, cmd: NodeExtraCmd) -> Result<()> {
         }
         other => other,
     };
+
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         NodeExtraCmd::EnrollToken { cluster, hostname, ttl_minutes } => {
             let cid = match cluster {
                 Some(c) => Some(cluster_id(&mut api, &c).await?),
                 None => None,
             };
+
             let body = json!({ "cluster_id": cid, "hostname": hostname, "ttl_minutes": ttl_minutes });
             let v = api.post("/api/v1/enrollment-tokens", &body).await?;
+
             if g.output == out::Format::Table {
                 eprintln!("This token is shown once; it enrolls one node.");
             }
+
             show(g, &v, None)
         }
         NodeExtraCmd::Processes { node, sort, limit, filter } => {
             let id = node_id(&mut api, &node).await?;
             let mut q = vec![format!("limit={limit}")];
+
             if let Some(s) = sort {
                 q.push(format!("sort={}", enc(&s)));
             }
+
             if let Some(f) = filter {
                 q.push(format!("filter={}", enc(&f)));
             }
+
             let v = api.get(&format!("/api/v1/servers/{id}/processes?{}", q.join("&"))).await?;
             let list = if v.is_array() { v } else { rows(&v, "/processes") };
             show(
@@ -2520,6 +2661,7 @@ pub async fn node_extra(g: &Global, cmd: NodeExtraCmd) -> Result<()> {
             if nice.is_none() && class.is_none() {
                 return Err(CliError::usage("pass --nice (Linux) or --class (Windows)"));
             }
+
             let id = node_id(&mut api, &node).await?;
             let (started, _) = process_start(&mut api, &id, pid, start_time).await?;
             let body = json!({ "start_time": started, "nice": nice, "class": class });
@@ -2561,7 +2703,9 @@ fn value_text(v: &Value) -> Value {
     if v["type"] != "measure" {
         return v["state"].clone();
     }
+
     let Some(milli) = v["state"]["milli"].as_i64() else { return json!("unknown") };
+
     #[allow(clippy::cast_precision_loss)]
     let n = milli as f64 / 1000.0;
     let unit = match v["state"]["unit"].as_str() {
@@ -2570,6 +2714,7 @@ fn value_text(v: &Value) -> Value {
         Some("seconds") => " s",
         _ => "",
     };
+
     json!(format!("{}{unit}", (n * 10.0).round() / 10.0))
 }
 
@@ -2618,6 +2763,7 @@ mod storage_tests {
             ))
         );
         assert!(test_result("media", &json!({ "ok": true, "latency_ms": 12, "buckets": 3 })).is_ok());
+
         // The API's own `store_unreachable` answer (502) maps to the same exit code.
         assert_eq!(CliError::from_http(502, Some("store_unreachable"), None, None).exit as i32, 9);
     }
@@ -2629,6 +2775,7 @@ mod storage_tests {
         else {
             panic!("owner")
         };
+
         assert_eq!(
             (store.as_str(), environment.as_deref(), clear, force, yes),
             ("media", Some("shop-prod"), false, true, true)
@@ -2637,6 +2784,7 @@ mod storage_tests {
             parse(&["forge", "storage", "owner", "media", "--clear"]),
             StorageCmd::Owner { environment: None, clear: true, .. }
         ));
+
         for bad in [
             &["forge", "storage", "owner", "media"][..],
             &["forge", "storage", "owner", "media", "--environment", "x", "--clear"],
@@ -2644,6 +2792,7 @@ mod storage_tests {
         ] {
             assert!(crate::Cli::try_parse_from(bad).is_err(), "{bad:?}");
         }
+
         assert_eq!(owner_body(Some("ns-1"), true), json!({ "environment_id": "ns-1", "force": true }));
         assert_eq!(owner_body(None, false), json!({ "environment_id": null, "force": false }));
     }
@@ -2655,7 +2804,9 @@ mod storage_tests {
         else {
             panic!("action")
         };
+
         assert!(delete_data);
+
         // The server wants the store's name as its confirmation.
         assert_eq!(
             action_body(&action, delete_data, "media"),
@@ -2671,6 +2822,7 @@ mod storage_tests {
         else {
             panic!("upload")
         };
+
         assert_eq!(
             (store.as_str(), file.to_string_lossy().as_ref(), content_type.as_str()),
             ("media", "a.pdf", "application/octet-stream")
@@ -2679,6 +2831,7 @@ mod storage_tests {
             object_path("st-1", &bucket, &key),
             "/api/v1/object-stores/st-1/buckets/uploads/object?key=docs%2Fa+b.pdf"
         );
+
         // `upload` and `download` are aliases.
         assert!(matches!(
             parse(&["forge", "storage", "upload", "media", "uploads", "k", "--file", "f"]),
@@ -2699,6 +2852,7 @@ mod storage_tests {
         assert_eq!(download_target("docs/2026/report.pdf", None).ok(), Some(Dest::File("report.pdf".into())));
         assert_eq!(download_target("docs/report.pdf", Some("out/r.pdf")).ok(), Some(Dest::File("out/r.pdf".into())));
         assert_eq!(download_target("docs/report.pdf", Some("-")).ok(), Some(Dest::Stdout));
+
         for key in ["docs/", "..", "a/..", "c:evil"] {
             assert!(download_target(key, None).is_err_and(|e| e.exit == Exit::Usage), "{key}");
         }
@@ -2714,25 +2868,31 @@ mod storage_tests {
             let (mut s, _) = listener.accept().await.unwrap_or_else(|e| panic!("{e}"));
             let mut buf = Vec::new();
             let mut chunk = [0u8; 4096];
+
             // Headers, then as many body bytes as Content-Length says.
             let (head, mut rest) = loop {
                 let n = s.read(&mut chunk).await.unwrap_or(0);
                 buf.extend_from_slice(&chunk[..n]);
+
                 if let Some(at) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
                     break (String::from_utf8_lossy(&buf[..at]).into_owned(), buf[at + 4..].to_vec());
                 }
+
                 assert!(n > 0, "the request ended before its headers");
             };
+
             let len: usize = head
                 .lines()
                 .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().to_owned()))
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0);
+
             while rest.len() < len {
                 let n = s.read(&mut chunk).await.unwrap_or(0);
                 assert!(n > 0, "the body ended early");
                 rest.extend_from_slice(&chunk[..n]);
             }
+
             let answer: &[u8] = if head.starts_with("PUT") { b"{}" } else { body };
             let status = format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", answer.len());
             let _ = s.write_all(status.as_bytes()).await;
@@ -2740,6 +2900,7 @@ mod storage_tests {
             let _ = s.shutdown().await;
             (head, rest)
         });
+
         (format!("http://{addr}"), task)
     }
 
@@ -2762,6 +2923,7 @@ mod storage_tests {
         assert!(head.contains("authorization: bearer t") && head.contains("idempotency-key:"), "{head}");
         assert!(!head.contains("transfer-encoding"), "the server needs a length, not chunks: {head}");
         assert_eq!(body, data);
+
         // A file that is not there is a usage error; nothing is sent.
         let gone = api.send_file(Method::PUT, &path, &dir.path().join("nope"), "x/y").await;
         assert!(gone.is_err_and(|e| e.exit == Exit::Usage));
@@ -2773,13 +2935,16 @@ mod storage_tests {
             let (server, _task) = serve_once(b"object bytes").await;
             let mut api = Api::with_token(server, None, "t".into()).unwrap_or_else(|e| panic!("{e}"));
             let resp = api.send(Method::GET, &object_path("st-1", "uploads", "o.bin"), None).await;
+
             resp.unwrap_or_else(|e| panic!("{e}"))
         }
+
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let path = dir.path().join("o.bin");
         let dest = Dest::File(path.clone());
         assert_eq!(save_body(fetch().await, &dest, false).await.ok(), Some(12));
         assert_eq!(std::fs::read(&path).ok().as_deref(), Some(&b"object bytes"[..]));
+
         // It exists now: refused (exit 7) and left alone, unless --force.
         std::fs::write(&path, b"mine").unwrap_or_else(|e| panic!("{e}"));
         let e = save_body(fetch().await, &dest, false).await;
@@ -2807,7 +2972,9 @@ pub(crate) async fn restrictions(api: &mut Api, allow: &[String]) -> Result<Opti
     if allow.is_empty() {
         return Ok(None);
     }
+
     let mut grants = Vec::new();
+
     for a in allow {
         let Some((scope, actions)) = a.split_once('=') else {
             return Err(crate::error::CliError::new(
@@ -2815,12 +2982,15 @@ pub(crate) async fn restrictions(api: &mut Api, allow: &[String]) -> Result<Opti
                 format!("--allow `{a}`: expected <kind>:<id>=<action>[,<action>…]"),
             ));
         };
+
         let scope = match scope.split_once(':') {
             Some(("cluster", c)) => format!("cluster:{}", cluster_id(api, c).await?),
             _ => scope.to_owned(),
         };
+
         let actions: Vec<&str> = actions.split(',').map(str::trim).filter(|x| !x.is_empty()).collect();
         grants.push(json!({ "scope": scope, "actions": actions }));
     }
+
     Ok(Some(json!(grants)))
 }

@@ -24,6 +24,7 @@ impl PeerIdentity {
             .ok_or_else(|| PkiError::Parse("certificate has no common name".into()))?
             .to_owned();
         let validity = cert.validity();
+
         Ok(Self {
             common_name,
             serial_hex: hex::encode(cert.raw_serial()),

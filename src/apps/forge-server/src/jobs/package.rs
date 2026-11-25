@@ -73,6 +73,7 @@ impl PackageJob {
         if server.status == AgentStatus::Revoked {
             return Err(StepError::Fatal("server is revoked".into()));
         }
+
         let command = Command::PackageAction(PackageAction {
             package: p.package.clone(),
             version: p.version.clone(),
@@ -89,10 +90,12 @@ impl PackageJob {
         self.hub.enqueue(p.server_id, &body.operation_id, signed).map_err(StepError::Retryable)?;
         ctx.set_state("operation_id", json!(body.operation_id));
         let action = p.action.clone();
+
         self.update(&p, ctx, |i| {
             if !forge_catalog::READ_ONLY_ACTIONS.contains(&action.as_str()) {
                 i.status = busy_status(&action).into();
             }
+
             i.last_error = None;
         })
         .await
@@ -112,15 +115,18 @@ impl PackageJob {
         else {
             return Ok(());
         };
+
         f(&mut i);
         i.last_job_id = Some(ctx.job.id);
         i.updated_at = self.clock.now();
+
         self.installations.put_installation(&i).await.map_err(|e| StepError::Retryable(e.to_string()))
     }
 
     async fn await_result(&self, ctx: &mut StepContext) -> Result<(), StepError> {
         let p = payload(ctx)?;
         let op = ctx.state_value("operation_id").and_then(Value::as_str).map(str::to_owned);
+
         // After a control-plane restart the waiter is gone; recipes are
         // idempotent, so dispatch again and wait.
         let op = match op {
@@ -130,13 +136,16 @@ impl PackageJob {
                 ctx.state_value("operation_id").and_then(Value::as_str).unwrap_or_default().to_owned()
             }
         };
+
         let result = self
             .hub
             .wait(&op, RESULT_WAIT)
             .await
             .ok_or_else(|| StepError::Retryable("the node did not report a result in time".into()))?;
+
         if !result.ok {
             let err: Value = serde_json::from_str(&result.error).unwrap_or_else(|_| json!({ "error": result.error }));
+
             // The last lines of the recipe's output usually say why.
             let tail: Vec<&str> = err
                 .get("output")
@@ -154,15 +163,19 @@ impl PackageJob {
                 } else if i.status.ends_with("ing") {
                     i.status = "installed".into();
                 }
+
                 i.last_error = Some(message.clone());
             })
             .await?;
+
             return Err(StepError::Fatal(message));
         }
+
         let out: Value = serde_json::from_str(&result.output).unwrap_or(Value::Null);
         ctx.set_state("output", out.get("output").cloned().unwrap_or(Value::Null));
         let state = out.get("state").and_then(Value::as_str).map(str::to_owned);
         ctx.set_state("state", json!(state));
+
         if p.action == "uninstall" {
             self.installations
                 .delete_installation(p.installation_id)
@@ -170,17 +183,22 @@ impl PackageJob {
                 .map_err(|e| StepError::Retryable(e.to_string()))?;
             return Ok(());
         }
+
         let env: BTreeMap<String, String> =
             out.get("env").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+
         if matches!(p.action.as_str(), "versions" | "upgrade") {
             return self.record_versions(&p, ctx, state.as_deref().unwrap_or_default(), &out, env).await;
         }
+
         self.update(&p, ctx, |i| {
             i.status = if state.as_deref() == Some("not-installed") { "missing".into() } else { "installed".into() };
             i.state = state.clone();
+
             if !env.is_empty() {
                 i.env = env;
             }
+
             i.last_error = None;
         })
         .await
@@ -201,6 +219,7 @@ impl PackageJob {
         let Some(nv) = forge_catalog::versions::NodeVersions::parse(last_line) else {
             return Err(StepError::Fatal("the node did not report package versions".into()));
         };
+
         let upgraded = p.action == "upgrade";
         let run_state = upgraded
             .then(|| {
@@ -222,21 +241,27 @@ impl PackageJob {
                 running: nv.running.clone(),
                 checked_at: now,
             });
+
             if upgraded {
                 i.status = "installed".into();
+
                 if run_state.is_some() {
                     i.state.clone_from(&run_state);
                 }
+
                 if !env.is_empty() {
                     i.env = env;
                 }
+
                 i.last_error = stale.then(|| message.clone());
             }
         })
         .await?;
+
         if stale {
             return Err(StepError::Fatal(message));
         }
+
         Ok(())
     }
 }

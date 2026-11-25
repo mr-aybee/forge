@@ -72,6 +72,7 @@ impl Limits {
         let d = Self::default();
         let pick = |v: u64, def: u64| if v == 0 { def } else { v };
         let secs_ms = |s: u64| i64::try_from(s.saturating_mul(1_000)).unwrap_or(i64::MAX);
+
         Self {
             max_bytes: pick(t.max_bytes, d.max_bytes).clamp(16 * MIB, 64 * 1024 * MIB),
             min_free_bytes: if t.min_free_bytes == 0 { d.min_free_bytes } else { t.min_free_bytes },
@@ -214,6 +215,7 @@ fn parse_entry(name: &str) -> Option<(&str, &str)> {
     let (stem, rest) = name.split_at(at);
     let stage = &rest[SUFFIX.len()..];
     FileName::parse(stem)?;
+
     Some((stem, stage))
 }
 
@@ -235,6 +237,7 @@ impl Spool {
         }
         let mut rec = Recovery::default();
         let mut ready = Vec::new();
+
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let name = entry.file_name();
@@ -260,6 +263,7 @@ impl Spool {
                 _ => {}
             }
         }
+
         ready.sort_by(|a, b| a.stem.cmp(&b.stem));
         let ready_bytes = ready.iter().map(|f| f.bytes).sum();
         let spool = Self {
@@ -277,15 +281,18 @@ impl Spool {
             counters: Counters::default(),
             sealed: Notify::new(),
         };
+
         {
             let mut inner = spool.lock();
             rec.dropped += spool.expire_locked(&mut inner, now_ms);
             rec.dropped += spool.enforce_cap_locked(&mut inner, 0);
             rec.ready = inner.ready.len() as u64;
         }
+
         if rec != Recovery::default() {
             tracing::info!(?rec, "spool recovered");
         }
+
         Ok((spool, rec))
     }
 
@@ -315,11 +322,14 @@ impl Spool {
             if inner.ready_bytes + inner.buf.len() as u64 >= inner.limits.max_bytes {
                 return Err(SpoolError::Full);
             }
+
             inner.limits
         };
+
         if self.below_floor(&limits) {
             return Err(SpoolError::DiskLow);
         }
+
         Ok(())
     }
 
@@ -348,6 +358,7 @@ impl Spool {
         }
         let r = Ref { k: "log", key: key_hash, ts: now_ms, fmt: BodyFormat::Raw, body };
         let line = serde_json::to_vec(&r).map_err(|e| SpoolError::Io(e.to_string()))?;
+
         self.append_line(&line, forge_core::spool::Kind::Log, now_ms)
     }
 
@@ -356,13 +367,16 @@ impl Spool {
         if !inner.buf.is_empty() && (inner.buf.len() + line.len()) as u64 > inner.limits.seal_bytes {
             self.seal_locked(&mut inner, now_ms)?;
         }
+
         inner.buf.extend_from_slice(line);
         inner.buf.push(b'\n');
         inner.counts.add(kind);
         inner.opened_ms.get_or_insert(now_ms);
+
         if inner.buf.len() as u64 >= inner.limits.seal_bytes {
             self.seal_locked(&mut inner, now_ms)?;
         }
+
         Ok(())
     }
 
@@ -371,9 +385,11 @@ impl Spool {
     pub fn tick(&self, now_ms: i64) -> Result<(), SpoolError> {
         let mut inner = self.lock();
         self.expire_locked(&mut inner, now_ms);
+
         if inner.opened_ms.is_some_and(|t| now_ms - t >= inner.limits.seal_ms) {
             self.seal_locked(&mut inner, now_ms)?;
         }
+
         Ok(())
     }
 
@@ -390,6 +406,7 @@ impl Spool {
         let before = inner.ready.back().map(|f| f.stem.clone());
         self.seal_locked(&mut inner, now_ms)?;
         let after = inner.ready.back().map(|f| f.stem.clone());
+
         Ok(after.filter(|a| Some(a) != before.as_ref()))
     }
 
@@ -403,30 +420,38 @@ impl Spool {
         if inner.buf.is_empty() {
             return Ok(());
         }
+
         let counts = std::mem::take(&mut inner.counts);
         let created = inner.opened_ms.take().unwrap_or(now_ms);
         let raw = inner.buf.len() as u64;
+
         // Make room first: the cap counts what is about to be written.
         let limits = inner.limits;
         self.enforce_cap_locked(inner, raw.min(limits.max_bytes));
+
         while self.below_floor(&limits) {
             if !self.drop_oldest_locked(inner) {
                 break;
             }
         }
+
         if self.below_floor(&limits) {
             self.count_drop(raw);
             inner.buf.clear();
+
             return Err(SpoolError::DiskLow);
         }
+
         let name = FileName::new(self.node);
         let stem = name.stem();
         let header = FileHeader { v: VERSION, node: self.node.to_string(), created, counts };
         let result = self.write_file(&stem, &header, &inner.buf, limits.level);
         inner.buf.clear();
+
         if inner.buf.capacity() as u64 > limits.seal_bytes.saturating_mul(2) {
             inner.buf.shrink_to(usize::try_from(limits.seal_bytes).unwrap_or(usize::MAX));
         }
+
         match result {
             Ok(f) => {
                 inner.ready_bytes += f.bytes;
@@ -457,6 +482,7 @@ impl Spool {
             file.sync_all()?;
             Ok(file.metadata()?.len())
         };
+
         let bytes = match write() {
             Ok(b) => b,
             Err(e) => {
@@ -464,9 +490,11 @@ impl Spool {
                 return Err(e);
             }
         };
+
         fs::rename(&tmp, &ready)?;
         sync_dir(&self.dir)?;
         let id = FileName::parse(stem).map(|n| n.id).unwrap_or_default();
+
         Ok(ReadyFile {
             stem: stem.to_owned(),
             path: ready,
@@ -484,31 +512,38 @@ impl Spool {
     fn drop_oldest_locked(&self, inner: &mut Inner) -> bool {
         let Some(f) = inner.ready.pop_front() else { return false };
         inner.ready_bytes = inner.ready_bytes.saturating_sub(f.bytes);
+
         if let Err(e) = fs::remove_file(&f.path)
             && e.kind() != io::ErrorKind::NotFound
         {
             tracing::warn!(file = %f.stem, error = %e, "removing a dropped spool file failed");
         }
+
         self.count_drop(f.bytes);
         tracing::warn!(file = %f.stem, bytes = f.bytes, "spool full: dropped the oldest file");
+
         true
     }
 
     /// Drops the oldest files until `incoming` more bytes fit under the cap.
     fn enforce_cap_locked(&self, inner: &mut Inner, incoming: u64) -> u64 {
         let mut dropped = 0;
+
         while inner.ready_bytes + incoming > inner.limits.max_bytes && self.drop_oldest_locked(inner) {
             dropped += 1;
         }
+
         dropped
     }
 
     fn expire_locked(&self, inner: &mut Inner, now_ms: i64) -> u64 {
         let mut dropped = 0;
+
         while inner.ready.front().is_some_and(|f| now_ms - f.created_ms > inner.limits.max_age_ms) {
             self.drop_oldest_locked(inner);
             dropped += 1;
         }
+
         dropped
     }
 
@@ -533,13 +568,16 @@ impl Spool {
         let Some(at) = inner.ready.iter().position(|f| f.stem == stem) else { return Ok(()) };
         let f = inner.ready.remove(at).ok_or_else(|| io::Error::other("spool index"))?;
         inner.ready_bytes = inner.ready_bytes.saturating_sub(f.bytes);
+
         // Counted while the lock is held, so a status read never sees the
         // file gone from the queue without it counted as uploaded: the
         // worker has stored it, deleting the local copy below is cleanup.
         if acked {
             self.counters.uploaded_files.fetch_add(1, Ordering::Relaxed);
         }
+
         drop(inner);
+
         if acked {
             let done = self.dir.join(file_name(stem, ACKED));
             fs::rename(&f.path, &done)?;
@@ -548,6 +586,7 @@ impl Spool {
             fs::remove_file(&f.path)?;
             self.count_drop(f.bytes);
         }
+
         Ok(())
     }
 
@@ -561,6 +600,7 @@ impl Spool {
     pub fn status(&self, now_ms: i64) -> SpoolStatus {
         let inner = self.lock();
         let c = &self.counters;
+
         SpoolStatus {
             files: inner.ready.len() as u64,
             bytes: inner.ready_bytes,
@@ -619,6 +659,7 @@ mod tests {
         let mut v: Vec<String> =
             fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
         v.sort();
+
         v
     }
 
@@ -628,6 +669,7 @@ mod tests {
         zstd::stream::read::Decoder::new(File::open(path).unwrap()).unwrap().read_to_string(&mut text).unwrap();
         let mut lines = text.lines();
         let header = serde_json::from_str(lines.next().unwrap()).unwrap();
+
         (header, lines.map(|l| serde_json::from_str(l).unwrap()).collect())
     }
 
@@ -655,6 +697,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let l = Limits { level: 1, ..limits() };
         let (s, _) = open(dir.path(), l, Arc::default());
+
         // Incompressible bodies so the files are near their raw size.
         let mut seed = 1u64;
         let mut body = || {
@@ -665,9 +708,11 @@ mod tests {
                 })
                 .collect::<String>()
         };
+
         for i in 0..200 {
             s.append_app_log("k", &body(), NOW + i).unwrap();
         }
+
         let st = s.status(NOW);
         assert!(st.files > 1, "sealed by size");
         assert!(st.bytes <= l.max_bytes, "{} over the cap", st.bytes);
@@ -684,6 +729,7 @@ mod tests {
         assert_eq!(s.accepting(), Ok(()));
         disk.full.store(true, Ordering::Relaxed);
         assert_eq!(s.accepting(), Err(SpoolError::DiskLow));
+
         // A full disk drops what was buffered instead of writing it.
         s.append_app_log("k", "x", NOW).unwrap();
         assert_eq!(s.seal(NOW), Err(SpoolError::DiskLow));
@@ -704,13 +750,16 @@ mod tests {
         s.seal(NOW).unwrap();
         s.append(&app_log_row("k", "b", NOW), NOW).unwrap();
         s.seal(NOW).unwrap();
+
         let (a, b) = {
             let i = s.lock();
             (i.ready[0].clone(), i.ready[1].clone())
         };
+
         // Lines still in the buffer at a crash are lost: they were never on disk.
         s.append(&app_log_row("k", "lost", NOW), NOW).unwrap();
         drop(s);
+
         // A crash while writing (tmp), between ack-rename and delete (acked),
         // and an old file past its age.
         let tmp = FileName::new(node).stem();

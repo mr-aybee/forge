@@ -7,6 +7,7 @@ use serde_json::json;
 async fn admin_mfa(h: &Harness) -> Client {
     let mut admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
     step_up(&mut admin).await;
+
     admin
 }
 
@@ -32,12 +33,14 @@ async fn built_in_profiles_mirror_the_roles_and_are_read_only() {
         admin.call(Method::DELETE, &format!("/api/v1/access/profiles/{id}"), None).await.0,
         StatusCode::CONFLICT
     );
+
     // A duplicate is an editable copy.
     let (s, copy) =
         admin.post(&format!("/api/v1/access/profiles/{id}/duplicate"), json!({ "name": "Night operator" })).await;
     assert_eq!(s, StatusCode::CREATED, "{copy}");
     assert_eq!(copy["builtin"], false);
     assert_eq!(copy["actions"], ops["actions"]);
+
     // The catalog lists every action with MFA and roles.
     let (_, cat) = admin.get("/api/v1/access/catalog").await;
     let term = cat["actions"].as_array().unwrap().iter().find(|a| a["action"] == "terminal.open").unwrap().clone();
@@ -55,6 +58,7 @@ async fn an_assignment_grants_only_its_actions_and_ends_at_once() {
         .await;
     assert_eq!(s, StatusCode::CREATED, "{p}");
     let pid = p["id"].as_str().unwrap().to_owned();
+
     // A user with nothing yet.
     h.app.state.identity.create_account(None, Some("v@example.com"), "V", PASSWORD).await.unwrap();
     let v = Client::login(&h.base, "v@example.com", PASSWORD).await;
@@ -98,6 +102,7 @@ async fn an_assignment_grants_only_its_actions_and_ends_at_once() {
     assert_eq!(v.get("/api/v1/settings").await.0, StatusCode::FORBIDDEN, "archived");
     let (_, audit) = admin.get("/api/v1/audit?limit=100").await;
     let text = audit.to_string();
+
     for a in ["access.profile.create", "access.assign", "access.profile.publish", "access.profile.archive"] {
         assert!(text.contains(a), "{a} audited");
     }
@@ -111,6 +116,7 @@ async fn nobody_hands_out_more_than_they_hold() {
     let (_, p) =
         admin.post("/api/v1/access/profiles", json!({ "name": "Secrets", "actions": ["view", "secret.read"] })).await;
     let pid = p["id"].as_str().unwrap().to_owned();
+
     // A workspace admin may assign, but `system.update` is platform-admin only.
     let (_, q) =
         admin.post("/api/v1/access/profiles", json!({ "name": "Updater", "actions": ["system.update"] })).await;
@@ -132,6 +138,7 @@ async fn nobody_hands_out_more_than_they_hold() {
         )
         .await;
     assert_eq!(s, StatusCode::CREATED, "a workspace admin holds view and secret.read here: {a}");
+
     // Without MFA, assigning is refused; removing is not.
     let plain = user_with_role(&h, &admin, "wsa2@example.com", "workspace_admin", &format!("workspace:{ws}")).await;
     let (s, e) = plain
@@ -146,6 +153,7 @@ async fn nobody_hands_out_more_than_they_hold() {
         plain.call(Method::DELETE, &format!("/api/v1/access/assignments/{id}"), None).await.0,
         StatusCode::NO_CONTENT
     );
+
     // Scopes come from the allow-list.
     let (s, _) = admin
         .post(
@@ -197,6 +205,7 @@ async fn service_accounts_use_tokens_only_and_get_access_only_by_assignment() {
         .await;
     assert_eq!(s, StatusCode::CREATED, "{a}");
     assert_eq!(ci.post("/api/v1/clusters", json!({ "name": "y" })).await.0, StatusCode::CREATED);
+
     // Tokens never hold MFA: guarded actions stay refused.
     let (s, _) = ci.post("/api/v1/access/profiles", json!({ "name": "z", "actions": ["view"] })).await;
     assert_eq!(s, StatusCode::FORBIDDEN);
@@ -213,9 +222,11 @@ async fn service_accounts_use_tokens_only_and_get_access_only_by_assignment() {
     let (_, t) = admin.post(&format!("{url}/tokens"), json!({ "name": "gha2" })).await;
     ci.bearer = t["secret"].as_str().map(str::to_owned);
     assert_eq!(ci.get("/api/v1/me").await.0, StatusCode::OK, "a new token works");
+
     // Unknown fields are refused.
     let (s, _) = admin.post(&format!("{url}/tokens"), json!({ "name": "y", "scope": "all" })).await;
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+
     // A service account's token is a personal access token: it can be
     // restricted like one, and then does only what is listed.
     let me_ws = ci.get("/api/v1/me").await.1["workspace_id"].as_str().map(str::to_owned);
@@ -248,6 +259,7 @@ async fn service_accounts_use_tokens_only_and_get_access_only_by_assignment() {
 
     let (_, audit) = admin.get("/api/v1/audit?limit=100").await;
     let text = audit.to_string();
+
     for a in [
         "service_account.create",
         "service_account.token.create",
@@ -256,6 +268,7 @@ async fn service_accounts_use_tokens_only_and_get_access_only_by_assignment() {
     ] {
         assert!(text.contains(a), "{a} audited");
     }
+
     assert!(!text.contains(t["secret"].as_str().unwrap()), "no token in the audit log");
 }
 
@@ -265,10 +278,12 @@ async fn service_account_tokens_are_capped() {
     let admin = admin_mfa(&h).await;
     let (_, sa) = admin.post("/api/v1/service-accounts", json!({ "name": "many" })).await;
     let url = format!("/api/v1/service-accounts/{}/tokens", sa["id"].as_str().unwrap());
+
     for i in 0..10 {
         let (s, b) = admin.post(&url, json!({ "name": format!("t{i}") })).await;
         assert_eq!(s, StatusCode::CREATED, "{b}");
     }
+
     let (s, e) = admin.post(&url, json!({ "name": "t10" })).await;
     assert_eq!(s, StatusCode::CONFLICT, "{e}");
     let (_, list) = admin.get(&url).await;
@@ -287,11 +302,13 @@ async fn concurrent_assign_publish_and_archive_never_leave_stale_links() {
         admin.post("/api/v1/access/profiles", json!({ "name": "Racy", "actions": ["view", "workspace.manage"] })).await;
     let pid = p["id"].as_str().unwrap().to_owned();
     let mut people = Vec::new();
+
     for i in 0..8 {
         let email = format!("r{i}@example.com");
         h.app.state.identity.create_account(None, Some(&email), "R", PASSWORD).await.unwrap();
         people.push(email);
     }
+
     let assigns = people.iter().map(|email| {
         admin.post(
             "/api/v1/access/assignments",
@@ -301,17 +318,21 @@ async fn concurrent_assign_publish_and_archive_never_leave_stale_links() {
     let profile_url = format!("/api/v1/access/profiles/{pid}");
     let publish = admin.call(Method::PUT, &profile_url, Some(json!({ "actions": ["view"], "expected_revision": 1 })));
     let (_, results) = tokio::join!(publish, futures::future::join_all(assigns));
+
     // Whatever order they ran in, nobody keeps workspace.manage.
     for (email, (s, _)) in people.iter().zip(&results) {
         let c = Client::login(&h.base, email, PASSWORD).await;
         let made = c.post("/api/v1/clusters", json!({ "name": format!("c-{email}") })).await.0;
         assert_eq!(made, StatusCode::FORBIDDEN, "{email} (assign answered {s}) kept the old revision");
     }
+
     // Archive racing more assigns: none of them grants afterwards.
     let more: Vec<String> = (0..6).map(|i| format!("a{i}@example.com")).collect();
+
     for email in &more {
         h.app.state.identity.create_account(None, Some(email), "A", PASSWORD).await.unwrap();
     }
+
     let assigns = more.iter().map(|email| {
         admin.post(
             "/api/v1/access/assignments",
@@ -320,6 +341,7 @@ async fn concurrent_assign_publish_and_archive_never_leave_stale_links() {
     });
     let archive = admin.call(Method::DELETE, &profile_url, None);
     let _ = tokio::join!(archive, futures::future::join_all(assigns));
+
     for email in &more {
         let c = Client::login(&h.base, email, PASSWORD).await;
         assert_eq!(c.get("/api/v1/settings").await.0, StatusCode::FORBIDDEN, "{email} granted by an archived profile");
@@ -347,6 +369,7 @@ async fn an_expired_assignment_stops_granting_without_the_sweep() {
     assert_eq!(s, StatusCode::CREATED, "{a}");
     let b = Client::login(&h.base, "b@example.com", PASSWORD).await;
     assert_eq!(b.post("/api/v1/clusters", json!({ "name": "early" })).await.0, StatusCode::CREATED);
+
     // Relink it with an expiry in the past, as the engine would see it a
     // minute later; the store row stays, so only the engine check can stop it.
     let mut stale: forge_core::permissions::ProfileAssignment = serde_json::from_value(a.clone()).unwrap();

@@ -70,6 +70,7 @@ pub async fn list(
         (Some(cluster), None) => state.store.list_cluster_services(cluster).await?,
         (_, ns) => (state.store.list_services(ns).await?, state.store.list_all_instances(ns).await?),
     };
+
     // Authorize once per environment, not once per service.
     let mut environments: Vec<EnvironmentId> = apps.iter().map(|a| a.environment_id).collect();
     environments.sort_unstable();
@@ -81,6 +82,7 @@ pub async fn list(
         environments.iter().zip(&views).filter(|(_, ok)| **ok).map(|(n, _)| *n).collect();
     let deployable: std::collections::HashSet<EnvironmentId> =
         environments.iter().zip(&deploys).filter(|(_, ok)| **ok).map(|(n, _)| *n).collect();
+
     // A grant on a single service (#13): services in environments the caller
     // cannot see are checked one by one, in one batch.
     let single: Vec<ServiceId> = apps.iter().filter(|a| !allowed.contains(&a.environment_id)).map(|a| a.id).collect();
@@ -91,12 +93,15 @@ pub async fn list(
         single.iter().zip(&single_views).filter(|(_, ok)| **ok).map(|(a, _)| *a).collect();
     let app_deployable: std::collections::HashSet<ServiceId> =
         single.iter().zip(&single_deploys).filter(|(_, ok)| **ok).map(|(a, _)| *a).collect();
+
     // Placements in one query (or one per app for a single environment view).
     let mut by_app: std::collections::HashMap<ServiceId, Vec<forge_core::model::ServiceInstance>> =
         std::collections::HashMap::new();
+
     for i in instances {
         by_app.entry(i.service_id).or_default().push(i);
     }
+
     Ok(Json(
         apps.into_iter()
             .filter(|a| allowed.contains(&a.environment_id) || app_allowed.contains(&a.id))
@@ -127,6 +132,7 @@ pub(super) async fn load_own(state: &AppState, id: ServiceId) -> ApiResult<Servi
             app.name
         )));
     }
+
     Ok(app)
 }
 
@@ -135,6 +141,7 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Path(id): Path<S
     caller.authorize(Action::View, svc_ref(app.id)).await?;
     let instances = state.store.list_instances(id).await?;
     let can_deploy = caller.can(Action::Deploy, svc_ref(app.id)).await;
+
     Ok(Json(AppView { app, instances, can_deploy }))
 }
 
@@ -214,16 +221,20 @@ fn apply(state: &AppState, app: &mut Service, ns_slug: &str, input: AppInput) ->
     if !matches!(input.runtime.as_str(), "systemd" | "container") {
         return Err(ApiError::bad_request("runtime must be systemd or container"));
     }
+
     if let Some(s) = &input.swarm {
         s.validate().map_err(ApiError::bad_request)?;
     }
+
     let mut seen = HashSet::new();
     let mut env = Vec::new();
+
     for e in input.env {
         let key = e.key.trim().to_owned();
         if !seen.insert(key.clone()) {
             return Err(ApiError::bad_request(format!("duplicate variable `{key}`")));
         }
+
         if e.secret {
             let sealed = match e.value.filter(|v| !v.is_empty()) {
                 Some(v) => Some(
@@ -235,16 +246,20 @@ fn apply(state: &AppState, app: &mut Service, ns_slug: &str, input: AppInput) ->
                 // Empty means "keep the stored value".
                 None => app.env.iter().find(|x| x.key == key && x.secret).and_then(|x| x.sealed.clone()),
             };
+
             if sealed.is_none() {
                 return Err(ApiError::bad_request(format!("secret `{key}` needs a value")));
             }
+
             env.push(EnvVar { key, value: None, secret: true, sealed });
         } else {
             env.push(EnvVar { key, value: Some(e.value.unwrap_or_default()), secret: false, sealed: None });
         }
     }
+
     app.runtime = input.runtime;
     app.env = env;
+
     // The health policy has its own endpoint (`PUT /services/{id}/health`);
     // an ordinary update keeps it.
     let health = app.spec.get("health").cloned().filter(|v| !v.is_null());
@@ -272,11 +287,14 @@ fn apply(state: &AppState, app: &mut Service, ns_slug: &str, input: AppInput) ->
         "log_max_mb": input.log_max_mb,
         "swarm": input.swarm,
     });
+
     if let (Some(h), Some(spec)) = (health, app.spec.as_object_mut()) {
         spec.insert("health".into(), h);
     }
+
     app.updated_at = state.clock.now();
     build_spec(app, None).map_err(ApiError::bad_request)?;
+
     Ok(())
 }
 
@@ -292,9 +310,11 @@ pub async fn create(
     if !forge_catalog::apps::valid_slug(&name, 40) {
         return Err(ApiError::bad_request("name: lowercase letters, digits and dashes (max 40)"));
     }
+
     if state.store.list_services(Some(ns_id)).await?.iter().any(|a| a.name == name) {
         return Err(ApiError::conflict(format!("`{name}` already exists in this environment")));
     }
+
     let now = state.clock.now();
     let mut app = Service {
         id: ServiceId::new(),
@@ -310,10 +330,12 @@ pub async fn create(
     };
     apply(&state, &mut app, &crate::names::environment_slug(&ns.name), input)?;
     state.swarm.check_runtime(ns.id, &app.runtime).await?;
+
     if state.swarm.swarm_of_environment(app.environment_id).await?.is_some() {
         // The whole Swarm definition is checked now, not first at deploy.
         crate::jobs::swarm_service::binds_of(&app).map_err(ApiError::bad_request)?;
     }
+
     state.store.put_service(&app).await?;
     caller
         .audit(
@@ -323,6 +345,7 @@ pub async fn create(
             json!({ "service": app.name, "runtime": app.runtime }),
         )
         .await;
+
     Ok((StatusCode::CREATED, Json(app)))
 }
 
@@ -337,10 +360,12 @@ pub async fn update(
     let ns_slug = app.spec.get("environment").and_then(Value::as_str).unwrap_or_default().to_owned();
     apply(&state, &mut app, &ns_slug, input)?;
     state.swarm.check_runtime(app.environment_id, &app.runtime).await?;
+
     if state.swarm.swarm_of_environment(app.environment_id).await?.is_some() {
         // The whole Swarm definition is checked now, not first at deploy.
         crate::jobs::swarm_service::binds_of(&app).map_err(ApiError::bad_request)?;
     }
+
     state.store.put_service(&app).await?;
     let keys: Vec<&str> = app.env.iter().map(|e| e.key.as_str()).collect();
     caller
@@ -351,12 +376,14 @@ pub async fn update(
             json!({ "service": app.name, "env_keys": keys }),
         )
         .await;
+
     Ok(Json(app))
 }
 
 pub async fn delete(State(state): State<AppState>, caller: Caller, Path(id): Path<ServiceId>) -> ApiResult<StatusCode> {
     let app = load_own(&state, id).await?;
     caller.authorize(Action::Deploy, ns_ref(app.environment_id)).await?;
+
     // A Swarm service must be removed from the swarm first.
     if let Some(cluster) = state.swarm.swarm_of_environment(app.environment_id).await? {
         for slot in ["", "a", "b"] {
@@ -364,25 +391,31 @@ pub async fn delete(State(state): State<AppState>, caller: Caller, Path(id): Pat
             let status: forge_catalog::swarm::SwarmServiceStatus =
                 serde_json::from_value(state.swarm.run(cluster, &caller.principal().to_string(), &op).await?)
                     .map_err(forge_core::DomainError::internal)?;
+
             if status.exists {
                 return Err(ApiError::conflict("remove the service from the swarm first"));
             }
         }
     }
+
     let instances = state.store.list_instances(id).await?;
     if instances.iter().any(|i| i.status != "pending") {
         return Err(ApiError::conflict("remove the service from its nodes first"));
     }
+
     // Prepared placements may hold an automatic file root (F-05).
     let actor = caller.principal().to_string();
+
     for i in &instances {
         crate::app_roots::remove(&state.store, state.audit.as_ref(), &actor, &app, i.server_id).await?;
     }
+
     state.store.delete_service(id).await?;
     state.health_secrets.forget(id);
     caller
         .audit("service.delete", &ns_ref(app.environment_id), Some(app.workspace_id), json!({ "service": app.name }))
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -408,6 +441,7 @@ pub async fn place(
     let existing = state.store.list_instances(id).await?;
     let wanted: HashSet<ServerId> = placements.iter().map(|p| p.server_id).collect();
     let actor = caller.principal().to_string();
+
     for i in &existing {
         if !wanted.contains(&i.server_id) {
             if i.status == "pending" {
@@ -419,16 +453,20 @@ pub async fn place(
             }
         }
     }
+
     let mut new_nodes = Vec::new();
+
     for p in placements {
         if !matches!(p.role.as_str(), "active" | "standby") {
             return Err(ApiError::bad_request("role must be active or standby"));
         }
+
         caller.authorize(Action::ServerManage, EntityRef::new(EntityKind::Server, p.server_id)).await?;
         let server = state.store.get_server(p.server_id).await.map_err(|_| ApiError::not_found("server not found"))?;
         if !existing.iter().any(|i| i.server_id == p.server_id) && crate::app_roots::supported(&server) {
             new_nodes.push(p.server_id);
         }
+
         let mut inst = existing.iter().find(|i| i.server_id == p.server_id).cloned().unwrap_or(ServiceInstance {
             service_id: id,
             server_id: p.server_id,
@@ -442,14 +480,17 @@ pub async fn place(
         inst.role = p.role;
         state.store.put_instance(&inst).await?;
     }
+
     // F-03: a native app's account, folder and file root are provisioned as
     // soon as it is placed, so code can be uploaded before the first deploy.
     let mut prepare_jobs = Vec::new();
+
     if crate::app_roots::spec_for(&app).is_some() {
         for server in new_nodes {
             prepare_jobs.push(submit(&state, &caller, &app, server, "prepare", 0, "", &[]).await?.id);
         }
     }
+
     caller
         .audit(
             "service.place",
@@ -458,6 +499,7 @@ pub async fn place(
             json!({ "service": app.name, "prepare_jobs": prepare_jobs }),
         )
         .await;
+
     Ok(Json(state.store.list_instances(id).await?))
 }
 
@@ -477,6 +519,7 @@ async fn privileged_mounts(
     if !mounts.is_empty() {
         caller.authorize(Action::StackPrivileged, ns_ref(app.environment_id)).await?;
     }
+
     Ok(mounts)
 }
 
@@ -523,6 +566,7 @@ pub async fn deploy(
 ) -> ApiResult<(StatusCode, Json<Vec<Job>>)> {
     let app = load_own(&state, id).await?;
     caller.authorize(Action::Deploy, svc_ref(app.id)).await?;
+
     // In a Swarm cluster the swarm places the tasks: one job on a manager.
     if state.swarm.swarm_of_environment(app.environment_id).await?.is_some() {
         let job = super::swarm::start_service_action(
@@ -534,23 +578,29 @@ pub async fn deploy(
         .await?;
         return Ok((StatusCode::ACCEPTED, Json(vec![job])));
     }
+
     let instances = state.store.list_instances(id).await?;
     if instances.is_empty() {
         return Err(ApiError::conflict("choose the nodes this service runs on first"));
     }
+
     // Mounts outside the app folder and approved roots: checked for every node
     // before anything starts.
     let mut mounts = Vec::new();
+
     for i in &instances {
         mounts.push(privileged_mounts(&state, &caller, &app, i.server_id).await?);
     }
+
     let nodes: Vec<ServerId> = instances.iter().map(|i| i.server_id).collect();
     let installs = install_runtimes(&state, &caller, &app, &nodes).await?;
     let runtime_installs = installs.len();
     let mut jobs = installs;
+
     for (i, m) in instances.iter().zip(&mounts) {
         jobs.push(submit(&state, &caller, &app, i.server_id, "deploy", 0, "", m).await?);
     }
+
     let privileged: Vec<&String> =
         mounts.iter().flatten().collect::<std::collections::BTreeSet<_>>().into_iter().collect();
     caller
@@ -564,6 +614,7 @@ pub async fn deploy(
             }),
         )
         .await;
+
     Ok((StatusCode::ACCEPTED, Json(jobs)))
 }
 
@@ -578,6 +629,7 @@ pub(super) async fn install_runtimes(
 ) -> ApiResult<Vec<Job>> {
     let spec = build_spec(app, None).map_err(ApiError::bad_request)?;
     let mut installs = Vec::new();
+
     // A container needs Docker Engine: installed first on the nodes that
     // say they have none (see `container_runtime`).
     if spec.runtime == forge_catalog::Runtime::Container {
@@ -590,13 +642,16 @@ pub(super) async fn install_runtimes(
                 params: std::collections::BTreeMap::new(),
                 server_ids: missing,
             };
+
             for s in super::packages::start_install(state, caller, req).await? {
                 installs.push(s.job);
             }
         }
     }
+
     for d in &spec.dependencies {
         let mut missing = Vec::new();
+
         for server in nodes {
             let have = state.store.list_installations(Some(*server)).await?;
             let ok = have.iter().any(|x| {
@@ -604,10 +659,12 @@ pub(super) async fn install_runtimes(
                     && x.version == d.version
                     && (x.status == "installed" || x.status.ends_with("ing"))
             });
+
             if !ok {
                 missing.push(*server);
             }
         }
+
         if !missing.is_empty() {
             let req = super::packages::InstallRequest {
                 package: d.package.clone(),
@@ -615,11 +672,13 @@ pub(super) async fn install_runtimes(
                 params: d.params.clone(),
                 server_ids: missing,
             };
+
             for s in super::packages::start_install(state, caller, req).await? {
                 installs.push(s.job);
             }
         }
     }
+
     Ok(installs)
 }
 
@@ -642,19 +701,25 @@ pub async fn action(
     if !forge_catalog::apps::APP_ACTIONS.contains(&req.action.as_str()) {
         return Err(ApiError::bad_request("unknown action"));
     }
+
     let app = load_own(&state, id).await?;
     let needed =
         if matches!(req.action.as_str(), "status" | "logs" | "follow") { Action::View } else { Action::Deploy };
+
     if req.cursor.len() > 512 || req.cursor.contains(['\n', '\0']) {
         return Err(ApiError::bad_request("invalid cursor"));
     }
+
     caller.authorize(needed, svc_ref(app.id)).await?;
+
     if !state.store.list_instances(id).await?.iter().any(|i| i.server_id == server) {
         return Err(ApiError::not_found("the service is not placed on this node"));
     }
+
     let mounts =
         if req.action == "deploy" { privileged_mounts(&state, &caller, &app, server).await? } else { Vec::new() };
     let job = submit(&state, &caller, &app, server, &req.action, req.tail.clamp(0, 5000), &req.cursor, &mounts).await?;
+
     if needed == Action::Deploy {
         caller
             .audit(
@@ -665,11 +730,13 @@ pub async fn action(
             )
             .await;
     }
+
     // Quick actions answer inline; deploys and job runs are followed via Jobs.
     // `follow` segments stream through `GET /jobs/{id}/live`.
     let wait =
         if matches!(req.action.as_str(), "deploy" | "follow") { Duration::ZERO } else { Duration::from_secs(25) };
     let deadline = tokio::time::Instant::now() + wait;
+
     loop {
         let j = state.store.get_job(job.id).await?;
         match j.status {

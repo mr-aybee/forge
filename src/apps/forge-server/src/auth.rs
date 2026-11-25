@@ -126,6 +126,7 @@ impl Caller {
     async fn within_ceiling(&self, action: Action, resources: &[EntityRef]) -> Vec<bool> {
         let Some(ceiling) = &self.ceiling else { return vec![true; resources.len()] };
         use forge_core::ports::ResourceResolver;
+
         self.state
             .store
             .resolve_many(resources)
@@ -154,11 +155,13 @@ impl Caller {
         let reqs: Vec<AccessRequest> =
             actions.iter().map(|a| AccessRequest::new(self.principal(), *a, scope.clone(), self.ctx())).collect();
         let mut held = self.state.authz.holds_over(&reqs).await;
+
         for (i, a) in actions.iter().enumerate() {
             if held[i] {
                 held[i] = self.within_ceiling(*a, std::slice::from_ref(scope)).await[0];
             }
         }
+
         held
     }
 
@@ -167,6 +170,7 @@ impl Caller {
         let reqs: Vec<AccessRequest> =
             resources.into_iter().map(|r| AccessRequest::new(self.principal(), action, r, self.ctx())).collect();
         let allowed = self.state.authz.is_allowed_many(&reqs).await;
+
         allowed.into_iter().zip(within).map(|(a, w)| a && w).collect()
     }
 
@@ -184,7 +188,9 @@ impl Caller {
         if self.ctx().mfa {
             return Ok(());
         }
+
         self.audit_denied(action, resource, None, "an MFA-verified session is required").await;
+
         Err(ApiError::new(
             axum::http::StatusCode::FORBIDDEN,
             "step_up_required",
@@ -221,6 +227,7 @@ impl Caller {
         details: Value,
     ) {
         let mut details = if details.is_null() { Value::Object(serde_json::Map::new()) } else { details };
+
         // Calls made by an AI connector name it, and its mode, in the audit log.
         if let (Some(c), Value::Object(m)) = (&self.session.connection, &mut details) {
             m.insert(
@@ -228,14 +235,17 @@ impl Caller {
                 serde_json::json!({ "connector": c.client_name, "client_id": c.client_id, "connection": c.id, "mode": c.mode }),
             );
         }
+
         if let (Some(v), Value::Object(m)) = (&self.via, &mut details) {
             m.insert("via".into(), v.clone());
         }
+
         // Calls made with an API key or service-account token name it.
         if let (Some(id), Value::Object(m)) = (self.session.session.id_hash.strip_prefix("apikey:"), &mut details) {
             m.entry("token_id").or_insert_with(|| Value::from(id));
             m.insert("elevated".into(), Value::from(self.elevated_token));
         }
+
         let ev = AuditEvent::new(self.principal(), action, resource, outcome).in_org(org).with_details(details);
         if let Err(e) = self.state.audit.append(ev).await {
             tracing::error!(error = %e, "audit write failed");
@@ -272,10 +282,12 @@ impl FromRequestParts<AppState> for Caller {
         {
             return api_key_caller(state, token).await;
         }
+
         if let Some(token) = bearer(&parts.headers) {
             let mut session =
                 state.identity.authenticate(token, SessionKind::Bearer).await?.ok_or_else(ApiError::unauthorized)?;
             let factor_verified = session.session.mfa && session.connection.is_none();
+
             if let Some(c) = &session.connection {
                 // RFC 8707: a connector's token is for /mcp only. Its calls
                 // reach handlers solely through the in-process MCP dispatch,
@@ -288,11 +300,13 @@ impl FromRequestParts<AppState> for Caller {
                         "this token is for the MCP endpoint only",
                     ));
                 }
+
                 // Agents never hold MFA, not even with the development toggle.
                 session.session.mfa = false;
             } else {
                 session.session.mfa |= !state.config.mfa_required();
             }
+
             return Ok(Self {
                 session,
                 state: state.clone(),
@@ -302,22 +316,27 @@ impl FromRequestParts<AppState> for Caller {
                 ceiling: None,
             });
         }
+
         let token = cookie(&parts.headers, SESSION_COOKIE).ok_or_else(ApiError::unauthorized)?;
         let mut session =
             state.identity.authenticate(token, SessionKind::Web).await?.ok_or_else(ApiError::unauthorized)?;
         let factor_verified = session.session.mfa;
+
         // Local development only (refused at start-up for non-loopback URLs).
         session.session.mfa |= !state.config.mfa_required();
+
         if !is_safe(&parts.method) {
             let header = parts.headers.get(CSRF_HEADER).and_then(|v| v.to_str().ok());
             if !IdentityService::verify_csrf(&session, header) {
                 return Err(ApiError::forbidden("missing or invalid CSRF token"));
             }
         }
+
         let via = parts
             .extensions
             .get::<ApprovalExec>()
             .map(|e| serde_json::json!({ "approval": e.approval_id, "connector": e.requester }));
+
         Ok(Self { session, state: state.clone(), via, factor_verified, elevated_token: false, ceiling: None })
     }
 }
@@ -413,10 +432,12 @@ async fn api_key_caller(state: &AppState, token: &str) -> Result<Caller, ApiErro
     if key.expires_at.is_some_and(|e| e <= now) {
         return Err(ApiError::unauthorized());
     }
+
     let user = state.store.get_user(key.user_id).await.map_err(|_| ApiError::unauthorized())?;
     if user.disabled {
         return Err(ApiError::unauthorized());
     }
+
     let _ = state.store.touch_api_key(&key.id, now).await;
     let elevated = key.elevated && state.config.elevated_tokens_allowed();
     let session = forge_core::model::Session {
@@ -431,6 +452,7 @@ async fn api_key_caller(state: &AppState, token: &str) -> Result<Caller, ApiErro
         expires_at: key.expires_at.unwrap_or(forge_core::Timestamp(i64::MAX)),
         connection_id: None,
     };
+
     Ok(Caller {
         session: AuthenticatedSession { user, session, connection: None },
         state: state.clone(),
@@ -456,6 +478,7 @@ pub(crate) async fn webhook_caller(
     if user.disabled {
         return Ok(None);
     }
+
     let now = state.clock.now();
     let session = forge_core::model::Session {
         id_hash: format!("webhook:{webhook}"),
@@ -468,6 +491,7 @@ pub(crate) async fn webhook_caller(
         expires_at: now,
         connection_id: None,
     };
+
     Ok(Some(Caller {
         session: AuthenticatedSession { user, session, connection: None },
         state: state.clone(),
@@ -495,12 +519,15 @@ pub async fn still_signed_in(state: &AppState, caller: &Caller) -> bool {
     if s.expires_at <= now {
         return false;
     }
+
     if !matches!(state.store.get_user(s.user_id).await, Ok(u) if !u.disabled) {
         return false;
     }
+
     if let Some(key_id) = s.id_hash.strip_prefix("apikey:") {
         return matches!(state.store.list_api_keys(s.user_id).await, Ok(keys) if keys.iter().any(|k| k.id == key_id));
     }
+
     matches!(state.store.get_session(&s.id_hash).await, Ok(Some(row)) if row.expires_at > now)
 }
 

@@ -44,6 +44,7 @@ impl Authorizer for CedarAuthorizer {
         let uniform = requests
             .windows(2)
             .all(|w| w[0].principal == w[1].principal && w[0].action == w[1].action && w[0].context == w[1].context);
+
         if uniform
             && let Some(first) = requests.first()
             && resolved.iter().all(Result::is_ok)
@@ -52,14 +53,17 @@ impl Authorizer for CedarAuthorizer {
             if let Ok(d) = self.engine.evaluate_many(&first.principal, first.action, &resources, first.context) {
                 return d.into_iter().map(|d| d.allowed).collect();
             }
+
             return vec![false; requests.len()];
         }
+
         requests.iter().zip(resolved).map(|(r, res)| res.and_then(|res| self.decide(r, &res)).is_ok()).collect()
     }
 
     async fn holds_over(&self, requests: &[AccessRequest]) -> Vec<bool> {
         let entities: Vec<EntityRef> = requests.iter().map(|r| r.resource.clone()).collect();
         let resolved = self.resolver.resolve_many(&entities).await;
+
         requests
             .iter()
             .zip(resolved)
@@ -86,6 +90,7 @@ impl CedarAuthorizer {
             }
             Err(e) => return Err(DomainError::internal(e)),
         };
+
         if decision.allowed {
             Ok(())
         } else {
@@ -96,6 +101,7 @@ impl CedarAuthorizer {
                 errors = ?decision.errors,
                 "authorization denied"
             );
+
             if decision.reasons.iter().any(|r| r == MFA_GUARD) {
                 // The role allows it; only the step-up is missing. Say so,
                 // so clients can ask for a code instead of showing a denial.
@@ -104,6 +110,7 @@ impl CedarAuthorizer {
                     request.action
                 )));
             }
+
             Err(DomainError::Denied(format!("{} on {}", request.action, request.resource)))
         }
     }

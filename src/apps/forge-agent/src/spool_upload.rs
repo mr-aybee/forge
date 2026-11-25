@@ -96,6 +96,7 @@ impl Sink for WorkerSink {
             header: Some((FILE_ID_HEADER, stem)),
             body,
         };
+
         match self.link.send(out).await {
             Ok((status, body)) => outcome(stem, status, &body),
             Err(e) => Outcome::Retry(e.to_string()),
@@ -116,12 +117,15 @@ pub async fn run(
 ) {
     let mut sink: Option<(Target, Box<dyn Sink>)> = None;
     let mut failures: u32 = 0;
+
     loop {
         if *shutdown.borrow() {
             return;
         }
+
         let current = target.borrow_and_update().clone();
         let file = spool.oldest();
+
         let (Some(t), Some(file)) = (current, file) else {
             tokio::select! {
                 () = spool.sealed() => {}
@@ -131,6 +135,7 @@ pub async fn run(
             }
             continue;
         };
+
         if sink.as_ref().is_none_or(|(st, _)| *st != t) {
             match make(&t) {
                 Ok(s) => sink = Some((t.clone(), s)),
@@ -141,10 +146,12 @@ pub async fn run(
                         r = target.changed() => if r.is_err() { return },
                         _ = shutdown.changed() => return,
                     }
+
                     continue;
                 }
             }
         }
+
         let Some((_, s)) = sink.as_mut() else { continue };
         let wait = match send_one(&spool, s.as_mut(), &file).await {
             Ok(()) => {
@@ -158,6 +165,7 @@ pub async fn run(
                 d
             }
         };
+
         tokio::select! {
             () = tokio::time::sleep(wait) => {}
             _ = shutdown.changed() => return,
@@ -177,6 +185,7 @@ async fn send_one(spool: &Arc<Spool>, sink: &mut dyn Sink, file: &ReadyFile) -> 
                 .map_err(|e| e.to_string())
         }
     };
+
     let body = match tokio::fs::read(&file.path).await {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -185,6 +194,7 @@ async fn send_one(spool: &Arc<Spool>, sink: &mut dyn Sink, file: &ReadyFile) -> 
         }
         Err(e) => return Err(e.to_string()),
     };
+
     match sink.upload(&file.stem, body).await {
         Outcome::Stored => finish(true).await,
         Outcome::Reject(reason) => {

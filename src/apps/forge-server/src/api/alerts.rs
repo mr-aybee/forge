@@ -59,6 +59,7 @@ pub async fn list_rules(
 ) -> ApiResult<Json<Vec<AlertRule>>> {
     let ws = q.workspace.unwrap_or(default);
     caller.authorize(Action::AlertView, ws_ref(ws)).await?;
+
     Ok(Json(state.store.list_rules(Some(ws)).await?))
 }
 
@@ -73,6 +74,7 @@ pub async fn get_rule(
     let describe = forge_alerts::parse_spec(&rule.spec).map(|s| s.describe()).ok();
     let mut v = serde_json::to_value(&rule).unwrap_or_default();
     v["condition"] = json!(describe);
+
     Ok(Json(v))
 }
 
@@ -119,18 +121,22 @@ async fn check(state: &AppState, ws: WorkspaceId, r: &RuleInput) -> ApiResult<()
             "the name is 1 to {MAX_RULE_NAME} characters, without control characters"
         )));
     }
+
     if r.description.chars().count() > 2000 {
         return Err(ApiError::bad_request("the description is at most 2000 characters"));
     }
+
     if !valid_subject(&r.subject) {
         return Err(ApiError::bad_request(
             "the subject is lowercase dotted segments of a-z, 0-9, _ and - (at most 128 bytes)",
         ));
     }
+
     // A typo would never fire: the subject must be one Forge produces, for
     // this scope (D-118).
     forge_alerts::catalog::check_subject(&r.subject, r.scope.kind()).map_err(bad_input)?;
     forge_alerts::parse_spec(&r.spec).map_err(ApiError::bad_request)?;
+
     check_scope_ids(state, ws, &r.scope).await
 }
 
@@ -139,6 +145,7 @@ async fn check_scope_ids(state: &AppState, ws: WorkspaceId, scope: &RuleScope) -
     if scope.len() > 500 {
         return Err(ApiError::bad_request("at most 500 ids in a scope"));
     }
+
     forge_alerts::catalog::check_scope_ids(&state.store, &state.store, ws, scope).await.map_err(bad_input)?;
     if let RuleScope::Servers { ids } = scope {
         for id in ids {
@@ -153,6 +160,7 @@ async fn check_scope_ids(state: &AppState, ws: WorkspaceId, scope: &RuleScope) -
     {
         return Err(ApiError::bad_request("service ids are 1 to 64 characters"));
     }
+
     Ok(())
 }
 
@@ -186,6 +194,7 @@ pub async fn list_subjects(
     let ws = q.workspace.unwrap_or(default);
     caller.authorize(Action::AlertView, ws_ref(ws)).await?;
     let seen_health = forge_alerts::catalog::seen_health_subjects(&state.store, &state.store, ws).await?;
+
     Ok(Json(SubjectList { subjects: forge_alerts::catalog::subjects(), seen_health }))
 }
 
@@ -209,6 +218,7 @@ pub async fn list_templates(
 ) -> ApiResult<Json<Vec<forge_alerts::catalog::AlertTemplate>>> {
     let ws = q.workspace.unwrap_or(default);
     caller.authorize(Action::AlertView, ws_ref(ws)).await?;
+
     Ok(Json(forge_alerts::catalog::templates(q.place)))
 }
 
@@ -228,6 +238,7 @@ pub async fn create_rule(
             "this workspace has the most alert rules allowed ({max}); delete one or raise [alerts] max_rules_per_workspace"
         )));
     }
+
     check(&state, ws, &input).await?;
     let now = state.clock.now();
     let rule = AlertRule {
@@ -249,6 +260,7 @@ pub async fn create_rule(
     caller
         .audit("alert.rule.create", &rule_ref(rule.id), Some(ws), json!({ "name": rule.name, "subject": rule.subject }))
         .await;
+
     Ok((StatusCode::CREATED, Json(rule)))
 }
 
@@ -263,10 +275,13 @@ pub async fn update_rule(
 ) -> ApiResult<Json<AlertRule>> {
     let old = state.store.get_rule(id).await.map_err(|_| ApiError::not_found("alert rule not found"))?;
     caller.authorize(Action::AlertManage, ws_ref(old.workspace_id)).await?;
+
     if input.workspace_id.is_some_and(|w| w != old.workspace_id) {
         return Err(ApiError::bad_request("a rule cannot move to another workspace"));
     }
+
     check(&state, old.workspace_id, &input).await?;
+
     // Only a change of what is evaluated starts a new revision; a new name
     // or description keeps the timers.
     let evaluated_changed = old.subject != input.subject
@@ -294,6 +309,7 @@ pub async fn update_rule(
             json!({ "name": rule.name, "revision": rule.revision, "resets_evaluation": evaluated_changed }),
         )
         .await;
+
     Ok(Json(rule))
 }
 
@@ -308,6 +324,7 @@ pub async fn delete_rule(
     caller.authorize(Action::AlertManage, ws_ref(rule.workspace_id)).await?;
     state.store.delete_rule(id).await?;
     caller.audit("alert.rule.delete", &rule_ref(id), Some(rule.workspace_id), json!({ "name": rule.name })).await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -373,6 +390,7 @@ fn view_target(a: &Alarm) -> EntityRef {
 async fn visible(caller: &Caller, alarms: Vec<Alarm>) -> Vec<Alarm> {
     let refs = alarms.iter().map(view_target).collect();
     let ok = caller.can_many(Action::View, refs).await;
+
     alarms.into_iter().zip(ok).filter(|(_, ok)| *ok).map(|(a, _)| a).collect()
 }
 
@@ -393,19 +411,24 @@ pub async fn list_alarms(
         resource: q.server.map(|s| EntityRef::new(EntityKind::Server, s)),
         before: None,
     };
+
     // The view filter runs after the query, so page on until the list is
     // full or the alarms run out (review of #23); bounded.
     let mut out: Vec<Alarm> = Vec::new();
+
     for _ in 0..20 {
         let page = state.store.list_alarms(&filter, limit).await?;
         let full = page.len() == limit as usize;
         filter.before = page.last().map(|a| (a.fired_at, a.id));
         out.extend(visible(&caller, page).await);
+
         if out.len() >= limit as usize || !full {
             break;
         }
     }
+
     out.truncate(limit as usize);
+
     Ok(Json(with_silences(&state, out).await?))
 }
 
@@ -422,6 +445,7 @@ async fn room_for_event(state: &AppState, id: AlarmId) -> ApiResult<()> {
             "this alarm already has {MAX_OPERATOR_EVENTS} notes and acknowledgements"
         )));
     }
+
     Ok(())
 }
 
@@ -431,7 +455,9 @@ async fn alarm_for(state: &AppState, caller: &Caller, id: AlarmId, action: Actio
     if !ok.first().copied().unwrap_or(false) {
         return Err(ApiError::not_found("alarm not found"));
     }
+
     caller.authorize(action, ws_ref(a.workspace_id)).await?;
+
     Ok(a)
 }
 
@@ -444,6 +470,7 @@ pub async fn get_alarm(
     let a = alarm_for(&state, &caller, id, Action::AlertView).await?;
     let events = state.store.alarm_events(id).await?;
     let alarm = with_silences(&state, vec![a]).await?.pop().ok_or_else(|| ApiError::not_found("alarm not found"))?;
+
     Ok(Json(AlarmDetail { alarm, events }))
 }
 
@@ -460,6 +487,7 @@ fn clean_note(n: &str) -> ApiResult<String> {
     if n.chars().count() > MAX_NOTE || n.chars().any(|c| c.is_control() && c != '\n') {
         return Err(ApiError::bad_request(format!("notes are at most {MAX_NOTE} characters")));
     }
+
     Ok(n.to_owned())
 }
 
@@ -485,6 +513,7 @@ pub async fn acknowledge(
     };
     state.store.acknowledge(id, Some(&who), now, &ev).await?;
     caller.audit("alert.alarm.acknowledge", &a.resource, Some(a.workspace_id), json!({ "alarm": id })).await;
+
     Ok(Json(state.store.get_alarm(id).await?))
 }
 
@@ -506,6 +535,7 @@ pub async fn unacknowledge(
     };
     state.store.acknowledge(id, None, now, &ev).await?;
     caller.audit("alert.alarm.unacknowledge", &a.resource, Some(a.workspace_id), json!({ "alarm": id })).await;
+
     Ok(Json(state.store.get_alarm(id).await?))
 }
 
@@ -521,6 +551,7 @@ pub async fn add_note(
     if note.is_empty() {
         return Err(ApiError::bad_request("the note is empty"));
     }
+
     room_for_event(&state, id).await?;
     let ev = AlarmEvent {
         alarm_id: id,
@@ -531,6 +562,7 @@ pub async fn add_note(
     };
     state.store.add_alarm_event(&ev).await?;
     caller.audit("alert.alarm.note", &a.resource, Some(a.workspace_id), json!({ "alarm": id })).await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -543,6 +575,7 @@ mod tests {
         for ok in ["node.agent.status", "node.cpu.percent", "health.readiness.http-check", "a_b.c"] {
             assert!(valid_subject(ok), "{ok}");
         }
+
         for bad in ["", "Node.cpu", "a..b", ".a", "a.", "a b", "a/b", &"a".repeat(129)] {
             assert!(!valid_subject(bad), "{bad:?}");
         }

@@ -109,6 +109,7 @@ fn transfers() -> &'static Semaphore {
 /// never; loopback only when `storage_allow_loopback` is set.
 fn endpoint_ip_allowed(ip: std::net::IpAddr, allow_loopback: bool) -> bool {
     use std::net::IpAddr;
+
     match ip {
         IpAddr::V4(v4) => {
             !(v4.is_link_local()
@@ -122,8 +123,10 @@ fn endpoint_ip_allowed(ip: std::net::IpAddr, allow_loopback: bool) -> bool {
             if let Some(v4) = v6.to_ipv4_mapped() {
                 return endpoint_ip_allowed(IpAddr::V4(v4), allow_loopback);
             }
+
             let seg = v6.segments();
             let link_local = seg[0] & 0xffc0 == 0xfe80;
+
             // AWS's IPv6 instance metadata service.
             let metadata = seg == [0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254];
             !(link_local
@@ -147,13 +150,16 @@ impl reqwest::dns::Resolve for GuardedResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let allow = self.allow_loopback;
         let host = name.as_str().to_owned();
+
         Box::pin(async move {
             let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
             let ok: Vec<std::net::SocketAddr> =
                 addrs.into_iter().filter(|a| endpoint_ip_allowed(a.ip(), allow)).collect();
+
             if ok.is_empty() {
                 return Err(format!("{host} resolves only to addresses Forge does not call for object storage").into());
             }
+
             let iter: reqwest::dns::Addrs = Box::new(ok.into_iter());
             Ok(iter)
         })
@@ -167,6 +173,7 @@ fn http(allow_loopback: bool) -> ApiResult<reqwest::Client> {
     if let Some(c) = cell.get() {
         return Ok(c.clone());
     }
+
     let c = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .read_timeout(Duration::from_secs(120))
@@ -174,6 +181,7 @@ fn http(allow_loopback: bool) -> ApiResult<reqwest::Client> {
         .dns_resolver(std::sync::Arc::new(GuardedResolver { allow_loopback }))
         .build()
         .map_err(|_| DomainError::internal("cannot create the S3 HTTP client"))?;
+
     Ok(cell.get_or_init(|| c).clone())
 }
 
@@ -223,11 +231,14 @@ async fn checked_owner(
         Err(DomainError::NotFound(_)) => None,
         Err(e) => return Err(e.into()),
     };
+
     // Another workspace's environment answers like one that does not exist.
     if found.is_none_or(|ns| ns.workspace_id != ws) {
         return Err(ApiError::not_found("environment not found"));
     }
+
     caller.authorize(Action::Deploy, ns_ref(id)).await?;
+
     Ok(Some(id))
 }
 
@@ -308,6 +319,7 @@ fn view_for(
         Shown::Role(Via::Owner) => false,
         Shown::Grant => true,
     };
+
     StoreView::Limited(LimitedStore {
         id: s.id,
         environment_id: s.environment_id.filter(|_| !by_grant),
@@ -394,6 +406,7 @@ pub(super) async fn load(
         .filter(|s| s.workspace_id == ws)
         .ok_or_else(|| ApiError::not_found("object store not found"))?;
     let members = state.store.list_store_members(id).await?;
+
     Ok((store, members))
 }
 
@@ -417,6 +430,7 @@ pub(super) async fn authorized_via(
             Via::Scope
         }
     };
+
     Ok((store, members, via))
 }
 
@@ -457,10 +471,13 @@ fn for_grant_holder(e: ApiError) -> ApiError {
     if e.status == StatusCode::NOT_FOUND {
         return ApiError::not_found("no such bucket or object");
     }
+
     if e.status == StatusCode::BAD_REQUEST {
         return ApiError::bad_request("the bucket name or the key is not valid");
     }
+
     tracing::warn!(code = e.code, error = %e.message, "a store request made through a bucket grant failed");
+
     ApiError::new(StatusCode::BAD_GATEWAY, "store_unreachable", "the store can't be reached")
 }
 
@@ -496,13 +513,16 @@ async fn reachable(
     if let Some(via) = by_role(caller, &store, &target, action).await {
         return Ok((store, members, Reach::Role(via)));
     }
+
     if grants_apply(caller) {
         let grants = state.bucket_grants.held_on(caller.session.user.id, store.id).await?;
         if !grants.is_empty() {
             return Ok((store, members, Reach::Grants(grants)));
         }
     }
+
     caller.authorize_with(action, target, denial_details(&store)).await?;
+
     Ok((store, members, Reach::Role(Via::Scope)))
 }
 
@@ -534,11 +554,13 @@ async fn authorized_for_bucket(
     let (store, members) = load(state, ws, id).await?;
     let target = store_ref(&store, &members);
     let mut grant_id = None;
+
     if by_role(caller, &store, &target, Action::StorageData).await.is_none() {
         if grants_apply(caller) {
             let grant = state.bucket_grants.allowance(caller.session.user.id, store.id, bucket, need).await?;
             grant_id = grant.map(|g| g.id);
         }
+
         if grant_id.is_none() {
             let denied = json!({
                 "store_id": store.id, "environment_id": store.environment_id, "bucket": bucket, "access": need,
@@ -546,6 +568,7 @@ async fn authorized_for_bucket(
             caller.authorize_with(Action::StorageData, target, denied).await?;
         }
     }
+
     Ok(BucketScope { store, members, grant_id })
 }
 
@@ -584,9 +607,11 @@ async fn foreign_attachments(
     if attachments.is_empty() {
         return Ok(Vec::new());
     }
+
     let own: HashSet<ServiceId> =
         state.store.list_services(Some(environment)).await?.into_iter().map(|a| a.id).collect();
     let mut out = Vec::new();
+
     for (service_id, a) in attachments.into_iter().filter(|(id, _)| !own.contains(id)) {
         let app = state.store.get_service(service_id).await?;
         out.push(ForeignAttachment {
@@ -597,6 +622,7 @@ async fn foreign_attachments(
             access_key: a.access_key,
         });
     }
+
     Ok(out)
 }
 
@@ -607,9 +633,11 @@ fn named(list: &[ForeignAttachment]) -> String {
         .take(10)
         .map(|f| format!("{} ({})", f.service.as_deref().unwrap_or("a deleted service"), f.bucket))
         .collect();
+
     if list.len() > names.len() {
         names.push(format!("and {} more", list.len() - names.len()));
     }
+
     names.join(", ")
 }
 
@@ -627,20 +655,24 @@ pub(super) async fn authorized_for_attach(
 ) -> ApiResult<(ObjectStore, Vec<StoreMember>)> {
     let (store, members) = load(state, ws, id).await?;
     let target = store_ref(&store, &members);
+
     if store.environment_id != Some(app.environment_id) {
         caller.authorize_with(Action::StorageManage, target, denial_details(&store)).await?;
         return Ok((store, members));
     }
+
     caller.authorize(Action::Deploy, ns_ref(app.environment_id)).await?;
     let elsewhere: Vec<ForeignAttachment> = foreign_attachments(state, &store, app.environment_id)
         .await?
         .into_iter()
         .filter(|f| f.bucket == bucket)
         .collect();
+
     if !elsewhere.is_empty() {
         let details = json!({
             "store_id": store.id, "environment_id": store.environment_id, "bucket": bucket, "attached_to": elsewhere,
         });
+
         // The denial is audited by the check; the answer says why.
         if caller.authorize_with(Action::StorageManage, target, details).await.is_err() {
             return Err(ApiError::new(
@@ -653,6 +685,7 @@ pub(super) async fn authorized_for_attach(
             ));
         }
     }
+
     Ok((store, members))
 }
 
@@ -672,16 +705,20 @@ pub async fn list(
 ) -> ApiResult<Json<Vec<StoreView>>> {
     let stores = state.store.list_object_stores(Some(ws)).await?;
     let mut rows = Vec::new();
+
     for s in stores {
         if q.environment_id.is_some_and(|n| s.environment_id != Some(n)) {
             continue;
         }
+
         let members = state.store.list_store_members(s.id).await?;
         rows.push((s, members));
     }
+
     let refs = rows.iter().map(|(s, m)| store_ref(s, m)).collect();
     let allowed = caller.can_many(Action::View, refs).await;
     let mut via: Vec<Option<Shown>> = allowed.iter().map(|ok| ok.then_some(Shown::Role(Via::Scope))).collect();
+
     // Owned stores the caller does not see on the node or workspace: asked
     // once more on the owning environment, in one batch.
     let by_owner: Vec<(usize, EntityRef)> = rows
@@ -692,22 +729,27 @@ pub async fn list(
         .filter_map(|(i, ((s, _), _))| s.environment_id.map(|n| (i, ns_ref(n))))
         .collect();
     let owner_refs = by_owner.iter().map(|(_, r)| r.clone()).collect();
+
     for ((i, _), ok) in by_owner.iter().zip(caller.can_many(Action::View, owner_refs).await) {
         via[*i] = ok.then_some(Shown::Role(Via::Owner));
     }
+
     // Stores no role shows: those the caller holds a live bucket grant on.
     // Not in a list by environment: a grant says nothing about who owns the
     // store, and the reduced view of a grant holder leaves the owner out.
     if q.environment_id.is_none() && grants_apply(&caller) && via.iter().any(Option::is_none) {
         let granted: HashSet<ObjectStoreId> =
             state.bucket_grants.held(caller.session.user.id).await?.into_iter().map(|g| g.store_id).collect();
+
         for (shown, (s, _)) in via.iter_mut().zip(&rows) {
             if shown.is_none() && granted.contains(&s.id) {
                 *shown = Some(Shown::Grant);
             }
         }
     }
+
     let names = hostnames(&state).await?;
+
     Ok(Json(rows.iter().zip(via).filter_map(|((s, m), via)| Some(view_for(via?, s, m, &names))).collect()))
 }
 
@@ -722,6 +764,7 @@ pub async fn get_one(
         Reach::Role(via) => Shown::Role(via),
         Reach::Grants(_) => Shown::Grant,
     };
+
     Ok(Json(view_for(shown, &store, &members, &hostnames(&state).await?)))
 }
 
@@ -756,6 +799,7 @@ pub async fn set_owner(
         Some(ns) => foreign_attachments(&state, &store, ns).await?,
         None => Vec::new(),
     };
+
     if !affected.is_empty() && !req.force {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
@@ -767,6 +811,7 @@ pub async fn set_owner(
             ),
         ));
     }
+
     let now = state.clock.now();
     state.store.set_object_store_owner(store.id, owner, now).await?;
     caller
@@ -782,6 +827,7 @@ pub async fn set_owner(
         .await;
     store.environment_id = owner;
     store.updated_at = now;
+
     Ok(Json(view(&store, &members, &hostnames(&state).await?)))
 }
 
@@ -790,18 +836,22 @@ fn random_alnum(len: usize) -> ApiResult<String> {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut buf = vec![0u8; len];
     ring::rand::SystemRandom::new().fill(&mut buf).map_err(|_| DomainError::internal("no randomness"))?;
+
     // 248 = 4 * 62: rejection-free modulo bias is negligible for keys; keep
     // it exact anyway by re-drawing bytes >= 248.
     let mut out = String::with_capacity(len);
     let rng = ring::rand::SystemRandom::new();
+
     for mut b in buf {
         while b >= 248 {
             let mut one = [0u8; 1];
             rng.fill(&mut one).map_err(|_| DomainError::internal("no randomness"))?;
             b = one[0];
         }
+
         out.push(char::from(ALPHABET[usize::from(b) % ALPHABET.len()]));
     }
+
     Ok(out)
 }
 
@@ -810,6 +860,7 @@ fn clean_name(name: &str) -> ApiResult<String> {
     if name.is_empty() || name.chars().count() > 80 {
         return Err(ApiError::bad_request("name: 1 to 80 characters"));
     }
+
     Ok(name.to_owned())
 }
 
@@ -845,6 +896,7 @@ pub(super) async fn vault_credential(
         rotated_at: now,
     };
     state.store.put_vault_item(&item).await?;
+
     Ok(id)
 }
 
@@ -937,9 +989,11 @@ async fn submit_with(
     delete_data: bool,
 ) -> ApiResult<Job> {
     let mut payload = json!({ "store_id": store.id, "server_id": server, "action": action });
+
     if delete_data {
         payload["delete_data"] = json!(true);
     }
+
     Ok(state
         .jobs
         .submit(NewJob {
@@ -962,17 +1016,20 @@ pub async fn install(
     Json(req): Json<InstallRequest>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let name = clean_name(&req.name)?;
+
     let distributed = match req.topology.as_str() {
         TOPOLOGY_STANDALONE => false,
         TOPOLOGY_DISTRIBUTED => true,
         _ => return Err(ApiError::bad_request("topology: standalone or distributed")),
     };
+
     let mut requested = req.members.clone();
     if requested.is_empty()
         && let (Some(server_id), Some(path)) = (req.server_id, req.data_path.clone())
     {
         requested.push(MemberRequest { server_id, data_paths: vec![path], endpoint_host: req.endpoint_host.clone() });
     }
+
     match (distributed, requested.len()) {
         (_, 0) => return Err(ApiError::bad_request("choose a node and its data path")),
         (false, n) if n > 1 => return Err(ApiError::bad_request("a standalone store has one node")),
@@ -982,20 +1039,24 @@ pub async fn install(
         }
         _ => {}
     }
+
     // Every member node is checked before anything is recorded.
     for m in &requested {
         caller.authorize(Action::StorageManage, server_ref(m.server_id)).await?;
     }
+
     let owner = checked_owner(&state, &caller, ws, req.environment_id).await?;
     let mut seen = HashSet::new();
     if !requested.iter().all(|m| seen.insert(m.server_id)) {
         return Err(ApiError::bad_request("each node may be listed once"));
     }
+
     if distributed {
         let drives = requested[0].data_paths.len();
         if requested.iter().any(|m| m.data_paths.len() != drives) {
             return Err(ApiError::bad_request("every node of a distributed store needs the same number of drives"));
         }
+
         if drives * requested.len() < forge_catalog::storage::MIN_DISTRIBUTED_DRIVES {
             return Err(ApiError::bad_request(format!(
                 "a distributed store needs at least {} drives in total (nodes × drives per node)",
@@ -1008,12 +1069,15 @@ pub async fn install(
     let id = ObjectStoreId::new();
     let mut members = Vec::new();
     let mut hosts = HashSet::new();
+
     for m in &requested {
         let server = state.store.get_server(m.server_id).await.map_err(|_| ApiError::not_found("server not found"))?;
         if server.workspace_id != ws {
             return Err(ApiError::not_found("server not found"));
         }
+
         let label = server.display_name.clone().unwrap_or_else(|| server.hostname.clone());
+
         match (server.os.as_str(), req.runtime.as_str()) {
             ("linux", "native" | "docker") => {}
             ("windows", "native") if !distributed => {}
@@ -1025,9 +1089,11 @@ pub async fn install(
             }
             (os, _) => return Err(ApiError::bad_request(format!("{label}: object stores are not supported on {os}"))),
         }
+
         if server.os == "windows" && !matches!(server.arch.as_str(), "x86_64" | "amd64") {
             return Err(ApiError::bad_request("RustFS for Windows is available for x86_64 only"));
         }
+
         for p in &m.data_paths {
             if server.os == "linux" && !p.starts_with('/') || server.os == "windows" && p.starts_with('/') {
                 return Err(ApiError::bad_request(format!(
@@ -1036,6 +1102,7 @@ pub async fn install(
                 )));
             }
         }
+
         // Default: the address the node's agent connects from. The host name
         // is the last resort only: without DNS neither the control plane nor
         // the other members can resolve it, and the store never forms (#1).
@@ -1047,29 +1114,37 @@ pub async fn install(
             .filter(|h| !h.is_empty())
             .or(known.as_deref())
             .unwrap_or(&server.hostname);
+
         if !forge_catalog::storage::valid_host(host) {
             return Err(ApiError::bad_request(format!("{label}: endpoint host: a hostname or IP address")));
         }
+
         if !hosts.insert(host.to_ascii_lowercase()) {
             return Err(ApiError::bad_request(format!("endpoint host `{host}` is used by two nodes")));
         }
+
         // Instances on one node need distinct names, ports and data paths.
         let mut taken_ports = HashSet::new();
+
         for other_m in state.store.list_node_store_members(server.id).await? {
             if let Some(p) = other_m.data_paths.iter().find(|p| m.data_paths.contains(p)) {
                 return Err(ApiError::conflict(format!("{label}: {p} is already used by another object store")));
             }
+
             if let Some(other) = state.store.get_object_store(other_m.store_id).await? {
                 if other.slug == req.slug {
                     return Err(ApiError::conflict(format!("{label}: instance name `{}` is taken", req.slug)));
                 }
+
                 taken_ports.insert(other.s3_port);
                 taken_ports.extend(other.console_port);
             }
         }
+
         if taken_ports.contains(&req.s3_port) || req.console_port.is_some_and(|p| taken_ports.contains(&p)) {
             return Err(ApiError::conflict(format!("{label}: another object store on this node uses that port")));
         }
+
         members.push(StoreMember {
             store_id: id,
             server_id: server.id,
@@ -1112,10 +1187,12 @@ pub async fn install(
         created_at: now,
         updated_at: now,
     };
+
     // Validates provider, slug, release, ports, data paths and the layout.
     for m in &members {
         spec(&store, m, &members).map_err(ApiError::bad_request)?;
     }
+
     store.credential_id = vault_credential(
         &state,
         &caller,
@@ -1129,14 +1206,18 @@ pub async fn install(
     )
     .await?;
     state.store.put_object_store(&store).await?;
+
     for m in &members {
         state.store.put_store_member(m).await?;
     }
+
     // Members install in parallel; distributed members wait for each other.
     let mut jobs = Vec::new();
+
     for m in &members {
         jobs.push(submit(&state, &caller, &store, m.server_id, "install").await?);
     }
+
     let member_list: Vec<Value> = members
         .iter()
         .map(|m| json!({ "server_id": m.server_id, "data_paths": m.data_paths, "endpoint_host": m.endpoint_host }))
@@ -1156,6 +1237,7 @@ pub async fn install(
         .await;
     let names = hostnames(&state).await?;
     let first = jobs.first().cloned();
+
     Ok((StatusCode::ACCEPTED, Json(json!({ "store": view(&store, &members, &names), "job": first, "jobs": jobs }))))
 }
 
@@ -1202,6 +1284,7 @@ fn parse_endpoint(raw: &str, allow_loopback: bool) -> ApiResult<url::Url> {
     {
         return Err(ApiError::bad_request("endpoint: http(s)://host[:port], without credentials or a query"));
     }
+
     // Literal addresses are checked here; host names by the resolver at
     // every connection.
     let literal = match url.host() {
@@ -1209,12 +1292,14 @@ fn parse_endpoint(raw: &str, allow_loopback: bool) -> ApiResult<url::Url> {
         Some(url::Host::Ipv6(a)) => Some(std::net::IpAddr::V6(a)),
         _ => None,
     };
+
     let localhost = url.host_str().is_some_and(|h| h.eq_ignore_ascii_case("localhost"));
     if literal.is_some_and(|ip| !endpoint_ip_allowed(ip, allow_loopback)) || (localhost && !allow_loopback) {
         return Err(ApiError::bad_request(
             "endpoint: link-local, metadata and loopback addresses are not allowed for object storage",
         ));
     }
+
     Ok(url)
 }
 
@@ -1250,14 +1335,17 @@ pub async fn connect(
     caller.authorize(Action::StorageManage, ws_ref.clone()).await?;
     let owner = checked_owner(&state, &caller, ws, req.environment_id).await?;
     let name = clean_name(&req.name)?;
+
     if !EXTERNAL_PROVIDERS.contains(&req.provider.as_str()) {
         return Err(ApiError::bad_request(format!("provider: one of {}", EXTERNAL_PROVIDERS.join(", "))));
     }
+
     let endpoint = parse_endpoint(&req.endpoint, state.config.storage_allow_loopback)?;
     let region = req.region.trim();
     if region.is_empty() || region.len() > 40 || !region.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
         return Err(ApiError::bad_request("region: letters, digits and - (us-east-1 when unsure)"));
     }
+
     if req.access_key.trim().is_empty()
         || req.access_key.len() > 256
         || req.secret_key.is_empty()
@@ -1265,6 +1353,7 @@ pub async fn connect(
     {
         return Err(ApiError::bad_request("access key and secret key are required"));
     }
+
     let client = Client::new(
         S3Config {
             endpoint: endpoint.clone(),
@@ -1328,6 +1417,7 @@ pub async fn connect(
             }),
         )
         .await;
+
     Ok((StatusCode::CREATED, Json(view(&store, &[], &HashMap::new()))))
 }
 
@@ -1351,71 +1441,89 @@ pub async fn action(
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let (store, members) = load(&state, ws, id).await?;
     let target = store_ref(&store, &members);
+
     if store.mode == MODE_EXTERNAL {
         if req.action != "disconnect" {
             return Err(ApiError::bad_request("a connected store supports `disconnect` only"));
         }
+
         caller.authorize_with(Action::StorageManage, target.clone(), denial_details(&store)).await?;
         state.store.delete_object_store(store.id).await?;
         state.store.delete_vault_item(store.credential_id).await?;
         caller
             .audit("storage.disconnect", &target, Some(ws), json!({ "store_id": store.id, "name": store.name }))
             .await;
+
         return Ok((StatusCode::OK, Json(json!({ "disconnected": store.id }))));
     }
+
     if !ACTIONS.contains(&req.action.as_str()) {
         return Err(ApiError::bad_request(format!("action: one of {}", ACTIONS.join(", "))));
     }
+
     let needed = if req.action == "status" { Action::ServerManage } else { Action::StorageManage };
     caller.authorize_with(needed, target.clone(), denial_details(&store)).await?;
+
     if req.action == "install" && members.iter().any(|m| m.data_paths == [forge_catalog::storage::LEGACY_DATA]) {
         return Err(ApiError::conflict(
             "an adopted App Store container is kept as it is and cannot be repaired by reinstalling",
         ));
     }
+
     if crate::jobs::storage::BUSY.contains(&store.status.as_str())
         && req.action != "status"
         && job_active(&state, &store).await
     {
         return Err(ApiError::conflict(format!("the store is {}", store.status)));
     }
+
     let delete_data = req.action == "uninstall" && req.delete_data;
     if req.delete_data && req.action != "uninstall" {
         return Err(ApiError::bad_request("delete_data applies to `uninstall` only"));
     }
+
     if delete_data {
         if req.confirm.as_deref().map(str::trim) != Some(store.name.as_str()) {
             return Err(ApiError::bad_request("type the store's name to confirm deleting its data"));
         }
+
         caller.require_mfa("storage.uninstall", &target).await?;
     }
+
     let mut jobs = Vec::new();
     let mut skipped = Vec::new();
+
     for m in &members {
         if req.action == "uninstall" {
             if m.status == "removed" {
                 continue;
             }
+
             // A node that is gone or revoked cannot run anything: its member
             // is dropped so the store can still be removed (best effort).
             let gone = match state.store.get_server(m.server_id).await {
                 Ok(s) => s.status == forge_core::model::AgentStatus::Revoked,
                 Err(_) => true,
             };
+
             if gone {
                 let mut removed = m.clone();
                 removed.status = "removed".into();
                 state.store.put_store_member(&removed).await?;
                 skipped.push(json!({ "server_id": m.server_id, "result": "node gone or revoked; member dropped" }));
+
                 continue;
             }
         }
+
         jobs.push(submit_with(&state, &caller, &store, m.server_id, &req.action, delete_data).await?);
     }
+
     if req.action == "uninstall" && jobs.is_empty() {
         // Nothing left to run on: the store goes now (data on nodes untouched).
         state.store.delete_object_store(store.id).await?;
     }
+
     if req.action != "status" {
         caller
             .audit(
@@ -1432,9 +1540,11 @@ pub async fn action(
             )
             .await;
     }
+
     if !skipped.is_empty() {
         return Ok((StatusCode::ACCEPTED, Json(json!({ "jobs": jobs, "skipped": skipped }))));
     }
+
     Ok((StatusCode::ACCEPTED, Json(json!({ "jobs": jobs }))))
 }
 
@@ -1446,6 +1556,7 @@ async fn job_active(state: &AppState, store: &ObjectStore) -> bool {
         // Submitted but not dispatched yet.
         return true;
     };
+
     match state.store.get_job(job_id).await {
         Ok(job) => matches!(job.status, JobStatus::Queued | JobStatus::Running),
         Err(_) => false,
@@ -1459,7 +1570,9 @@ async fn reachable_endpoint(state: &AppState, store: &ObjectStore) -> ApiResult<
     if store.topology != TOPOLOGY_DISTRIBUTED {
         return Ok(store.endpoint.clone());
     }
+
     let members = state.store.list_store_members(store.id).await?;
+
     for m in members.iter().filter(|m| m.status != "removed") {
         let addr = (m.endpoint_host.as_str(), store.s3_port);
         let probe = tokio::time::timeout(Duration::from_millis(1500), tokio::net::TcpStream::connect(addr));
@@ -1467,6 +1580,7 @@ async fn reachable_endpoint(state: &AppState, store: &ObjectStore) -> ApiResult<
             return Ok(format!("http://{}:{}", m.endpoint_host, store.s3_port));
         }
     }
+
     Ok(store.endpoint.clone())
 }
 
@@ -1484,6 +1598,7 @@ pub(super) async fn client(state: &AppState, store: &ObjectStore) -> ApiResult<C
         .map_err(|_| DomainError::internal("cannot unseal the store credential"))?;
     let secret_key = String::from_utf8(secret).map_err(|_| DomainError::internal("store secret is not text"))?;
     let endpoint = parse_endpoint(&reachable_endpoint(state, store).await?, state.config.storage_allow_loopback)?;
+
     Client::new(
         S3Config {
             endpoint,
@@ -1508,6 +1623,7 @@ pub async fn test(
     let started = std::time::Instant::now();
     let result = c.list_buckets().await;
     let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+
     Ok(Json(match result {
         Ok(b) => json!({ "ok": true, "latency_ms": ms, "buckets": b.len() }),
         Err(e) => json!({ "ok": false, "latency_ms": ms, "error": e.to_string() }),
@@ -1524,10 +1640,12 @@ pub async fn buckets(
     let shown = shown_error(matches!(reach, Reach::Grants(_)));
     let c = client(&state, &store).await.map_err(&shown)?;
     let mut list = c.list_buckets().await.map_err(s3_error).map_err(&shown)?;
+
     // Through grants only: the granted buckets, not the store's other ones.
     if let Reach::Grants(grants) = &reach {
         list.retain(|b| grants.iter().any(|g| g.bucket == b.name));
     }
+
     Ok(Json(json!(list)))
 }
 
@@ -1544,23 +1662,28 @@ pub async fn create_bucket(
     Json(req): Json<BucketRequest>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let (store, members) = authorized(&state, &caller, ws, id, Action::StorageData).await?;
+
     if !forge_s3::valid_bucket(&req.name) {
         return Err(ApiError::bad_request(
             "bucket name: 3-63 lowercase letters, digits, dots and hyphens, starting and ending with a letter or digit",
         ));
     }
+
     let c = client(&state, &store).await?;
+
     // Some stores answer "created" for a bucket that is already there: only
     // a bucket that was missing is a new one.
     let missing = c.list_objects(&req.name, "", None, 1).await.is_err();
     c.create_bucket(&req.name).await.map_err(s3_error)?;
     let target = store_ref(&store, &members);
+
     let revoked = if missing {
         super::storage_grants::revoke_for_bucket(&state, &caller, &store, &target, &req.name, REASON_BUCKET_RECREATED)
             .await?
     } else {
         0
     };
+
     caller
         .audit(
             "storage.bucket.create",
@@ -1569,6 +1692,7 @@ pub async fn create_bucket(
             json!({ "store_id": store.id, "bucket": req.name, "stale_grants_revoked": revoked }),
         )
         .await;
+
     Ok((StatusCode::CREATED, Json(json!({ "name": req.name }))))
 }
 
@@ -1581,12 +1705,14 @@ pub async fn delete_bucket(
     let (store, members) = authorized(&state, &caller, ws, id, Action::StorageManage).await?;
     client(&state, &store).await?.delete_bucket(&bucket).await.map_err(s3_error)?;
     let target = store_ref(&store, &members);
+
     // Two steps that cannot be one transaction (the store, then the grants).
     // The deletion is audited first, so it is on record even if revoking
     // fails; grants left live then are revoked when a bucket of this name is
     // created again (`create_bucket`).
     caller.audit("storage.bucket.delete", &target, Some(ws), json!({ "store_id": store.id, "bucket": bucket })).await;
     super::storage_grants::revoke_for_bucket(&state, &caller, &store, &target, &bucket, REASON_BUCKET_DELETED).await?;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1610,9 +1736,11 @@ pub async fn objects(
     let BucketScope { store, grant_id, .. } =
         authorized_for_bucket(&state, &caller, ws, id, &bucket, BucketAccess::Read).await?;
     let shown = shown_error(grant_id.is_some());
+
     if q.prefix.len() > 1024 || q.token.as_ref().is_some_and(|t| t.len() > 2048) {
         return Err(ApiError::bad_request("prefix or token too long"));
     }
+
     let page = client(&state, &store)
         .await
         .map_err(&shown)?
@@ -1620,6 +1748,7 @@ pub async fn objects(
         .await
         .map_err(s3_error)
         .map_err(&shown)?;
+
     Ok(Json(json!(page)))
 }
 
@@ -1643,6 +1772,7 @@ fn disposition(key: &str) -> HeaderValue {
             }
         })
         .collect();
+
     HeaderValue::from_str(&format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{utf8}"))
         .unwrap_or_else(|_| HeaderValue::from_static("attachment"))
 }
@@ -1670,6 +1800,7 @@ pub async fn download(
             json!({ "store_id": store.id, "bucket": bucket, "key": q.key, "size": head.size, "grant_id": grant_id }),
         )
         .await;
+
     // The permit lives as long as the body stream.
     let stream = futures::StreamExt::map(resp.bytes_stream(), move |chunk| {
         let _held = &permit;
@@ -1684,14 +1815,18 @@ pub async fn download(
             .and_then(|c| HeaderValue::from_str(c).ok())
             .unwrap_or_else(|| HeaderValue::from_static("application/octet-stream")),
     );
+
     if head.size > 0 {
         h.insert(header::CONTENT_LENGTH, HeaderValue::from(head.size));
     }
+
     h.insert(header::CONTENT_DISPOSITION, disposition(&q.key));
     h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+
     // The stored type comes from whoever uploaded the object: if a browser
     // ever renders it, it runs sandboxed with nothing allowed.
     h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox; default-src 'none'"));
+
     Ok(out)
 }
 
@@ -1710,9 +1845,11 @@ pub async fn upload(
         headers.get(header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok()).ok_or_else(
             || ApiError::new(StatusCode::LENGTH_REQUIRED, "length_required", "Content-Length is required"),
         )?;
+
     if len > MAX_UPLOAD {
         return Err(ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "too_large", "uploads are limited to 5 GiB"));
     }
+
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
@@ -1734,6 +1871,7 @@ pub async fn upload(
             json!({ "store_id": store.id, "bucket": bucket, "key": q.key, "size": len, "grant_id": grant_id }),
         )
         .await;
+
     Ok((StatusCode::CREATED, Json(json!({ "bucket": bucket, "key": q.key, "size": len }))))
 }
 
@@ -1757,6 +1895,7 @@ pub async fn delete_object(
             json!({ "store_id": store.id, "bucket": bucket, "key": q.key, "grant_id": grant_id }),
         )
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1793,6 +1932,7 @@ pub async fn adopt(
     if server.workspace_id != ws {
         return Err(ApiError::not_found("server not found"));
     }
+
     let inst = state
         .store
         .list_installations(Some(server.id))
@@ -1802,16 +1942,19 @@ pub async fn adopt(
         .ok_or_else(|| ApiError::not_found("no App Store RustFS installation on this node"))?;
     let port = |k: &str, d: u16| inst.params.get(k).and_then(|v| v.parse().ok()).unwrap_or(d);
     let (s3_port, console_port) = (port("port", 9000), port("console_port", 9001));
+
     for m in state.store.list_node_store_members(server.id).await? {
         if m.data_paths.iter().any(|p| p == forge_catalog::storage::LEGACY_DATA) {
             return Err(ApiError::conflict("the App Store RustFS container is already adopted"));
         }
+
         if let Some(o) = state.store.get_object_store(m.store_id).await?
             && (o.slug == "rustfs" || o.s3_port == s3_port)
         {
             return Err(ApiError::conflict("another object store on this node uses the name `rustfs` or that port"));
         }
     }
+
     let known = crate::facts::node_address(&state, server.id).await?;
     let host = req
         .endpoint_host
@@ -1820,9 +1963,11 @@ pub async fn adopt(
         .filter(|h| !h.is_empty())
         .or(known.as_deref())
         .unwrap_or(&server.hostname);
+
     if !forge_catalog::storage::valid_host(host) {
         return Err(ApiError::bad_request("endpoint host: a hostname or IP address"));
     }
+
     let now = state.clock.now();
     let id = ObjectStoreId::new();
     let store = ObjectStore {
@@ -1879,6 +2024,7 @@ pub async fn adopt(
         )
         .await;
     let names = hostnames(&state).await?;
+
     Ok((StatusCode::ACCEPTED, Json(json!({ "store": view(&store, &[member], &names), "job": job }))))
 }
 
@@ -1892,6 +2038,7 @@ pub(super) fn keys_supported(store: &ObjectStore) -> ApiResult<()> {
             "access keys are issued for managed RustFS stores; create keys for a connected store at its provider",
         ));
     }
+
     Ok(())
 }
 
@@ -1917,6 +2064,7 @@ pub async fn list_keys(
     let (store, _, via) = authorized_via(&state, &caller, ws, id, Action::StorageData).await?;
     keys_supported(&store)?;
     let mut items = key_items(&state, &store).await?;
+
     // Through the owning environment only: the keys attached to services of
     // that environment. Standalone keys, other environments' keys and keys
     // Forge did not issue are left out.
@@ -1926,9 +2074,12 @@ pub async fn list_keys(
             Some(ns) => state.store.list_services(Some(ns)).await?.into_iter().map(|a| a.id).collect(),
             None => HashSet::new(),
         };
+
         items.retain(|_, i| app_storage::attached_service(i).is_some_and(|a| own.contains(&a)));
     }
+
     let accounts = client(&state, &store).await?.list_service_accounts().await.map_err(s3_error)?;
+
     Ok(Json(
         accounts
             .iter()
@@ -1972,6 +2123,7 @@ fn clean_key_name(n: &str) -> ApiResult<String> {
     {
         return Err(ApiError::bad_request("key name: 1 to 32 letters, digits, - _ ."));
     }
+
     Ok(n.to_owned())
 }
 
@@ -1987,15 +2139,19 @@ pub async fn create_key(
     let (store, members) = authorized(&state, &caller, ws, id, Action::StorageManage).await?;
     keys_supported(&store)?;
     let name = clean_key_name(&req.name)?;
+
     if !forge_s3::valid_bucket(&req.bucket) {
         return Err(ApiError::bad_request("bucket name"));
     }
+
     let write = match req.access.as_str() {
         "read" => false,
         "readwrite" => true,
         _ => return Err(ApiError::bad_request("access: read or readwrite")),
     };
+
     let c = client(&state, &store).await?;
+
     // The bucket must exist, so a typo does not create a useless key.
     c.list_objects(&req.bucket, "", None, 1).await.map_err(s3_error)?;
     let (ak, sk) = c
@@ -2027,6 +2183,7 @@ pub async fn create_key(
             json!({ "store_id": store.id, "access_key": ak, "name": name, "bucket": req.bucket, "access": req.access }),
         )
         .await;
+
     Ok((
         StatusCode::CREATED,
         Json(
@@ -2050,6 +2207,7 @@ async fn tag_key_item(
         format!("access:{access}"),
     ];
     state.store.put_vault_item(&item).await?;
+
     Ok(())
 }
 
@@ -2066,10 +2224,13 @@ pub async fn delete_key(
     if root.is_some_and(|r| r.username == access_key) {
         return Err(ApiError::conflict("the store's root key cannot be revoked here"));
     }
+
     client(&state, &store).await?.delete_service_account(&access_key).await.map_err(s3_error)?;
+
     if let Some(item) = key_items(&state, &store).await?.remove(&access_key) {
         state.store.delete_vault_item(item.id).await?;
     }
+
     caller
         .audit(
             "storage.key.revoke",
@@ -2078,6 +2239,7 @@ pub async fn delete_key(
             json!({ "store_id": store.id, "access_key": access_key }),
         )
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -2107,6 +2269,7 @@ pub async fn rotate_key(
         )
         .await
         .map_err(s3_error)?;
+
     // Prove the new key before retiring the old one.
     let probe = Client::new(
         S3Config {
@@ -2120,14 +2283,17 @@ pub async fn rotate_key(
     )
     .map_err(s3_error)?;
     let mut tried = probe.list_objects(&bucket, "", None, 1).await;
+
     for _ in 0..5 {
         if tried.is_ok() {
             break;
         }
+
         // New keys can take a moment to replicate on distributed stores.
         tokio::time::sleep(Duration::from_millis(400)).await;
         tried = probe.list_objects(&bucket, "", None, 1).await;
     }
+
     if let Err(e) = tried {
         let _ = c.delete_service_account(&ak).await;
         return Err(ApiError::new(
@@ -2136,11 +2302,13 @@ pub async fn rotate_key(
             format!("the new key did not work, so the old one stays: {e}"),
         ));
     }
+
     item.username = ak.clone();
     item.sealed = state.envelope.seal(sk.as_bytes(), &vault_aad(item.id)).map_err(DomainError::internal)?;
     item.rotated_at = state.clock.now();
     item.updated_at = item.rotated_at;
     state.store.put_vault_item(&item).await?;
+
     // The rotation stands once the vault holds the new key; a failure to
     // retire the old key is reported (and audited) instead of hidden.
     let retired = c.delete_service_account(&access_key).await;
@@ -2156,6 +2324,7 @@ pub async fn rotate_key(
             }),
         )
         .await;
+
     Ok(Json(json!({
         "access_key": ak, "bucket": bucket, "access": access, "vault_item_id": item.id,
         "old_key_retired": retired.is_ok(), "warning": warning,
@@ -2178,6 +2347,7 @@ mod tests {
     #[test]
     fn a_grant_holder_learns_nothing_about_the_store_from_an_error() {
         let secret = "error sending request for url (http://10.0.0.7:9000/media): connection refused";
+
         for e in [
             s3_error(S3Error::Transport(secret.into())),
             ApiError::conflict("the store's credential is missing from the vault"),
@@ -2187,10 +2357,12 @@ mod tests {
             assert_eq!((shown.status, shown.code), (StatusCode::BAD_GATEWAY, "store_unreachable"));
             assert_eq!(shown.message, "the store can't be reached");
         }
+
         let gone = shown_error(true)(ApiError::not_found("NoSuchKey at http://10.0.0.7:9000/media/a.txt"));
         assert_eq!((gone.status, gone.message.as_str()), (StatusCode::NOT_FOUND, "no such bucket or object"));
         let invalid = shown_error(true)(ApiError::bad_request(secret));
         assert_eq!(invalid.message, "the bucket name or the key is not valid");
+
         // Someone a role let in keeps the store's own answer.
         assert_eq!(shown_error(false)(ApiError::bad_request(secret)).message, secret);
     }
@@ -2202,13 +2374,16 @@ mod tests {
         assert!(parse_endpoint("https://user:pw@host", false).is_err());
         assert!(parse_endpoint("https://host/?X-Amz-Credential=x", false).is_err());
         assert!(parse_endpoint("file:///etc/passwd", false).is_err());
+
         // Never the metadata service or link-local, whatever the setting.
         for bad in
             ["http://169.254.169.254/", "http://[fe80::1]:9000", "http://[fd00:ec2::254]/", "http://0.0.0.0:9000"]
         {
             assert!(parse_endpoint(bad, true).is_err(), "{bad}");
         }
+
         assert!(parse_endpoint("http://[::ffff:169.254.169.254]/", true).is_err(), "IPv4-mapped");
+
         // Loopback only when allowed (labs and tests).
         for lo in ["http://127.0.0.1:9000", "http://[::1]:9000", "http://localhost:9000"] {
             assert!(parse_endpoint(lo, false).is_err(), "{lo}");

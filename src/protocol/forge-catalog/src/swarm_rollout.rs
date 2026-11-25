@@ -42,6 +42,7 @@ impl SwarmStep {
     #[must_use]
     pub fn describe(&self) -> String {
         let name = |s: &str| if s.is_empty() { "the service".to_owned() } else { format!("slot {s}") };
+
         match self {
             Self::Deploy { slot, replicas } => format!("Deploy the release to {} ({replicas} tasks)", name(slot)),
             Self::Gate { slot } => format!("Wait until {} runs all its tasks, healthy", name(slot)),
@@ -117,6 +118,7 @@ pub fn plan(input: &SwarmPlanInput<'_>) -> Result<SwarmPlan, String> {
     };
     let stabilize = p.stabilization_secs.max(10);
     let from_slot = input.serving.map(str::to_owned);
+
     match p.strategy {
         Strategy::Manual => {
             Err("manual rollouts are not available on Docker Swarm: Swarm cannot hold an update between batches; use Rolling with approval, or Canary".into())
@@ -125,6 +127,7 @@ pub fn plan(input: &SwarmPlanInput<'_>) -> Result<SwarmPlan, String> {
             if input.serving.is_some_and(|s| !s.is_empty()) {
                 return Err("this service runs in slots (Blue-Green or Canary); keep that strategy".into());
             }
+
             let downtime = if p.strategy == Strategy::Recreate {
                 update.parallelism = 0;
                 update.order = UpdateOrder::StopFirst;
@@ -138,10 +141,12 @@ pub fn plan(input: &SwarmPlanInput<'_>) -> Result<SwarmPlan, String> {
                         if r == 1 { "one replica".to_owned() } else { format!("batches of {}", update.parallelism) }
                     ));
                 }
+
                 true
             } else {
                 false
             };
+
             let mut steps = Vec::new();
             approve(&mut steps);
             steps.push(SwarmStep::Deploy { slot: String::new(), replicas: r });
@@ -152,12 +157,15 @@ pub fn plan(input: &SwarmPlanInput<'_>) -> Result<SwarmPlan, String> {
             if !input.routed {
                 return Err("Blue-Green and Canary need a site in front of the service, so Forge's edge can move traffic between the slots".into());
             }
+
             if input.serving == Some("") {
                 return Err("this service runs unslotted (Rolling or Recreate); keep that strategy".into());
             }
+
             let new = other_slot(input.serving).to_owned();
             let old = input.serving.map(str::to_owned);
             let mut steps = Vec::new();
+
             if p.strategy == Strategy::BlueGreen || old.is_none() {
                 steps.push(SwarmStep::Deploy { slot: new.clone(), replicas: r });
                 steps.push(SwarmStep::Gate { slot: new.clone() });
@@ -168,33 +176,43 @@ pub fn plan(input: &SwarmPlanInput<'_>) -> Result<SwarmPlan, String> {
                 } else {
                     p.steps.iter().map(|s| s.weight.clamp(1, 99)).collect()
                 };
+
                 for (i, w) in weights.iter().enumerate() {
                     if i == 0 {
                         steps.push(SwarmStep::Deploy { slot: new.clone(), replicas: share(r, *w) });
                     } else {
                         steps.push(SwarmStep::Scale { slot: new.clone(), replicas: share(r, *w) });
                     }
+
                     steps.push(SwarmStep::Gate { slot: new.clone() });
+
                     if i == 0 {
                         approve(&mut steps);
                     }
+
                     if let Some(o) = &old {
                         steps.push(SwarmStep::Route { slot: new.clone(), weight: *w, other: o.clone() });
                     }
+
                     let pause = p.steps.get(i).map_or(stabilize, |s| s.pause.0.max(10));
                     steps.push(SwarmStep::Wait { secs: pause });
+
                     if p.steps.get(i).is_some_and(|s| s.approval) {
                         steps.push(SwarmStep::Approve { reason: format!("at {w}% of traffic") });
                     }
                 }
+
                 steps.push(SwarmStep::Scale { slot: new.clone(), replicas: r });
                 steps.push(SwarmStep::Gate { slot: new.clone() });
             }
+
             steps.push(SwarmStep::Route { slot: new.clone(), weight: 100, other: old.clone().unwrap_or_default() });
             steps.push(SwarmStep::Wait { secs: stabilize });
+
             if let Some(o) = old {
                 steps.push(SwarmStep::Scale { slot: o, replicas: 0 });
             }
+
             Ok(SwarmPlan { strategy: p.strategy, slot: new, from_slot, update, steps, downtime: false })
         }
     }
@@ -237,12 +255,14 @@ mod tests {
         p.replacement = crate::deploy::Replacement::StopFirst;
         p.batch_size = 4;
         p.allow_downtime = false; // as a deployment document defaults it
+
         // Nothing serves yet: a first deploy has no running copy to lose.
         assert!(!plan(&input(&p, None, false)).unwrap().downtime);
         let e = plan(&input(&p, Some(""), false)).unwrap_err();
         assert!(e.contains("allowDowntime"), "{e}");
         p.allow_downtime = true;
         assert!(plan(&input(&p, Some(""), false)).unwrap().downtime);
+
         // Smaller batches keep tasks serving.
         p.batch_size = 1;
         p.allow_downtime = false;
@@ -281,6 +301,7 @@ mod tests {
         assert!(plan.steps.contains(&SwarmStep::Approve { reason: "at 25% of traffic".into() }));
         assert!(plan.steps.contains(&SwarmStep::Scale { slot: "a".into(), replicas: 2 }));
         assert_eq!(plan.steps.last(), Some(&SwarmStep::Scale { slot: "b".into(), replicas: 0 }));
+
         for s in &plan.steps {
             assert!(!s.describe().is_empty());
         }

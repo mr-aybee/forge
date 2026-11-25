@@ -82,11 +82,14 @@ fn postgres_migrator() -> Result<sqlx::migrate::Migrator, DomainError> {
         .iter_mut()
         .find(|m| m.version == 1)
         .ok_or_else(|| DomainError::internal("migration 1 is missing"))?;
+
     if first.sql.matches(PG_0001_FORWARD_REF).count() != 1 {
         return Err(DomainError::internal("migration 1 no longer matches the Postgres patch"));
     }
+
     let patched = first.sql.replacen(PG_0001_FORWARD_REF, PG_0001_COLUMN, 1) + PG_0001_FK;
     first.sql = patched.into();
+
     Ok(sqlx::migrate::Migrator {
         migrations: migrations.into(),
         ignore_missing: MIGRATOR.ignore_missing,
@@ -115,6 +118,7 @@ impl Store {
         let mut opts = AnyPoolOptions::new()
             .max_connections(if is_sqlite { 8 } else { 16 })
             .acquire_timeout(Duration::from_secs(10));
+
         if is_sqlite {
             opts = opts.after_connect(|conn, _meta| {
                 Box::pin(async move {
@@ -126,13 +130,16 @@ impl Store {
                 })
             });
         }
+
         let pool = opts.connect(url).await.map_err(DomainError::internal)?;
         let store = Self { pool, observation_writes: std::sync::Arc::default() };
+
         if is_sqlite {
             store.migrate().await?;
         } else {
             postgres_migrator()?.run(&store.pool).await.map_err(DomainError::internal)?;
         }
+
         Ok(store)
     }
 
@@ -158,9 +165,11 @@ impl Store {
             .connect(url)
             .await
             .map_err(DomainError::internal)?;
+
         // No table yet: nothing applied.
         let rows = sqlx::query("SELECT version FROM _sqlx_migrations").fetch_all(&pool).await.unwrap_or_default();
         pool.close().await;
+
         Ok(unknown_versions(rows.iter().filter_map(|r| sqlx::Row::try_get::<i64, _>(r, "version").ok())))
     }
 
@@ -170,8 +179,10 @@ impl Store {
         if !url.starts_with("sqlite:") {
             return Ok(false);
         }
+
         let p = path.display().to_string().replace('\\', "/").replace('\'', "''");
         sqlx::query(&format!("VACUUM INTO '{p}'")).execute(self.pool()).await.map_err(db_err)?;
+
         Ok(true)
     }
 
@@ -192,6 +203,7 @@ fn unknown_versions(applied: impl Iterator<Item = i64>) -> Vec<i64> {
     let mut out: Vec<i64> = applied.filter(|v| !known.contains(v)).collect();
     out.sort_unstable();
     out.dedup();
+
     out
 }
 
@@ -213,9 +225,11 @@ mod postgres_migration_tests {
     fn postgres_migrator_moves_the_forward_reference_and_keeps_checksums() {
         let pg = postgres_migrator().unwrap();
         assert_eq!(pg.migrations.len(), MIGRATOR.migrations.len());
+
         for (a, b) in pg.migrations.iter().zip(MIGRATOR.migrations.iter()) {
             assert_eq!(a.checksum, b.checksum, "migration {}", a.version);
         }
+
         let first = pg.migrations.iter().find(|m| m.version == 1).unwrap();
         let col = first.sql.find(PG_0001_COLUMN).unwrap();
         let clusters = first.sql.find("CREATE TABLE clusters").unwrap();
@@ -229,6 +243,7 @@ mod postgres_migration_tests {
     async fn migrations_apply_on_postgres() {
         let Ok(url) = std::env::var("FORGE_TEST_POSTGRES_URL") else { return };
         Store::connect(&url).await.unwrap();
+
         // A second connect re-checks every checksum and applies nothing.
         Store::connect(&url).await.unwrap();
     }

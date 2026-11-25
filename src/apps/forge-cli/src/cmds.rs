@@ -38,6 +38,7 @@ pub(crate) async fn resolve_node(api: &mut Api, node: &str) -> Result<Value> {
     if looks_like_id(node) {
         return api.get(&format!("/api/v1/servers/{node}")).await;
     }
+
     let all = api.get("/api/v1/servers").await?;
     let matches: Vec<&Value> = all
         .as_array()
@@ -48,6 +49,7 @@ pub(crate) async fn resolve_node(api: &mut Api, node: &str) -> Result<Value> {
                 || s["display_name"].as_str().is_some_and(|d| d.eq_ignore_ascii_case(node))
         })
         .collect();
+
     match matches.as_slice() {
         [one] => Ok((*one).clone()),
         [] => Err(CliError::new(Exit::NotFound, format!("no node named `{node}` that you can see"))),
@@ -67,13 +69,16 @@ pub(crate) fn confirm(g: &Global, yes: bool, what: &str) -> Result<()> {
     if yes {
         return Ok(());
     }
+
     if g.non_interactive || !std::io::stdin().is_terminal() {
         return Err(CliError::usage(format!("{what}: confirmation needed; pass --yes in non-interactive use")));
     }
+
     eprint!("{what}\nType `yes` to continue: ");
     let _ = std::io::stderr().flush();
     let mut line = String::new();
     std::io::stdin().lock().read_line(&mut line)?;
+
     if line.trim() == "yes" { Ok(()) } else { Err(CliError::new(Exit::General, "cancelled").with_code("cancelled")) }
 }
 
@@ -85,19 +90,25 @@ pub async fn simple_get(g: &Global, path: &str) -> Result<()> {
         Err(e) if e.exit == Exit::Auth => Api::anonymous(t.server.clone(), t.ca_file.as_deref())?,
         Err(e) => return Err(e),
     };
+
     let v = api.get(path).await?;
+
     show(g, &v, None)
 }
 
 pub async fn version(g: &Global) -> Result<()> {
     let client = json!({ "version": crate::VERSION });
+
     let server = match target(g) {
         Ok(t) => Api::anonymous(t.server.clone(), t.ca_file.as_deref())?.get("/api/version").await.ok(),
         Err(_) => None,
     };
+
     let v = json!({ "client": client, "server": server });
+
     if g.output == Format::Table {
         println!("client  {}", crate::VERSION);
+
         match &server {
             Some(s) => println!(
                 "server  {} (build {})",
@@ -106,8 +117,10 @@ pub async fn version(g: &Global) -> Result<()> {
             ),
             None => println!("server  (not connected)"),
         }
+
         return Ok(());
     }
+
     show(g, &v, None)
 }
 
@@ -160,11 +173,14 @@ pub async fn contexts(g: &Global, cmd: ContextsCmd) -> Result<()> {
                         format!("context `{name}` exists; use `forge contexts update`"),
                     ));
                 }
+
                 c.contexts
                     .insert(name.clone(), ctx::Context { server: server.clone(), ca_file: ca, ..Default::default() });
+
                 if !no_use || c.current.is_none() {
                     c.current = Some(name.clone());
                 }
+
                 Ok(())
             })?;
             eprintln!("Added context `{name}` → {server}. Sign in with: forge auth login");
@@ -218,26 +234,34 @@ pub async fn contexts(g: &Global, cmd: ContextsCmd) -> Result<()> {
                     .get_mut(&name)
                     .ok_or_else(|| CliError::new(Exit::NotFound, format!("no context `{name}`")))?;
                 let mut moved = false;
+
                 if let Some(s) = server {
                     moved = s != entry.server;
+
                     if moved {
                         entry.instance_id = None;
                         entry.user = None;
                     }
+
                     entry.server = s;
                 }
+
                 if let Some(p) = ca_file {
                     entry.ca_file = Some(p.to_string_lossy().into_owned());
                 }
+
                 if let Some(d) = default_cluster {
                     entry.default_cluster = (!d.is_empty()).then_some(d);
                 }
+
                 Ok(moved)
             })?;
+
             if moved {
                 creds::delete(&name)?;
                 eprintln!("The server changed: the stored login was removed. Sign in again with: forge auth login");
             }
+
             show(g, &json!({ "updated": name }), None)
         }
         ContextsCmd::Remove { name } => {
@@ -250,17 +274,22 @@ pub async fn contexts(g: &Global, cmd: ContextsCmd) -> Result<()> {
                 }
                 _ => false,
             };
+
             creds::delete(&name)?;
             ctx::Config::update(|cfg| {
                 cfg.contexts.remove(&name);
+
                 if cfg.current.as_deref() == Some(name.as_str()) {
                     cfg.current = None;
                 }
+
                 Ok(())
             })?;
+
             if !revoked {
                 eprintln!("Note: the server session was not revoked (not signed in, or the server was unreachable).");
             }
+
             show(g, &json!({ "removed": name, "server_session_revoked": revoked }), None)
         }
     }
@@ -303,12 +332,15 @@ pub async fn auth(g: &Global, cmd: AuthCmd) -> Result<()> {
                 )
                 .with_code("step_up_needs_context"));
             }
+
             let t = target(g)?;
             let mut api = connect(g, &t).await?;
+
             let code = match code {
                 Some(c) => c,
                 None => crate::api::prompt_code(g.non_interactive)?,
             };
+
             let v = api.step_up(&code).await?;
             show(g, &v, None)
         }
@@ -316,17 +348,20 @@ pub async fn auth(g: &Global, cmd: AuthCmd) -> Result<()> {
             if g.non_interactive {
                 return Err(CliError::usage("interactive sign-in is disabled by --non-interactive; use FORGE_TOKEN"));
             }
+
             let t = target(g)?;
             let name = t
                 .context
                 .clone()
                 .ok_or_else(|| CliError::usage("sign-in needs a context: forge contexts add <name> --server <url>"))?;
             let timeout = Duration::from_secs(timeout_secs);
+
             let tokens = if device {
                 login::device(&t.server, t.ca_file.as_deref(), timeout).await?
             } else {
                 login::browser(&t.server, t.ca_file.as_deref(), timeout).await?
             };
+
             let mut api = Api::with_context(t.server.clone(), t.ca_file.as_deref(), name.clone(), tokens.clone())?;
             let me = api.get("/api/v1/me").await?;
             let ws = api.get("/api/v1/workspace").await?;
@@ -341,6 +376,7 @@ pub async fn auth(g: &Global, cmd: AuthCmd) -> Result<()> {
                 )
                 .with_code("instance_mismatch"));
             }
+
             let store = creds::save(&name, &tokens)?;
             let user = me["user"]["username"].as_str().or(me["user"]["email"].as_str()).map(str::to_owned);
             ctx::Config::update(|c| {
@@ -348,6 +384,7 @@ pub async fn auth(g: &Global, cmd: AuthCmd) -> Result<()> {
                     e.instance_id = instance.clone();
                     e.user = user.clone();
                 }
+
                 Ok(())
             })?;
             let stored = if store == creds::Store::Keyring { "OS credential store" } else { "owner-only file" };
@@ -364,11 +401,13 @@ pub async fn auth(g: &Global, cmd: AuthCmd) -> Result<()> {
                     .is_ok(),
                 None => false,
             };
+
             creds::delete(&name)?;
             ctx::Config::update(|c| {
                 if let Some(e) = c.contexts.get_mut(&name) {
                     e.user = None;
                 }
+
                 Ok(())
             })?;
             show(g, &json!({ "context": name, "server_session_revoked": revoked }), None)
@@ -379,24 +418,29 @@ pub async fn auth(g: &Global, cmd: AuthCmd) -> Result<()> {
                 Some(n) => creds::for_server(n, &t.server)?.is_some(),
                 None => g.token.is_some(),
             };
+
             let v = json!({ "context": t.context, "server": t.server, "instance_id": t.instance_id, "signed_in": signed_in });
+
             if !signed_in {
                 // One document per run: the error alone (exit 3).
                 let where_ = t.context.as_deref().unwrap_or(&t.server);
                 return Err(CliError::auth(format!("not signed in to `{where_}`")).with_code("not_signed_in"));
             }
+
             show(g, &v, None)
         }
         AuthCmd::Whoami => {
             let t = target(g)?;
             let mut api = connect(g, &t).await?;
             let me = api.get("/api/v1/me").await?;
+
             if g.output == Format::Table {
                 let u = &me["user"];
                 println!("user      {}", u["username"].as_str().or(u["email"].as_str()).unwrap_or("?"));
                 println!("name      {}", u["display_name"].as_str().unwrap_or("-"));
                 println!("email     {}", u["email"].as_str().unwrap_or("-"));
                 println!("mfa       {}", if me["mfa"] == true { "verified" } else { "not verified" });
+
                 for b in me["bindings"].as_array().into_iter().flatten() {
                     println!(
                         "role      {} on {}",
@@ -412,8 +456,10 @@ pub async fn auth(g: &Global, cmd: AuthCmd) -> Result<()> {
                         )
                     );
                 }
+
                 return Ok(());
             }
+
             show(g, &me, None)
         }
     }
@@ -433,6 +479,7 @@ fn specs(m: &Value) -> String {
     .into_iter()
     .flatten()
     .collect();
+
     if parts.is_empty() { "-".into() } else { parts.join(" · ") }
 }
 
@@ -535,34 +582,43 @@ pub async fn nodes(g: &Global, cmd: NodesCmd) -> Result<()> {
         NodesCmd::Extra(x) => return crate::admincmd::node_extra(g, x).await,
         other => other,
     };
+
     let remove = matches!(cmd, NodesCmd::Remove { .. });
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         NodesCmd::List { cluster, workspace, paging } => {
             let path = match &workspace {
                 Some(w) => format!("/api/v1/servers?workspace={}", enc(w)),
                 None => "/api/v1/servers".to_owned(),
             };
+
             let mut v = api.get(&path).await?;
+
             // The API has no cluster filter: resolve the name to an id here
             // (the context's default cluster may be a name too).
             if let Some(c) = cluster.or(t.default_cluster.clone()) {
                 let id = crate::admincmd::cluster_id(&mut api, &c).await?;
+
                 if let Value::Array(rows) = &mut v {
                     filter_cluster(rows, &id);
                 }
             }
+
             // Hardware from live telemetry (best effort: offline nodes show "-").
             let latest = api.get("/api/v1/metrics/latest").await.unwrap_or(Value::Null);
+
             for s in v.as_array_mut().into_iter().flatten() {
                 let id = s["id"].as_str().unwrap_or_default().to_owned();
+
                 // Saved facts (server ≥ issue #8 tags/facts) first, live telemetry otherwise.
                 let m = if s["facts"].is_object() { s["facts"].clone() } else { latest[id.as_str()].clone() };
                 s["specs"] = json!(specs(&m));
                 let os = s["facts"]["os_version"].as_str().or(s["os"].as_str()).unwrap_or("-").to_owned();
                 s["os_label"] = json!(format!("{os} {}", s["arch"].as_str().unwrap_or_default()).trim().to_owned());
             }
+
             out::list(g.output, rows_of(v), Some(NODE_COLS), paging.into(), out::Total::Rows);
             Ok(())
         }
@@ -578,42 +634,52 @@ pub async fn nodes(g: &Global, cmd: NodesCmd) -> Result<()> {
             let clean = |v: Vec<String>| -> Vec<String> {
                 v.into_iter().map(|t| t.trim().to_owned()).filter(|t| !t.is_empty()).collect()
             };
+
             let wanted = match set {
                 Some(s) => Some(clean(s)),
                 None if add.is_empty() && remove.is_empty() => None,
                 None => {
                     let (add, remove) = (clean(add), clean(remove));
                     let mut t: Vec<String> = current.iter().filter(|t| !remove.contains(t)).cloned().collect();
+
                     for a in add {
                         if !t.contains(&a) {
                             t.push(a);
                         }
                     }
+
                     Some(t)
                 }
             };
+
             let v = match wanted {
                 Some(tags) => api.call(reqwest::Method::PUT, &path, Some(&json!({ "tags": tags }))).await?,
                 None => json!({ "tags": current }),
             };
+
             show(g, &v, None)
         }
         NodesCmd::Command { node, kind, name, no_wait, timeout_secs } => {
             let id = resolve_node(&mut api, &node).await?["id"].as_str().unwrap_or_default().to_owned();
             let mut command = json!({ "type": kind });
+
             if let Some(n) = name {
                 command["name"] = json!(n);
             }
+
             let job = api.post(&format!("/api/v1/servers/{id}/commands"), &json!({ "command": command })).await?;
             let job_id = job["id"].as_str().unwrap_or_default().to_owned();
             if no_wait || job_id.is_empty() {
                 if g.output.is_machine() {
                     return show(g, &job, None);
                 }
+
                 println!("{job_id}");
                 eprintln!("queued; follow it with `forge jobs watch {job_id}`");
+
                 return Ok(());
             }
+
             let done = wait_jobs(&mut api, std::slice::from_ref(&job_id), Duration::from_secs(timeout_secs)).await;
             match done {
                 Ok(jobs) => {
@@ -622,6 +688,7 @@ pub async fn nodes(g: &Global, cmd: NodesCmd) -> Result<()> {
                     if g.output.is_machine() {
                         return show(g, &json!({ "job_id": job_id, "status": j["status"], "result": output }), None);
                     }
+
                     show(g, &command_result(&kind, &output), None)
                 }
                 Err(e) if e.exit == Exit::Timeout => Err(CliError::new(
@@ -652,6 +719,7 @@ pub async fn nodes(g: &Global, cmd: NodesCmd) -> Result<()> {
             let s = resolve_node(&mut api, &node).await?;
             let id = s["id"].as_str().unwrap_or_default().to_owned();
             let hostname = s["hostname"].as_str().unwrap_or_default().to_owned();
+
             let question = if remove {
                 format!(
                     "Remove node {hostname} ({id}) from {}? Its certificate is revoked and the node, its \
@@ -662,7 +730,9 @@ pub async fn nodes(g: &Global, cmd: NodesCmd) -> Result<()> {
             } else {
                 format!("Revoke node {hostname} ({id}) on {}? It will disconnect and must be re-enrolled.", t.server)
             };
+
             confirm(g, yes, &question)?;
+
             // The server wants the host name typed as confirmation and, when it
             // requires MFA and you have enrolled, a fresh one-time code (a
             // missing code counts as a failed attempt, so ask first).
@@ -676,6 +746,7 @@ pub async fn nodes(g: &Global, cmd: NodesCmd) -> Result<()> {
                         .into_iter()
                         .flatten()
                         .any(|c| c["id"] == "security.mfa_required" && c["enabled"] == true);
+
                     if required && me["mfa_enrolled"] == true {
                         Some(crate::api::prompt_code(g.non_interactive)?)
                     } else {
@@ -683,11 +754,14 @@ pub async fn nodes(g: &Global, cmd: NodesCmd) -> Result<()> {
                     }
                 }
             };
+
             let body = json!({ "confirm_hostname": hostname, "totp_code": code });
+
             if remove {
                 api.call(reqwest::Method::DELETE, &format!("/api/v1/servers/{id}"), Some(&body)).await?;
                 return show(g, &json!({ "removed": id, "hostname": hostname }), None);
             }
+
             let v = api.post(&format!("/api/v1/servers/{id}/revoke"), &body).await?;
             show(g, &v, None)
         }
@@ -767,17 +841,21 @@ const DNS_COLS: &[Col] = &[
 pub async fn dns(g: &Global, cmd: DnsCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         DnsCmd::List { workspace, kind } => {
             let path = match workspace {
                 Some(w) => format!("/api/v1/names?workspace={}", urlencoding(&w)),
                 None => "/api/v1/names".to_owned(),
             };
+
             let v = api.get(&path).await?;
             let mut rows: Vec<Value> = v["names"].as_array().cloned().unwrap_or_default();
+
             if let Some(k) = kind {
                 rows.retain(|r| r["kind"] == k.as_str());
             }
+
             for r in &mut rows {
                 let ports: Vec<String> = r["ports"]
                     .as_array()
@@ -787,6 +865,7 @@ pub async fn dns(g: &Global, cmd: DnsCmd) -> Result<()> {
                     .collect();
                 r["ports_text"] = json!(ports.join(", "));
             }
+
             show(g, &Value::Array(rows), Some(DNS_COLS))
         }
         DnsCmd::Suffix(c) => {
@@ -799,6 +878,7 @@ pub async fn dns(g: &Global, cmd: DnsCmd) -> Result<()> {
                     api.call(reqwest::Method::PUT, "/api/v1/names/suffix", Some(&json!({ "suffix": "" }))).await?
                 }
             };
+
             show(g, &v, Some(SUFFIX_COLS))
         }
     }
@@ -836,8 +916,10 @@ pub async fn clusters(g: &Global, cmd: ClustersCmd) -> Result<()> {
         ClustersCmd::Swarm(s) => return crate::containercmd::cluster_swarm(g, s).await,
         other => other,
     };
+
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         ClustersCmd::List { paging } => {
             let v = api.get("/api/v1/clusters").await?;
@@ -906,9 +988,11 @@ async fn watch_job(g: &Global, api: &mut Api, job: &str, timeout: Duration) -> R
     let mut seen_steps = 0usize;
     let mut printed = 0usize;
     let human = matches!(g.output, Format::Table);
+
     loop {
         let v = api.get(&format!("/api/v1/jobs/{}", enc(job))).await?;
         let steps = api.get(&format!("/api/v1/jobs/{}/steps", enc(job))).await.unwrap_or(Value::Null);
+
         for s in steps.as_array().into_iter().flatten().skip(seen_steps) {
             if human {
                 eprintln!(
@@ -919,24 +1003,30 @@ async fn watch_job(g: &Global, api: &mut Api, job: &str, timeout: Duration) -> R
                     s["error"].as_str().map(|e| format!(" ({e})")).unwrap_or_default()
                 );
             }
+
             seen_steps += 1;
         }
+
         let live = api.get(&format!("/api/v1/jobs/{}/live", enc(job))).await.unwrap_or(Value::Null);
         if let Some(text) = live["output"].as_str() {
             if text.len() < printed {
                 printed = 0; // a new operation started: its output begins again
             }
+
             if human && text.len() > printed {
                 eprint!("{}", text.get(printed..).unwrap_or_default());
             }
+
             printed = text.len();
         }
+
         let status = v["status"].as_str().unwrap_or_default().to_owned();
         if terminal(&status) {
             // JSON mode prints one document: the job on success, else the error.
             if human || status == "succeeded" {
                 show(g, &v, None)?;
             }
+
             return if status == "succeeded" {
                 Ok(())
             } else {
@@ -947,12 +1037,14 @@ async fn watch_job(g: &Global, api: &mut Api, job: &str, timeout: Duration) -> R
                 .with_code(format!("job_{status}")))
             };
         }
+
         if Instant::now() >= deadline {
             return Err(CliError::new(
                 Exit::Timeout,
                 format!("job {job} is still {status}; it keeps running (check with `forge jobs get {job}`)"),
             ));
         }
+
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
@@ -963,6 +1055,7 @@ pub(crate) async fn wait_jobs(api: &mut Api, ids: &[String], timeout: Duration) 
     let deadline = Instant::now() + timeout;
     let mut delay = Duration::from_millis(500);
     let mut done: Vec<Option<Value>> = vec![None; ids.len()];
+
     loop {
         for (i, id) in ids.iter().enumerate() {
             if done[i].is_none() {
@@ -972,6 +1065,7 @@ pub(crate) async fn wait_jobs(api: &mut Api, ids: &[String], timeout: Duration) 
                 }
             }
         }
+
         if done.iter().all(Option::is_some) {
             let jobs: Vec<Value> = done.into_iter().flatten().collect();
             if let Some(bad) = jobs.iter().find(|j| j["status"] != "succeeded") {
@@ -986,8 +1080,10 @@ pub(crate) async fn wait_jobs(api: &mut Api, ids: &[String], timeout: Duration) 
                 )
                 .with_code(format!("job_{status}")));
             }
+
             return Ok(jobs);
         }
+
         if Instant::now() >= deadline {
             let pending: Vec<&str> =
                 ids.iter().zip(&done).filter(|(_, d)| d.is_none()).map(|(id, _)| id.as_str()).collect();
@@ -996,6 +1092,7 @@ pub(crate) async fn wait_jobs(api: &mut Api, ids: &[String], timeout: Duration) 
                 format!("still running: {}; they keep running (check with `forge jobs get <id>`)", pending.join(", ")),
             ));
         }
+
         tokio::time::sleep(delay).await;
         delay = (delay * 2).min(Duration::from_secs(5));
     }
@@ -1008,6 +1105,7 @@ fn terminal(status: &str) -> bool {
 pub async fn jobs(g: &Global, cmd: JobsCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         JobsCmd::List { status, workspace, paging } => {
             // The API returns the newest `limit` jobs: ask for every row up
@@ -1015,11 +1113,13 @@ pub async fn jobs(g: &Global, cmd: JobsCmd) -> Result<()> {
             let page: out::Page = paging.into();
             let fetch = page.fetch().unwrap_or(10_000);
             let mut path = format!("/api/v1/jobs?limit={fetch}");
+
             for (k, v) in [("status", status), ("workspace", workspace)] {
                 if let Some(v) = v {
                     path.push_str(&format!("&{k}={}", enc(&v)));
                 }
             }
+
             let rows = rows_of(api.get(&path).await?);
             let more = rows.len() >= fetch;
             out::list(g.output, rows, Some(JOB_COLS), page, if more { out::Total::AtLeast } else { out::Total::Rows });
@@ -1038,6 +1138,7 @@ pub async fn jobs(g: &Global, cmd: JobsCmd) -> Result<()> {
             if let Ok(jobs) = &r {
                 show(g, &jobs.first().cloned().unwrap_or(Value::Null), None)?;
             }
+
             r.map(|_| ())
         }
         JobsCmd::Watch { job, timeout_secs } => watch_job(g, &mut api, &job, Duration::from_secs(timeout_secs)).await,
@@ -1097,8 +1198,10 @@ fn parse_since(s: &str) -> Result<i64> {
     if let Ok(ms) = s.parse::<i64>() {
         return Ok(ms);
     }
+
     let (num, unit) = s.split_at(s.len().saturating_sub(1));
     let n: i64 = num.parse().map_err(|_| CliError::usage(format!("--since: `{s}` is not 30m, 12h, 7d or epoch ms")))?;
+
     let secs = match unit {
         "s" => n,
         "m" => n * 60,
@@ -1106,16 +1209,20 @@ fn parse_since(s: &str) -> Result<i64> {
         "d" => n * 86_400,
         _ => return Err(CliError::usage(format!("--since: `{s}` is not 30m, 12h, 7d or epoch ms"))),
     };
+
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+
     Ok(i64::try_from(now).unwrap_or(i64::MAX) - secs * 1000)
 }
 
 pub async fn audit(g: &Global, cmd: AuditCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         AuditCmd::List { paging, before, until, action, actor, outcome, resource, since, workspace } => {
             let mut filter = String::new();
+
             for (k, v) in [
                 ("action", action),
                 ("actor", actor),
@@ -1127,12 +1234,15 @@ pub async fn audit(g: &Global, cmd: AuditCmd) -> Result<()> {
                     filter.push_str(&format!("&{k}={}", enc(&v)));
                 }
             }
+
             if let Some(s) = since {
                 filter.push_str(&format!("&since={}", parse_since(&s)?));
             }
+
             if let Some(u) = until {
                 filter.push_str(&format!("&until={}", parse_since(&u)?));
             }
+
             // Keyset pages of up to 200 entries (`/audit/page`), walked until
             // the requested page is covered; the first page carries the total.
             let page: out::Page = paging.into();
@@ -1140,30 +1250,39 @@ pub async fn audit(g: &Global, cmd: AuditCmd) -> Result<()> {
             let mut rows: Vec<Value> = Vec::new();
             let mut cursor = before;
             let mut total = None;
+
             loop {
                 let per = want.map_or(200, |w| w.saturating_sub(rows.len()).clamp(1, 200));
                 let mut path = format!("/api/v1/audit/page?limit={per}{filter}");
+
                 if total.is_none() {
                     path.push_str("&total=true");
                 }
+
                 if let Some(c) = cursor {
                     path.push_str(&format!("&before={c}"));
                 }
+
                 let p = api.get(&path).await?;
+
                 if total.is_none() {
                     total = p["total"].as_u64().and_then(|n| usize::try_from(n).ok());
                 }
+
                 rows.extend(p["entries"].as_array().cloned().unwrap_or_default());
                 cursor = p["next_cursor"].as_i64();
+
                 if cursor.is_none() || want.is_some_and(|w| rows.len() >= w) {
                     break;
                 }
             }
+
             let total = match total {
                 Some(n) => out::Total::Known(n),
                 None if cursor.is_some() => out::Total::AtLeast,
                 None => out::Total::Rows,
             };
+
             out::list(
                 g.output,
                 rows,
@@ -1183,6 +1302,7 @@ pub async fn audit(g: &Global, cmd: AuditCmd) -> Result<()> {
         AuditCmd::Verify => {
             let v = api.get("/api/v1/audit/verify").await?;
             show(g, &v, None)?;
+
             if v["ok"] == true {
                 Ok(())
             } else {
@@ -1241,6 +1361,7 @@ pub enum PluginsCmd {
 
 pub async fn plugins(g: &Global, cmd: PluginsCmd) -> Result<()> {
     let offline = |e: String| CliError::new(Exit::General, e);
+
     match cmd {
         PluginsCmd::Keygen { out } => {
             if out.exists() {
@@ -1249,6 +1370,7 @@ pub async fn plugins(g: &Global, cmd: PluginsCmd) -> Result<()> {
                     format!("{} already exists; refusing to overwrite a key", out.display()),
                 ));
             }
+
             let (key, pkcs8) = PublisherKey::generate().map_err(|e| offline(e.to_string()))?;
             forge_secrets::write_private(&out, &pkcs8).map_err(|e| offline(e.to_string()))?;
             show(g, &json!({ "public_key": key.public_key_b64(), "key_file": out }), None)
@@ -1263,6 +1385,7 @@ pub async fn plugins(g: &Global, cmd: PluginsCmd) -> Result<()> {
         cmd => {
             let t = target(g)?;
             let mut api = connect(g, &t).await?;
+
             let v = match cmd {
                 PluginsCmd::List => api.get("/api/v1/plugins").await?,
                 PluginsCmd::Install { manifest, artifact, signature, approve, upgrade } => {
@@ -1293,6 +1416,7 @@ pub async fn plugins(g: &Global, cmd: PluginsCmd) -> Result<()> {
                 }
                 PluginsCmd::Keygen { .. } | PluginsCmd::Sign { .. } => Value::Null,
             };
+
             show(g, &v, None)
         }
     }
@@ -1316,10 +1440,12 @@ mod tests {
             json!({ "hostname": "web-1", "cluster_id": "c-prod" }),
             json!({ "hostname": "loose", "cluster_id": null }),
         ];
+
         for needle in ["lab", "LAB", "lb", "c-lab"] {
             let id = crate::admincmd::pick(&clusters, &["name", "abbr"], "cluster", needle).map(|c| c["id"].clone());
             assert_eq!(id.ok(), Some(json!("c-lab")), "{needle}");
         }
+
         assert!(crate::admincmd::pick(&clusters, &["name", "abbr"], "cluster", "nope").is_err());
         filter_cluster(&mut nodes, "c-lab");
         let names: Vec<&str> = nodes.iter().filter_map(|n| n["hostname"].as_str()).collect();

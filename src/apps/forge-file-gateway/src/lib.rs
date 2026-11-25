@@ -62,13 +62,17 @@ fn load_or_create_host_key(path: &Path) -> Result<PrivateKey, String> {
     if let Ok(pem) = std::fs::read_to_string(path) {
         return PrivateKey::from_openssh(pem.as_bytes()).map_err(|e| format!("invalid SFTP host key: {e}"));
     }
+
     let pair = Ed25519Keypair::from_seed(&forge_secrets::crypto::random_bytes::<32>());
     let key = PrivateKey::new(KeypairData::Ed25519(pair), "orbyn-forge-sftp").map_err(|e| e.to_string())?;
     let pem = key.to_openssh(LineEnding::LF).map_err(|e| e.to_string())?;
+
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
+
     write_private(path, pem.as_bytes())?;
+
     Ok(key)
 }
 
@@ -103,6 +107,7 @@ impl Throttle {
     fn blocked(&self, ip: IpAddr) -> bool {
         let Ok(mut m) = self.0.lock() else { return true };
         m.retain(|_, (_, at)| at.elapsed() < FAILURE_WINDOW);
+
         m.get(&ip).is_some_and(|(n, _)| *n >= MAX_FAILURES)
     }
 
@@ -155,7 +160,9 @@ impl Sessions {
         if Self::used(&m, grant) >= max {
             return false;
         }
+
         m.insert(id, Conn { grant: grant.to_owned(), handle: None, channels: 0 });
+
         true
     }
 
@@ -176,9 +183,11 @@ impl Sessions {
         if extra && Self::used(&m, &grant) >= max {
             return false;
         }
+
         if let Some(c) = m.get_mut(&id) {
             c.channels += 1;
         }
+
         true
     }
 
@@ -194,6 +203,7 @@ impl Sessions {
     fn take_grant(&self, grant: &str) -> Vec<Handle> {
         let Ok(mut m) = self.0.lock() else { return Vec::new() };
         let ids: Vec<u64> = m.iter().filter(|(_, c)| c.grant == grant).map(|(id, _)| *id).collect();
+
         ids.into_iter().filter_map(|id| m.remove(&id).and_then(|c| c.handle)).collect()
     }
 
@@ -232,6 +242,7 @@ pub async fn serve(
     let sweeper = tokio::spawn(sweep(shared.clone()));
     let dropper = tokio::spawn(drop_on_change(shared.clone()));
     let mut next_id = 0u64;
+
     loop {
         let (stream, peer) = tokio::select! {
             r = listener.accept() => match r {
@@ -243,9 +254,11 @@ pub async fn serve(
             },
             _ = shutdown.changed() => break,
         };
+
         if shared.throttle.blocked(peer.ip()) {
             continue;
         }
+
         let _ = stream.set_nodelay(true);
         next_id += 1;
         let handler = SshSession {
@@ -266,6 +279,7 @@ pub async fn serve(
             }
         });
     }
+
     sweeper.abort();
     dropper.abort();
 }
@@ -274,6 +288,7 @@ pub async fn serve(
 /// (revoked, password reset, or narrowed access).
 async fn drop_on_change(shared: Arc<Shared>) {
     let mut rx = shared.files.subscribe_grant_drops();
+
     loop {
         let grant = match rx.recv().await {
             Ok(g) => g,
@@ -284,6 +299,7 @@ async fn drop_on_change(shared: Arc<Shared>) {
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
         };
+
         for handle in shared.sessions.take_grant(&grant) {
             let _ = handle
                 .disconnect(
@@ -299,6 +315,7 @@ async fn drop_on_change(shared: Arc<Shared>) {
 /// Closes sessions whose grant expired, was revoked, or lost its creator's rights.
 async fn sweep(shared: Arc<Shared>) {
     let mut tick = tokio::time::interval(SWEEP);
+
     loop {
         tick.tick().await;
         sweep_once(&shared).await;
@@ -314,6 +331,7 @@ async fn sweep_once(shared: &Shared) {
             .map(|m| m.iter().filter_map(|(id, c)| Some((*id, c.grant.clone(), c.handle.clone()?))).collect())
             .unwrap_or_default();
         let mut checked: HashMap<String, bool> = HashMap::new();
+
         for (id, grant, handle) in open {
             let active = match checked.get(&grant) {
                 Some(a) => *a,
@@ -323,6 +341,7 @@ async fn sweep_once(shared: &Shared) {
                     a
                 }
             };
+
             if !active {
                 let _ = handle
                     .disconnect(
@@ -351,6 +370,7 @@ impl SshSession {
     /// Frees a session channel's slot (once, however it closed).
     fn release(&mut self, channel: ChannelId) {
         self.channels.remove(&channel);
+
         if self.counted.remove(&channel) {
             self.shared.sessions.close_channel(self.id);
         }
@@ -360,6 +380,7 @@ impl SshSession {
 impl Drop for SshSession {
     fn drop(&mut self) {
         self.shared.sessions.remove(self.id);
+
         if let Some(actor) = self.actor.take() {
             let files = self.shared.files.clone();
             let peer = self.peer.ip().to_string();
@@ -378,12 +399,14 @@ impl russh::server::Handler for SshSession {
         if self.shared.throttle.blocked(ip) {
             return Ok(Auth::reject());
         }
+
         match self.shared.files.authenticate(user, password, Some(ip)).await {
             Ok(actor) => {
                 let (grant_id, max) = match &actor {
                     Actor::Grant { grant, .. } => (grant.id.clone(), grant.max_sessions as usize),
                     Actor::User { .. } => return Ok(Auth::reject()),
                 };
+
                 if !self.shared.sessions.reserve(self.id, &grant_id, max) {
                     self.shared
                         .files
@@ -396,6 +419,7 @@ impl russh::server::Handler for SshSession {
                         .await;
                     return Ok(Auth::reject());
                 }
+
                 self.shared
                     .files
                     .grant_event(&actor, "file.sftp.connect", AuditOutcome::Success, json!({ "peer": ip.to_string() }))
@@ -422,6 +446,7 @@ impl russh::server::Handler for SshSession {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         let Some(Actor::Grant { grant, .. }) = &self.actor else { return Ok(()) };
+
         // Each session channel is a session: dropping `reply` refuses it.
         if !self.shared.sessions.open_channel(self.id, grant.max_sessions as usize) {
             let actor = self.actor.clone();
@@ -429,11 +454,14 @@ impl russh::server::Handler for SshSession {
                 let reason = json!({ "peer": self.peer.ip().to_string(), "reason": "session limit" });
                 self.shared.files.grant_event(&actor, "file.sftp.connect", AuditOutcome::Denied, reason).await;
             }
+
             return Ok(());
         }
+
         self.counted.insert(channel.id());
         self.channels.insert(channel.id(), channel);
         reply.accept().await;
+
         Ok(())
     }
 
@@ -452,16 +480,20 @@ impl russh::server::Handler for SshSession {
             session.channel_failure(channel)?;
             return Ok(());
         };
+
         let Some(ch) = self.channels.remove(&channel) else {
             session.channel_failure(channel)?;
             return Ok(());
         };
+
         let Some(handler) = sftp::SftpSession::new(self.shared.files.clone(), actor).await else {
             session.channel_failure(channel)?;
             return Ok(());
         };
+
         session.channel_success(channel)?;
         russh_sftp::server::run(ch.into_stream(), handler).await;
+
         Ok(())
     }
 
@@ -473,8 +505,10 @@ impl russh::server::Handler for SshSession {
     ) -> Result<(), Self::Error> {
         session.channel_failure(channel)?;
         session.close(channel)?;
+
         // Closed by us: its slot is free now, whenever the client answers.
         self.release(channel);
+
         Ok(())
     }
 
@@ -482,6 +516,7 @@ impl russh::server::Handler for SshSession {
         session.channel_failure(channel)?;
         session.close(channel)?;
         self.release(channel);
+
         Ok(())
     }
 
@@ -509,12 +544,15 @@ mod tests {
     #[test]
     fn session_slots_are_reserved_at_login_and_counted_per_channel() {
         let s = Sessions::default();
+
         // Limit 2: two logins fit, a third is refused before any channel opens.
         assert!(s.reserve(1, "g", 2));
         assert!(s.reserve(2, "g", 2));
         assert!(!s.reserve(3, "g", 2));
+
         // Another grant has its own limit.
         assert!(s.reserve(4, "other", 1));
+
         // The first channel uses the login's slot; a second one on the same
         // connection needs a free slot.
         assert!(s.open_channel(1, 2));
@@ -522,9 +560,11 @@ mod tests {
         s.remove(2);
         assert!(s.open_channel(1, 2));
         assert!(!s.reserve(5, "g", 2));
+
         // Closing a channel frees its slot.
         s.close_channel(1);
         assert!(s.reserve(5, "g", 2));
+
         // Unknown connections never get a channel.
         assert!(!s.open_channel(99, 10));
     }
@@ -535,6 +575,7 @@ mod tests {
         assert!(s.reserve(1, "g", 5));
         assert!(s.reserve(2, "g", 5));
         assert!(s.reserve(3, "other", 5));
+
         // No handles yet (login not finished): removed, nothing to close.
         assert!(s.take_grant("g").is_empty());
         assert!(s.reserve(4, "g", 2) && s.reserve(5, "g", 2));

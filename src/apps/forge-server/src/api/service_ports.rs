@@ -47,6 +47,7 @@ pub async fn list(
     // target before it can open the tunnel.
     let now = state.clock.now();
     let user = caller.session.user.id;
+
     let grants: Vec<forge_core::tunnels::TunnelGrant> =
         if caller.can(Action::View, EntityRef::new(EntityKind::Workspace, ws)).await {
             Vec::new()
@@ -56,8 +57,10 @@ pub async fn list(
             if mine.is_empty() && !crate::console_access::is_member(&state.store, &state.store, user, ws).await? {
                 caller.authorize(Action::View, EntityRef::new(EntityKind::Workspace, ws)).await?;
             }
+
             mine
         };
+
     let granted = |e: &ServicePort| grants.iter().any(|g| g.covers(user, e.kind, &e.id, e.server_id, e.port, now));
     let all = crate::service_ports::catalogue(&state, ws).await.map_err(internal)?;
     let wanted: Vec<ServicePort> = all
@@ -73,6 +76,7 @@ pub async fn list(
     let allowed = caller
         .can_many(Action::View, wanted.iter().map(|e| EntityRef::new(EntityKind::Server, e.server_id)).collect())
         .await;
+
     Ok(Json(wanted.into_iter().zip(allowed).filter_map(|(e, ok)| (ok || granted(&e)).then_some(e)).collect()))
 }
 
@@ -88,5 +92,6 @@ pub async fn for_server(
         .map_err(|_| ApiError::not_found("server not found"))?;
     let all = crate::service_ports::catalogue(&state, server.workspace_id).await.map_err(internal)?;
     let ports: Vec<ServicePort> = all.into_iter().filter(|e| e.server_id == id).collect();
+
     Ok(Json(serde_json::json!({ "server_id": id, "ports": ports })))
 }

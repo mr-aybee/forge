@@ -97,6 +97,7 @@ impl NodeAnalytics {
         if self.started {
             return;
         }
+
         self.started = true;
         let tls = self.tls.clone();
         let make: MakeSink = Box::new(move |t: &Target| {
@@ -118,6 +119,7 @@ impl NodeAnalytics {
         if let Ok(mut t) = self.tls.write() {
             *t = tls;
         }
+
         self.target.send_modify(|t| {
             if let Some(t) = t {
                 t.generation += 1;
@@ -131,8 +133,10 @@ impl NodeAnalytics {
         let Some(cfg) = cfg else {
             self.enabled = false;
             self.gate.set_keys(&[]);
+
             return;
         };
+
         self.enabled = true;
         let url = Some(cfg.url.clone()).filter(|u| !u.is_empty());
         self.target.send_if_modified(|t| {
@@ -140,11 +144,14 @@ impl NodeAnalytics {
             if !same {
                 *t = url.map(|url| Target { url, generation: 0 });
             }
+
             !same
         });
+
         if let Some(s) = &cfg.spool {
             self.spool.set_limits(Limits::from_tuning(s));
         }
+
         self.gate.set_keys(&cfg.keys);
         let listener = cfg.listener.clone().unwrap_or_default();
         self.gate.set_limits(log_listener::Limits::from_tuning(&listener));
@@ -159,6 +166,7 @@ impl NodeAnalytics {
             if changed {
                 a.clone_from(&want);
             }
+
             changed
         });
     }
@@ -169,17 +177,21 @@ impl NodeAnalytics {
         if !self.enabled {
             return;
         }
+
         let minute = MinuteBucket::minute_of(now);
         let mut rows = Vec::new();
+
         match &mut self.bucket {
             Some(b) if b.minute() == minute => {}
             other => {
                 if let Some(b) = other.take() {
                     rows.push(Row::NodeMinute(b.close()));
                 }
+
                 *other = Some(MinuteBucket::new(minute));
             }
         }
+
         if let Some(b) = &mut self.bucket {
             b.add(&NodeSample {
                 cpu: m.cpu_percent,
@@ -193,6 +205,7 @@ impl NodeAnalytics {
                 load1: m.load1,
             });
         }
+
         rows.extend(m.top_processes.iter().map(|p| {
             Row::TopProcess(TopProcessRow {
                 minute,
@@ -204,6 +217,7 @@ impl NodeAnalytics {
                 cmd: p.cmd.clone(),
             })
         }));
+
         if let Err(e) = self.append(rows, now, false).await {
             tracing::debug!(error = %e, "node minute not spooled");
         }
@@ -218,21 +232,28 @@ impl NodeAnalytics {
             self.gateway = t.bridge_gateway;
             self.update_addresses();
         }
+
         if !self.enabled {
             return 0;
         }
+
         let minute = MinuteBucket::minute_of(now);
         let mut rows: Vec<Row> = rows::samples(&t.samples, minute).collect();
+
         let Some(batch) = &t.batch else {
             if let Err(e) = self.append(rows, now, false).await {
                 tracing::debug!(error = %e, "container samples not spooled");
             }
+
             return 0;
         };
+
         if batch.dropped > 0 {
             tracing::warn!(dropped = batch.dropped, "the helper dropped container log lines (buffer full)");
         }
+
         rows.extend(rows::lines(batch));
+
         match self.append(rows, now, true).await {
             Ok(()) => batch.seq,
             Err(e) => {
@@ -246,11 +267,14 @@ impl NodeAnalytics {
         if rows.is_empty() && !seal {
             return Ok(());
         }
+
         let spool = self.spool.clone();
+
         tokio::task::spawn_blocking(move || {
             for r in &rows {
                 spool.append(r, now)?;
             }
+
             if seal { spool.seal(now) } else { Ok(()) }
         })
         .await
@@ -268,6 +292,7 @@ impl NodeAnalytics {
 async fn tick(spool: Arc<Spool>, mut stop: watch::Receiver<bool>) {
     let mut every = tokio::time::interval(std::time::Duration::from_secs(1));
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
     loop {
         tokio::select! {
             _ = every.tick() => {}

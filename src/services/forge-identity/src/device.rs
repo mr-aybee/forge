@@ -24,9 +24,11 @@ impl IdentityService {
         if session.connection_id.is_some() {
             return Err(IdentityError::InvalidRequest("AI connectors cannot use multi-factor authentication".into()));
         }
+
         let user = self.get_user_checked(session.user_id).await?;
         let tokens = self.issue_bearer(user, true, None, session.created_at).await?;
         self.sessions.delete_session(&session.id_hash).await?;
+
         Ok(tokens)
     }
 
@@ -35,6 +37,7 @@ impl IdentityService {
         if u.disabled {
             return Err(IdentityError::Disabled);
         }
+
         Ok(u.id)
     }
 }

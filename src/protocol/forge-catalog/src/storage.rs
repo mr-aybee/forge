@@ -171,6 +171,7 @@ impl StoreOp {
 
     pub fn validate(&self) -> Result<(), String> {
         self.spec().validate()?;
+
         match self {
             Self::Adopt { spec } if !spec.adopted => return Err("adopt needs an adopted spec".into()),
             Self::Install { spec, .. } if spec.adopted => {
@@ -178,6 +179,7 @@ impl StoreOp {
             }
             _ => {}
         }
+
         if let Self::Uninstall { protect, .. } = self {
             for p in protect {
                 if p.contains('|') || valid_data_path(p).is_err() && p != LEGACY_DATA {
@@ -188,6 +190,7 @@ impl StoreOp {
         if let Self::Install { credential, .. } = self {
             credential.validate()?;
         }
+
         Ok(())
     }
 
@@ -225,6 +228,7 @@ impl StoreOp {
             env.insert("FORGE_OS_ACCESS_KEY".to_owned(), credential.access_key.clone());
             env.insert("FORGE_OS_SECRET_KEY".to_owned(), credential.secret_key.clone());
         }
+
         env
     }
 
@@ -267,7 +271,9 @@ pub fn parse_peer(peer: &str, port: u16) -> Result<(&str, &str), String> {
     if !valid_host(host) || p != port.to_string() || !path.starts_with('/') {
         return Err(bad());
     }
+
     valid_data_path(path)?;
+
     Ok((host, path))
 }
 
@@ -314,13 +320,16 @@ const LINUX_RESERVED: &[&str] = &[
 /// not `/` and not inside system directories. Windows: `D:\data\...`.
 pub fn valid_data_path(p: &str) -> Result<(), String> {
     let bad = || format!("data path `{p}`: an absolute directory such as /srv/objstore or D:\\objstore");
+
     if p.len() < 2 || p.len() > 200 || p.split(['/', '\\']).any(|c| c == "..") {
         return Err(bad());
     }
+
     if p.starts_with('/') {
         if !p.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'_' | b'.' | b'-')) || p.contains("//") {
             return Err(bad());
         }
+
         let trimmed = p.trim_end_matches('/');
         if trimmed.is_empty()
             || LINUX_RESERVED.iter().any(|r| trimmed == *r || trimmed.starts_with(&format!("{r}/")))
@@ -328,8 +337,10 @@ pub fn valid_data_path(p: &str) -> Result<(), String> {
         {
             return Err(format!("data path `{p}` is a system directory; use a dedicated directory or mount"));
         }
+
         return Ok(());
     }
+
     // Windows: X:\dir[\dir...]
     let b = p.as_bytes();
     if b.len() >= 4
@@ -343,8 +354,10 @@ pub fn valid_data_path(p: &str) -> Result<(), String> {
         if ["\\windows", "\\program files", "\\programdata", "\\users"].iter().any(|r| lower[2..].starts_with(r)) {
             return Err(format!("data path `{p}` is a system directory; use a dedicated directory or volume"));
         }
+
         return Ok(());
     }
+
     Err(bad())
 }
 
@@ -353,46 +366,60 @@ impl StoreSpec {
         if !PROVIDERS.contains(&self.provider.as_str()) {
             return Err(format!("unsupported object store provider `{}`", self.provider));
         }
+
         if !valid_slug(&self.slug) {
             return Err(format!("instance name `{}`: lowercase letters, digits and -, up to 31", self.slug));
         }
+
         if self.owner.len() > 64 || !self.owner.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
             return Err("owner: the store id".into());
         }
+
         if !valid_version(&self.version) {
             return Err(format!("release `{}`: `latest` or an exact release such as 1.0.0-alpha.67", self.version));
         }
+
         if self.s3_port < 1024 {
             return Err("S3 port: 1024-65535".into());
         }
+
         if self.console_port.is_some_and(|c| c < 1024 || c == self.s3_port) {
             return Err("console port: 1024-65535, different from the S3 port".into());
         }
+
         if self.data_paths.is_empty() || self.data_paths.len() > MAX_DRIVES_PER_NODE {
             return Err(format!("1 to {MAX_DRIVES_PER_NODE} data paths per node"));
         }
+
         if self.adopted {
             // Exactly the App Store container's layout.
             if self.runtime != Runtime::Docker || self.data_paths != [LEGACY_DATA] || !self.peers.is_empty() {
                 return Err(format!("an adopted store is the {LEGACY_CONTAINER} container with data in {LEGACY_DATA}"));
             }
+
             return Ok(());
         }
+
         for p in &self.data_paths {
             valid_data_path(p)?;
         }
+
         let distinct: std::collections::BTreeSet<&str> =
             self.data_paths.iter().map(|p| p.trim_end_matches(['/', '\\'])).collect();
+
         if distinct.len() != self.data_paths.len() {
             return Err("each data path may be listed once".into());
         }
+
         let windows = !self.data_paths[0].starts_with('/');
         if windows && (self.data_paths.len() > 1 || self.runtime == Runtime::Docker || !self.peers.is_empty()) {
             return Err("Windows nodes run a standalone native store with one data path".into());
         }
+
         if !self.peers.is_empty() {
             self.validate_peers()?;
         }
+
         Ok(())
     }
 
@@ -404,13 +431,16 @@ impl StoreSpec {
                 "a distributed store needs {MIN_DISTRIBUTED_DRIVES} to {MAX_DISTRIBUTED_DRIVES} drives in total"
             ));
         }
+
         let mut seen = std::collections::BTreeSet::new();
+
         for peer in &self.peers {
             let (host, path) = parse_peer(peer, self.s3_port)?;
             if !seen.insert((host, path)) {
                 return Err(format!("drive `{peer}` is listed twice"));
             }
         }
+
         if !self
             .data_paths
             .iter()
@@ -418,6 +448,7 @@ impl StoreSpec {
         {
             return Err("every data path of this member must be one of the cluster's drives".into());
         }
+
         Ok(())
     }
 
@@ -434,6 +465,7 @@ impl StoreCredential {
         if !ok(&self.access_key, 3) || !ok(&self.secret_key, 8) {
             return Err("access key (3+) and secret key (8+): letters and digits, up to 128".into());
         }
+
         Ok(())
     }
 }
@@ -468,6 +500,7 @@ pub const CREDENTIAL_PREFIX: &str = "forge: objstore-credential: ";
 pub fn take_credential(output: &str) -> (Option<StoreCredential>, String) {
     let mut cred = None;
     let mut rest = String::with_capacity(output.len());
+
     for line in output.lines() {
         match line.trim().strip_prefix(CREDENTIAL_PREFIX) {
             Some(json) => cred = serde_json::from_str(json).ok().or(cred),
@@ -477,6 +510,7 @@ pub fn take_credential(output: &str) -> (Option<StoreCredential>, String) {
             }
         }
     }
+
     (cred.filter(|c: &StoreCredential| c.validate().is_ok()), rest)
 }
 
@@ -536,6 +570,7 @@ wait_store 900
     fn windows_recipes_use_only_the_branded_data_folder() {
         for (name, script) in [("_winget.ps1", crate::WINGET_RUNNER), ("objstore-rustfs.ps1", RUSTFS_PS1)] {
             assert!(script.contains("OrbynForge"), "{name}");
+
             for line in script.lines() {
                 let generic = line.contains("ProgramData \"Forge") || line.contains("ProgramData 'Forge");
                 let legacy = line.contains("Legacy") || line.contains("Join-Path $env:ProgramData 'Forge')");
@@ -594,6 +629,7 @@ wait_store 900
             .output()
             .ok()?;
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+
         Some(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
@@ -610,8 +646,10 @@ wait_store 900
         let d = std::env::temp_dir().join(format!("forge-objstore-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
+
         // The shell sees the canonical path (no symlinked temp parents).
         let d = std::fs::canonicalize(&d).unwrap();
+
         #[cfg(windows)]
         let d = std::path::PathBuf::from(d.to_string_lossy().trim_start_matches(r"\\?\").to_owned());
         d
@@ -621,15 +659,18 @@ wait_store 900
     fn delete_data_needs_the_matching_marker() {
         let base = scratch("marker");
         let (mine, other, bare) = (base.join("mine"), base.join("other"), base.join("bare"));
+
         for d in [&mine, &other, &bare] {
             std::fs::create_dir_all(d.join("bucket")).unwrap();
         }
+
         std::fs::write(mine.join(".forge-objstore"), "store-1\n").unwrap();
         std::fs::write(other.join(".forge-objstore"), "store-2\n").unwrap();
         let Some(out) = run_delete(&[&mine, &other, &bare], "store-1", "") else { return };
         let gone = !mine.exists();
         let kept = other.exists() && bare.exists();
         let _ = std::fs::remove_dir_all(&base);
+
         // Git Bash paths differ from Windows paths; the behaviour is what counts.
         assert!(gone, "matching marker deletes: {out}");
         assert!(kept, "{out}");
@@ -646,6 +687,7 @@ wait_store 900
         std::fs::write(inner.join(".forge-objstore"), "store-2\n").unwrap();
         let Some(out) = run_delete(&[&outer], "store-1", "") else { return };
         assert!(outer.exists() && out.contains("contains data of another store"), "{out}");
+
         // A path the server lists as another store's is refused even without a nested marker.
         std::fs::remove_file(inner.join(".forge-objstore")).unwrap();
         let protect = sh_path(&inner);
@@ -740,12 +782,15 @@ wait_store 900
     #[test]
     fn validates_specs() {
         assert!(spec().validate().is_ok());
+
         for bad in ["", "Media", "-a", "a-", "a b", "a;id", &"a".repeat(32)] {
             assert!(StoreSpec { slug: bad.into(), ..spec() }.validate().is_err(), "{bad}");
         }
+
         for bad in ["/", "/etc", "/etc/x", "/var/lib/forge/x", "/srv/../etc", "/srv/a b", "srv", "/srv", "/tmp/x"] {
             assert!(StoreSpec { data_paths: vec![bad.into()], ..spec() }.validate().is_err(), "{bad}");
         }
+
         let win = |p: &str| vec![p.to_owned()];
         assert!(StoreSpec { data_paths: win("D:\\objstore\\media"), ..spec() }.validate().is_ok());
         assert!(StoreSpec { data_paths: win("C:\\Windows\\x"), ..spec() }.validate().is_err());
@@ -819,6 +864,7 @@ wait_store 900
         assert!(StoreOp::Install { spec: legacy.clone(), credential: cred }.validate().is_err(), "never recreated");
         assert!(StoreSpec { runtime: Runtime::Native, ..legacy.clone() }.validate().is_err());
         assert!(StoreSpec { data_paths: vec!["/srv/other".into()], ..legacy }.validate().is_err());
+
         // Without the flag, the App Store data path stays forbidden.
         assert!(StoreSpec { data_paths: vec![LEGACY_DATA.into()], ..spec() }.validate().is_err());
     }

@@ -32,6 +32,7 @@ async fn docker_resources_are_checked_guarded_and_audited() {
     // Credentials never go through the API (they would be stored in jobs).
     let (s, e) = admin.post(&ops, json!({"op": "image_pull", "image": "nginx:1.27", "registry_auth": "e30="})).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "{e}");
+
     // Driver options and protected networks are refused before the node.
     let (s, _) = admin.post(&ops, json!({"op": "volume_create", "name": "data", "driver_opts": {"device": "/"}})).await;
     assert!(s.is_client_error(), "{s}");
@@ -97,6 +98,7 @@ async fn registries_hold_secrets_and_gate_pushes() {
     let ops = format!("/api/v1/servers/{id}/docker/ops");
     let (s, e) = admin.post(&ops, json!({"op": "image_push", "image": "attacker.example/x:1"})).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "{e}");
+
     // Pushes need a registry that allows them, and registry.manage.
     let (s, e) = admin.post(&ops, json!({"op": "image_push", "image": "ghcr.io/acme/app:1"})).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "pushes are off by default: {e}");
@@ -121,6 +123,7 @@ async fn registries_hold_secrets_and_gate_pushes() {
     assert_eq!(s, StatusCode::ACCEPTED, "{job}");
 
     let (_, audit) = admin.get("/api/v1/audit?limit=200").await;
+
     for text in [list.to_string(), r.to_string(), job.to_string(), audit.to_string()] {
         assert!(!text.contains("ghp_s3cret"), "the secret leaked: {text}");
     }

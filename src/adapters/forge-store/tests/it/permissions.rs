@@ -10,6 +10,7 @@ use forge_store::Store;
 async fn store() -> (Store, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let s = Store::open_sqlite(&dir.path().join("forge.db")).await.unwrap();
+
     (s, dir)
 }
 
@@ -26,6 +27,7 @@ async fn user(s: &Store, name: &str) -> UserId {
         created_at: Timestamp(1),
     };
     s.create_user(&u).await.unwrap();
+
     u.id
 }
 
@@ -60,12 +62,14 @@ async fn revisions_publish_in_order_and_built_in_profiles_are_read_only() {
     s.create_profile(&p, &r1).await.unwrap();
     let r2 = ProfileRevision { revision: 2, actions: vec![Action::ServerManage, Action::View], ..r1.clone() };
     s.publish_revision(&r2, Timestamp(5)).await.unwrap();
+
     // A stale publish (revision 2 again) conflicts instead of overwriting.
     assert!(matches!(s.publish_revision(&r2, Timestamp(6)).await, Err(DomainError::Conflict(_))));
     let got = s.get_profile(p.id).await.unwrap().unwrap();
     assert_eq!((got.revision, got.updated_at), (2, Timestamp(5)));
     assert_eq!(s.get_revision(p.id, 2).await.unwrap().unwrap().actions, vec![Action::ServerManage, Action::View]);
     assert_eq!(s.list_revisions(p.id).await.unwrap().len(), 2, "history is kept");
+
     // Names are unique.
     let (dup, dup_r) = profile("UAT Support", false);
     assert!(s.create_profile(&dup, &dup_r).await.is_err());
@@ -103,6 +107,7 @@ async fn assignments_and_service_accounts_round_trip() {
     s.create_assignment(&a, 1).await.unwrap();
     assert_eq!(s.list_assignments().await.unwrap(), vec![a.clone()]);
     assert!(a.expired(Timestamp(100)) && !a.expired(Timestamp(99)));
+
     // Fail closed: a stale revision or an archived profile stores nothing.
     let stale = ProfileAssignment { id: ProfileAssignmentId::new(), ..a.clone() };
     assert!(matches!(s.create_assignment(&stale, 2).await, Err(DomainError::Conflict(_))));

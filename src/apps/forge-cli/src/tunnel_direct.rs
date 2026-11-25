@@ -50,9 +50,11 @@ impl client::Handler for PinnedHost {
         let PublicKeyOrCertificate::PublicKey { key, .. } = key else {
             return Ok(false);
         };
+
         let fp = key.fingerprint(HashAlg::Sha256).to_string();
         let ok = fp == self.fingerprint;
         self.seen = Some(fp);
+
         Ok(ok)
     }
 }
@@ -82,15 +84,18 @@ pub async fn connect(api: &Arc<Mutex<Api>>, tunnel_id: &str, mut sock: TcpStream
         Ok(Err(e)) => return Err(fail(format!("SSH to {}:{}: {e}", c.host, c.port))),
         Ok(Ok(h)) => h,
     };
+
     let key = PrivateKey::from_openssh(c.key_openssh.as_bytes()).map_err(|e| fail(format!("bad key: {e}")))?;
     let cert = Certificate::from_openssh(&c.cert_openssh).map_err(|e| fail(format!("bad certificate: {e}")))?;
     let auth = handle
         .authenticate_openssh_cert(&c.user, Arc::new(key), cert)
         .await
         .map_err(|e| fail(format!("SSH authentication: {e}")))?;
+
     if !matches!(auth, AuthResult::Success) {
         return Err(fail("the node refused the tunnel certificate (is its agent current?)"));
     }
+
     let channel = handle
         .channel_open_direct_tcpip(c.dial_ip.as_str(), u32::from(c.dial_port), "127.0.0.1", 0)
         .await
@@ -98,5 +103,6 @@ pub async fn connect(api: &Arc<Mutex<Api>>, tunnel_id: &str, mut sock: TcpStream
     let mut stream = channel.into_stream();
     let copied = tokio::io::copy_bidirectional(&mut sock, &mut stream).await;
     let _ = handle.disconnect(russh::Disconnect::ByApplication, "", "en").await;
+
     copied.map(|_| ()).map_err(|e| fail(e.to_string()))
 }

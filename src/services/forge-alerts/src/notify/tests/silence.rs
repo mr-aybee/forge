@@ -30,6 +30,7 @@ impl Env {
         };
         tune(&mut s);
         self.store.create_silence(&s).await.unwrap();
+
         s
     }
 
@@ -46,15 +47,18 @@ impl Env {
     /// pass); the sum of what was dispatched.
     async fn drain(&self) -> DispatchReport {
         let mut total = DispatchReport::default();
+
         for _ in 0..10 {
             let (plan, d) = self.pass().await;
             if plan == PlanReport::default() && d == DispatchReport::default() {
                 break;
             }
+
             total.sent += d.sent;
             total.suppressed += d.suppressed;
             total.cancelled += d.cancelled;
         }
+
         total
     }
 
@@ -103,10 +107,12 @@ async fn an_alarm_that_fires_during_a_silence_is_recorded_as_suppressed_and_noth
     e.advance(30 * MIN);
     assert_eq!(e.pass().await, (PlanReport::default(), DispatchReport::default()));
     assert_eq!(e.receiver.count(), 0);
+
     // The alarm and its timeline are exactly as the evaluator left them.
     assert_eq!(e.store.get_alarm(a.id).await.unwrap(), before);
     let kinds: Vec<String> = e.store.alarm_events(a.id).await.unwrap().into_iter().map(|ev| ev.kind).collect();
     assert_eq!(kinds, ["fired"]);
+
     // And it shows as silenced, by which silence and until when.
     let mark = e.n.silences.marks(std::slice::from_ref(&before)).await.unwrap().remove(0).unwrap();
     assert_eq!((mark.silence_id, mark.until), (s.id, s.ends_at));
@@ -124,6 +130,7 @@ async fn when_a_silence_expires_a_still_firing_alarm_sends_one_fired_message_tha
     // One millisecond before the end: still held.
     e.advance(HOUR - 1);
     assert_eq!(e.pass().await, (PlanReport::default(), DispatchReport::default()));
+
     // At the end (exclusive): one message.
     e.advance(1);
     let (plan, dispatch) = e.pass().await;
@@ -146,6 +153,7 @@ async fn when_a_silence_expires_a_still_firing_alarm_sends_one_fired_message_tha
         e.advance(MIN);
         assert_eq!(e.pass().await, (PlanReport::default(), DispatchReport::default()));
     }
+
     assert_eq!(e.receiver.count(), 1);
 
     // The recovery follows as for any announced alarm, without the marker.
@@ -174,14 +182,17 @@ async fn ending_a_silence_early_notifies_at_once_for_what_still_fires() {
     let ended = e.n.silences.end(s.id, e.who.clone()).await.unwrap();
     assert_eq!(ended.state(e.now()), SilenceState::Expired);
     let (plan, dispatch) = e.pass().await;
+
     // One message per channel for the alarm that still fires; none for the
     // one that fired and recovered inside the silence.
     assert_eq!((plan.after_silence, dispatch.sent), (2, 2));
     assert_eq!((e.receiver.count_to("/in/ops"), e.receiver.count_to("/in/chat")), (1, 1));
+
     for body in e.bodies() {
         assert_eq!((body["alarm"]["id"].clone(), body["event"]["type"].as_str()), (json!(still.id), Some("fired")));
         assert_eq!(body["after_silence"]["silence_id"], json!(s.id));
     }
+
     assert_eq!(e.pass().await, (PlanReport::default(), DispatchReport::default()));
 }
 
@@ -216,6 +227,7 @@ async fn a_recovery_is_held_back_while_silenced_and_sent_when_the_silence_ends()
     let e = env().await;
     let c = e.webhook("ops", false).await;
     e.policy(&[&c]).await;
+
     // Announced before the silence.
     let a = e.fire(Severity::Major).await;
     assert_eq!(e.pass().await.1.sent, 1);
@@ -254,11 +266,13 @@ async fn reminders_are_suppressed_while_silenced_and_one_follows_the_silence() {
     assert_eq!(e.pass().await.1.sent, 1, "fired, before the silence");
 
     let s = e.silence(35 * MIN).await;
+
     for n in 1..=3 {
         e.advance(10 * MIN);
         let (plan, dispatch) = e.pass().await;
         assert_eq!((plan.reminders, dispatch.suppressed, dispatch.sent), (1, 1, 0), "reminder {n}");
     }
+
     assert_eq!(e.receiver.count(), 1);
 
     // The silence ends at 35 minutes: one reminder stands for the three
@@ -351,6 +365,7 @@ async fn acknowledging_and_silencing_are_independent() {
 
     // A silence does not acknowledge.
     assert!(e.store.get_alarm(a.id).await.unwrap().acknowledged_at.is_none());
+
     // An acknowledgement does not lift the silence: the alarm is still
     // marked, and nothing is sent.
     e.store.acknowledge(a.id, Some(&e.who), e.now(), &e.event(&a, "acknowledged")).await.unwrap();
@@ -413,6 +428,7 @@ async fn overlapping_silences_hold_until_the_last_one_ends_and_extending_moves_t
     // A second silence begins before the first ends.
     e.advance(30 * MIN);
     let second = e.silence(HOUR).await;
+
     // The first ends: the alarm is still covered, so nothing is sent and
     // the held delivery now names the silence that holds it.
     e.advance(30 * MIN);
@@ -425,6 +441,7 @@ async fn overlapping_silences_hold_until_the_last_one_ends_and_extending_moves_t
     e.advance(30 * MIN);
     assert_eq!(e.pass().await, (PlanReport::default(), DispatchReport::default()));
     assert_eq!(e.receiver.count(), 0);
+
     // The new end: exactly one message.
     e.advance(HOUR);
     assert_eq!(e.now(), extended.ends_at);
@@ -443,6 +460,7 @@ async fn a_message_that_follows_a_silence_is_held_by_the_next_silence() {
     let first = e.silence(HOUR).await;
     e.fire(Severity::Major).await;
     e.pass().await;
+
     // The first ends and the receiver is down; before the retry a second
     // silence starts.
     e.advance(HOUR);
@@ -501,6 +519,7 @@ async fn settling_is_safe_to_repeat_and_survives_a_deleted_alarm_or_silence() {
     assert_eq!(e.store.release_suppressed(&[held.id], std::slice::from_ref(&follow_up), e.now()).await.unwrap(), 1);
     let again = Notifier::after_silence(&held, e.now());
     assert_eq!(e.store.release_suppressed(&[held.id], std::slice::from_ref(&again), e.now()).await.unwrap(), 0);
+
     // Even a planner that missed the release cannot add a second message:
     // the key (alarm, event, silence, channel) is taken.
     assert_eq!(e.store.add_deliveries(std::slice::from_ref(&again)).await.unwrap(), 0);
@@ -520,6 +539,7 @@ async fn a_suppressed_delivery_is_kept_until_it_was_settled() {
     let e = env().await;
     let c = e.webhook("ops", false).await;
     e.policy(&[&c]).await;
+
     // Chained 30-day silences hold an alarm back past the retention.
     let first = e.silence(30 * 24 * HOUR).await;
     e.fire(Severity::Major).await;

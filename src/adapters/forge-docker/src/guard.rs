@@ -53,33 +53,42 @@ fn is_host(v: Option<&Value>) -> bool {
 
 fn container_create(body: &Value) -> Vec<&'static str> {
     let mut out = Vec::new();
+
     let Some(h) = body.get("HostConfig") else {
         return out;
     };
+
     if h.get("Privileged").and_then(Value::as_bool) == Some(true) {
         out.push("HostConfig.Privileged");
     }
+
     if non_empty(h.get("CapAdd")) {
         out.push("HostConfig.CapAdd");
     }
+
     if non_empty(h.get("Binds")) {
         out.push("HostConfig.Binds");
     }
+
     let host_mount = h.get("Mounts").and_then(Value::as_array).is_some_and(|m| {
         m.iter().any(|m| {
             let t = m.get("Type").and_then(Value::as_str).unwrap_or("volume");
             t == "bind" || t == "npipe" || t == "cluster"
         })
     });
+
     if host_mount {
         out.push("HostConfig.Mounts (bind)");
     }
+
     if non_empty(h.get("Devices")) {
         out.push("HostConfig.Devices");
     }
+
     if non_empty(h.get("DeviceCgroupRules")) {
         out.push("HostConfig.DeviceCgroupRules");
     }
+
     for (key, label) in [
         ("PidMode", "HostConfig.PidMode=host"),
         ("IpcMode", "HostConfig.IpcMode=host"),
@@ -92,6 +101,7 @@ fn container_create(body: &Value) -> Vec<&'static str> {
             out.push(label);
         }
     }
+
     let weak_profile = h.get("SecurityOpt").and_then(Value::as_array).is_some_and(|a| {
         a.iter().filter_map(Value::as_str).any(|s| {
             let s = s.to_ascii_lowercase();
@@ -101,9 +111,11 @@ fn container_create(body: &Value) -> Vec<&'static str> {
                 || s.starts_with("seccomp")
         })
     });
+
     if weak_profile {
         out.push("HostConfig.SecurityOpt");
     }
+
     out
 }
 
@@ -113,6 +125,7 @@ fn volume_create(body: &Value) -> Vec<&'static str> {
         o.get("device").is_some()
             || o.get("o").and_then(Value::as_str).is_some_and(|s| s.split(',').any(|p| p.trim() == "bind"))
     });
+
     if binds { vec!["DriverOpts.device (host path)"] } else { Vec::new() }
 }
 
@@ -138,6 +151,7 @@ mod tests {
             "Mounts": [{ "Type": "bind", "Source": "/etc", "Target": "/e" }]
         }});
         let r = host_access("container.create", &body);
+
         for want in [
             "HostConfig.Privileged",
             "HostConfig.CapAdd",
@@ -150,6 +164,7 @@ mod tests {
         ] {
             assert!(r.contains(&want), "{want}: {r:?}");
         }
+
         assert_eq!(effective_class(Class::Manage, &r), Class::Admin);
     }
 

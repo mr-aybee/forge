@@ -85,18 +85,22 @@ fn settings() -> Settings {
 pub fn init(fmt: Format, color: ColorChoice, no_pager: bool) {
     let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
     let dumb = std::env::var("TERM").is_ok_and(|t| t == "dumb");
+
     let want = |tty: bool| match color {
         ColorChoice::Always => true,
         ColorChoice::Never => false,
         ColorChoice::Auto => tty && !no_color && !dumb,
     };
+
     let human = !fmt.is_machine();
+
     let s = Settings {
         color_out: human && want(std::io::stdout().is_terminal()),
         color_err: want(std::io::stderr().is_terminal()),
         pager: human && !no_pager && std::io::stdout().is_terminal() && std::io::stdin().is_terminal(),
         offset: OFFSET.get().copied().flatten(),
     };
+
     #[cfg(windows)]
     if s.color_out || s.color_err {
         let _ = anstyle_query::windows::enable_ansi_colors();
@@ -165,9 +169,11 @@ pub fn datetime(ms: i64, offset: Option<time::UtcOffset>) -> Option<String> {
     if !(946_684_800_000..4_102_444_800_000).contains(&ms) {
         return None;
     }
+
     let t = time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(ms) * 1_000_000).ok()?;
     let t = t.to_offset(offset.unwrap_or(time::UtcOffset::UTC));
     let zone = if offset.is_none_or(|o| o.is_utc()) { " UTC".to_owned() } else { String::new() };
+
     Some(format!(
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}{zone}",
         t.year(),
@@ -262,6 +268,7 @@ fn table_styled<H: AsRef<str>, P: AsRef<str>>(
         .collect();
     out.push_str(header.join("  ").trim_end());
     out.push('\n');
+
     for r in &data {
         let cells: Vec<String> = r
             .iter()
@@ -279,6 +286,7 @@ fn table_styled<H: AsRef<str>, P: AsRef<str>>(
         out.push_str(cells.join("  ").trim_end());
         out.push('\n');
     }
+
     out
 }
 
@@ -299,6 +307,7 @@ fn auto_cols(rows: &[Value]) -> Vec<(String, String)> {
 /// nested sections, lists of flat objects as indented tables.
 fn human_with(v: &Value, color: bool, offset: Option<time::UtcOffset>) -> String {
     let mut out = String::new();
+
     match v {
         Value::Object(m) => kv(m, 0, color, offset, &mut out),
         Value::Array(rows) if rows.iter().all(Value::is_object) && !rows.is_empty() => {
@@ -309,6 +318,7 @@ fn human_with(v: &Value, color: bool, offset: Option<time::UtcOffset>) -> String
                     if i > 0 {
                         out.push('\n');
                     }
+
                     if let Value::Object(m) = r {
                         kv(m, 0, color, offset, &mut out);
                     }
@@ -327,6 +337,7 @@ fn human_with(v: &Value, color: bool, offset: Option<time::UtcOffset>) -> String
             let _ = writeln!(out, "{}", scalar("", other, offset));
         }
     }
+
     out
 }
 
@@ -339,6 +350,7 @@ fn kv(m: &Map<String, Value>, indent: usize, color: bool, offset: Option<time::U
         .map(|(k, _)| k.chars().count())
         .max()
         .unwrap_or(0);
+
     for (k, v) in shown {
         match v {
             Value::Object(inner) => {
@@ -363,6 +375,7 @@ fn kv(m: &Map<String, Value>, indent: usize, color: bool, offset: Option<time::U
                                 if let Some(first) = lines.next() {
                                     let _ = writeln!(out, "{pad}  - {}", first.trim_start());
                                 }
+
                                 for l in lines {
                                     let _ = writeln!(out, "{l}");
                                 }
@@ -376,6 +389,7 @@ fn kv(m: &Map<String, Value>, indent: usize, color: bool, offset: Option<time::U
             }
             Value::String(s) if s.contains('\n') => {
                 let _ = writeln!(out, "{pad}{}", paint(color, BOLD, &format!("{k}:")));
+
                 for l in s.lines() {
                     let _ = writeln!(out, "{pad}  {l}");
                 }
@@ -386,6 +400,7 @@ fn kv(m: &Map<String, Value>, indent: usize, color: bool, offset: Option<time::U
                     Some(st) => format!("{st}{text}{RESET}"),
                     None => text,
                 };
+
                 let key = format!("{k:<width$}");
                 let _ = writeln!(out, "{pad}{}  {text}", paint(color, CYAN, &key));
             }
@@ -427,6 +442,7 @@ fn yaml_inline(v: &Value) -> bool {
 
 fn yaml(v: &Value, indent: usize, out: &mut String) {
     let pad = " ".repeat(indent);
+
     match v {
         Value::Object(m) if !m.is_empty() => {
             for (k, x) in m {
@@ -461,11 +477,13 @@ fn yaml(v: &Value, indent: usize, out: &mut String) {
 pub fn to_yaml(v: &Value) -> String {
     let mut out = String::from("---\n");
     yaml(v, 0, &mut out);
+
     out
 }
 
 fn xml_escape(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
+
     for c in s.chars() {
         match c {
             '&' => o.push_str("&amp;"),
@@ -477,6 +495,7 @@ fn xml_escape(s: &str) -> String {
             c => o.push(c),
         }
     }
+
     o
 }
 
@@ -489,27 +508,33 @@ fn xml_name_ok(k: &str) -> bool {
 
 fn xml(name: &str, v: &Value, indent: usize, out: &mut String) {
     let pad = "  ".repeat(indent);
+
     let (open, close) = if xml_name_ok(name) {
         (name.to_owned(), name.to_owned())
     } else {
         (format!("entry key=\"{}\"", xml_escape(name)), "entry".to_owned())
     };
+
     match v {
         Value::Null => {
             let _ = writeln!(out, "{pad}<{open} nil=\"true\"/>");
         }
         Value::Object(m) => {
             let _ = writeln!(out, "{pad}<{open}>");
+
             for (k, x) in m {
                 xml(k, x, indent + 1, out);
             }
+
             let _ = writeln!(out, "{pad}</{close}>");
         }
         Value::Array(a) => {
             let _ = writeln!(out, "{pad}<{open}>");
+
             for x in a {
                 xml("item", x, indent + 1, out);
             }
+
             let _ = writeln!(out, "{pad}</{close}>");
         }
         Value::String(s) => {
@@ -526,10 +551,13 @@ fn xml(name: &str, v: &Value, indent: usize, out: &mut String) {
 pub fn to_xml(envelope: &Value) -> String {
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     let _ = writeln!(out, "<forge schema=\"{SCHEMA}\">");
+
     for (k, x) in envelope.as_object().into_iter().flatten().filter(|(k, _)| *k != "schema") {
         xml(k, x, 1, &mut out);
     }
+
     out.push_str("</forge>\n");
+
     out
 }
 
@@ -557,6 +585,7 @@ pub fn emit(text: &str) {
     if s.pager && rows > 2 && text.lines().count() >= rows && page(text, rows) {
         return;
     }
+
     let _ = std::io::stdout().lock().write_all(text.as_bytes());
 }
 
@@ -570,24 +599,30 @@ fn page(text: &str, rows: usize) -> bool {
         None if cfg!(windows) => None,
         None => Some("less".to_owned()),
     };
+
     if let Some(cmd) = cmd {
         let mut parts = cmd.split_whitespace();
         let Some(prog) = parts.next() else { return false };
         let mut c = std::process::Command::new(prog);
         c.args(parts).stdin(std::process::Stdio::piped());
+
         if std::env::var_os("LESS").is_none() {
             // Quit when it fits, keep colours, leave the text on screen.
             c.env("LESS", "FRX");
         }
+
         if let Ok(mut child) = c.spawn() {
             if let Some(mut stdin) = child.stdin.take() {
                 // A user quitting early closes the pipe: not an error.
                 let _ = stdin.write_all(text.as_bytes());
             }
+
             let _ = child.wait();
+
             return true;
         }
     }
+
     builtin_pager(text, rows)
 }
 
@@ -600,25 +635,34 @@ fn builtin_pager(text: &str, rows: usize) -> bool {
     let mut stdout = std::io::stdout().lock();
     let mut shown = 0usize;
     let mut step = rows.saturating_sub(1).max(1);
+
     while shown < lines.len() {
         let end = (shown + step).min(lines.len());
+
         for l in &lines[shown..end] {
             let _ = writeln!(stdout, "{l}");
         }
+
         shown = end;
+
         if shown >= lines.len() {
             break;
         }
+
         let pct = shown * 100 / lines.len();
         let _ = write!(stdout, "{DIM}-- more ({pct}%) · space: page · enter: line · q: quit --{RESET}");
         let _ = stdout.flush();
+
         if enable_raw_mode().is_err() {
             let _ = writeln!(stdout);
+
             for l in &lines[shown..] {
                 let _ = writeln!(stdout, "{l}");
             }
+
             return true;
         }
+
         let action = loop {
             match read() {
                 Ok(Event::Key(k)) if k.kind == KeyEventKind::Press => match k.code {
@@ -632,8 +676,10 @@ fn builtin_pager(text: &str, rows: usize) -> bool {
                 Err(_) => break None,
             }
         };
+
         let _ = disable_raw_mode();
         let _ = write!(stdout, "\r\x1b[2K");
+
         match action {
             Some(n) => step = n.max(1),
             None => {
@@ -642,7 +688,9 @@ fn builtin_pager(text: &str, rows: usize) -> bool {
             }
         }
     }
+
     let _ = stdout.flush();
+
     true
 }
 
@@ -651,8 +699,10 @@ pub fn result(fmt: Format, value: &Value, cols: Option<&[Col]>) {
     if fmt.is_machine() {
         let doc = document(fmt, &json!({ "schema": SCHEMA, "result": value }));
         let _ = std::io::stdout().lock().write_all(doc.as_bytes());
+
         return;
     }
+
     emit(&render_human(value, cols));
 }
 
@@ -660,6 +710,7 @@ pub fn result(fmt: Format, value: &Value, cols: Option<&[Col]>) {
 #[must_use]
 pub fn render_human(value: &Value, cols: Option<&[Col]>) -> String {
     let s = settings();
+
     match (value, cols) {
         (Value::Array(rows), Some(cols)) => table_styled(rows, cols, s.color_out, s.offset),
         // A single object with columns is a one-row table, like a list.
@@ -684,8 +735,10 @@ pub fn error(fmt: Format, e: &CliError) {
             }
         });
         let _ = std::io::stdout().lock().write_all(document(fmt, &body).as_bytes());
+
         return;
     }
+
     let _ = writeln!(std::io::stderr().lock(), "{} {} [{}]", error_prefix(), e.message, e.code);
 }
 
@@ -744,26 +797,32 @@ impl Page {
     /// page) to the page; returns the footer text for people.
     pub fn cut(&self, rows: &mut Vec<Value>, total: Total) -> Option<String> {
         let have = rows.len();
+
         let (count, more) = match total {
             Total::Rows => (have, false),
             Total::AtLeast => (have, true),
             Total::Known(n) => (n.max(have), false),
         };
+
         let Some(limit) = self.limit else {
             return (have > 0).then(|| format!("{have} rows"));
         };
+
         let start = limit * (self.page - 1);
         let end = (start + limit).min(have);
         let of = if more { format!("{count}+") } else { count.to_string() };
+
         if start >= have {
             rows.clear();
             return Some(format!("page {} is empty ({of} rows)", self.page));
         }
+
         rows.truncate(end);
         rows.drain(..start);
         let further = end < count || more;
         let next = if further { format!(" · next: --page {}", self.page + 1) } else { String::new() };
         let all = if further || self.page > 1 { " · every row: --all" } else { "" };
+
         Some(format!("showing {}–{end} of {of}{next}{all}", start + 1))
     }
 }
@@ -785,14 +844,18 @@ pub fn list(fmt: Format, rows: Vec<Value>, cols: Option<&[Col]>, page: Page, tot
     let mut rows = rows;
     let footer = page.cut(&mut rows, total);
     let value = Value::Array(rows);
+
     if fmt.is_machine() {
         result(fmt, &value, cols);
         return;
     }
+
     let mut text = render_human(&value, cols);
+
     if let Some(f) = footer.filter(|_| page.limit.is_some()) {
         let _ = writeln!(text, "{}", paint(settings().color_out, DIM, &f));
     }
+
     emit(&text);
 }
 
@@ -804,6 +867,7 @@ pub fn list_value(fmt: Format, v: Value, pointer: &str, cols: Option<&[Col]>, pa
         Value::Array(a) => a,
         _ => Vec::new(),
     };
+
     list(fmt, rows, cols, page.into(), Total::Rows);
 }
 
@@ -837,6 +901,7 @@ mod tests {
         assert!(!plain.contains('\x1b'));
         let c = table_styled(&rows, cols, true, None);
         assert!(c.contains(&format!("{GREEN}online{RESET}")));
+
         // A name that happens to be a status word stays plain.
         assert!(c.contains("failed  "));
         assert!(!c.contains(&format!("{RED}failed")));

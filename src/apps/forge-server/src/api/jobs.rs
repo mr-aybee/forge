@@ -36,11 +36,13 @@ pub async fn list(
 ) -> ApiResult<Json<Vec<Job>>> {
     let filter = JobFilter { workspace_id: q.workspace, status: q.status, limit: q.limit.unwrap_or(100) };
     let mut visible = Vec::new();
+
     for j in state.store.list_jobs(&filter).await? {
         if caller.can(Action::View, job_ref(j.id)).await {
             visible.push(redact_job(j));
         }
     }
+
     Ok(Json(visible))
 }
 
@@ -56,6 +58,7 @@ fn redact_job(mut j: Job) -> Job {
         crate::endpoints::redact(&mut wrapper);
         *spec = wrapper["spec"].take();
     }
+
     j
 }
 
@@ -70,6 +73,7 @@ pub async fn live(
     let job = state.store.get_job(id).await?;
     let output =
         job.state.get("operation_id").and_then(serde_json::Value::as_str).and_then(|op| state.hub.live_output(op));
+
     Ok(Json(serde_json::json!({ "output": output, "status": job.status })))
 }
 
@@ -106,6 +110,7 @@ pub async fn submit(
     if !DIRECT_KINDS.contains(&req.kind.as_str()) {
         return Err(ApiError::bad_request("this job kind cannot be submitted directly"));
     }
+
     let resource: EntityRef = req.resource.parse().map_err(ApiError::bad_request)?;
     let resolved = state.authz_resolve(&resource).await.map_err(|_| ApiError::not_found("resource not found"))?;
     let workspace_id = std::iter::once(&resolved.entity)
@@ -125,6 +130,7 @@ pub async fn submit(
             max_attempts: req.max_attempts.unwrap_or(3).clamp(1, 10),
         })
         .await?;
+
     Ok((StatusCode::ACCEPTED, Json(job)))
 }
 
@@ -146,10 +152,12 @@ pub async fn cancel(State(state): State<AppState>, caller: Caller, Path(id): Pat
                 state.clock.now(),
                 std::time::Duration::from_secs(120),
             );
+
             if let Err(e) = state.hub.enqueue(server, &body.operation_id, signed) {
                 tracing::warn!(error = %e, job = %id, "could not send the cancel to the node");
             }
         }
+
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::new(StatusCode::CONFLICT, "conflict", "job already finished"))

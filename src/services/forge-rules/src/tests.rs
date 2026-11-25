@@ -29,10 +29,12 @@ fn cpu_sustained() -> RuleSpec {
 /// Feeds one sample per minute; returns every event.
 fn feed(t: &mut Tracker, spec: &RuleSpec, from_min: i64, values: &[f64]) -> Vec<Event> {
     let mut out = Vec::new();
+
     for (i, v) in values.iter().enumerate() {
         let at = (from_min + i64::try_from(i).unwrap()) * MIN;
         out.extend(t.observe(spec, num(at, *v), at).unwrap());
     }
+
     out
 }
 
@@ -55,9 +57,11 @@ fn sustained_fires_after_the_full_duration_and_clears_with_hysteresis() {
     let ev = feed(&mut t, &spec, 30, &[90.0]);
     assert!(fired(&ev), "{ev:?}");
     assert!(matches!(t.phase, Phase::Firing { .. }));
+
     // 80 % is below the trigger but above the recovery threshold: still firing.
     let ev = feed(&mut t, &spec, 31, &[80.0; 10]);
     assert!(!resolved(&ev), "hysteresis: 80 % does not clear");
+
     // Below 75 % for 5 minutes clears.
     let ev = feed(&mut t, &spec, 41, &[70.0; 5]);
     assert!(!resolved(&ev), "4 minutes of recovery is not 5");
@@ -83,14 +87,17 @@ fn unknown_interrupts_pending_but_never_resolves_a_firing_alarm() {
     let spec = cpu_sustained();
     let mut t = Tracker::new();
     feed(&mut t, &spec, 0, &[90.0; 10]);
+
     // Explicitly unknown: pending ends, marked as unknown.
     let ev = t.observe(&spec, unknown(10 * MIN), 10 * MIN).unwrap();
     assert!(ev.iter().any(|e| matches!(e, Event::PendingCancelled { unknown: true, .. })), "{ev:?}");
+
     // Fire, then the evidence stops: still firing.
     let ev = feed(&mut t, &spec, 11, &[90.0; 31]);
     assert!(fired(&ev));
     let ev = t.tick(&spec, 200 * MIN);
     assert!(ev.is_empty() && matches!(t.phase, Phase::Firing { .. }), "silence is not recovery");
+
     // Valid recovery evidence returns and holds: resolves.
     let ev = feed(&mut t, &spec, 201, &[10.0; 6]);
     assert!(resolved(&ev));
@@ -101,6 +108,7 @@ fn a_gap_in_the_evidence_breaks_a_sustained_run() {
     let spec = cpu_sustained();
     let mut t = Tracker::new();
     feed(&mut t, &spec, 0, &[90.0; 20]);
+
     // Nothing for 10 minutes (each sample covers 2): the run restarts.
     let ev = feed(&mut t, &spec, 30, &[90.0; 25]);
     assert!(!fired(&ev), "{ev:?}");
@@ -113,6 +121,7 @@ fn stale_evidence_never_extends_a_run() {
     let spec = cpu_sustained();
     let mut t = Tracker::new();
     feed(&mut t, &spec, 0, &[90.0; 5]);
+
     // Ticking long after the last sample: unknown, no firing.
     assert!(!fired(&t.tick(&spec, 60 * MIN)));
     assert!(!t.known(60 * MIN));
@@ -140,14 +149,17 @@ fn window_average_is_time_weighted_and_needs_coverage() {
     };
     spec.validate().unwrap();
     let mut t = Tracker::new();
+
     // 10 minutes of evidence only: not enough coverage, even at 100 %.
     let ev = feed(&mut t, &spec, 0, &[100.0; 10]);
     assert!(!fired(&ev));
+
     // A single spike in an otherwise calm window: the average stays low.
     let mut calm = vec![50.0; 24];
     calm.push(100.0);
     let ev = feed(&mut t, &spec, 10, &calm);
     assert!(!fired(&ev), "{ev:?}");
+
     // High for long enough: the average crosses 80.
     let ev = feed(&mut t, &spec, 35, &[95.0; 30]);
     let value = ev.iter().find_map(|e| match e {
@@ -155,6 +167,7 @@ fn window_average_is_time_weighted_and_needs_coverage() {
         _ => None,
     });
     assert!(value.is_some_and(|v| v > 80.0), "{ev:?}");
+
     // Calm again: resolves when the window no longer qualifies.
     let ev = feed(&mut t, &spec, 65, &[20.0; 30]);
     assert!(resolved(&ev));
@@ -185,12 +198,15 @@ fn repeated_counts_distinct_breaches_not_samples() {
         recovery: Recovery::default(),
     };
     let mut t = Tracker::new();
+
     // One long breach is one breach, however many samples it has.
     let ev = feed(&mut t, &spec, 0, &[90.0; 10]);
     assert!(!fired(&ev));
+
     // Two more distinct breaches, spaced out.
     let ev = feed(&mut t, &spec, 10, &[50.0, 90.0, 50.0, 50.0, 50.0, 50.0, 50.0, 90.0]);
     assert!(fired(&ev), "{ev:?}");
+
     // Flapping faster than the spacing does not count again.
     let mut t2 = Tracker::new();
     let ev = feed(&mut t2, &spec, 0, &[90.0, 50.0, 90.0, 50.0, 90.0, 50.0]);
@@ -207,11 +223,14 @@ fn state_rules_fire_and_recover() {
     spec.validate().unwrap();
     let mut t = Tracker::new();
     let mut all = Vec::new();
+
     for (m, s) in [(0, "failing"), (1, "failing"), (2, "failing"), (3, "pending"), (4, "passing"), (5, "passing")] {
         all.extend(t.observe(&spec, state(m * MIN, s), m * MIN).unwrap());
     }
+
     assert!(fired(&all), "{all:?}");
     assert!(resolved(&all), "pending is not recovery, passing for 1 min is: {all:?}");
+
     // A number never satisfies a state condition.
     assert!(!spec.trigger.holds(&Value::Num(1.0)));
 }
@@ -236,6 +255,7 @@ fn trackers_survive_a_restart() {
     let saved = serde_json::to_string(&t).unwrap();
     let mut back: Tracker = serde_json::from_str(&saved).unwrap();
     assert_eq!(back, t);
+
     // The 20 minutes already seen still count.
     let ev = feed(&mut back, &spec, 20, &[90.0; 11]);
     assert!(fired(&ev));

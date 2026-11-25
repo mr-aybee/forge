@@ -29,17 +29,21 @@ impl Envelope {
         let mut buf = plaintext.to_vec();
         key.seal_in_place_append_tag(Nonce::assume_unique_for_key(nonce), Aad::from(aad.as_bytes()), &mut buf)
             .map_err(|_| SecretError::Crypto)?;
+
         Ok(format!("{VERSION}.{key_id}.{}.{}.{}", b64url(&wrapped), b64url(&nonce), b64url(&buf)))
     }
 
     pub fn open(&self, sealed: &str, aad: &str) -> Result<Vec<u8>, SecretError> {
         let parts: Vec<&str> = sealed.split('.').collect();
+
         let [version, key_id, wrapped, nonce, ct] = parts.as_slice() else {
             return Err(SecretError::Malformed);
         };
+
         if *version != VERSION {
             return Err(SecretError::Malformed);
         }
+
         let wrapped = b64url_decode(wrapped).ok_or(SecretError::Malformed)?;
         let nonce = b64url_decode(nonce).ok_or(SecretError::Malformed)?;
         let mut buf = b64url_decode(ct).ok_or(SecretError::Malformed)?;
@@ -47,6 +51,7 @@ impl Envelope {
         let key = LessSafeKey::new(UnboundKey::new(&AES_256_GCM, &dek).map_err(|_| SecretError::Crypto)?);
         let nonce = Nonce::try_assume_unique_for_key(&nonce).map_err(|_| SecretError::Malformed)?;
         let plain = key.open_in_place(nonce, Aad::from(aad.as_bytes()), &mut buf).map_err(|_| SecretError::Decrypt)?;
+
         Ok(plain.to_vec())
     }
 }

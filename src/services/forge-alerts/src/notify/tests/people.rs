@@ -63,9 +63,11 @@ impl Env {
         let scope = scope.unwrap_or_else(|| EntityRef::new(EntityKind::Workspace, self.ws));
         let b = RoleBinding { id: RoleBindingId::new(), user_id: u.id, role, scope, created_at: self.now() };
         self.store.create_binding(&b).await.unwrap();
+
         if allowed {
             self.access.allow(u.id);
         }
+
         u.id
     }
 
@@ -76,6 +78,7 @@ impl Env {
             slug: "acme".into(),
             created_at: Timestamp(1),
         };
+
         // The first call creates the workspace; later ones find it.
         self.store.create_workspace(&ws).await.ok();
         let ns = Environment {
@@ -88,6 +91,7 @@ impl Env {
             created_at: Timestamp(1),
         };
         self.store.create_environment(&ns).await.unwrap();
+
         EntityRef::new(EntityKind::Environment, ns.id)
     }
 
@@ -110,6 +114,7 @@ impl Env {
             created_at: Timestamp(1),
         };
         self.store.create_server(&s).await.unwrap();
+
         EntityRef::new(EntityKind::Server, s.id)
     }
 
@@ -118,6 +123,7 @@ impl Env {
         input.email_channel = Some(mail.id);
         input.email_users = users;
         input.email_roles = roles;
+
         self.n.create_policy(self.ws, input, self.who.clone()).await.unwrap()
     }
 
@@ -134,6 +140,7 @@ impl Env {
 fn skipped(d: &Delivery) -> Vec<SkippedRecipient> {
     let mut s = d.recipients.clone().unwrap().skipped;
     s.sort_by_key(|x| x.user_id);
+
     s
 }
 
@@ -199,6 +206,7 @@ async fn people_are_deduplicated_by_address() {
     let e = env().await;
     let mail = e.mail_channel().await;
     let a = e.person(Some("same@example.com"), true, Role::Operator, None).await;
+
     // A second binding of the same person on the node's environment.
     e.store
         .create_binding(&RoleBinding {
@@ -210,6 +218,7 @@ async fn people_are_deduplicated_by_address() {
         })
         .await
         .ok();
+
     // Named and holding the role (twice): one address.
     e.people_policy(&mail, vec![a], vec![Role::Operator]).await;
     e.fire(Severity::Major).await;

@@ -43,6 +43,7 @@ pub fn due(cert: &Value) -> bool {
     if cert.get("missing").is_some() {
         return true;
     }
+
     cert.get("days_left").and_then(Value::as_i64).is_some_and(|d| d <= RENEW_AT_DAYS)
 }
 
@@ -53,13 +54,16 @@ async fn check_site(state: &AppState, site: &mut Site, principal: Principal, ctx
     if spec.tls != Tls::Acme {
         return false;
     }
+
     let Ok(edges) = edges_now(state, site).await else { return false };
     let Ok(per) = per_edge(state, &spec, &edges).await else { return false };
     let mut failed = false;
+
     for (edge, spec) in per {
         let now = state.clock.now().0;
         let key = edge.to_string();
         let mut cert = json!({ "checked_at": now });
+
         if !force {
             let r = run_as(
                 state,
@@ -70,6 +74,7 @@ async fn check_site(state: &AppState, site: &mut Site, principal: Principal, ctx
                 WAIT,
             )
             .await;
+
             match r {
                 Ok(r) if r["status"] == "succeeded" => {
                     if let Some(c) = r["result"]["certificate"].as_object() {
@@ -82,6 +87,7 @@ async fn check_site(state: &AppState, site: &mut Site, principal: Principal, ctx
                 Err(e) => cert["error"] = json!(e.message),
             }
         }
+
         if force || due(&cert) {
             let before = cert.get("days_left").cloned();
             let r = run_as(
@@ -93,6 +99,7 @@ async fn check_site(state: &AppState, site: &mut Site, principal: Principal, ctx
                 WAIT,
             )
             .await;
+
             let (ok, err) = match r {
                 Ok(r) if r["status"] == "succeeded" => {
                     if let Some(c) = r["result"]["certificate"].as_object() {
@@ -100,14 +107,17 @@ async fn check_site(state: &AppState, site: &mut Site, principal: Principal, ctx
                             cert[k] = v.clone();
                         }
                     }
+
                     (true, None)
                 }
                 Ok(r) => (false, r["error"].as_str().map(str::to_owned).or(Some("renewal did not finish".into()))),
                 Err(e) => (false, Some(e.message)),
             };
+
             if let Some(o) = cert.as_object_mut() {
                 o.remove("missing");
             }
+
             if ok {
                 cert["renewed_at"] = json!(now);
                 cert["renew_error"] = Value::Null;
@@ -115,6 +125,7 @@ async fn check_site(state: &AppState, site: &mut Site, principal: Principal, ctx
                 failed = true;
                 cert["renew_error"] = json!(err);
             }
+
             let ev = AuditEvent::new(
                 principal.to_string(),
                 "site.certificate.renew",
@@ -123,21 +134,27 @@ async fn check_site(state: &AppState, site: &mut Site, principal: Principal, ctx
             )
             .in_org(Some(site.workspace_id))
             .with_details(json!({ "site": site.name, "days_left_before": before, "forced": force, "error": err, "automatic": !force }));
+
             if let Err(e) = state.audit.append(ev).await {
                 tracing::error!(error = %e, "audit write failed");
             }
         }
+
         if !site.edge_status.is_object() {
             site.edge_status = json!({});
         }
+
         if !site.edge_status[&key].is_object() {
             site.edge_status[&key] = json!({});
         }
+
         site.edge_status[&key]["cert"] = cert;
     }
+
     if let Err(e) = state.store.put_site(site).await {
         tracing::warn!(error = %e, "saving certificate status failed");
     }
+
     failed
 }
 
@@ -146,22 +163,27 @@ async fn check_site(state: &AppState, site: &mut Site, principal: Principal, ctx
 async fn pass(state: &AppState) -> bool {
     let Ok(sites) = state.store.list_sites().await else { return true };
     let mut retry = false;
+
     for mut site in sites {
         if site.config["spec"]["tls"] != "acme" {
             continue;
         }
+
         let Some(by) =
             site.edge_status.get("_applied_by").cloned().and_then(|v| serde_json::from_value::<AppliedBy>(v).ok())
         else {
             continue; // never applied
         };
+
         retry |= check_site(state, &mut site, by.principal, by.context, false).await;
     }
+
     retry
 }
 
 pub(crate) async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
     let mut wait = Duration::from_secs(60);
+
     loop {
         tokio::select! {
             () = tokio::time::sleep(wait) => {}
@@ -184,13 +206,16 @@ pub async fn renew_now(
             "only Let's Encrypt certificates are renewed by Forge; upload a new certificate from your CA instead",
         ));
     }
+
     let edges = edges_now(&state, &site).await?;
     if edges.is_empty() {
         return Err(ApiError::bad_request("this endpoint has no edge nodes"));
     }
+
     for e in edges {
         caller.authorize(Action::ProxyManage, EntityRef::new(EntityKind::Server, e)).await?;
     }
+
     let failed = check_site(&state, &mut site, caller.principal(), caller.ctx(), true).await;
     let certs: serde_json::Map<String, Value> = site
         .edge_status
@@ -202,6 +227,7 @@ pub async fn renew_now(
                 .collect()
         })
         .unwrap_or_default();
+
     Ok(Json(json!({ "ok": !failed, "certificates": certs })))
 }
 

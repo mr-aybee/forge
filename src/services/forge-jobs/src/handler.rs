@@ -39,6 +39,7 @@ impl StepContext {
         if !self.state.is_object() {
             self.state = Value::Object(serde_json::Map::new());
         }
+
         if let Some(obj) = self.state.as_object_mut() {
             obj.insert(key.to_owned(), value);
         }

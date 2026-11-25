@@ -58,6 +58,7 @@ impl NodeRpc {
         if !result.ok {
             return Err(RpcError::Failed(result.error));
         }
+
         serde_json::from_str(&result.output).map_err(|e| RpcError::BadAnswer(e.to_string()))
     }
 }

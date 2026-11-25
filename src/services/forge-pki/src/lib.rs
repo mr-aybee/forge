@@ -67,9 +67,11 @@ pub enum PkiError {
 #[must_use]
 pub fn canonical_serial(hex: &str) -> String {
     let mut s = hex.trim().to_ascii_lowercase();
+
     while s.len() > 2 && s.starts_with("00") && s.as_bytes().get(2).is_some_and(|c| (b'0'..=b'7').contains(c)) {
         s.drain(..2);
     }
+
     s
 }
 
@@ -98,6 +100,7 @@ mod tests {
     fn issued_serials_are_the_ones_peers_present() {
         let now = Timestamp(1_800_000_000_000);
         let ca = CertificateAuthority::generate("t", now).unwrap();
+
         for _ in 0..1_000 {
             let csr = AgentCsr::generate("n").unwrap();
             let c = ca.issue_agent_certificate(&csr.csr_pem, "s", now, std::time::Duration::from_secs(60)).unwrap();

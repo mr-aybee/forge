@@ -323,6 +323,7 @@ fn rfc3339(s: &str) -> Option<i64> {
     let rest = rest.strip_prefix(['T', 't', ' '])?;
     let mut d = date.split('-');
     let (y, mo, da) = (num(d.next()?)?, num(d.next()?)?, num(d.next()?)?);
+
     // The offset: `Z`, or `+HH:MM` / `-HH:MM` at the end.
     let (clock, offset_secs) = if let Some(c) = rest.strip_suffix(['Z', 'z']) {
         (c, 0)
@@ -333,19 +334,23 @@ fn rfc3339(s: &str) -> Option<i64> {
         let (h, m) = off.get(1..)?.split_once(':')?;
         (c, sign * (num(h)? * 3600 + num(m)? * 60))
     };
+
     let (hms, frac) = clock.split_once('.').unwrap_or((clock, ""));
     let mut t = hms.split(':');
     let (h, mi) = (num(t.next()?)?, num(t.next()?)?);
     let sec = t.next().map_or(Some(0), num)?;
+
     if t.next().is_some() || !frac.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
+
     let ms_part: i64 = format!("{frac:0<3}").get(..3).and_then(num).unwrap_or(0);
     let month = time::Month::try_from(u8::try_from(mo).ok()?).ok()?;
     let date = time::Date::from_calendar_date(i32::try_from(y).ok()?, month, u8::try_from(da).ok()?).ok()?;
     let clock = time::Time::from_hms(u8::try_from(h).ok()?, u8::try_from(mi).ok()?, u8::try_from(sec).ok()?).ok()?;
     let offset = time::UtcOffset::from_whole_seconds(i32::try_from(offset_secs).ok()?).ok()?;
     let at = time::PrimitiveDateTime::new(date, clock).assume_offset(offset);
+
     at.unix_timestamp().checked_mul(1000)?.checked_add(ms_part)
 }
 
@@ -372,15 +377,18 @@ pub fn silence_body(f: &CreateFlags, nodes: Vec<String>) -> Result<SilenceBody> 
     } else {
         return Err(CliError::usage("pass one scope: --workspace-wide, --cluster, --environment, --node or --service"));
     };
+
     if let (Some(a), Some(b)) = (f.min_severity, f.max_severity)
         && rank(a) > rank(b)
     {
         return Err(CliError::usage("--min-severity is worse than --max-severity: no alarm would match"));
     }
+
     let reason = f.reason.trim();
     if reason.is_empty() {
         return Err(CliError::usage("--reason is empty: say why alarms are quiet"));
     }
+
     Ok(SilenceBody {
         workspace_id: f.workspace.clone(),
         scope,
@@ -413,11 +421,13 @@ const fn rank(s: Severity) -> u8 {
 
 fn dedup(items: Vec<String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(items.len());
+
     for i in items {
         if !out.contains(&i) {
             out.push(i);
         }
     }
+
     out
 }
 
@@ -431,6 +441,7 @@ fn show_one(g: &Global, v: &Value) -> Result<()> {
         row_of(v)?;
         out::result(g.output, v, None);
     }
+
     Ok(())
 }
 
@@ -440,19 +451,24 @@ pub async fn run(g: &Global, server: &str, api: &mut Api, cmd: SilencesCmd) -> R
             let page: out::Page = paging.into();
             let fetch = page.fetch().unwrap_or(SERVER_MAX).min(SERVER_MAX);
             let mut q = format!("{SILENCES}?limit={fetch}");
+
             if let Some(s) = state {
                 q.push_str(&format!("&state={}", s.as_str()));
             }
+
             if let Some(w) = workspace {
                 q.push_str(&format!("&workspace={}", enc(&w)));
             }
+
             let raw = crate::cmds::rows_of(api.get(&q).await?);
             let total = if raw.len() >= fetch { out::Total::AtLeast } else { out::Total::Rows };
+
             let rows = if g.output.is_machine() {
                 raw
             } else {
                 raw.iter().map(|v| row_of(v).and_then(|r| Ok(serde_json::to_value(r)?))).collect::<Result<_>>()?
             };
+
             out::list(g.output, rows, Some(SILENCE_COLS), page, total);
             Ok(())
         }
@@ -464,9 +480,11 @@ pub async fn run(g: &Global, server: &str, api: &mut Api, cmd: SilencesCmd) -> R
             // Checked before the server is asked for anything.
             silence_body(&flags, flags.scope.nodes.clone())?;
             let mut nodes = Vec::with_capacity(flags.scope.nodes.len());
+
             for n in &flags.scope.nodes {
                 nodes.push(if looks_like_id(n) { n.clone() } else { node_id(api, n).await? });
             }
+
             let body = silence_body(&flags, nodes)?;
             let v = api.post(SILENCES, &serde_json::to_value(&body)?).await?;
             show_one(g, &v)
@@ -499,6 +517,7 @@ mod tests {
     fn parse(args: &[&str]) -> std::result::Result<SilencesCmd, clap::Error> {
         let mut all = vec!["forge", "alerts", "silences"];
         all.extend_from_slice(args);
+
         Cli::try_parse_from(all).map(|c| match c.cmd {
             Cmd::Alerts(AlertsCmd::Silences(s)) => s,
             other => panic!("{other:?}"),
@@ -508,6 +527,7 @@ mod tests {
     fn create(args: &[&str]) -> CreateFlags {
         let mut all = vec!["create"];
         all.extend_from_slice(args);
+
         match parse(&all) {
             Ok(SilencesCmd::Create { flags }) => flags,
             other => panic!("{other:?}"),
@@ -520,6 +540,7 @@ mod tests {
         assert_eq!(parse_time("t", "2026-11-20T02:00:00Z").ok(), Some(1_795_140_000_000));
         assert_eq!(parse_time("t", "2026-11-20T04:00+02:00").ok(), Some(1_795_140_000_000));
         assert_eq!(parse_time("t", "2026-11-20T02:00:00.250Z").ok(), Some(1_795_140_000_250));
+
         for bad in ["tomorrow", "2026-13-01T00:00Z", "2026-11-20T02:00", "2026-11-20", ""] {
             assert!(parse_time("t", bad).is_err(), "{bad}");
         }

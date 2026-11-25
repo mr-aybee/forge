@@ -93,6 +93,7 @@ impl DeployJob {
         plan: Value,
     ) -> Result<(), StepError> {
         let plan: SwarmPlan = serde_json::from_value(plan).map_err(|e| StepError::Fatal(format!("bad plan: {e}")))?;
+
         if d.state == DeploymentState::Pending {
             d.state = DeploymentState::Running;
             self.save(d).await.map_err(stop_error)?;
@@ -104,23 +105,29 @@ impl DeployJob {
             );
             self.event(d.id, "info", None, line).await;
         }
+
         let ro = Rollout { run: r, cluster, plan: &plan };
         let mut outcome = Ok(());
+
         for (i, step) in plan.steps.iter().enumerate().skip(usize::try_from(d.step).unwrap_or(0)) {
             if let Err(e) = self.checkpoint(d).await {
                 outcome = Err(e);
                 break;
             }
+
             if let Err(e) = self.swarm_step(ctx, d, &ro, i, step).await {
                 outcome = Err(e);
                 break;
             }
+
             d.step = i64::try_from(i + 1).unwrap_or(i64::MAX);
+
             if let Err(e) = self.save(d).await {
                 outcome = Err(e);
                 break;
             }
         }
+
         match outcome {
             Ok(()) => Ok(()),
             Err(Stop::Retry(m)) if ctx.job.attempts + 1 < ctx.job.max_attempts => {
@@ -152,6 +159,7 @@ impl DeployJob {
         op.validate().map_err(failed)?;
         let manager = self.manager(cluster).await?;
         let op_json = serde_json::to_string(op).map_err(failed)?;
+
         Ok(self.ops.run(ctx, manager, key, Command::SwarmAction(SwarmAction { op_json }), OP_WAIT).await?)
     }
 
@@ -171,6 +179,7 @@ impl DeployJob {
         let (r, cluster) = (ro.run, ro.cluster);
         let sid = r.app.id.to_string();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(r.policy.startup_timeout_secs.max(30));
+
         loop {
             self.aborted(d.id).await?;
             let s = self.slot_status(ctx, cluster, &sid, slot).await?;
@@ -178,6 +187,7 @@ impl DeployJob {
                 Progress::Done => {
                     let line = format!("{} runs {} of {} tasks", slot_name(slot), s.running_current, s.desired);
                     self.event(d.id, "info", None, line).await;
+
                     return Ok(());
                 }
                 Progress::Failed(why) => return Err(Stop::Failed(why)),
@@ -205,6 +215,7 @@ impl DeployJob {
     ) -> Done {
         let (r, cluster, plan) = (ro.run, ro.cluster, ro.plan);
         let sid = r.app.id.to_string();
+
         match step {
             SwarmStep::Deploy { slot, replicas } => {
                 let release = self.fresh_release(r).await?;
@@ -234,12 +245,14 @@ impl DeployJob {
             SwarmStep::Wait { secs } => {
                 self.event(d.id, "info", None, step.describe()).await;
                 let end = tokio::time::Instant::now() + Duration::from_secs(*secs);
+
                 while tokio::time::Instant::now() < end {
                     self.aborted(d.id).await?;
                     let s = self.slot_status(ctx, cluster, &sid, &plan.slot).await?;
                     if !s.exists {
                         return Err(Stop::Failed(format!("{} is gone from the swarm", slot_name(&plan.slot))));
                     }
+
                     if s.running < s.desired {
                         return Err(Stop::Failed(format!(
                             "{} dropped to {} of {} running tasks",
@@ -248,9 +261,11 @@ impl DeployJob {
                             s.desired
                         )));
                     }
+
                     let left = end.saturating_duration_since(tokio::time::Instant::now());
                     tokio::time::sleep(POLL.min(left).max(Duration::from_millis(10))).await;
                 }
+
                 Ok(())
             }
             SwarmStep::Approve { reason } => self.approve(d, r, reason).await,
@@ -262,20 +277,25 @@ impl DeployJob {
     async fn swarm_def(&self, ctx: &mut StepContext, ro: &Rollout<'_>, f: &DefFor<'_>) -> Done<ServiceDef> {
         let (r, cluster) = (ro.run, ro.cluster);
         let mut spec = self.runner.resolved_spec(&release_app(&r.app, f.release)).await?;
+
         // A release without a recorded artifact keeps the spec's image, as
         // node rollouts do (`copy_spec`); a recorded one must parse.
         if !f.release.artifact.is_null() {
             let a: ArtifactRef = serde_json::from_value(f.release.artifact.clone())
                 .map_err(|e| Stop::Failed(format!("the release's artifact is unreadable: {e}")))?;
+
             if let Some(image) = a.image_ref() {
                 spec.image = image;
             }
         }
+
         let mut settings = spec.swarm.clone().unwrap_or_default();
         settings.replicas = f.replicas;
+
         if let Some(u) = f.update {
             settings.update = u.clone();
         }
+
         let sid = r.app.id.to_string();
         let mut def = service_def(&spec, &settings, &sid, &r.app.environment_id.to_string()).map_err(failed)?;
         let needed = self.swarm.privileged_binds(cluster, &def.bind_sources()).await?;
@@ -285,11 +305,13 @@ impl DeployJob {
                  stack.privileged (an administrator with MFA)"
             )));
         }
+
         if !f.slot.is_empty() {
             let count = u32::try_from(def.ports.len()).unwrap_or(u32::MAX);
             let range = (*SLOT_PORTS.start(), *SLOT_PORTS.end());
             let own = self.deploys.slot_ports(r.app.id, f.slot, count, range).await?;
             let by_target: BTreeMap<u16, u16> = def.ports.iter().zip(&own).map(|(p, o)| (p.target, *o)).collect();
+
             // Service port (published, else container port) → slot port, as
             // node rollouts record it for the edge.
             let service_ports: BTreeMap<String, u16> =
@@ -297,6 +319,7 @@ impl DeployJob {
             ctx.set_state(&ports_key(f.slot), json!(service_ports));
             def = def.into_slot(f.slot, &by_target).map_err(failed)?;
         }
+
         Ok(def)
     }
 
@@ -330,6 +353,7 @@ impl DeployJob {
         };
         let other_release = rows.iter().find(|x| x.slot == other).map_or(d.from_release, |x| x.release_number);
         let now = self.clock.now();
+
         // The whole routing change at once: other slots of member nodes
         // stay, nodes that left the swarm lose their rows.
         let mut next: Vec<SlotRecord> = rows
@@ -337,6 +361,7 @@ impl DeployJob {
             .filter(|x| members.contains(&x.server_id) && x.slot != slot && x.slot != other)
             .cloned()
             .collect();
+
         for server in &members {
             next.push(SlotRecord {
                 service_id: r.app.id,
@@ -348,6 +373,7 @@ impl DeployJob {
                 ports: ports_of(slot),
                 updated_at: now,
             });
+
             if !other.is_empty() {
                 next.push(SlotRecord {
                     service_id: r.app.id,
@@ -361,8 +387,10 @@ impl DeployJob {
                 });
             }
         }
+
         self.deploys.replace_slots(r.app.id, &next).await?;
         self.effects()?.reapply_endpoints(r.app.id).await?;
+
         Ok(())
     }
 
@@ -376,10 +404,12 @@ impl DeployJob {
     async fn swarm_restore(&self, ctx: &mut StepContext, d: &Deployment, ro: &Rollout<'_>) -> Done<bool> {
         let (r, cluster, plan) = (ro.run, ro.cluster, ro.plan);
         let sid = r.app.id.to_string();
+
         if plan.slot.is_empty() {
             if d.from_release == 0 {
                 return Ok(false);
             }
+
             let previous = self
                 .releases
                 .release_by_number(r.app.id, d.from_release)
@@ -391,21 +421,26 @@ impl DeployJob {
             let registry_auth = self.registries.auth_for(r.app.workspace_id, &def.image).await?;
             let apply = SwarmOp::ServiceApply { def: Box::new(def), registry_auth };
             self.swarm_op(ctx, cluster, KEY_RESTORE_APPLY, &apply).await?;
+
             return Ok(true);
         }
+
         let done = usize::try_from(d.step).unwrap_or(0);
         if Self::full_route_index(plan).is_some_and(|i| i < done) {
             // All traffic is on the new release already: leave it there.
             return Ok(false);
         }
+
         let Some(old) = plan.from_slot.as_deref().filter(|o| !o.is_empty()) else {
             let s = self.slot_status(ctx, cluster, &sid, &plan.slot).await?;
             if s.exists {
                 let op = SwarmOp::ServiceScale { service_id: sid, slot: plan.slot.clone(), replicas: 0 };
                 self.swarm_op(ctx, cluster, KEY_RESTORE_SCALE_NEW, &op).await?;
             }
+
             return Ok(false);
         };
+
         let full = plan
             .steps
             .iter()
@@ -421,6 +456,7 @@ impl DeployJob {
         self.swarm_route(ctx, d, ro, old, 100, &plan.slot).await?;
         let op = SwarmOp::ServiceScale { service_id: sid, slot: plan.slot.clone(), replicas: 0 };
         self.swarm_op(ctx, cluster, KEY_RESTORE_SCALE_NEW, &op).await?;
+
         Ok(true)
     }
 
@@ -428,6 +464,7 @@ impl DeployJob {
     async fn swarm_fail(&self, ctx: &mut StepContext, d: &mut Deployment, ro: &Rollout<'_>, why: &str, aborted: bool) {
         let r = ro.run;
         self.event(d.id, "error", None, why.to_owned()).await;
+
         let restored = if aborted || r.policy.auto_rollback {
             match self.swarm_restore(ctx, d, ro).await {
                 Ok(true) => {
@@ -446,6 +483,7 @@ impl DeployJob {
         } else {
             false
         };
+
         d.state = if aborted {
             DeploymentState::Aborted
         } else if restored && d.kind == DeploymentKind::Apply {
@@ -453,12 +491,15 @@ impl DeployJob {
         } else {
             DeploymentState::Failed
         };
+
         d.error = Some(why.to_owned());
         d.finished_at = Some(self.clock.now());
+
         if let Err(e) = self.save(d).await {
             tracing::error!(deployment = %d.id, error = ?e, "could not record the failed deployment");
             return;
         }
+
         let action = if aborted { "deployment.aborted" } else { "deployment.failed" };
         let details = json!({ "service": r.app.name, "release": d.release_number, "error": why, "restored": restored });
         self.audit(&r.principal, d, action, false, details).await;

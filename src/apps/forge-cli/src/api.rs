@@ -74,28 +74,34 @@ pub fn new_idempotency_key() -> Result<String> {
     use ring::rand::{SecureRandom, SystemRandom};
     let mut b = [0u8; 16];
     SystemRandom::new().fill(&mut b).map_err(|_| CliError::new(Exit::General, "no secure random source"))?;
+
     Ok(hex::encode(b))
 }
 
 /// Exponential backoff with jitter, or the server's `Retry-After` (capped).
 fn backoff(attempt: u32, retry_after: Option<u64>) -> Duration {
     use ring::rand::{SecureRandom, SystemRandom};
+
     if let Some(s) = retry_after {
         return Duration::from_secs(s.min(30));
     }
+
     let base = 250u64 << attempt.min(5);
     let mut j = [0u8; 2];
     let _ = SystemRandom::new().fill(&mut j);
+
     Duration::from_millis(base + u64::from(u16::from_le_bytes(j)) % base)
 }
 
 /// Asks for a one-time code on the terminal (step-up).
 pub fn prompt_code(non_interactive: bool) -> Result<String> {
     use std::io::{BufRead, IsTerminal, Write};
+
     if non_interactive || !std::io::stdin().is_terminal() {
         return Err(CliError::new(Exit::MfaRequired, "pass the code with --code (no terminal to ask on)")
             .with_code("step_up_required"));
     }
+
     eprint!("One-time code from your authenticator app: ");
     let _ = std::io::stderr().flush();
     let mut line = String::new();
@@ -104,6 +110,7 @@ pub fn prompt_code(non_interactive: bool) -> Result<String> {
     if code.len() != 6 {
         return Err(CliError::usage("a one-time code has 6 digits"));
     }
+
     Ok(code)
 }
 
@@ -120,14 +127,17 @@ pub fn http_client(ca_file: Option<&str>) -> Result<reqwest::Client> {
         .timeout(Duration::from_secs(300))
         .redirect(reqwest::redirect::Policy::none())
         .user_agent(concat!("forge-cli/", env!("CARGO_PKG_VERSION")));
+
     if let Some(path) = ca_file {
         let pem = std::fs::read(path).map_err(|e| CliError::usage(format!("CA file {path}: {e}")))?;
         let certs =
             reqwest::Certificate::from_pem_bundle(&pem).map_err(|e| CliError::usage(format!("CA file {path}: {e}")))?;
+
         for c in certs {
             b = b.add_root_certificate(c);
         }
     }
+
     b.build().map_err(|e| CliError::new(Exit::Transport, e.to_string()))
 }
 
@@ -135,13 +145,16 @@ fn transport(e: &reqwest::Error) -> CliError {
     let exit = if e.is_timeout() { Exit::Timeout } else { Exit::Transport };
     let mut msg = e.to_string();
     let mut src = std::error::Error::source(e);
+
     while let Some(s) = src {
         msg.push_str(": ");
         msg.push_str(&s.to_string());
         src = s.source();
     }
+
     let mut err = CliError::new(exit, msg);
     err.retryable = true;
+
     err
 }
 
@@ -158,6 +171,7 @@ pub async fn problem(resp: reqwest::Response) -> CliError {
         .or_else(|| v.get("message").and_then(Value::as_str))
         .or_else(|| v.get("error_description").and_then(Value::as_str));
     let detail = detail.map(str::to_owned).or_else(|| (!body.is_empty() && body.len() < 300).then(|| body.clone()));
+
     CliError::from_http(status, title, detail.as_deref(), request_id)
 }
 
@@ -242,6 +256,7 @@ impl Api {
             )
             .with_code("step_up_needs_context"));
         }
+
         let resp = self
             .send_payload_once(
                 Method::POST,
@@ -253,6 +268,7 @@ impl Api {
         let v: Value = resp.json().await.map_err(|e| transport(&e))?;
         if v.get("access_token").is_some() {
             let fresh = token_pair(&self.server, &v)?;
+
             match &mut self.auth {
                 Auth::Context { name, tokens } => {
                     let dir = config_dir()?;
@@ -264,6 +280,7 @@ impl Api {
                 Auth::Static(_) | Auth::None => {}
             }
         }
+
         Ok(serde_json::json!({ "mfa": true }))
     }
 
@@ -280,8 +297,10 @@ impl Api {
         let Auth::Context { name, tokens } = &mut self.auth else {
             return Err(CliError::auth("the token was rejected; sign in again or supply a new FORGE_TOKEN"));
         };
+
         let dir = config_dir()?;
         let _lock = Lock::acquire(&dir)?;
+
         // Another process may have refreshed while we waited for the lock.
         if let Some(stored) = creds::for_server(name, &self.server)?
             && stored.refresh_token != tokens.refresh_token
@@ -290,6 +309,7 @@ impl Api {
             *tokens = stored;
             return Ok(());
         }
+
         let resp = self
             .http
             .post(format!("{}/oauth/token", self.server))
@@ -297,6 +317,7 @@ impl Api {
             .send()
             .await
             .map_err(|e| transport(&e))?;
+
         if !resp.status().is_success() {
             let e = problem(resp).await;
             return Err(CliError::auth(format!(
@@ -304,10 +325,12 @@ impl Api {
                 e.message
             )));
         }
+
         let v: Value = resp.json().await.map_err(|e| transport(&e))?;
         let fresh = token_pair(&self.server, &v)?;
         creds::save(name, &fresh)?;
         *tokens = fresh;
+
         Ok(())
     }
 
@@ -328,11 +351,14 @@ impl Api {
         if !is_mutation(&method) {
             return self.send_with_step_up(method, path, body, None).await;
         }
+
         let key = match self.idempotency_key.take() {
             Some(k) => k,
             None => new_idempotency_key()?,
         };
+
         let mut attempt = 0;
+
         loop {
             match self.send_with_step_up(method.clone(), path, body.clone(), Some(&key)).await {
                 Err(e) if e.retryable && attempt < MUTATION_RETRIES => {
@@ -398,17 +424,22 @@ impl Api {
             self.refresh().await?;
         }
         let mut retried = false;
+
         loop {
             let mut req = self.http.request(method.clone(), format!("{}{path}", self.server));
+
             if let Some(t) = self.bearer() {
                 req = req.bearer_auth(t);
             }
+
             if let Some(k) = key {
                 req = req.header("Idempotency-Key", k);
             }
+
             if let Some(t) = self.request_timeout {
                 req = req.timeout(t);
             }
+
             match &body {
                 Payload::None => {}
                 Payload::Json(b) => req = req.json(b),
@@ -425,19 +456,23 @@ impl Api {
                         .body(reqwest::Body::from(f));
                 }
             }
+
             let resp = req.send().await.map_err(|e| transport(&e))?;
             let status = resp.status();
             if status == StatusCode::UNAUTHORIZED && !retried && matches!(self.auth, Auth::Context { .. }) {
                 retried = true;
                 self.refresh().await?;
+
                 continue;
             }
+
             if status.is_redirection() {
                 return Err(CliError::new(
                     Exit::Transport,
                     format!("unexpected redirect from {path} (redirects are not followed)"),
                 ));
             }
+
             if !status.is_success() {
                 let retry_after = resp
                     .headers()
@@ -446,8 +481,10 @@ impl Api {
                     .and_then(|v| v.trim().parse::<u64>().ok());
                 let mut e = problem(resp).await;
                 e.retry_after = retry_after;
+
                 return Err(e);
             }
+
             return Ok(resp);
         }
     }
@@ -458,7 +495,9 @@ impl Api {
         if resp.status() == StatusCode::NO_CONTENT {
             return Ok(Value::Null);
         }
+
         let text = resp.text().await.map_err(|e| transport(&e))?;
+
         Ok(serde_json::from_str(&text).unwrap_or(Value::String(text)))
     }
 
@@ -482,5 +521,6 @@ pub fn token_pair(server: &str, v: &Value) -> Result<Tokens> {
     let access_token = s("access_token").ok_or_else(|| CliError::auth("token response without access_token"))?;
     let refresh_token = s("refresh_token").ok_or_else(|| CliError::auth("token response without refresh_token"))?;
     let expires_in = v.get("expires_in").and_then(Value::as_i64).unwrap_or(3600);
+
     Ok(Tokens { server: server.to_owned(), access_token, refresh_token, expires_at_ms: now_ms() + expires_in * 1000 })
 }

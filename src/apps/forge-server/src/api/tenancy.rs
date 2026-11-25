@@ -26,6 +26,7 @@ fn valid_name(name: &str) -> ApiResult<String> {
     if n.is_empty() || n.len() > 100 {
         return Err(ApiError::bad_request("name must be 1-100 characters"));
     }
+
     Ok(n.to_owned())
 }
 
@@ -44,7 +45,9 @@ pub async fn current_workspace(
     if !member {
         caller.authorize(Action::View, workspace_ref(ws)).await?;
     }
+
     let all = state.store.list_workspaces().await?;
+
     all.into_iter().find(|w| w.id == ws).map(Json).ok_or_else(|| ApiError::not_found("workspace"))
 }
 
@@ -73,6 +76,7 @@ pub async fn create_tenant(
     caller
         .audit("tenant.create", &EntityRef::new(EntityKind::Tenant, t.id), Some(org), json!({ "name": t.name }))
         .await;
+
     Ok((StatusCode::CREATED, Json(t)))
 }
 
@@ -97,14 +101,17 @@ pub async fn list_environments(
     Query(q): Query<EnvironmentQuery>,
 ) -> ApiResult<Json<Vec<Environment>>> {
     let mut visible = Vec::new();
+
     for ns in state.store.list_environments(ws, q.cluster_id).await? {
         if q.project_id.is_some_and(|g| ns.project_id != Some(g)) {
             continue;
         }
+
         if caller.can(Action::View, EntityRef::new(EntityKind::Environment, ns.id)).await {
             visible.push(ns);
         }
     }
+
     Ok(Json(visible))
 }
 
@@ -136,7 +143,9 @@ async fn checked_project(
     if g.workspace_id != ws {
         return Err(ApiError::bad_request("project belongs to another workspace"));
     }
+
     caller.authorize(Action::WorkspaceManage, EntityRef::new(EntityKind::Project, id)).await?;
+
     Ok(id)
 }
 
@@ -153,6 +162,7 @@ async fn checked_cluster(
     if c.workspace_id != ws {
         return Err(ApiError::bad_request("cluster belongs to another workspace"));
     }
+
     Ok(id)
 }
 
@@ -190,6 +200,7 @@ pub async fn create_environment(
             json!({ "name": e.name, "protected": e.protected, "cluster_id": e.cluster_id, "project_id": e.project_id }),
         )
         .await;
+
     Ok((StatusCode::CREATED, Json(e)))
 }
 
@@ -214,6 +225,7 @@ pub async fn rename_environment(
         caller.audit("environment.rename", &target, Some(e.workspace_id), json!({ "from": e.name, "to": name })).await;
         e.name = name;
     }
+
     Ok(Json(e))
 }
 
@@ -234,6 +246,7 @@ pub async fn delete_environment(
             "remove this environment's {apps} service(s) and {stacks} stack(s) first"
         )));
     }
+
     // Refused with `409` by the store while the environment owns an object
     // store (D-107): that check is part of the delete's transaction.
     state.store.delete_environment(id).await?;
@@ -245,6 +258,7 @@ pub async fn delete_environment(
             json!({ "name": e.name, "cluster_id": e.cluster_id, "project_id": e.project_id }),
         )
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -272,6 +286,7 @@ pub async fn set_environment_project(
         .audit("environment.set_project", &target, Some(e.workspace_id), json!({ "from": e.project_id, "to": group }))
         .await;
     e.project_id = Some(group);
+
     Ok(Json(e))
 }
 
@@ -299,6 +314,7 @@ pub async fn set_environment_cluster(
         .audit("environment.move", &target, Some(e.workspace_id), json!({ "from": e.cluster_id, "to": cluster_id }))
         .await;
     e.cluster_id = Some(cluster_id);
+
     Ok(Json(e))
 }
 
@@ -342,6 +358,7 @@ pub async fn create_user(
             json!({ "username": user.username, "email": user.email }),
         )
         .await;
+
     Ok((StatusCode::CREATED, Json(user)))
 }
 
@@ -373,11 +390,13 @@ const SCOPE_KINDS: [EntityKind; 6] = [
 
 pub async fn list_bindings(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Vec<RoleBinding>>> {
     let mut visible = Vec::new();
+
     for b in state.store.list_bindings().await? {
         if b.user_id == caller.session.user.id || caller.can(Action::UserManage, b.scope.clone()).await {
             visible.push(b);
         }
     }
+
     Ok(Json(visible))
 }
 
@@ -392,6 +411,7 @@ pub async fn create_binding(
             "scope must be platform, workspace, tenant, cluster, project or environment",
         ));
     }
+
     // Escalation guard: platform_admin can only be bound at platform scope
     // (an "org-scoped platform admin" would be meaningless and confusing), and
     // granting anything requires user.manage on the scope itself, which only
@@ -399,8 +419,10 @@ pub async fn create_binding(
     if req.role == Role::PlatformAdmin && scope.kind != EntityKind::Platform {
         return Err(ApiError::bad_request("platform_admin can only be bound at platform scope"));
     }
+
     caller.authorize(Action::UserManage, scope.clone()).await?;
     caller.require_mfa("role.grant", &scope).await?;
+
     // Validate the scope exists (fails closed for forged ids).
     state.authz_resolve(&scope).await?;
 
@@ -413,10 +435,12 @@ pub async fn create_binding(
             } else {
                 state.store.find_user_by_username(login).await?
             };
+
             found.ok_or_else(|| ApiError::not_found("no user with that username or email"))?
         }
         _ => return Err(ApiError::bad_request("user_id, username or email required")),
     };
+
     let binding = RoleBinding {
         id: RoleBindingId::new(),
         user_id: user.id,
@@ -433,6 +457,7 @@ pub async fn create_binding(
             json!({ "binding_id": binding.id, "user_id": user.id, "role": binding.role }),
         )
         .await;
+
     Ok((StatusCode::CREATED, Json(binding)))
 }
 
@@ -449,6 +474,7 @@ pub async fn delete_binding(
         .find(|b| b.id == id)
         .ok_or_else(|| ApiError::not_found("binding not found"))?;
     caller.authorize(Action::UserManage, binding.scope.clone()).await?;
+
     if binding.role == Role::PlatformAdmin {
         let Principal::User(me) = caller.principal();
         let admins: std::collections::BTreeSet<UserId> = state
@@ -459,11 +485,13 @@ pub async fn delete_binding(
             .filter(|b| b.role == Role::PlatformAdmin)
             .map(|b| b.user_id)
             .collect();
+
         if let Some(reason) = admin_revoke_block(me, binding.user_id, &admins) {
             caller.audit_denied("role.revoke", &binding.scope, None, reason).await;
             return Err(ApiError::conflict(reason));
         }
     }
+
     state.revoke(id).await?;
     caller
         .audit(
@@ -473,6 +501,7 @@ pub async fn delete_binding(
             json!({ "binding_id": id, "user_id": binding.user_id, "role": binding.role }),
         )
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 

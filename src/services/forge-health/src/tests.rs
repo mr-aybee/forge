@@ -35,6 +35,7 @@ async fn fixture() -> Fixture {
     let placements = Arc::new(FakePlacements::default());
     let rec =
         ObservationRecorder::new(Arc::new(store.clone()), placements.clone(), clock.clone(), RecorderConfig::default());
+
     Fixture { rec, store, clock, placements, node: ServerId::new(), _dir: dir }
 }
 
@@ -122,12 +123,14 @@ async fn a_node_reports_only_about_itself_and_apps_placed_on_it() {
         about(EntityKind::Service, "app-here".into(), Some(f.node)),
     ];
     let r = f.rec.record_from_agent(f.node, accepted).await.unwrap();
+
     // The two server keys differ only by `server`, so both are stored.
     assert_eq!((r.refused, r.transitions.len()), (0, 3));
 }
 #[tokio::test]
 async fn freshness_uses_the_server_clock_and_the_sweeper_marks_stale_once() {
     let f = fixture().await;
+
     // The executor's clock is an hour behind; freshness still counts from now.
     let r = f.rec.record_from_agent(f.node, vec![obs(f.node, HealthState::Passing, 1_000_000 - 3_600_000)]).await;
     let stored = f.store.latest_for(&[obs(f.node, HealthState::Passing, 0).key]).await.unwrap();
@@ -181,6 +184,7 @@ async fn measures_use_a_deadband_and_no_feed_transitions() {
     let key = cpu(None, 0).key;
     let read = || async { f.store.latest_for(std::slice::from_ref(&key)).await.unwrap()[0].clone() };
     assert_eq!(f.rec.record_from_agent(f.node, vec![cpu(Some(40_000), 1_000_000)]).await.unwrap().transitions.len(), 1);
+
     // Within ±1 %: not rewritten.
     f.clock.advance(Duration::from_secs(2));
     f.rec.record_from_agent(f.node, vec![cpu(Some(40_600), 1_002_000)]).await.unwrap();
@@ -188,6 +192,7 @@ async fn measures_use_a_deadband_and_no_feed_transitions() {
         read().await.value,
         ObservedValue::Measure { milli: Some(40_000), unit: forge_core::observation::Unit::Percent }
     );
+
     // Past the deadband: rewritten, but no transition.
     f.clock.advance(Duration::from_secs(2));
     let r = f.rec.record_from_agent(f.node, vec![cpu(Some(92_000), 1_004_000)]).await.unwrap();
@@ -196,6 +201,7 @@ async fn measures_use_a_deadband_and_no_feed_transitions() {
         read().await.value,
         ObservedValue::Measure { milli: Some(92_000), unit: forge_core::observation::Unit::Percent }
     );
+
     // Going unknown is a transition.
     f.clock.advance(Duration::from_secs(2));
     let r = f.rec.record_from_agent(f.node, vec![cpu(None, 1_006_000)]).await.unwrap();
@@ -230,6 +236,7 @@ async fn a_node_going_offline_makes_its_values_unknown_at_once() {
     assert_eq!(now[0].value, ObservedValue::Health(HealthState::Unknown));
     assert!(f.rec.expire_node(f.node).await.unwrap().is_empty(), "already unknown");
     assert!(f.rec.sweep_stale().await.unwrap().is_empty(), "the stale sweep adds nothing");
+
     // Coming back: the next report transitions from unknown.
     f.clock.advance(Duration::from_secs(5));
     let r = f.rec.record_from_agent(f.node, vec![obs(f.node, HealthState::Passing, 1_005_000)]).await.unwrap();

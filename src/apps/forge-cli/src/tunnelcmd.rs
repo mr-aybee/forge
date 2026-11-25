@@ -217,17 +217,21 @@ pub(crate) fn parse_lifetime(s: &str) -> Result<Option<u64>> {
     if s == "never" {
         return Ok(None);
     }
+
     let bad = || CliError::usage(format!("--for {s}: use a duration like 30m, 8h or 3d, or `never`"));
     let mut minutes: u64 = 0;
     let mut digits = String::new();
     let mut seen = false;
+
     for c in s.chars() {
         if c.is_ascii_digit() {
             digits.push(c);
             continue;
         }
+
         let n: u64 = digits.parse().map_err(|_| bad())?;
         digits.clear();
+
         let per = match c {
             'm' => 1,
             'h' => 60,
@@ -235,12 +239,15 @@ pub(crate) fn parse_lifetime(s: &str) -> Result<Option<u64>> {
             'w' => 7 * 24 * 60,
             _ => return Err(bad()),
         };
+
         minutes = minutes.checked_add(n.checked_mul(per).ok_or_else(bad)?).ok_or_else(bad)?;
         seen = true;
     }
+
     if !digits.is_empty() || !seen || minutes == 0 {
         return Err(bad());
     }
+
     Ok(Some(minutes))
 }
 
@@ -269,8 +276,10 @@ pub(crate) fn expiry_text(v: &Value) -> String {
 /// The `{kind, ref}` of a tunnel or grant as one word pair (`app site`).
 fn target_text(t: &Value) -> String {
     let kind = t["kind"].as_str().unwrap_or("?");
+
     // The server stores the id in `ref` and sends the human name alongside.
     let r = t["name"].as_str().filter(|n| !n.is_empty()).or_else(|| t["ref"].as_str()).unwrap_or("?");
+
     match kind {
         "ssh" => "ssh".to_owned(),
         "raw" => "raw port".to_owned(),
@@ -368,6 +377,7 @@ fn matches_service(e: &Value, needle: &str, stack: Option<&str>) -> bool {
         || eq(s(e, "id"), needle)
         || name.rsplit_once('/').is_some_and(|(_, b)| eq(b, needle))
         || stack.is_some_and(|st| eq(name, &format!("{st}/{needle}")));
+
     in_stack && is_service
 }
 
@@ -378,9 +388,11 @@ async fn resolve(g: &Global, api: &mut Api, a: &TargetArgs, mode: Mode) -> Resul
         let Some(node) = &a.node else {
             return Err(CliError::usage("--port alone is a raw port on a node: add --node <NODE>, or name a service"));
         };
+
         let n = resolve_node(api, node).await?;
         let node_id = s(&n, "id").to_owned();
         let node_name = node_label(&n);
+
         let (kind, port, role) = if a.ssh {
             let ssh = api.get(&format!("/api/v1/servers/{node_id}/ssh")).await?;
             let port = ssh["endpoint"]["port"].as_u64().and_then(|p| u16::try_from(p).ok()).unwrap_or(22);
@@ -389,11 +401,14 @@ async fn resolve(g: &Global, api: &mut Api, a: &TargetArgs, mode: Mode) -> Resul
             let Some(port) = a.port else {
                 return Err(CliError::usage("name a service (--app, --stack --service, --db), --ssh or --port"));
             };
+
             ("raw", port, None)
         };
+
         if a.ssh && a.port.is_some_and(|p| p != port) {
             return Err(CliError::usage(format!("--ssh uses the node's SSH port ({port}); drop --port")));
         }
+
         return Ok(Resolved {
             kind: kind.to_owned(),
             reference: node_id.clone(),
@@ -406,12 +421,14 @@ async fn resolve(g: &Global, api: &mut Api, a: &TargetArgs, mode: Mode) -> Resul
             chosen: vec![port],
         });
     }
+
     // A stack service is catalogued as `<stack>/<service>`; ask for it by that
     // name, or the server finds nothing for a bare service name.
     let stack_needle = match (&a.stack, &a.service) {
         (Some(st), Some(svc)) if !svc.contains('/') => Some(format!("{st}/{svc}")),
         _ => None,
     };
+
     let (kind, needle) = match (&a.app, &a.stack, &a.service, &a.db) {
         (Some(app), _, _, _) => (Some("app"), app.as_str()),
         (_, Some(_), Some(svc), _) => (Some("stack"), stack_needle.as_deref().unwrap_or(svc.as_str())),
@@ -419,36 +436,44 @@ async fn resolve(g: &Global, api: &mut Api, a: &TargetArgs, mode: Mode) -> Resul
         (_, _, Some(svc), _) => (None, svc.as_str()),
         _ => return Err(CliError::usage("name a target: --app, --stack --service, --service, --db, or --node --ssh")),
     };
+
     // The catalogue: the node's own, or the whole fleet's for this name.
     let pinned = match &a.node {
         Some(n) => Some(resolve_node(api, n).await?),
         None => None,
     };
+
     let raw = match &pinned {
         Some(n) => api.get(&format!("/api/v1/servers/{}/service-ports", s(n, "id"))).await?,
         None => {
             let mut q = format!("/api/v1/service-ports?service={}", crate::admincmd::enc(needle));
+
             if let Some(k) = kind {
                 q.push_str(&format!("&kind={k}"));
             }
+
             if let Some(ns) = &a.environment {
                 q.push_str(&format!("&environment={}", crate::admincmd::enc(ns)));
             }
+
             api.get(&q).await?
         }
     };
+
     let what = match kind {
         Some("app") => "service",
         Some("stack") => "stack service",
         Some("package") => "database",
         _ => "service",
     };
+
     let mut entries: Vec<Value> = entries_of(raw)
         .into_iter()
         .filter(|e| matches_service(e, needle, a.stack.as_deref()))
         .filter(|e| kind.is_none_or(|k| s(e, "kind") == k))
         .filter(|e| a.environment.as_deref().is_none_or(|ns| s(e, "environment") == ns || s(e, "environment_id") == ns))
         .collect();
+
     if entries.is_empty() {
         let where_ = pinned.as_ref().map(|n| format!(" on {}", node_label(n))).unwrap_or_default();
         return Err(CliError::new(
@@ -456,6 +481,7 @@ async fn resolve(g: &Global, api: &mut Api, a: &TargetArgs, mode: Mode) -> Resul
             format!("no {what} `{needle}`{where_} with a listening port that you can see"),
         ));
     }
+
     // One kind and one environment, or the name is ambiguous.
     let mut kinds: Vec<(String, String, String)> = entries
         .iter()
@@ -463,6 +489,7 @@ async fn resolve(g: &Global, api: &mut Api, a: &TargetArgs, mode: Mode) -> Resul
         .collect();
     kinds.sort();
     kinds.dedup();
+
     if kinds.len() > 1 {
         let list: Vec<String> = kinds
             .iter()
@@ -475,24 +502,30 @@ async fn resolve(g: &Global, api: &mut Api, a: &TargetArgs, mode: Mode) -> Resul
         ))
         .with_code("ambiguous"));
     }
+
     let first = entries.first().cloned().unwrap_or(Value::Null);
     let kind = s(&first, "kind").to_owned();
     let name = s(&first, "name").to_owned();
     let ns = s(&first, "environment").to_owned();
+
     let reference = match (&kind[..], &a.stack) {
         ("stack", Some(st)) if !name.contains('/') => format!("{st}/{name}"),
         _ => name.clone(),
     };
+
     let label = if ns.is_empty() { name.clone() } else { format!("{name} ({ns})") };
+
     // Nodes, in catalogue order; prefer one that is online.
     let servers = api.get("/api/v1/servers").await.ok().and_then(|v| v.as_array().cloned()).unwrap_or_default();
     let mut node_ids: Vec<String> = Vec::new();
+
     for e in &entries {
         let id = s(e, "server_id").to_owned();
         if !id.is_empty() && !node_ids.contains(&id) {
             node_ids.push(id);
         }
     }
+
     let nodes: Vec<String> = node_ids
         .iter()
         .map(|id| {
@@ -501,25 +534,31 @@ async fn resolve(g: &Global, api: &mut Api, a: &TargetArgs, mode: Mode) -> Resul
         })
         .collect();
     let online = |id: &str| servers.iter().any(|n| n["id"].as_str() == Some(id) && n["status"] == "online");
+
     let node_id: Option<String> = match (&pinned, mode) {
         (Some(n), _) => Some(s(n, "id").to_owned()),
         (None, Mode::Grant) => None,
         (None, Mode::Open { .. }) => node_ids.iter().find(|id| online(id)).or(node_ids.first()).cloned(),
     };
+
     if let Some(id) = &node_id {
         entries.retain(|e| s(e, "server_id") == id);
     }
+
     let node_name = node_id.as_deref().map(|id| name_of(&servers, id, "")).unwrap_or_default();
     let mut ports: Vec<PortChoice> = Vec::new();
+
     for e in &entries {
         let Some(port) = e["port"].as_u64().and_then(|p| u16::try_from(p).ok()) else { continue };
         if !ports.iter().any(|p| p.port == port) {
             ports.push(PortChoice { port, role: e["role"].as_str().map(str::to_owned) });
         }
     }
+
     if ports.is_empty() {
         return Err(CliError::new(Exit::NotFound, format!("{label} has no listening port on {node_name}")));
     }
+
     let chosen = match (mode, a.port) {
         (_, Some(p)) => {
             if !ports.iter().any(|c| c.port == p) {
@@ -529,6 +568,7 @@ async fn resolve(g: &Global, api: &mut Api, a: &TargetArgs, mode: Mode) -> Resul
                     have.join(", ")
                 )));
             }
+
             vec![p]
         }
         (Mode::Grant, None) => Vec::new(),
@@ -536,7 +576,9 @@ async fn resolve(g: &Global, api: &mut Api, a: &TargetArgs, mode: Mode) -> Resul
         (Mode::Open { all: false }, None) if ports.len() == 1 => vec![ports[0].port],
         (Mode::Open { all: false }, None) => vec![pick_port(g, &label, &node_name, &ports)?],
     };
+
     let key_target = reference_display(&kind, &name, a);
+
     Ok(Resolved { kind, reference, label, key_target, node_id, node_name, nodes, ports, chosen })
 }
 
@@ -554,7 +596,9 @@ fn pick_port(g: &Global, label: &str, node: &str, ports: &[PortChoice]) -> Resul
         Some(r) => format!("{} ({r})", c.port),
         None => c.port.to_string(),
     };
+
     let list: Vec<String> = ports.iter().map(describe).collect();
+
     if g.non_interactive || !std::io::stdin().is_terminal() || g.output.is_machine() {
         return Err(CliError::usage(format!(
             "{label} listens on {} on {node}; pick one with --port, or open every port with --all",
@@ -562,10 +606,13 @@ fn pick_port(g: &Global, label: &str, node: &str, ports: &[PortChoice]) -> Resul
         ))
         .with_code("choice_needed"));
     }
+
     eprintln!("{label} listens on several ports on {node}:");
+
     for (i, d) in list.iter().enumerate() {
         eprintln!("  {}) {d}", i + 1);
     }
+
     eprint!("Port to open [1-{}]: ", list.len());
     let _ = std::io::stderr().flush();
     let mut line = String::new();
@@ -573,18 +620,22 @@ fn pick_port(g: &Global, label: &str, node: &str, ports: &[PortChoice]) -> Resul
     let answer = line.trim();
     let by_index = answer.parse::<usize>().ok().filter(|i| (1..=ports.len()).contains(i)).map(|i| ports[i - 1].port);
     let by_port = answer.parse::<u16>().ok().filter(|p| ports.iter().any(|c| c.port == *p));
+
     by_index.or(by_port).ok_or_else(|| CliError::new(Exit::General, "cancelled").with_code("cancelled"))
 }
 
 /// The server's target object for a resolution.
 fn target_body(r: &Resolved, ports: &[u16]) -> Value {
     let mut t = json!({ "kind": r.kind, "ref": r.reference });
+
     if let Some(id) = &r.node_id {
         t["server_id"] = json!(id);
     }
+
     if !ports.is_empty() {
         t["ports"] = json!(ports);
     }
+
     t
 }
 
@@ -594,6 +645,7 @@ fn lifetime_body(body: &mut Value, lifetime: &str) -> Result<()> {
         Some(min) => body["lifetime_minutes"] = json!(min),
         None => body["never_expires"] = json!(true),
     }
+
     Ok(())
 }
 
@@ -603,6 +655,7 @@ pub async fn run(g: &Global, cmd: TunnelCmd) -> Result<()> {
     }
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         TunnelCmd::Open { target: ta, all, local_port, bind, allow_remote_bind, lifetime, direct } => {
             let how = How { local_port, bind, allow_remote_bind, direct };
@@ -612,6 +665,7 @@ pub async fn run(g: &Global, cmd: TunnelCmd) -> Result<()> {
             let mut v = api.get(&format!("/api/v1/tunnels{}", if all { "?all=true" } else { "" })).await?;
             let nodes = api.get("/api/v1/servers").await.ok().and_then(|v| v.as_array().cloned()).unwrap_or_default();
             let mut rows = if v.is_array() { v } else { v["tunnels"].take() };
+
             for r in rows.as_array_mut().into_iter().flatten() {
                 let id = s(r, "server_id").to_owned();
                 let fallback = s(r, "server").to_owned();
@@ -621,6 +675,7 @@ pub async fn run(g: &Global, cmd: TunnelCmd) -> Result<()> {
                 r["down"] = json!(size(r["bytes_down"].as_u64().unwrap_or(0)));
                 r["expires"] = json!(expiry_text(r).trim_start_matches("expires ").to_owned());
             }
+
             out::result(g.output, &rows, Some(COLS));
             Ok(())
         }
@@ -657,6 +712,7 @@ fn remember(t: &Target, key: &str, port: u16) {
         if let Some(c) = cfg.contexts.get_mut(&name) {
             c.tunnel_ports.insert(key, port);
         }
+
         Ok(())
     });
 }
@@ -666,6 +722,7 @@ fn db_hint(r: &Resolved, port: u16, local: SocketAddr) -> Option<String> {
     let text = format!("{} {} {}", r.reference, r.label, r.role_of(port).unwrap_or_default()).to_ascii_lowercase();
     let host = local.ip();
     let lp = local.port();
+
     let hint = if text.contains("postgres") || text.contains("-pg") || text.contains("pgsql") || port == 5432 {
         format!("psql -h {host} -p {lp} -U postgres")
     } else if text.contains("mysql") || text.contains("mariadb") || port == 3306 {
@@ -679,6 +736,7 @@ fn db_hint(r: &Resolved, port: u16, local: SocketAddr) -> Option<String> {
     } else {
         return None;
     };
+
     Some(hint)
 }
 
@@ -717,29 +775,36 @@ async fn open(g: &Global, t: Target, mut api: Api, ta: &TargetArgs, all: bool, h
                 "--bind {bind} lets other machines use the tunnel; add --allow-remote-bind if that is what you want"
             )));
         }
+
         eprintln!("warning: listening on {bind}: anyone who can reach this address can use the tunnel");
     }
+
     parse_lifetime(lifetime)?;
     let r = resolve(g, &mut api, ta, Mode::Open { all }).await?;
     if local_port.is_some() && r.chosen.len() > 1 {
         return Err(CliError::usage("--local-port fits one tunnel; drop it with --all, or pick one port with --port"));
     }
+
     let Some(node_id) = r.node_id.clone() else {
         return Err(CliError::new(Exit::General, "the catalogue named no node for this service"));
     };
+
     let human = !g.output.is_machine();
     if human {
         let ports: Vec<String> = r.ports.iter().map(|p| p.port.to_string()).collect();
+
         match r.kind.as_str() {
             "ssh" => eprintln!("{} · SSH on {}", r.label, ports.join(", ")),
             "raw" => eprintln!("{} · port {} (raw)", r.label, ports.join(", ")),
             _ => eprintln!("{} runs on {} · listens on {}", r.label, r.nodes.join(", "), ports.join(", ")),
         }
     }
+
     let token = api.access_token().await?.ok_or_else(|| CliError::auth("not signed in"))?;
     let user = t.context.as_deref().and_then(|n| ctx::Config::load().ok()?.contexts.get(n)?.user.clone());
     let mut held = Vec::new();
     let mut machine = Vec::new();
+
     for port in r.chosen.clone() {
         let key = format!("{}:{}@{}:{port}", r.kind, r.key_target, r.node_name);
         let pick = match (local_port, remembered(&t, &key)) {
@@ -747,6 +812,7 @@ async fn open(g: &Global, t: Target, mut api: Api, ta: &TargetArgs, all: bool, h
             (None, Some(p)) => Pick::Remembered(p),
             (None, None) => Pick::Fresh,
         };
+
         // Listen first: a busy local port fails before anything opens remotely.
         let (listener, pick) = match pick {
             Pick::Given(p) => (bind_local(SocketAddr::new(bind, p)).await?, pick),
@@ -759,6 +825,7 @@ async fn open(g: &Global, t: Target, mut api: Api, ta: &TargetArgs, all: bool, h
             },
             Pick::Fresh => (bind_local(SocketAddr::new(bind, 0)).await?, Pick::Fresh),
         };
+
         let local = listener.local_addr().map_err(|e| CliError::new(Exit::General, e.to_string()))?;
         let mut body = json!({ "target": target_body(&r, &[port]), "bind": local.to_string(), "direct": direct });
         lifetime_body(&mut body, lifetime)?;
@@ -767,14 +834,18 @@ async fn open(g: &Global, t: Target, mut api: Api, ta: &TargetArgs, all: bool, h
         if id.is_empty() {
             return Err(CliError::new(Exit::General, "the server opened a tunnel without an id; update the CLI"));
         }
+
         let role = tunnel["role"].as_str().map(str::to_owned).or_else(|| r.role_of(port).map(str::to_owned));
         let remote_port = tunnel["port"].as_u64().and_then(|p| u16::try_from(p).ok()).unwrap_or(port);
         let node_name = tunnel["server"].as_str().filter(|x| !x.is_empty()).unwrap_or(&r.node_name).to_owned();
         let control = ws_connect(&t, &token, &format!("/api/v1/tunnels/{id}/control")).await?;
+
         if matches!(pick, Pick::Fresh) {
             remember(&t, &key, local.port());
         }
+
         let shown = local_text(role.as_deref(), local);
+
         if human {
             let mem = if matches!(pick, Pick::Remembered(_)) { " (remembered)" } else { "" };
             let via = if direct { "direct SSH, " } else { "" };
@@ -782,6 +853,7 @@ async fn open(g: &Global, t: Target, mut api: Api, ta: &TargetArgs, all: bool, h
                 "→ {node_name}:{remote_port}  →  {shown}{mem}   ({via}{}, Ctrl-C to close)",
                 expiry_text(&tunnel)
             );
+
             if r.kind == "ssh" {
                 eprintln!("  ssh -p {} {}@{}", local.port(), user.as_deref().unwrap_or("<user>"), local.ip());
             } else if r.kind == "package"
@@ -790,6 +862,7 @@ async fn open(g: &Global, t: Target, mut api: Api, ta: &TargetArgs, all: bool, h
                 eprintln!("  {h}");
             }
         }
+
         machine.push(json!({
             "id": id, "local": local.to_string(), "url": shown, "node": node_name, "server_id": node_id,
             "port": remote_port, "role": role, "target": target_body(&r, &[port]),
@@ -798,13 +871,16 @@ async fn open(g: &Global, t: Target, mut api: Api, ta: &TargetArgs, all: bool, h
         }));
         held.push(Held { id, listener, control, direct });
     }
+
     if !human {
         let v = if machine.len() == 1 { machine.remove(0) } else { Value::Array(machine) };
         out::result(g.output, &v, None);
     }
+
     let api = Arc::new(Mutex::new(api));
     let runs = held.into_iter().map(|h| hold(t.clone(), api.clone(), token.clone(), h));
     futures::future::join_all(runs).await;
+
     Ok(())
 }
 
@@ -818,10 +894,12 @@ async fn hold(t: Target, api: Arc<Mutex<Api>>, token: String, h: Held) {
     let mut last_token = token;
     let mut refresh = tokio::time::interval(Duration::from_secs(60));
     refresh.tick().await;
+
     // Direct connections: counted for the server's idle check, and ended
     // with the tunnel (they do not pass through the server).
     let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut conns = tokio::task::JoinSet::new();
+
     let reason = loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => break "closed here".to_owned(),
@@ -871,6 +949,7 @@ async fn hold(t: Target, api: Arc<Mutex<Api>>, token: String, h: Held) {
             },
         }
     };
+
     conns.abort_all();
     let _ = control.close(None).await;
     eprintln!("Tunnel {id}: {reason}");
@@ -883,12 +962,14 @@ async fn relay(t: &Target, api: &Arc<Mutex<Api>>, id: &str, sock: TcpStream) -> 
     let ws = ws_connect(t, &token, &format!("/api/v1/tunnels/{id}/connect")).await?;
     let (mut ws_tx, mut ws_rx) = ws.split();
     let (mut rd, mut wr) = sock.into_split();
+
     // Each direction ends on its own (half-close): local EOF sends `eof` and
     // keeps receiving; the server's `eof` ends our writes. A closed socket
     // (the tunnel ended) stops both.
     let closed = tokio::sync::Notify::new();
     let up = async {
         let mut buf = vec![0u8; 64 * 1024];
+
         loop {
             tokio::select! {
                 r = rd.read(&mut buf) => match r {
@@ -906,6 +987,7 @@ async fn relay(t: &Target, api: &Arc<Mutex<Api>>, id: &str, sock: TcpStream) -> 
                 () = closed.notified() => break,
             }
         }
+
         ws_tx
     };
     let down = async {
@@ -923,6 +1005,7 @@ async fn relay(t: &Target, api: &Arc<Mutex<Api>>, id: &str, sock: TcpStream) -> 
                         let _ = wr.shutdown().await;
                         return;
                     }
+
                     if let Some(e) = v["message"].as_str() {
                         eprintln!("the node refused the connection: {e}");
                     }
@@ -931,11 +1014,13 @@ async fn relay(t: &Target, api: &Arc<Mutex<Api>>, id: &str, sock: TcpStream) -> 
                 _ => {}
             }
         }
+
         let _ = wr.shutdown().await;
         closed.notify_one();
     };
     let (mut ws_tx, ()) = tokio::join!(up, down);
     let _ = ws_tx.close().await;
+
     Ok(())
 }
 
@@ -946,14 +1031,17 @@ fn split_key(key: &str) -> Option<(&str, &str, &str, &str)> {
     let (kind, rest) = key.split_once(':')?;
     let (target, node_port) = rest.rsplit_once('@')?;
     let (node, remote) = node_port.rsplit_once(':')?;
+
     Some((kind, target, node, remote))
 }
 
 fn ports(g: &Global, action: Option<PortsCmd>) -> Result<()> {
     let t = target(g)?;
+
     let Some(name) = t.context.clone() else {
         return Err(CliError::usage("remembered ports belong to a context; select one (`forge contexts use`)"));
     };
+
     match action {
         None => {
             let cfg = ctx::Config::load()?;
@@ -981,17 +1069,21 @@ fn ports(g: &Global, action: Option<PortsCmd>) -> Result<()> {
                     .collect();
                 let loose: Vec<String> = keys.iter().filter(|k| k.contains(&what)).cloned().collect();
                 let hit = [exact, by_target, loose].into_iter().find(|v| !v.is_empty()).unwrap_or_default();
+
                 for k in &hit {
                     c.tunnel_ports.remove(k);
                 }
+
                 Ok(hit)
             })?;
+
             if gone.is_empty() {
                 return Err(CliError::new(
                     Exit::NotFound,
                     format!("no remembered port matches `{what}` (see `forge tunnel ports`)"),
                 ));
             }
+
             out::result(g.output, &json!({ "forgotten": gone }), None);
             Ok(())
         }
@@ -1002,11 +1094,13 @@ fn ports(g: &Global, action: Option<PortsCmd>) -> Result<()> {
 
 async fn grants(g: &Global, api: &mut Api, cmd: GrantsCmd) -> Result<()> {
     let base = "/api/v1/tunnel-grants";
+
     match cmd {
         GrantsCmd::List { all } => {
             let v = api.get(&format!("{base}{}", if all { "?all=true" } else { "" })).await?;
             let nodes = api.get("/api/v1/servers").await.ok().and_then(|v| v.as_array().cloned()).unwrap_or_default();
             let mut rows = entries_of(v);
+
             for r in &mut rows {
                 let tgt = r["target"].clone();
                 let sid = tgt["server_id"].as_str().or(r["server_id"].as_str()).unwrap_or_default().to_owned();
@@ -1015,11 +1109,13 @@ async fn grants(g: &Global, api: &mut Api, cmd: GrantsCmd) -> Result<()> {
                 } else {
                     name_of(&nodes, &sid, r["server"].as_str().unwrap_or_default())
                 });
+
                 let ref_text = match tgt["kind"].as_str() {
                     Some("ssh") => "ssh".to_owned(),
                     Some("raw") => "raw port".to_owned(),
                     _ => target_text(&tgt),
                 };
+
                 r["target_text"] = json!(ref_text);
                 r["ports_text"] = json!(match &tgt["ports"] {
                     Value::Array(p) if !p.is_empty() => {
@@ -1035,10 +1131,12 @@ async fn grants(g: &Global, api: &mut Api, cmd: GrantsCmd) -> Result<()> {
                     .or(r["user_id"].as_str())
                     .map_or(Value::Null, |u| json!(u));
                 r["expires"] = json!(expiry_text(r).trim_start_matches("expires ").to_owned());
+
                 if r["status"].is_null() {
                     r["status"] = json!(if r["revoked_at"].is_null() { "active" } else { "revoked" });
                 }
             }
+
             out::result(g.output, &Value::Array(rows), Some(GRANT_COLS));
             Ok(())
         }
@@ -1054,20 +1152,26 @@ async fn grants(g: &Global, api: &mut Api, cmd: GrantsCmd) -> Result<()> {
             let r = resolve(g, api, &ta, Mode::Grant).await?;
             let mut body = json!({ "user_id": s(&u, "id"), "target": target_body(&r, &r.chosen) });
             lifetime_body(&mut body, &lifetime)?;
+
             if let Some(n) = note {
                 body["note"] = json!(n);
             }
+
             let v = api.post(base, &body).await?;
+
             if !g.output.is_machine() {
                 let who = u["username"].as_str().or(u["email"].as_str()).unwrap_or(&user);
                 let on = if r.node_name.is_empty() { "every node".to_owned() } else { r.node_name.clone() };
+
                 let ports = if r.chosen.is_empty() {
                     "every port".to_owned()
                 } else {
                     format!("port {}", r.chosen.iter().map(ToString::to_string).collect::<Vec<_>>().join(", "))
                 };
+
                 eprintln!("{who} may tunnel to {} on {on} ({ports}) · {}", r.label, expiry_text(&v));
             }
+
             out::result(g.output, &v, None);
             Ok(())
         }

@@ -91,6 +91,7 @@ pub fn spec(store: &ObjectStore, member: &StoreMember, all: &[StoreMember]) -> R
         "docker" => Runtime::Docker,
         other => return Err(format!("unknown runtime `{other}`")),
     };
+
     let spec = StoreSpec {
         provider: store.provider.clone(),
         slug: store.slug.clone(),
@@ -114,6 +115,7 @@ pub fn spec(store: &ObjectStore, member: &StoreMember, all: &[StoreMember]) -> R
         owner: store.id.to_string(),
     };
     spec.validate()?;
+
     Ok(spec)
 }
 
@@ -139,6 +141,7 @@ impl StorageJob {
             .find(|m| m.server_id == p.server_id)
             .cloned()
             .ok_or_else(|| StepError::Fatal("the node is not a member of this object store".into()))?;
+
         Ok((store, member, all))
     }
 
@@ -172,6 +175,7 @@ impl StorageJob {
             rotated_at: now,
         };
         self.vault.put_vault_item(&item).await.map_err(retry)?;
+
         // The App Store no longer manages the container.
         for i in self.installations.list_installations(None).await.map_err(retry)? {
             if i.package == "rustfs" && i.workspace_id == store.workspace_id {
@@ -181,6 +185,7 @@ impl StorageJob {
                 }
             }
         }
+
         Ok(())
     }
 
@@ -198,6 +203,7 @@ impl StorageJob {
             .map_err(|_| StepError::Fatal("cannot unseal the store's credential".into()))?;
         let secret_key =
             String::from_utf8(secret).map_err(|_| StepError::Fatal("the store's secret key is not text".into()))?;
+
         Ok(StoreCredential { access_key: item.username, secret_key })
     }
 
@@ -206,20 +212,25 @@ impl StorageJob {
         if !ACTIONS.contains(&p.action.as_str()) && p.action != "adopt" {
             return Err(StepError::Fatal(format!("unknown object store action `{}`", p.action)));
         }
+
         let (store, member, all) = self.load(&p).await?;
         let mut spec = spec(&store, &member, &all).map_err(StepError::Fatal)?;
+
         // An agent that predates ownership markers rejects the field: retried without it.
         let legacy = ctx.state_value("legacy_agent").and_then(Value::as_bool).unwrap_or(false);
         if legacy {
             if p.delete_data {
                 return Err(StepError::Fatal(old_agent_message(&member)));
             }
+
             spec.owner.clear();
         }
+
         let server = self.servers.get_server(p.server_id).await.map_err(|e| StepError::Fatal(e.to_string()))?;
         if server.status == AgentStatus::Revoked {
             return Err(StepError::Fatal("server is revoked".into()));
         }
+
         let op = match p.action.as_str() {
             "install" => StoreOp::Install { spec, credential: self.credential(&store).await? },
             "start" | "enable" => StoreOp::Start { spec },
@@ -232,6 +243,7 @@ impl StorageJob {
             "adopt" => StoreOp::Adopt { spec },
             _ => StoreOp::Status { spec },
         };
+
         let op_json = serde_json::to_string(&op).map_err(|e| StepError::Fatal(e.to_string()))?;
         let (body, signed) = self.signer.issue(
             &p.server_id.to_string(),
@@ -242,6 +254,7 @@ impl StorageJob {
         );
         self.hub.enqueue(p.server_id, &body.operation_id, signed).map_err(StepError::Retryable)?;
         ctx.set_state("operation_id", json!(body.operation_id));
+
         if p.action != "status" {
             let mut m = member;
             m.status = busy_status(&p.action).into();
@@ -253,6 +266,7 @@ impl StorageJob {
             s.updated_at = self.clock.now();
             self.stores.put_object_store(&s).await.map_err(retry)?;
         }
+
         Ok(())
     }
 
@@ -266,6 +280,7 @@ impl StorageJob {
                 ctx.state_value("operation_id").and_then(Value::as_str).unwrap_or_default().to_owned()
             }
         };
+
         let result = self
             .hub
             .wait(&op, RESULT_WAIT)
@@ -275,6 +290,7 @@ impl StorageJob {
         let now = self.clock.now();
         store.last_job_id = Some(ctx.job.id);
         store.updated_at = now;
+
         if !result.ok {
             let err: Value = serde_json::from_str(&result.error).unwrap_or_else(|_| json!({ "error": result.error }));
             let tail: Vec<&str> = err
@@ -290,8 +306,10 @@ impl StorageJob {
                 ctx.set_state("legacy_agent", json!(true));
                 tracing::info!(node = %member.endpoint_host, "agent predates ownership markers; sending without them");
                 self.dispatch(ctx).await?;
+
                 return Box::pin(self.await_result(ctx)).await;
             }
+
             let message = if old_agent && p.delete_data {
                 old_agent_message(&member)
             } else if tail.is_empty() {
@@ -299,6 +317,7 @@ impl StorageJob {
             } else {
                 format!("{base}\n{tail}")
             };
+
             ctx.set_state("output", err.get("output").cloned().unwrap_or(Value::Null));
             member.status = if p.action == "install" { "failed".into() } else { "error".into() };
             member.observed_at = Some(now);
@@ -308,31 +327,40 @@ impl StorageJob {
             store.last_error =
                 Some(if all.len() > 1 { format!("{}: {message}", member.endpoint_host) } else { message.clone() });
             self.stores.put_object_store(&store).await.map_err(retry)?;
+
             if p.action == "install" && never_ran(&store, &all) {
                 self.roll_back(ctx, &p, &store, &member, &all, &message).await?;
             }
+
             return Err(StepError::Fatal(message));
         }
+
         let out: Value = serde_json::from_str(&result.output).unwrap_or(Value::Null);
         ctx.set_state("output", out.get("output").cloned().unwrap_or(Value::Null));
         let report: StoreReport =
             out.get("report").cloned().and_then(|r| serde_json::from_value(r).ok()).unwrap_or_default();
         ctx.set_state("report", json!(report));
+
         if p.action == "adopt" {
             self.adopted(&mut store, &out).await?;
         }
+
         member.observed_at = Some(now);
+
         if p.action == "uninstall" {
             // Data paths and the vault credential stay (recovery/adoption).
             // The store goes once its last member is removed.
             member.status = "removed".into();
             self.stores.put_store_member(&member).await.map_err(retry)?;
             replace(&mut all, &member);
+
             if all.iter().all(|m| m.status == "removed") {
                 self.stores.delete_object_store(store.id).await.map_err(retry)?;
             }
+
             return Ok(());
         }
+
         member.status = match report.state.as_str() {
             "running" => "running".into(),
             // A disabled member stays disabled until it is enabled again.
@@ -343,18 +371,22 @@ impl StorageJob {
             "not-installed" => "missing".into(),
             _ => "unknown".into(),
         };
+
         if !report.version.is_empty() {
             store.deployed_version = Some(report.version.clone());
         }
+
         member.capacity_bytes = report.capacity_bytes;
         member.free_bytes = report.free_bytes;
         member.dedicated = report.dedicated;
         self.stores.put_store_member(&member).await.map_err(retry)?;
         replace(&mut all, &member);
         store.status = aggregate(&all);
+
         if store.status == "running" {
             store.last_error = None;
         }
+
         self.stores.put_object_store(&store).await.map_err(retry)
     }
 }
@@ -377,6 +409,7 @@ impl StorageJob {
             if ctx.state_value("legacy_agent").and_then(Value::as_bool).unwrap_or(false) {
                 spec.owner.clear();
             }
+
             let op = StoreOp::Uninstall { spec, delete_data: false, protect: Vec::new() };
             if let Ok(op_json) = serde_json::to_string(&op) {
                 let (body, signed) = self.signer.issue(
@@ -386,16 +419,19 @@ impl StorageJob {
                     self.clock.now(),
                     COMMAND_TTL,
                 );
+
                 if self.hub.enqueue(p.server_id, &body.operation_id, signed).is_ok() {
                     let _ = self.hub.wait(&body.operation_id, CLEANUP_WAIT).await;
                 }
             }
         }
+
         let members = self.stores.list_store_members(store.id).await.map_err(retry)?;
         if !members.iter().all(|m| m.status == "failed" || m.status == "removed") {
             // Other members are still installing; the last failure rolls back.
             return Ok(());
         }
+
         // The credential goes first: once the record is gone a retry can no
         // longer find it, and the secret would stay behind in the vault.
         if let Ok(Some(item)) = self.vault.get_vault_item(store.credential_id).await
@@ -403,6 +439,7 @@ impl StorageJob {
         {
             self.vault.delete_vault_item(item.id).await.map_err(retry)?;
         }
+
         self.stores.delete_object_store(store.id).await.map_err(retry)?;
         let ev = forge_core::model::AuditEvent::new(
             &ctx.job.principal,
@@ -418,9 +455,11 @@ impl StorageJob {
             "job_id": ctx.job.id,
             "error": error.lines().next().unwrap_or_default(),
         }));
+
         if let Err(e) = self.audit.record(ev).await {
             tracing::error!(error = %e, "audit write failed");
         }
+
         Ok(())
     }
 }
@@ -469,22 +508,27 @@ pub fn aggregate(members: &[StoreMember]) -> String {
     if live.is_empty() {
         return "removed".into();
     }
+
     // Members still being worked on keep the store busy.
     if let Some(busy) = live.iter().find(|m| m.status == "pending" || BUSY.contains(&m.status.as_str())) {
         return if busy.status == "pending" { "installing".into() } else { busy.status.clone() };
     }
+
     let running = live.iter().filter(|m| m.status == "running").count();
     if running == live.len() {
         return "running".into();
     }
+
     if running > 0 {
         return "degraded".into();
     }
+
     for s in ["failed", "error", "missing", "disabled", "stopped"] {
         if live.iter().any(|m| m.status == s) {
             return s.into();
         }
     }
+
     "unknown".into()
 }
 

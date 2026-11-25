@@ -41,21 +41,26 @@ pub async fn run(
     let path = format!("{}{}", forge_proto::paths::EXEC, x.session_id);
     let ControlStream { up, mut down, sender, conn_task } =
         dial_control(&endpoint, tls, &path, TOKEN_HEADER, &x.stream_token).await?;
+
     let pipe = match pipe {
         Ok(p) => p,
         Err(e) => {
             let _ = up.send(Bytes::from(Frame::Error(e.clone()).encode())).await;
             drop(up);
+
             // Let the control plane read it; it ends the stream then.
             let _ = tokio::time::timeout(ERROR_GRACE, async { while down.frame().await.is_some() {} }).await;
             conn_task.abort();
+
             return Err(e);
         }
     };
+
     if up.send(Bytes::from(Frame::Ready.encode())).await.is_err() {
         conn_task.abort();
         return Err("the control plane closed the stream".into());
     }
+
     let idle = Duration::from_secs(u64::from(x.idle_secs));
     let deadline_ms = now_ms().saturating_add(i64::from(x.lifetime_secs) * 1000);
     tokio::spawn(async move {
@@ -63,15 +68,18 @@ pub async fn run(
         let _sender = sender;
         let last = Arc::new(AtomicI64::new(now_ms()));
         let ExecPipe { mut reader, mut writer } = pipe;
+
         // Helper → control plane: frames as the helper wrote them.
         let up_last = last.clone();
         let up_fut = async move {
             let mut buf = vec![0u8; MAX_PAYLOAD];
+
             loop {
                 match reader.read(&mut buf).await {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
                         up_last.store(now_ms(), Ordering::Relaxed);
+
                         if up.send(Bytes::copy_from_slice(&buf[..n])).await.is_err() {
                             break;
                         }
@@ -79,17 +87,20 @@ pub async fn run(
                 }
             }
         };
+
         // Control plane → helper.
         let down_last = last.clone();
         let down_fut = async move {
             while let Some(Ok(frame)) = down.frame().await {
                 if let Ok(data) = frame.into_data() {
                     down_last.store(now_ms(), Ordering::Relaxed);
+
                     if writer.write_all(&data).await.is_err() {
                         break;
                     }
                 }
             }
+
             // The helper drops the shell's stream when the agent hangs up.
             let _ = writer.shutdown().await;
         };
@@ -106,5 +117,6 @@ pub async fn run(
         }
         conn_task.abort();
     });
+
     Ok(json!({ "connected": true }))
 }

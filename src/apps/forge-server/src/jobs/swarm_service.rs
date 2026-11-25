@@ -114,9 +114,11 @@ pub fn progress(action: ServiceAction, s: &SwarmServiceStatus) -> Progress {
     if action == ServiceAction::Remove {
         return if s.exists { Progress::Running } else { Progress::Done };
     }
+
     if !s.exists {
         return Progress::Failed("the service is gone from the swarm".into());
     }
+
     match s.update_state.as_str() {
         "paused" | "rollback_paused" => Progress::Failed(format!("Swarm paused the update: {}", s.update_message)),
         "rollback_completed" if action != ServiceAction::Rollback => {
@@ -135,6 +137,7 @@ pub fn progress(action: ServiceAction, s: &SwarmServiceStatus) -> Progress {
 pub fn binds_of(app: &Service) -> Result<Vec<String>, String> {
     let spec = crate::jobs::app::build_spec(app, None)?;
     let settings = spec.swarm.clone().unwrap_or_default();
+
     Ok(service_def(&spec, &settings, &app.id.to_string(), &app.environment_id.to_string())?.bind_sources())
 }
 
@@ -149,6 +152,7 @@ impl SwarmServiceJob {
     ) -> Result<Value, StepError> {
         op.validate().map_err(fatal)?;
         let op_json = serde_json::to_string(op).map_err(fatal)?;
+
         self.ops.run(ctx, manager, key, Command::SwarmAction(SwarmAction { op_json }), wait).await
     }
 
@@ -156,6 +160,7 @@ impl SwarmServiceJob {
         if let Some(id) = ctx.state_value("manager").and_then(Value::as_str).and_then(|s| s.parse().ok()) {
             return Ok(id);
         }
+
         let m = self
             .swarms
             .list_members(cluster)
@@ -165,6 +170,7 @@ impl SwarmServiceJob {
             .find(|m| m.role == MemberRole::Manager && m.state == MemberState::Joined)
             .ok_or_else(|| fatal("the cluster has no swarm manager; add a node on the Swarm tab"))?;
         ctx.set_state("manager", Value::String(m.server_id.to_string()));
+
         Ok(m.server_id)
     }
 
@@ -175,6 +181,7 @@ impl SwarmServiceJob {
                 let spec = crate::jobs::app::build_spec(app, Some(&self.envelope)).map_err(fatal)?;
                 let settings = spec.swarm.clone().unwrap_or_default();
                 let def = service_def(&spec, &settings, &sid, &app.environment_id.to_string()).map_err(fatal)?;
+
                 // Binds outside the swarm's approved roots need
                 // stack.privileged; checked again at every attempt.
                 let needed = self.swarm.privileged_binds(p.cluster_id, &def.bind_sources()).await.map_err(retry)?;
@@ -184,6 +191,7 @@ impl SwarmServiceJob {
                          stack.privileged (an administrator with MFA): deploy again as one"
                     )));
                 }
+
                 let registry_auth = self.registries.auth_for(app.workspace_id, &def.image).await.map_err(retry)?;
                 SwarmOp::ServiceApply { def: Box::new(def), registry_auth }
             }
@@ -199,12 +207,14 @@ impl SwarmServiceJob {
     async fn converge(&self, ctx: &mut StepContext, p: &Payload, manager: ServerId) -> Result<(), StepError> {
         let deadline = tokio::time::Instant::now() + CONVERGE_FOR;
         let op = SwarmOp::ServiceStatus { service_id: p.service_id.to_string(), slot: p.slot.clone() };
+
         loop {
             // One key: a finished operation is no longer tracked, so each
             // round sends a fresh status request.
             let status: SwarmServiceStatus =
                 serde_json::from_value(self.op(ctx, manager, "status_op", &op, QUICK_WAIT).await?).map_err(fatal)?;
             ctx.set_state("status", serde_json::to_value(&status).map_err(fatal)?);
+
             match progress(p.action, &status) {
                 Progress::Done => return Ok(()),
                 Progress::Failed(why) => return Err(fatal(why)),
@@ -221,6 +231,7 @@ impl SwarmServiceJob {
 
     async fn step(&self, index: usize, ctx: &mut StepContext, p: &Payload) -> Result<(), StepError> {
         let manager = self.manager(ctx, p.cluster_id).await?;
+
         match index {
             0 if p.action == ServiceAction::Deploy => {
                 let app = self
@@ -239,6 +250,7 @@ impl SwarmServiceJob {
                     let op = SwarmOp::ServiceRemove { service_id: p.service_id.to_string(), slot: slot.into() };
                     self.op(ctx, manager, &format!("remove_op_{slot}"), &op, QUICK_WAIT).await?;
                 }
+
                 self.deploys.replace_slots(p.service_id, &[]).await.map_err(retry)?;
                 Ok(())
             }
@@ -300,6 +312,7 @@ mod tests {
         assert!(matches!(progress(ServiceAction::Deploy, &status(3, 2, "paused")), Progress::Failed(_)));
         assert_eq!(progress(ServiceAction::Rollback, &status(3, 3, "rollback_completed")), Progress::Done);
         assert_eq!(progress(ServiceAction::Deploy, &status(3, 3, "rollback_started")), Progress::Running);
+
         // Old tasks still running while Swarm picks up the new definition.
         let mut updating = status(3, 3, "");
         updating.spec = "new".into();

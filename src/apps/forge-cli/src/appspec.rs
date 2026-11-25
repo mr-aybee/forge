@@ -125,6 +125,7 @@ pub fn parse_secret_env(specs: &[String]) -> Result<Vec<(String, SecretSource)>>
                     }
                 },
             };
+
             if valid_key(key) {
                 Ok((key.to_owned(), source))
             } else {
@@ -148,6 +149,7 @@ pub fn read_secrets(
         specs.iter().filter(|(_, s)| *s == SecretSource::Stdin).map(|(k, _)| k.as_str()).collect();
     let piped = if from_stdin.is_empty() { String::new() } else { stdin()? };
     let mut out = Vec::new();
+
     for (key, source) in specs {
         let value = match source {
             SecretSource::File(path) => {
@@ -161,14 +163,18 @@ pub fn read_secrets(
                 .find_map(|l| l.split_once('=').filter(|(k, _)| k.trim() == key).map(|(_, v)| v.to_owned()))
                 .ok_or_else(|| CliError::usage(format!("stdin has no `{key}=<value>` line for --secret-env {key}")))?,
         };
+
         if value.is_empty() {
             return Err(CliError::usage(format!("the value of secret `{key}` is empty")));
         }
+
         if value.contains(['\n', '\r']) {
             return Err(CliError::usage(format!("the value of secret `{key}` may not contain line breaks")));
         }
+
         out.push((key.clone(), value));
     }
+
     Ok(out)
 }
 
@@ -183,11 +189,13 @@ const NOT_DEFINITION: &[&str] = &["environment", "health", "name", "runtime", "e
 pub fn definition(app: &Value) -> Value {
     let mut d = Map::new();
     d.insert("runtime".into(), app["runtime"].clone());
+
     for (k, v) in app["spec"].as_object().into_iter().flatten() {
         if !NOT_DEFINITION.contains(&k.as_str()) && !v.is_null() {
             d.insert(k.clone(), v.clone());
         }
     }
+
     let env: Vec<Value> = app["env"]
         .as_array()
         .into_iter()
@@ -201,6 +209,7 @@ pub fn definition(app: &Value) -> Value {
         })
         .collect();
     d.insert("env".into(), Value::Array(env));
+
     Value::Object(d)
 }
 
@@ -209,6 +218,7 @@ fn set_env(body: &mut Map<String, Value>, entry: Value) {
     if !list.is_array() {
         *list = json!([]);
     }
+
     if let Some(list) = list.as_array_mut() {
         match list.iter_mut().find(|e| e["key"] == entry["key"]) {
             Some(slot) => *slot = entry,
@@ -239,43 +249,55 @@ pub fn apply(body: &mut Value, changes: Changes<'_>) -> Result<()> {
     let Some(b) = body.as_object_mut() else {
         return Err(CliError::usage("the definition must be a JSON object"));
     };
+
     let f = changes.flags;
     if let Some(r) = f.runtime {
         b.insert("runtime".into(), json!(r.as_str()));
     }
+
     if let Some(i) = &f.image {
         b.insert("image".into(), json!(i));
     }
+
     if let Some(c) = &f.command {
         b.insert("command".into(), json!(c));
     }
+
     if !f.ports.is_empty() {
         b.insert("ports".into(), json!(f.ports));
     }
+
     if !f.volumes.is_empty() {
         b.insert("volumes".into(), json!(f.volumes));
     }
+
     if let Some(p) = f.listen_port {
         b.insert("listen_port".into(), json!(p));
     }
+
     if let Some(r) = f.restart {
         b.insert("restart".into(), json!(r));
     }
+
     for key in changes.unset_env {
         let had = b.get("env").and_then(Value::as_array).is_some_and(|l| l.iter().any(|e| e["key"] == *key));
         if !had {
             return Err(CliError::usage(format!("--unset-env {key}: the service has no such variable")));
         }
+
         if let Some(list) = b.get_mut("env").and_then(Value::as_array_mut) {
             list.retain(|e| e["key"] != *key);
         }
     }
+
     for (key, value) in parse_env(&f.env)? {
         set_env(b, json!({ "key": key, "value": value }));
     }
+
     for (key, value) in changes.secrets {
         set_env(b, json!({ "key": key, "value": value, "secret": true }));
     }
+
     Ok(())
 }
 
@@ -289,17 +311,21 @@ pub fn create_body(
 ) -> Result<Value> {
     let mut body = file.unwrap_or_else(|| json!({}));
     apply(&mut body, changes)?;
+
     if let Some(ns) = environment_id {
         body["environment_id"] = json!(ns);
     }
+
     if let Some(n) = name {
         body["name"] = json!(n);
     }
+
     for (field, flag) in [("environment_id", "--environment"), ("name", "--name"), ("runtime", "--runtime")] {
         if body[field].as_str().is_none_or(str::is_empty) {
             return Err(CliError::usage(format!("pass {flag} (or `{field}` in --file)")));
         }
     }
+
     Ok(body)
 }
 
@@ -330,9 +356,11 @@ pub fn parse_placement(spec: &str, default: Role) -> Result<(String, Role)> {
             return Err(CliError::usage(format!("--node {spec}: role `{other}` is not active or standby")));
         }
     };
+
     if node.is_empty() {
         return Err(CliError::usage(format!("--node {spec}: name the node")));
     }
+
     Ok((node.to_owned(), role))
 }
 
@@ -409,6 +437,7 @@ mod tests {
                     { "key": "OLD", "value": "x", "secret": false }],
         });
         let mut body = definition(&stored);
+
         // The server's own fields and the health policy are not sent back.
         assert!(body.get("environment").is_none() && body.get("health").is_none() && body.get("listen_port").is_none());
         let flags = AppFlags { image: Some("nginx:1.27".into()), env: s(&["MODE=uat"]), ..AppFlags::default() };
@@ -432,6 +461,7 @@ mod tests {
             parse_env(&s(&["A=", "B=x=y"])).ok(),
             Some(vec![("A".into(), String::new()), ("B".into(), "x=y".into())])
         );
+
         for bad in ["A", "=x", "1A=x", "A B=x"] {
             assert!(parse_env(&s(&[bad])).is_err(), "{bad}");
         }
@@ -462,6 +492,7 @@ mod tests {
             read_secrets(&one, || Ok("p=ss word\r\n".into())).ok(),
             Some(vec![("TOKEN".into(), "p=ss word".into())])
         );
+
         // Several: one KEY=VALUE line each.
         let two = vec![("A".to_owned(), SecretSource::Stdin), ("B".to_owned(), SecretSource::Stdin)];
         assert_eq!(
@@ -470,6 +501,7 @@ mod tests {
         );
         assert!(read_secrets(&two, || Ok("A=1\n".into())).is_err_and(|e| e.message.contains("`B=<value>`")));
         assert!(read_secrets(&one, || Ok("\n".into())).is_err(), "an empty secret is refused");
+
         // A file: stdin is not touched.
         let dir = tempfile::tempdir().ok();
         let path = dir.as_ref().map(|d| d.path().join("token")).unwrap_or_default();

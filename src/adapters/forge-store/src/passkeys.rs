@@ -115,6 +115,7 @@ impl PasskeyRepository for Store {
         // `expires_at` is now + the 5-minute lifetime, so anything older
         // than now has expired.
         static INSERTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
         if INSERTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed).is_multiple_of(32) {
             sqlx::query("DELETE FROM webauthn_challenges WHERE expires_at < $1")
                 .bind(expires_at.0 - 300_000)
@@ -122,6 +123,7 @@ impl PasskeyRepository for Store {
                 .await
                 .map_err(db_err)?;
         }
+
         sqlx::query(
             "INSERT INTO webauthn_challenges (challenge_hash, user_id, purpose, expires_at) VALUES ($1, $2, $3, $4)",
         )
@@ -132,6 +134,7 @@ impl PasskeyRepository for Store {
         .execute(self.pool())
         .await
         .map_err(db_err)?;
+
         Ok(())
     }
 
@@ -145,6 +148,7 @@ impl PasskeyRepository for Store {
         .fetch_optional(self.pool())
         .await
         .map_err(db_err)?;
+
         match r {
             Some(r) => Ok(Some((opt_parsed(&r, "user_id")?, text(&r, "purpose")?, ts(&r, "expires_at")?))),
             None => Ok(None),

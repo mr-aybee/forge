@@ -44,9 +44,11 @@ fn invalid(m: &str) -> DomainError {
 /// URL-safe base64 with padding, as Docker decodes `X-Registry-Auth`.
 fn b64url_padded(data: &[u8]) -> String {
     let mut s = forge_secrets::crypto::b64url(data);
+
     while !s.len().is_multiple_of(4) {
         s.push('=');
     }
+
     s
 }
 
@@ -55,16 +57,20 @@ fn check(input: &RegistryInput) -> DomainResult<String> {
     if name.is_empty() || name.len() > 100 || name.chars().any(char::is_control) {
         return Err(invalid("the name is 1 to 100 characters"));
     }
+
     if input.username.len() > 256 || input.username.chars().any(char::is_control) {
         return Err(invalid("the user name is at most 256 characters"));
     }
+
     if input.secret.as_ref().is_some_and(|s| s.is_empty() || s.len() > 8192 || s.contains('\0')) {
         return Err(invalid("the password or token is 1 to 8192 characters"));
     }
+
     let host = normalize_host(&input.host)?;
     if input.kind == RegistryKind::DockerHub && host != forge_core::registries::DOCKER_HUB {
         return Err(invalid("Docker Hub's host is docker.io"));
     }
+
     Ok(host)
 }
 
@@ -88,6 +94,7 @@ impl RegistryService {
         };
         r.secret_sealed = self.envelope.seal(secret.as_bytes(), &aad(&r)).map_err(DomainError::internal)?;
         self.repo.create_registry(&r).await?;
+
         Ok(r)
     }
 
@@ -95,9 +102,11 @@ impl RegistryService {
         let mut r = self.get(id).await?;
         let host = check(&input)?;
         let username = input.username.trim().to_owned();
+
         // The stored secret only ever goes where it was entered for: a new
         // host, kind or user needs the secret again.
         let moved = host != r.host || input.kind != r.kind || username != r.username;
+
         let secret = match input.secret {
             Some(s) => s,
             None if moved => {
@@ -108,6 +117,7 @@ impl RegistryService {
                 String::from_utf8(raw).map_err(DomainError::internal)?
             }
         };
+
         r.host = host;
         r.name = input.name.trim().to_owned();
         r.kind = input.kind;
@@ -116,6 +126,7 @@ impl RegistryService {
         r.secret_sealed = self.envelope.seal(secret.as_bytes(), &aad(&r)).map_err(DomainError::internal)?;
         r.updated_at = self.clock.now();
         self.repo.update_registry(&r).await?;
+
         Ok(r)
     }
 
@@ -139,6 +150,7 @@ impl RegistryService {
         let secret = self.envelope.open(&r.secret_sealed, &aad(&r)).map_err(DomainError::internal)?;
         let secret = String::from_utf8(secret).map_err(DomainError::internal)?;
         let body = serde_json::json!({ "username": r.username, "password": secret, "serveraddress": r.host });
+
         Ok(Some(RegistryAuth(b64url_padded(body.to_string().as_bytes()))))
     }
 }

@@ -27,6 +27,7 @@ async fn node(h: &crate::common::Harness, admin: &Client, name: &str, cluster: &
     let (s, b) =
         admin.call(Method::PATCH, &format!("/api/v1/servers/{id}"), Some(json!({"cluster_id": cluster["id"]}))).await;
     assert_eq!(s, StatusCode::OK, "{b}");
+
     id
 }
 
@@ -43,6 +44,7 @@ async fn swarm_membership_is_checked_guarded_and_tracked() {
     // Without MFA even an administrator is refused (guardrail).
     let (s, _) = admin.post(&members, json!({"server_id": a, "role": "manager"})).await;
     assert_eq!(s, StatusCode::FORBIDDEN);
+
     // Operators may not manage swarms at all.
     let mut op =
         user_with_role(&h, &admin, "op@example.com", "operator", &format!("workspace:{}", h.default_org)).await;
@@ -51,16 +53,20 @@ async fn swarm_membership_is_checked_guarded_and_tracked() {
     assert_eq!(s, StatusCode::FORBIDDEN);
 
     step_up(&mut admin).await;
+
     // Only Swarm clusters have a swarm.
     let plain_members = format!("/api/v1/clusters/{}/swarm/members", plain["id"].as_str().unwrap());
     let (s, e) = admin.post(&plain_members, json!({"server_id": b, "role": "manager"})).await;
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{e}");
+
     // The node must be in the cluster.
     let (s, e) = admin.post(&members, json!({"server_id": b, "role": "manager"})).await;
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{e}");
+
     // The first node is a manager.
     let (s, e) = admin.post(&members, json!({"server_id": a, "role": "worker"})).await;
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{e}");
+
     // A bad advertise address never reaches the node.
     let (s, _) = admin.post(&members, json!({"server_id": a, "role": "manager", "advertise_addr": "0.0.0.0"})).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
@@ -68,6 +74,7 @@ async fn swarm_membership_is_checked_guarded_and_tracked() {
     let (s, started) = admin.post(&members, json!({"server_id": a, "role": "manager", "autolock": true})).await;
     assert_eq!(s, StatusCode::ACCEPTED, "{started}");
     assert_eq!(started["job"]["kind"], "swarm.member");
+
     // A second request while the first runs is refused.
     let (s, _) = admin.post(&members, json!({"server_id": a, "role": "manager"})).await;
     assert_eq!(s, StatusCode::CONFLICT);
@@ -97,6 +104,7 @@ async fn swarm_membership_is_checked_guarded_and_tracked() {
         )
         .await;
     assert_eq!(s, StatusCode::CONFLICT, "the first node's join still runs, so a second manager has no swarm yet: {e}");
+
     // Joins and denials are audited.
     let (_, audit) = admin.get("/api/v1/audit?limit=200").await;
     assert!(audit.to_string().contains("swarm.member.join"), "{audit}");
@@ -142,6 +150,7 @@ async fn swarm_services_are_containers_with_checked_settings() {
     assert_eq!(s, StatusCode::CONFLICT, "{e}");
     let (s, e) = admin.post(&format!("/api/v1/services/{id}/swarm"), json!({"kind": "scale", "replicas": 5000})).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "{e}");
+
     // A refused scale leaves the definition alone (a successful one records
     // the new count, so the next deploy keeps it).
     let (s, e) = admin.post(&format!("/api/v1/services/{id}/swarm"), json!({"kind": "scale", "replicas": 5})).await;

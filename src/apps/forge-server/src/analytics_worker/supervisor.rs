@@ -204,6 +204,7 @@ impl ListenerCertState {
         if !self.due(now, generation) {
             return Renewal::NotDue;
         }
+
         let result = match certs.issue(now) {
             Ok(cert) => {
                 let validity = (cert.not_before, cert.not_after, generation);
@@ -211,6 +212,7 @@ impl ListenerCertState {
             }
             Err(e) => Err(format!("issuing it: {e}")),
         };
+
         match result {
             Ok(validity) => {
                 *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(validity);
@@ -226,6 +228,7 @@ impl ListenerCertState {
                 } else {
                     tracing::debug!(error = %e, "renewing the analytics worker's listener certificate failed");
                 }
+
                 Renewal::Failed(e)
             }
         }
@@ -243,6 +246,7 @@ enum Ended {
 async fn rss(pid: u32) -> Option<u64> {
     let status = tokio::fs::read_to_string(format!("/proc/{pid}/status")).await.ok()?;
     let kb = status.lines().find_map(|l| l.strip_prefix("VmRSS:"))?.split_whitespace().next()?.parse::<u64>().ok()?;
+
     Some(kb * 1024)
 }
 
@@ -288,6 +292,7 @@ impl WorkerSupervisor {
         })
         .await
         .map_err(std::io::Error::other)??;
+
         Ok(path)
     }
 
@@ -306,18 +311,22 @@ impl WorkerSupervisor {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .kill_on_drop(true);
+
         if let Some(pw) = &c.password {
             cmd.env(PASSWORD_ENV, pw);
         }
+
         let mut child = cmd.spawn().map_err(|e| format!("cannot start {}: {e}", c.binary.display()))?;
         let mut stdin = child.stdin.take().ok_or("the worker has no stdin")?;
         let stdout = child.stdout.take().ok_or("the worker has no stdout")?;
         stdin.write_all(format!("{secret}\n").as_bytes()).await.map_err(|e| format!("handing over the secret: {e}"))?;
+
         if let Some(tls) = tls {
             let mut line = serde_json::to_vec(tls).map_err(|e| format!("encoding the agent listener identity: {e}"))?;
             line.push(b'\n');
             stdin.write_all(&line).await.map_err(|e| format!("handing over the agent listener identity: {e}"))?;
         }
+
         stdin.flush().await.map_err(|e| format!("handing over the secret: {e}"))?;
         let mut line = String::new();
         let ready = tokio::time::timeout(READY_WAIT, BufReader::new(stdout).read_line(&mut line)).await;
@@ -326,7 +335,9 @@ impl WorkerSupervisor {
             Ok(_) => return Err("the worker exited before it was ready".into()),
             Err(_) => return Err("the worker did not report ready in time".into()),
         }
+
         let endpoint = line.trim().strip_prefix(READY_PREFIX).ok_or("the worker sent an unexpected first line")?;
+
         Ok((child, stdin, endpoint.to_owned()))
     }
 
@@ -334,6 +345,7 @@ impl WorkerSupervisor {
         let details = serde_json::json!({ "reason": reason, "detail": detail });
         let ev = AuditEvent::new("system:forge", AUDIT_WORKER_RESTART, EntityRef::platform(), AuditOutcome::Success)
             .with_details(details);
+
         if let Err(e) = self.d.audit.record(ev).await {
             tracing::error!(error = %e, "audit write failed");
         }
@@ -343,6 +355,7 @@ impl WorkerSupervisor {
     pub async fn run(self: Arc<Self>, mut shutdown: watch::Receiver<bool>) {
         let Some(config) = self.d.config.clone() else { return };
         let mut attempt = 0u32;
+
         loop {
             let started = std::time::Instant::now();
             let ended = self.run_once(&config, &mut shutdown).await;
@@ -352,6 +365,7 @@ impl WorkerSupervisor {
                 s.rss_bytes = None;
                 s.started_at = None;
             });
+
             let (reason, detail) = match ended {
                 Ended::Shutdown => {
                     self.set(|s| s.status = WorkerStatus::Stopped);
@@ -364,19 +378,23 @@ impl WorkerSupervisor {
                         s.last_error = Some(why);
                     });
                     let _ = shutdown.changed().await;
+
                     return;
                 }
                 Ended::Restart(reason, detail) => (reason, detail),
             };
+
             if started.elapsed() > HEALTHY_RUN {
                 attempt = 0;
             }
+
             let now = self.d.clock.now().0;
             self.set(|s| {
                 s.status = WorkerStatus::Restarting;
                 s.restarts += 1;
                 s.last_restart_at = Some(now);
                 s.last_restart_reason = Some(reason);
+
                 if detail.is_some() {
                     s.last_error.clone_from(&detail);
                 }
@@ -399,19 +417,25 @@ impl WorkerSupervisor {
     async fn run_once(&self, config: &SupervisorConfig, shutdown: &mut watch::Receiver<bool>) -> Ended {
         self.set(|s| s.status = WorkerStatus::Starting);
         let secret = forge_secrets::crypto::random_token::<32>();
+
         // A fresh listener certificate at every start (D-145).
         let generation = config.listener_certs.as_ref().map_or(0, |c| c.generation());
+
         let cert = match config.listener_certs.as_ref().map(|c| c.issue(self.d.clock.now())).transpose() {
             Ok(c) => c,
             Err(e) => return Ended::Restart(RestartReason::StartFailed, Some(format!("listener certificate: {e}"))),
         };
+
         self.listener_cert.started(cert.as_ref(), generation);
+
         let (mut child, stdin, endpoint) = match Self::start(config, &secret, cert.as_ref().map(|c| &c.tls)).await {
             Ok(x) => x,
             Err(e) => return Ended::Restart(RestartReason::StartFailed, Some(e)),
         };
+
         let pid = child.id();
         self.d.client.connect_to(endpoint, secret);
+
         match self.d.client.ping(PING_WAIT).await {
             Ok(_) => {}
             Err(CallError::Worker(e @ WorkerError::ProtocolMismatch { .. })) => {
@@ -423,12 +447,14 @@ impl WorkerSupervisor {
                 return Ended::Restart(RestartReason::StartFailed, Some(e.to_string()));
             }
         }
+
         // The worker started with the tuning in its configuration file;
         // send the current one in case it changed since.
         let current = *self.d.tuning.borrow();
         if let Err(e) = self.d.client.set_tuning(current).await {
             tracing::warn!(error = %e, "sending the analytics settings to the worker failed");
         }
+
         self.d.maps.nudge();
         let now = self.d.clock.now().0;
         self.set(|s| {
@@ -439,6 +465,7 @@ impl WorkerSupervisor {
         tracing::info!(pid = ?pid, "analytics worker running");
         let ended = self.watch(config, &mut child, pid, shutdown).await;
         stop(child, stdin).await;
+
         ended
     }
 
@@ -453,10 +480,12 @@ impl WorkerSupervisor {
         {
             let e = format!("listener certificate renewal: {e}");
             self.set(|s| s.last_error = Some(e.clone()));
+
             if self.listener_cert.expiring(now) {
                 return Some(Ended::Restart(RestartReason::Unresponsive, Some(e)));
             }
         }
+
         None
     }
 
@@ -470,6 +499,7 @@ impl WorkerSupervisor {
     ) -> Ended {
         let mut tuning = self.d.tuning.clone();
         let mut missed = 0;
+
         loop {
             tokio::select! {
                 status = child.wait() => {
@@ -517,6 +547,7 @@ impl WorkerSupervisor {
 /// Closes stdin (the worker flushes and exits), then kills it after [`STOP_WAIT`].
 async fn stop(mut child: Child, stdin: ChildStdin) {
     drop(stdin);
+
     if tokio::time::timeout(STOP_WAIT, child.wait()).await.is_err() {
         tracing::warn!("the analytics worker did not stop in time; killing it");
         let _ = child.start_kill();
@@ -539,6 +570,7 @@ mod tests {
         fn issue(&self, now: Timestamp) -> Result<ListenerCert, forge_pki::PkiError> {
             let mut n = self.0.lock().unwrap();
             *n += 1;
+
             Ok(ListenerCert {
                 tls: AgentTls { cert_pem: format!("cert {n}"), key_pem: "key".into() },
                 not_before: now,
@@ -569,14 +601,18 @@ mod tests {
         assert_eq!(state.renew(&certs, due, ok).await, Renewal::Renewed);
         assert_eq!(sent.lock().unwrap().as_slice(), ["cert 3"]);
         assert!(!state.due(Timestamp(due.0 + 59 * DAY), 0) && state.due(Timestamp(due.0 + 60 * DAY), 0));
+
         // Each renewal is checked well before its expiry, so the worker never
         // serves an expired one however long it runs.
         let mut now = due;
+
         for _ in 0..10 {
             now = Timestamp(now.0 + 60 * DAY);
             assert_eq!(state.renew(&certs, now, ok).await, Renewal::Renewed);
         }
+
         assert_eq!(sent.lock().unwrap().len(), 11);
+
         // A restart starts over with the certificate handed over at start.
         state.started(None, 0);
         assert!(!state.due(Timestamp(now.0 + 1_000 * DAY), 0), "no listener: nothing to renew");

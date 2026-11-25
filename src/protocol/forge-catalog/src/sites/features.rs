@@ -104,6 +104,7 @@ impl ProxyOptions {
         if !(1..=3600).contains(&self.read_timeout_s) || !(1..=300).contains(&self.connect_timeout_s) {
             return Err("timeouts: read 1–3600 s, connect 1–300 s".into());
         }
+
         Ok(())
     }
 }
@@ -159,6 +160,7 @@ fn index_html() -> String {
 impl StaticRoot {
     fn validate(&self) -> Result<(), String> {
         valid_dir(&self.root)?;
+
         if self.index.is_empty()
             || self.index.len() > 64
             || !self.index.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
@@ -166,6 +168,7 @@ impl StaticRoot {
         {
             return Err("index file: a file name such as index.html".into());
         }
+
         Ok(())
     }
 }
@@ -205,13 +208,17 @@ pub struct RouteRule {
 impl RouteRule {
     pub(super) fn validate(&self) -> Result<(), String> {
         valid_path(&self.path, self.match_kind)?;
+
         if self.match_kind == MatchKind::Prefix && self.path == "/" {
             return Err("the `/` rule is the endpoint's default route; set its type on the Routing page".into());
         }
+
         if self.proxy.strip_prefix && (self.match_kind != MatchKind::Prefix || !self.path.ends_with('/')) {
             return Err(format!("strip prefix needs a prefix rule ending in `/` (`{}`)", self.path));
         }
+
         self.proxy.validate()?;
+
         check_kind(self.kind, &self.upstreams, &self.standby, self.redirect.as_ref(), self.static_root.as_ref())
             .map_err(|e| format!("rule `{}`: {e}", self.path))
     }
@@ -239,6 +246,7 @@ pub(super) fn check_kind(
             if upstreams.is_empty() {
                 return Err("at least one upstream (host:port) is required".into());
             }
+
             if let Some(u) = upstreams.iter().chain(standby).find(|u| !super::valid_upstream(u)) {
                 return Err(format!("invalid upstream `{u}` (use host:port)"));
             }
@@ -246,6 +254,7 @@ pub(super) fn check_kind(
         RuleKind::Redirect => redirect.ok_or("a redirect needs a target URL")?.validate()?,
         RuleKind::Static => static_root.ok_or("a static site needs a directory")?.validate()?,
     }
+
     Ok(())
 }
 
@@ -291,10 +300,13 @@ impl CacheSpec {
         {
             return Err("cache key: nginx variables only, such as $scheme$host$request_uri".into());
         }
+
         valid_extensions(&self.extensions)?;
+
         if !(1..=525_600).contains(&self.ttl_minutes) || !(1..=1_048_576).contains(&self.max_size_mb) {
             return Err("cache: TTL 1–525600 minutes, size 1–1048576 MB".into());
         }
+
         Ok(())
     }
 }
@@ -322,15 +334,18 @@ impl GzipSpec {
         if !(1..=9).contains(&self.level) {
             return Err("gzip level: 1–9".into());
         }
+
         let mime = |t: &str| {
             let ok = |s: &str| {
                 !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'+' | b'-'))
             };
             t.len() <= 100 && t.split_once('/').is_some_and(|(a, b)| ok(a) && (b == "*" || ok(b)))
         };
+
         if self.types.len() > 50 {
             return Err("at most 50 gzip types".into());
         }
+
         match self.types.iter().find(|t| !mime(t)) {
             Some(t) => Err(format!("`{t}` is not a MIME type")),
             None => Ok(()),
@@ -370,6 +385,7 @@ pub fn valid_crypt_hash(h: &str) -> bool {
         },
         None => rest,
     };
+
     rest.split_once('$')
         .is_some_and(|(salt, hash)| (1..=16).contains(&salt.len()) && b64(salt) && hash.len() == 86 && b64(hash))
 }
@@ -429,9 +445,11 @@ impl AccessSpec {
         if self.deny.len() + self.allow.len() > 500 {
             return Err("at most 500 allow and deny entries".into());
         }
+
         if let Some(a) = self.deny.iter().chain(&self.allow).find(|a| !valid_ip_or_cidr(a)) {
             return Err(format!("`{a}` is not an IP address or CIDR"));
         }
+
         if let Some(b) = &self.basic_auth {
             if b.realm.is_empty()
                 || b.realm.len() > 64
@@ -439,10 +457,13 @@ impl AccessSpec {
             {
                 return Err("basic auth realm: letters, digits, spaces, `.`, `-` and `_`".into());
             }
+
             if b.users.is_empty() || b.users.len() > 100 {
                 return Err("basic auth needs 1–100 users".into());
             }
+
             let mut seen = std::collections::BTreeSet::new();
+
             for u in &b.users {
                 if u.user.is_empty()
                     || u.user.len() > 64
@@ -450,26 +471,33 @@ impl AccessSpec {
                 {
                     return Err(format!("basic auth user `{}`: letters, digits, `.`, `-`, `_` and `@`", u.user));
                 }
+
                 if !seen.insert(u.user.as_str()) {
                     return Err(format!("basic auth user `{}` is listed twice", u.user));
                 }
+
                 if !valid_crypt_hash(&u.hash) {
                     return Err(format!("basic auth user `{}` has no password", u.user));
                 }
             }
         }
+
         if let Some(h) = &self.hotlink {
             if h.extensions.is_empty() {
                 return Err("hotlink protection needs at least one file type".into());
             }
+
             valid_extensions(&h.extensions)?;
+
             if h.referers.len() > 50 {
                 return Err("at most 50 allowed referers".into());
             }
+
             if let Some(r) = h.referers.iter().find(|r| !super::valid_domain(r)) {
                 return Err(format!("referer `{r}`: a domain or *.domain"));
             }
         }
+
         Ok(())
     }
 
@@ -502,6 +530,7 @@ impl RedirectRule {
     pub(super) fn validate(&self, domains: &[String]) -> Result<(), String> {
         valid_code(self.code)?;
         valid_url(&self.to)?;
+
         if self.is_path() {
             valid_path(&self.from, MatchKind::Exact)
         } else if domains.iter().any(|d| *d == self.from && !d.starts_with("*.")) {
@@ -514,6 +543,7 @@ impl RedirectRule {
     /// The `return` statement (path redirects keep the query string).
     pub(super) fn ret(&self) -> String {
         let to = RedirectTo { to: self.to.clone(), code: self.code, keep_path: self.keep_path };
+
         if self.is_path() {
             let t = if self.keep_path { format!("{}$is_args$args", self.to) } else { self.to.clone() };
             format!("return {} {t};", self.code)
@@ -545,6 +575,7 @@ pub fn valid_url(u: &str) -> Result<(), String> {
         });
         u.len() <= 2048 && host_ok && port_ok && path_ok
     });
+
     if ok { Ok(()) } else { Err(format!("`{u}` is not a URL (https://host[:port][/path])")) }
 }
 
@@ -567,6 +598,7 @@ fn valid_path(p: &str, kind: MatchKind) -> Result<(), String> {
                 && !p.chars().any(|c| c.is_whitespace() || c.is_control() || matches!(c, '"' | '\'' | ';' | '{' | '}'))
         }
     };
+
     if ok { Ok(()) } else { Err(format!("invalid path `{p}`")) }
 }
 
@@ -585,6 +617,7 @@ fn valid_extensions(exts: &[String]) -> Result<(), String> {
     if exts.len() > 50 {
         return Err("at most 50 file types".into());
     }
+
     match exts.iter().find(|e| e.is_empty() || e.len() > 10 || !e.bytes().all(|b| b.is_ascii_alphanumeric())) {
         Some(e) => Err(format!("file type `{e}`: letters and digits, without the dot")),
         None => Ok(()),
@@ -613,9 +646,11 @@ pub(super) fn validate_features(
     if let Some(c) = cache {
         c.validate()?;
     }
+
     if let Some(g) = gzip {
         g.validate()?;
     }
+
     access.validate()
 }
 
@@ -628,17 +663,21 @@ mod tests {
         for ok in ["https://example.com", "http://example.com:8080/a/b?x=1", "https://10.0.0.1/"] {
             assert!(valid_url(ok).is_ok(), "{ok}");
         }
+
         for bad in ["ftp://x.com", "https://x.com/a b", "https://x.com/;", "https://x.com/$host", "https://", "x.com"] {
             assert!(valid_url(bad).is_err(), "{bad}");
         }
+
         assert!(valid_path("/api/", MatchKind::Prefix).is_ok());
         assert!(valid_path("/a/../b", MatchKind::Prefix).is_err());
         assert!(valid_path("\\.php$", MatchKind::Regex).is_ok());
         assert!(valid_path("a\" { root /;", MatchKind::Regex).is_err());
         assert!(valid_dir("/srv/www/site").is_ok());
+
         for bad in ["/", "srv", "/srv/../etc", "/srv//x", "/srv/x;", "/srv/a b"] {
             assert!(valid_dir(bad).is_err(), "{bad}");
         }
+
         let h = format!("$6$saltsalt${}", "a".repeat(86));
         assert!(valid_crypt_hash(&h));
         assert!(valid_crypt_hash(&format!("$6$rounds=5000$salt${}", "b".repeat(86))));

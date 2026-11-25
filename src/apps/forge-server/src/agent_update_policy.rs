@@ -64,26 +64,33 @@ pub fn update_verdict(
 ) -> NodeVerdict {
     let warnings = capability.map(|c| c.warnings.clone()).unwrap_or_default();
     let plain = |verdict| NodeVerdict { verdict, reasons: Vec::new(), warnings: warnings.clone() };
+
     if !is_outdated(&node.agent_version, target) {
         return plain(if is_ahead(&node.agent_version, target) { Verdict::Ahead } else { Verdict::Current });
     }
+
     let mut reasons = Vec::new();
+
     if !node.os.eq_ignore_ascii_case("linux") {
         reasons.push(UpdateIssue::NotLinux);
     } else {
         if !has_build {
             reasons.push(UpdateIssue::NoAgentBuild);
         }
+
         if let Some(c) = capability.filter(|c| !c.ready) {
             reasons.extend(c.reasons.iter().copied());
         }
     }
+
     if !reasons.is_empty() {
         return NodeVerdict { verdict: Verdict::NeedsReinstall, reasons, warnings };
     }
+
     if node.status != AgentStatus::Online {
         return plain(Verdict::Offline);
     }
+
     plain(if capability.is_some() { Verdict::WillUpdate } else { Verdict::Unknown })
 }
 
@@ -157,11 +164,13 @@ mod tests {
         assert_eq!(v(&lin("2.0.0", Online), Some(&ready), true).verdict, Verdict::Current);
         assert_eq!(v(&lin("2.1.0", Online), Some(&ready), true).verdict, Verdict::Ahead);
         assert_eq!(v(&lin("1.0.0", Online), Some(&ready), true).verdict, Verdict::WillUpdate);
+
         // An older agent reports nothing: unknown, still eligible.
         let old = v(&lin("1.0.0", Online), None, true);
         assert_eq!(old.verdict, Verdict::Unknown);
         assert!(old.verdict.eligible() && Verdict::WillUpdate.eligible());
         assert_eq!(v(&lin("1.0.0", Offline), Some(&ready), true).verdict, Verdict::Offline);
+
         // Blockers win over offline: they need a person either way.
         let blocked = v(&lin("1.0.0", Offline), Some(&cap(&[NoSystemd, NoCurl], &[])), true);
         assert_eq!((blocked.verdict, blocked.reasons), (Verdict::NeedsReinstall, vec![NoSystemd, NoCurl]));
@@ -169,6 +178,7 @@ mod tests {
         assert_eq!((win.verdict, win.reasons), (Verdict::NeedsReinstall, vec![NotLinux]));
         let nobuild = v(&lin("1.0.0", Online), Some(&ready), false);
         assert_eq!((nobuild.verdict, nobuild.reasons), (Verdict::NeedsReinstall, vec![NoAgentBuild]));
+
         // A warning does not block.
         let eph = v(&lin("1.0.0", Online), Some(&cap(&[], &[EphemeralContainer])), true);
         assert_eq!((eph.verdict, eph.warnings), (Verdict::WillUpdate, vec![EphemeralContainer]));

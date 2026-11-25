@@ -113,6 +113,7 @@ impl Ingest {
         if free != FREE_DISK_UNKNOWN && free < min_free {
             return Err(WorkerError::DiskLow);
         }
+
         Ok(())
     }
 
@@ -127,14 +128,17 @@ impl Ingest {
         if events.iter().any(|e| e.server_id.is_none()) {
             let maps = self.maps.get();
             let nodes = maps.placements.get(&service).map_or(&[][..], Vec::as_slice);
+
             for e in events.iter_mut().filter(|e| e.server_id.is_none()) {
                 e.server_id = attribute_node(&e.properties, nodes);
             }
         }
+
         let count = events.len();
         if count > 0 {
             self.batcher.write(events).await?;
         }
+
         Ok(count)
     }
 
@@ -150,29 +154,37 @@ impl Ingest {
         if !metrics.is_empty() {
             let m = NodeMetrics::decode(metrics).map_err(|e| WorkerError::BadBody { reason: e.to_string() })?;
             self.analytics.observe(server, now, &m);
+
             if !m.containers.is_empty() {
                 let rows = self.minutes(server, now, &m.containers);
                 self.analytics.push_container_minutes(rows);
             }
         }
+
         if logs.is_empty() {
             return Ok(0);
         }
+
         let batch = ContainerLogBatch::decode(logs).map_err(|e| WorkerError::BadBody { reason: e.to_string() })?;
         let key = BatchKey::of(server, &batch);
         if self.stored.lock().unwrap_or_else(PoisonError::into_inner).contains(&key) {
             // Stored before; its first answer did not reach the node.
             return Ok(batch.seq);
         }
+
         self.accepting()?;
+
         if batch.dropped > 0 {
             tracing::warn!(server = %server, dropped = batch.dropped, "the node dropped container log lines (buffer full)");
         }
+
         let events = self.events(server, now, &batch);
         if !events.is_empty() {
             self.batcher.write(events).await?;
         }
+
         self.stored.lock().unwrap_or_else(PoisonError::into_inner).insert(key);
+
         Ok(batch.seq)
     }
 
@@ -206,6 +218,7 @@ impl Ingest {
             .write_spool_file(file)
             .await
             .map_err(|e| ImportError::Refused(WorkerError::Unavailable { reason: e.to_string() }))?;
+
         Ok(FileImport { rows, skipped, write })
     }
 
@@ -219,6 +232,7 @@ impl Ingest {
     fn events(&self, server: ServerId, now: Timestamp, batch: &ContainerLogBatch) -> Vec<LogEvent> {
         let maps = self.maps.get();
         let services = maps.apps.get(&server);
+
         batch
             .lines
             .iter()
@@ -233,10 +247,12 @@ impl Ingest {
                     stack: a.stack,
                     now,
                 };
+
                 let stream = match ContainerStream::try_from(l.stream) {
                     Ok(ContainerStream::Stderr) => LogStream::Stderr,
                     _ => LogStream::Stdout,
                 };
+
                 container_event(&cx, stream, l.ts_ms, clip(&l.line, MAX_CONTAINER_LINE_BYTES))
             })
             .collect()
@@ -247,6 +263,7 @@ impl Ingest {
         let maps = self.maps.get();
         let services = maps.apps.get(&server);
         let minute = Timestamp(now.0 - now.0.rem_euclid(MINUTE_MS));
+
         samples
             .iter()
             .take(MAX_CONTAINER_SAMPLES)
@@ -332,6 +349,7 @@ mod tests {
         assert_eq!(e.stack.as_deref(), Some("shop"));
         assert_eq!(e.level, forge_core::logs::LogLevel::Warning, "stderr without a level");
         assert!(e.message.len() <= MAX_CONTAINER_LINE_BYTES + 4, "long lines are cut");
+
         // Once the service is placed there, lines are attributed to it.
         let svc = ServiceId::new();
         maps.replace(AnalyticsMaps {
@@ -363,22 +381,27 @@ mod tests {
             dropped: 0,
         };
         let bytes = batch.encode_to_vec();
+
         // The first attempt times out on the server side while the insert runs.
         let first = tokio::spawn({
             let (t, bytes) = (t.clone(), bytes.clone());
             async move { t.telemetry(node, Timestamp(1), &[], &bytes).await }
         });
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+
         while store.writes_started() == 0 {
             assert!(tokio::time::Instant::now() < deadline, "the insert never started");
             tokio::task::yield_now().await;
         }
+
         gate.release();
         assert_eq!(first.await.unwrap(), Ok(7));
+
         // The node never saw the ack and sends the same batch again.
         assert_eq!(t.telemetry(node, Timestamp(2), &[], &bytes).await, Ok(7));
         assert_eq!(store.log_count(), 3, "stored once");
         assert_eq!(store.writes_started(), 1);
+
         // A different batch with a reused seq (the helper restarted) is stored.
         let again = ContainerLogBatch { seq: 7, lines: vec![line(9, ContainerStream::Stdout, "new")], dropped: 0 };
         assert_eq!(t.telemetry(node, Timestamp(3), &[], &again.encode_to_vec()).await, Ok(7));

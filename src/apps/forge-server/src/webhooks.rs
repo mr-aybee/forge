@@ -104,15 +104,18 @@ fn check(input: &WebhookInput) -> DomainResult<()> {
     if name.is_empty() || name.len() > 100 || name.chars().any(char::is_control) {
         return Err(invalid("the name is 1 to 100 characters"));
     }
+
     if let Some(p) = &input.tag_pattern {
         if p.is_empty() || p.len() > 128 || !tag_ok(&p.replace('*', "x")) {
             return Err(invalid("the tag pattern is a tag with `*` wildcards, e.g. v*"));
         }
+
         // Choosing what to deploy needs more than a URL that may leak.
         if input.signature == Signature::None {
             return Err(invalid("a webhook that may change the tag needs a signature"));
         }
     }
+
     Ok(())
 }
 
@@ -140,6 +143,7 @@ impl WebhookService {
         let token = format!("{TOKEN_PREFIX}{}", random_token::<32>());
         let hash = sha256_hex(token.as_bytes());
         let hint = token.chars().take(TOKEN_PREFIX.len() + 4).collect();
+
         (token, hash, hint)
     }
 
@@ -147,8 +151,10 @@ impl WebhookService {
         if signature == Signature::None {
             return Ok((None, None));
         }
+
         let secret = random_token::<32>();
         let sealed = self.envelope.seal(secret.as_bytes(), &aad(id)).map_err(DomainError::internal)?;
+
         Ok((Some(secret), Some(sealed)))
     }
 
@@ -175,6 +181,7 @@ impl WebhookService {
             last_delivery_at: None,
         };
         self.repo.create_webhook(&webhook).await?;
+
         Ok(Minted { webhook, token, secret })
     }
 
@@ -190,6 +197,7 @@ impl WebhookService {
         w.secret_sealed = secret_sealed;
         w.updated_at = self.clock.now();
         self.repo.update_webhook(&w).await?;
+
         Ok(Minted { webhook: w, token, secret })
     }
 
@@ -201,14 +209,17 @@ impl WebhookService {
         check(&input)?;
         let mut w = self.get(id).await?;
         w.created_by = by.clone();
+
         if input.target != w.target || input.signature != w.signature {
             return Err(invalid("the target and the signature cannot change; create a new webhook"));
         }
+
         w.name = input.name.trim().to_owned();
         w.tag_pattern = input.tag_pattern;
         w.enabled = input.enabled;
         w.updated_at = self.clock.now();
         self.repo.update_webhook(&w).await?;
+
         Ok(w)
     }
 
@@ -225,6 +236,7 @@ impl WebhookService {
         if !token.starts_with(TOKEN_PREFIX) || token.len() > 128 {
             return Ok(None);
         }
+
         self.repo.webhook_by_token_hash(&sha256_hex(token.as_bytes())).await
     }
 
@@ -238,10 +250,12 @@ impl WebhookService {
         if image.is_empty() {
             return Err(invalid("the service has no image to retag"));
         }
+
         let mut next = app.clone();
         next.spec["image"] = serde_json::Value::String(retag(image, tag));
         next.updated_at = self.clock.now();
         self.services.put_service(&next).await?;
+
         Ok(next)
     }
 
@@ -253,10 +267,13 @@ impl WebhookService {
             .await?
             .iter()
             .any(|d| d.job_id == Some(job));
+
         if !started {
             return Err(DomainError::NotFound("no such job for this webhook".into()));
         }
+
         let j = self.jobs.get_job(job).await?;
+
         // Status only: error text can name nodes and paths (the console shows it).
         Ok(serde_json::json!({ "id": j.id, "kind": j.kind, "status": j.status }))
     }
@@ -276,6 +293,7 @@ impl WebhookService {
     pub async fn restore(&self, app: &forge_core::model::Service) -> DomainResult<()> {
         let mut prev = app.clone();
         prev.updated_at = self.clock.now();
+
         self.services.put_service(&prev).await
     }
 
@@ -295,9 +313,11 @@ impl WebhookService {
         if !w.enabled {
             return Err(Rejection::Disabled);
         }
+
         if w.signature != Signature::None {
             let sealed = w.secret_sealed.as_deref().ok_or(Rejection::BadSignature)?;
             let secret = self.envelope.open(sealed, &aad(w.id)).map_err(|_| Rejection::BadSignature)?;
+
             let ok = match w.signature {
                 Signature::None => true,
                 Signature::Github => headers
@@ -311,6 +331,7 @@ impl WebhookService {
                     if (now - ts).abs() > SIGNATURE_WINDOW_SECS {
                         return Err(Rejection::Stale);
                     }
+
                     let mut signed = format!("{ts}.").into_bytes();
                     signed.extend_from_slice(body);
                     headers
@@ -319,9 +340,11 @@ impl WebhookService {
                         .is_some_and(|sig| constant_time_eq(sig.as_bytes(), hmac_hex(&secret, &signed).as_bytes()))
                 }
             };
+
             if !ok {
                 return Err(Rejection::BadSignature);
             }
+
             // The same signed delivery is accepted once (D-168). GitHub: the
             // body signature, since `X-GitHub-Delivery` is not signed and an
             // attacker could change it. Forge: the signature, which covers the
@@ -332,17 +355,21 @@ impl WebhookService {
                 Signature::Gitlab => Some(headers.gitlab_event.ok_or(Rejection::MissingDeliveryId)?),
                 Signature::None => None,
             };
+
             if let Some(m) = marker {
                 self.claim(w.id, m).await?;
             }
+
             if query_tag.is_some() {
                 return Err(Rejection::TagNotAllowed);
             }
         }
+
         let tag = match query_tag {
             Some(t) => Some(t.to_owned()),
             None => body_tag(body),
         };
+
         match (tag.as_deref(), &w.tag_pattern) {
             (None, _) => Ok(None),
             (Some(_), None) => Err(Rejection::TagNotAllowed),
@@ -392,6 +419,7 @@ pub fn retag(image: &str, tag: &str) -> String {
         Some((r, t)) if !t.contains('/') => r,
         _ => base,
     };
+
     format!("{repo}:{tag}")
 }
 
@@ -461,6 +489,7 @@ mod tests {
                 enabled: true,
             };
             let minted = svc.create(ws.id, &Principal::User(UserId::new()), input).await.unwrap();
+
             (dir, clock, svc, minted)
         }
 
@@ -477,13 +506,16 @@ mod tests {
             assert_eq!(svc.verify(&m.webhook, &h, body, None).await, Ok(Some("v1".into())));
             clock.advance(Duration::from_secs(601));
             assert_eq!(svc.verify(&m.webhook, &h, body, None).await, Err(Rejection::Replayed));
+
             // A changed (unsigned) delivery id does not make it new.
             let h2 = SignatureHeaders { github_delivery: Some("other"), ..h.clone() };
             assert_eq!(svc.verify(&m.webhook, &h2, body, None).await, Err(Rejection::Replayed));
+
             // A restart (same database, fresh service) still remembers it.
             drop(svc);
             let restarted = service(&dir.path().join("forge.db"), clock.clone()).await;
             assert_eq!(restarted.verify(&m.webhook, &h, body, None).await, Err(Rejection::Replayed));
+
             // Markers are forgotten after the retention window.
             clock.advance(REPLAY_RETENTION);
             assert_eq!(restarted.verify(&m.webhook, &h, body, None).await, Ok(Some("v1".into())));

@@ -26,12 +26,15 @@ impl EndpointService {
         if dirs.is_empty() {
             return Ok(());
         }
+
         let paths: Vec<FilePath> = dirs
             .iter()
             .map(|d| FilePath::parse(d).map_err(|e| DomainError::Invalid(format!("static directory `{d}`: {e}"))))
             .collect::<DomainResult<_>>()?;
+
         for edge in edges {
             let roots = self.files.list_roots(*edge).await?;
+
             for (dir, path) in dirs.iter().zip(&paths) {
                 let inside = roots.iter().any(|r| match &r.spec {
                     RootSpec::Dir { .. } | RootSpec::App { .. } => {
@@ -41,6 +44,7 @@ impl EndpointService {
                     }
                     RootSpec::Node | RootSpec::Container { .. } => false,
                 });
+
                 if !inside {
                     return Err(DomainError::Invalid(format!(
                         "static directory `{dir}` is not inside an approved file root on node {edge} \
@@ -49,6 +53,7 @@ impl EndpointService {
                 }
             }
         }
+
         Ok(())
     }
 }
@@ -60,12 +65,14 @@ pub fn prepare_basic_auth(spec: &mut SiteSpec, stored: Option<&SiteSpec>) -> Dom
     let Some(auth) = spec.access.basic_auth.as_mut() else { return Ok(()) };
     let old: Vec<&BasicAuthUser> =
         stored.and_then(|s| s.access.basic_auth.as_ref()).map(|b| b.users.iter().collect()).unwrap_or_default();
+
     for u in &mut auth.users {
         match u.password.take().filter(|p| !p.is_empty()) {
             Some(pw) => {
                 if pw.len() > 256 {
                     return Err(DomainError::Invalid("basic auth passwords are at most 256 characters".into()));
                 }
+
                 u.hash = crypt_sha512(pw.as_bytes(), &random_salt()?);
             }
             None => {
@@ -75,6 +82,7 @@ pub fn prepare_basic_auth(spec: &mut SiteSpec, stored: Option<&SiteSpec>) -> Dom
             }
         }
     }
+
     Ok(())
 }
 
@@ -96,6 +104,7 @@ fn random_salt() -> DomainResult<Vec<u8>> {
     use ring::rand::SecureRandom;
     let mut raw = [0u8; 16];
     ring::rand::SystemRandom::new().fill(&mut raw).map_err(|_| DomainError::internal("no randomness"))?;
+
     Ok(raw.iter().map(|b| ITOA64[usize::from(b % 64)]).collect())
 }
 
@@ -108,9 +117,11 @@ pub fn crypt_sha512(pw: &[u8], salt: &[u8]) -> String {
     let salt = &salt[..salt.len().min(16)];
     let digest = |parts: &[&[u8]]| {
         let mut c = Context::new(&SHA512);
+
         for p in parts {
             c.update(p);
         }
+
         c.finish().as_ref().to_vec()
     };
     let b = digest(&[pw, salt, pw]);
@@ -118,51 +129,69 @@ pub fn crypt_sha512(pw: &[u8], salt: &[u8]) -> String {
     a.update(pw);
     a.update(salt);
     let mut n = pw.len();
+
     while n > 64 {
         a.update(&b);
         n -= 64;
     }
+
     a.update(&b[..n]);
     let mut n = pw.len();
+
     while n > 0 {
         if n & 1 == 1 {
             a.update(&b);
         } else {
             a.update(pw);
         }
+
         n >>= 1;
     }
+
     let a = a.finish().as_ref().to_vec();
     let repeat = |d: &[u8], len: usize| d.iter().copied().cycle().take(len).collect::<Vec<u8>>();
+
     let dp = {
         let mut c = Context::new(&SHA512);
+
         for _ in 0..pw.len() {
             c.update(pw);
         }
+
         c.finish().as_ref().to_vec()
     };
+
     let p = repeat(&dp, pw.len());
+
     let ds = {
         let mut c = Context::new(&SHA512);
+
         for _ in 0..16 + usize::from(a[0]) {
             c.update(salt);
         }
+
         c.finish().as_ref().to_vec()
     };
+
     let s = repeat(&ds, salt.len());
     let mut c = a;
+
     for i in 0..5000 {
         let mut x = Context::new(&SHA512);
         x.update(if i % 2 == 1 { &p } else { &c });
+
         if i % 3 != 0 {
             x.update(&s);
         }
+
         if i % 7 != 0 {
             x.update(&p);
         }
+
         x.update(if i % 2 == 1 { &c } else { &p });
         c = x.finish().as_ref().to_vec();
     }
+
     const ORDER: [(usize, usize, usize); 21] = [
         (0, 21, 42),
         (22, 43, 1),
@@ -191,15 +220,19 @@ pub fn crypt_sha512(pw: &[u8], salt: &[u8]) -> String {
     out.push('$');
     let mut b64 = |w: u32, n: usize| {
         let mut w = w;
+
         for _ in 0..n {
             out.push(char::from(ITOA64[(w & 0x3f) as usize]));
             w >>= 6;
         }
     };
+
     for (x, y, z) in ORDER {
         b64((u32::from(c[x]) << 16) | (u32::from(c[y]) << 8) | u32::from(c[z]), 4);
     }
+
     b64(u32::from(c[63]), 2);
+
     out
 }
 

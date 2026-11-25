@@ -59,15 +59,19 @@ impl JobHandler for ThreeSteps {
     }
     async fn run_step(&self, index: usize, ctx: &mut StepContext) -> Result<(), StepError> {
         self.runs[index].fetch_add(1, Ordering::SeqCst);
+
         if index == 1 && self.block_step1.load(Ordering::SeqCst) {
             // Simulates the process dying mid-step: never returns.
             std::future::pending::<()>().await;
         }
+
         if index == 2 && self.fail_times.load(Ordering::SeqCst) > 0 {
             self.fail_times.fetch_sub(1, Ordering::SeqCst);
             return Err(StepError::Retryable("flaky".into()));
         }
+
         ctx.set_state(&format!("step{index}"), json!(true));
+
         Ok(())
     }
 }
@@ -106,6 +110,7 @@ async fn fixture() -> Fixture {
     forge_core::ports::ServerRepository::create_server(&store, &srv).await.unwrap();
     let engine = Arc::new(PolicyEngine::new().unwrap());
     let authz = Arc::new(CedarAuthorizer::new(engine.clone(), Arc::new(store.clone())));
+
     Fixture { store, engine, authz, server: EntityRef::new(EntityKind::Server, srv.id), org: org.id, _dir: dir }
 }
 
@@ -119,12 +124,14 @@ fn operator(f: &Fixture) -> (UserId, RoleBinding) {
         created_at: Timestamp(0),
     };
     f.engine.link_binding(&b).unwrap();
+
     (user, b)
 }
 
 fn job_engine(f: &Fixture, handler: Arc<ThreeSteps>, worker: &str, lease: Duration) -> Arc<JobEngine> {
     let mut reg = JobRegistry::new();
     reg.register(handler);
+
     Arc::new(JobEngine::new(
         Arc::new(f.store.clone()),
         f.authz.clone(),
@@ -160,8 +167,10 @@ async fn wait_for_status(store: &Store, id: JobId, status: JobStatus) -> Job {
         if j.status == status {
             return j;
         }
+
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
+
     panic!("job {id} never reached {status:?}");
 }
 
@@ -195,13 +204,16 @@ async fn crashed_worker_job_resumes_from_last_incomplete_step() {
         let a = a.clone();
         async move { a.run_once().await }
     });
+
     // Wait (bounded) until worker A is inside step 1, then "crash" it.
     for _ in 0..200 {
         if h.runs[1].load(Ordering::SeqCst) == 1 {
             break;
         }
+
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+
     a_task.abort();
     assert_eq!(h.runs[1].load(Ordering::SeqCst), 1, "step 1 started");
     let mid = f.store.get_job(job.id).await.unwrap();
@@ -298,20 +310,25 @@ async fn cancel_stops_a_running_step_at_once() {
     let (user, _) = operator(&f);
     let h = Arc::new(ThreeSteps::default());
     h.block_step1.store(true, Ordering::SeqCst);
+
     // A long lease: without the cancel signal the step would only stop at
     // the next renewal, 20 seconds away.
     let e = job_engine(&f, h.clone(), "w", Duration::from_secs(60));
     let job = e.submit(new_job(&f, user)).await.unwrap();
+
     let runner = {
         let e = e.clone();
         tokio::spawn(async move { e.run_once().await })
     };
+
     for _ in 0..200 {
         if h.runs[1].load(Ordering::SeqCst) == 1 {
             break;
         }
+
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+
     assert_eq!(h.runs[1].load(Ordering::SeqCst), 1, "step 1 is running");
     assert!(e.cancel(job.id, Principal::User(user), AuthzContext::default()).await.unwrap());
     let done = tokio::time::timeout(Duration::from_secs(2), runner).await;

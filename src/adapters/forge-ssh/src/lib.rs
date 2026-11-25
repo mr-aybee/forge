@@ -39,14 +39,17 @@ impl client::Handler for Pin {
         let PublicKeyOrCertificate::PublicKey { key, .. } = key else {
             return Ok(false); // SSH certificates are not supported for bootstrap
         };
+
         let info = HostKeyInfo {
             algorithm: key.algorithm().as_str().to_owned(),
             fingerprint: key.fingerprint(HashAlg::Sha256).to_string(),
         };
         let accept = self.expected.as_deref().is_none_or(|e| e == info.fingerprint);
+
         if let Ok(mut s) = self.seen.lock() {
             *s = Some(info);
         }
+
         Ok(accept)
     }
 }
@@ -83,6 +86,7 @@ impl SshConnector {
         let pin = Pin { expected: expected.clone(), seen: seen.clone() };
         let res = tokio::time::timeout(self.timeout, client::connect(self.config(), (host, port), pin)).await;
         let info = seen.lock().ok().and_then(|s| s.clone());
+
         match res {
             Err(_) => Err(DomainError::Invalid(format!("SSH connection to {host}:{port} timed out"))),
             Ok(Ok(h)) => Ok((h, info)),
@@ -94,6 +98,7 @@ impl SshConnector {
                         info.map(|i| i.fingerprint).unwrap_or_default()
                     )));
                 }
+
                 Err(DomainError::Invalid(format!("SSH connection failed: {e}")))
             }
         }
@@ -105,16 +110,19 @@ impl RemoteConnector for SshConnector {
     async fn probe(&self, host: &str, port: u16) -> DomainResult<HostKeyInfo> {
         let (handle, info) = self.open(host, port, None).await?;
         let _ = handle.disconnect(russh::Disconnect::ByApplication, "probe", "en").await;
+
         info.ok_or_else(|| DomainError::Invalid("server sent no host key".into()))
     }
 
     async fn connect(&self, target: &RemoteTarget, auth: &RemoteAuth) -> DomainResult<Box<dyn RemoteSession>> {
         let (mut handle, _) = self.open(&target.host, target.port, Some(target.host_key_fingerprint.clone())).await?;
+
         let result = match auth {
             RemoteAuth::Password { password } => handle.authenticate_password(&target.username, password).await,
             RemoteAuth::PrivateKey { pem, passphrase } => {
                 let key = PrivateKey::from_openssh(pem.as_bytes())
                     .map_err(|_| DomainError::Invalid("private key is not in OpenSSH format".into()))?;
+
                 let key = match (key.is_encrypted(), passphrase) {
                     (true, Some(p)) => {
                         key.decrypt(p.as_bytes()).map_err(|_| DomainError::Invalid("wrong key passphrase".into()))?
@@ -122,6 +130,7 @@ impl RemoteConnector for SshConnector {
                     (true, None) => return Err(DomainError::Invalid("private key needs a passphrase".into())),
                     (false, _) => key,
                 };
+
                 let hash = handle.best_supported_rsa_hash().await.ok().flatten().flatten();
                 handle.authenticate_publickey(&target.username, PrivateKeyWithHashAlg::new(Arc::new(key), hash)).await
             }
@@ -132,6 +141,7 @@ impl RemoteConnector for SshConnector {
             }
         }
         .map_err(|e| DomainError::Invalid(format!("SSH authentication error: {e}")))?;
+
         match result {
             AuthResult::Success => Ok(Box::new(SshSession { handle, timeout: Duration::from_secs(600) })),
             AuthResult::Failure { .. } => {
@@ -152,11 +162,14 @@ impl RemoteSession for SshSession {
         let run = async {
             let mut channel = self.handle.channel_open_session().await.map_err(DomainError::internal)?;
             channel.exec(true, command).await.map_err(DomainError::internal)?;
+
             if let Some(input) = stdin {
                 channel.data(&input[..]).await.map_err(DomainError::internal)?;
                 channel.eof().await.map_err(DomainError::internal)?;
             }
+
             let (mut out, mut err, mut status) = (Vec::new(), Vec::new(), None);
+
             while let Some(msg) = channel.wait().await {
                 match msg {
                     ChannelMsg::Data { data } if out.len() < MAX_OUTPUT => out.extend_from_slice(&data),
@@ -166,6 +179,7 @@ impl RemoteSession for SshSession {
                     _ => {}
                 }
             }
+
             Ok(ExecResult {
                 status: status.unwrap_or(255),
                 stdout: String::from_utf8_lossy(&out).into_owned(),
@@ -183,6 +197,7 @@ impl RemoteSession for SshSession {
         channel.request_pty(true, term, size.cols, size.rows, 0, 0, &[]).await.map_err(DomainError::internal)?;
         channel.request_shell(true).await.map_err(DomainError::internal)?;
         let (read, write) = channel.split();
+
         Ok((Box::new(SshShellReader { read }), Box::new(SshShellWriter { write })))
     }
 
@@ -197,6 +212,7 @@ impl RemoteSession for SshSession {
         channel.request_pty(true, term, size.cols, size.rows, 0, 0, &[]).await.map_err(DomainError::internal)?;
         channel.exec(true, command).await.map_err(DomainError::internal)?;
         let (read, write) = channel.split();
+
         Ok((Box::new(SshShellReader { read }), Box::new(SshShellWriter { write })))
     }
 
@@ -204,6 +220,7 @@ impl RemoteSession for SshSession {
         let channel = self.handle.channel_open_session().await.map_err(DomainError::internal)?;
         channel.exec(true, command).await.map_err(DomainError::internal)?;
         let (read, write) = channel.split();
+
         Ok((Box::new(SshExecReader { read, done: false }), Box::new(SshShellWriter { write })))
     }
 
@@ -230,6 +247,7 @@ fn signal_status(name: &str) -> u32 {
         "TERM" => 15,
         _ => 0,
     };
+
     128 + n
 }
 
@@ -244,6 +262,7 @@ impl ExecReader for SshExecReader {
         if self.done {
             return None;
         }
+
         loop {
             match self.read.wait().await {
                 Some(ChannelMsg::Data { data }) => return Some(ExecEvent::Stdout(data.to_vec())),

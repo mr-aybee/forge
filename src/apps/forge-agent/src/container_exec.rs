@@ -69,24 +69,30 @@ impl ExecSpec {
         if !crate::helper::valid_container_id(&self.container) {
             return Err(format!("invalid container id `{}`", self.container));
         }
+
         if self.cols == 0 || self.rows == 0 || u32::from(self.cols) > MAX_DIM || u32::from(self.rows) > MAX_DIM {
             return Err("invalid terminal size".into());
         }
+
         if !(1..=MAX_IDLE_SECS).contains(&self.idle_secs) {
             return Err("invalid idle timeout".into());
         }
+
         if !(1..=MAX_LIFETIME_SECS).contains(&self.lifetime_secs) {
             return Err("invalid lifetime".into());
         }
+
         Ok(())
     }
 
     /// [`Self::validate`] plus the request's expiry.
     pub fn validate_at(&self, now_ms: i64) -> Result<(), String> {
         self.validate()?;
+
         if self.expires_at_ms <= now_ms {
             return Err("the container shell request has expired".into());
         }
+
         Ok(())
     }
 }
@@ -100,11 +106,14 @@ pub fn validate_open(x: &ContainerExecOpen, now_ms: i64) -> Result<ExecSpec, Str
     if !hex(&x.session_id, 32) {
         return Err("invalid session id".into());
     }
+
     if !hex(&x.stream_token, 64) {
         return Err("invalid stream token".into());
     }
+
     let spec = ExecSpec::from_wire(x);
     spec.validate_at(now_ms)?;
+
     Ok(spec)
 }
 
@@ -119,10 +128,12 @@ pub struct Slot(ShellCount);
 impl Slot {
     pub fn take(counter: &ShellCount, max: usize) -> Result<Self, String> {
         use std::sync::atomic::Ordering;
+
         if counter.fetch_add(1, Ordering::SeqCst) >= max {
             counter.fetch_sub(1, Ordering::SeqCst);
             return Err(format!("this node already has {max} open container shells"));
         }
+
         Ok(Self(counter.clone()))
     }
 }
@@ -161,6 +172,7 @@ pub async fn open_helper(signed: &forge_proto::messages::SignedCommand) -> Resul
     let mut line = serde_json::to_string(&envelope).map_err(|e| e.to_string())?;
     line.push('\n');
     write.write_all(line.as_bytes()).await.map_err(|e| e.to_string())?;
+
     // The answer line is short; frames may follow it at once, so the
     // buffered reader stays the pipe's reader.
     let mut reader = BufReader::new(read);
@@ -169,16 +181,19 @@ pub async fn open_helper(signed: &forge_proto::messages::SignedCommand) -> Resul
         let mut limited = (&mut reader).take(64 * 1024);
         limited.read_line(&mut answer).await
     };
+
     match tokio::time::timeout(std::time::Duration::from_secs(30), read_line).await {
         Ok(Ok(n)) if n > 0 => {}
         Ok(Ok(_)) => return Err("the helper closed the connection".into()),
         Ok(Err(e)) => return Err(e.to_string()),
         Err(_) => return Err("the helper did not answer in time".into()),
     }
+
     let r: HelperResponse = serde_json::from_str(&answer).map_err(|e| format!("bad helper response: {e}"))?;
     if !r.ok {
         return Err(r.error.unwrap_or_else(|| "the helper refused the container shell".into()));
     }
+
     Ok(ExecPipe { reader: Box::new(reader), writer: Box::new(write) })
 }
 
@@ -235,11 +250,13 @@ mod docker_exec {
             404 => return Err(format!("no container `{}` on this node", spec.container)),
             _ => return Err(docker_error(status, &bytes)),
         }
+
         let v: Value = serde_json::from_slice(&bytes).map_err(|e| format!("Docker: {e}"))?;
         let id = v["Id"].as_str().unwrap_or_default().to_owned();
         if !crate::helper::valid_container_id(&id) {
             return Err("Docker returned no exec id".into());
         }
+
         Ok(id)
     }
 
@@ -257,24 +274,30 @@ mod docker_exec {
             stream.write_all(head.as_bytes()).await.map_err(|e| format!("Docker: {e}"))?;
             let mut buf = Vec::new();
             let mut chunk = [0u8; 4096];
+
             let end = loop {
                 if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
                     break i + 4;
                 }
+
                 if buf.len() > MAX_HEAD {
                     return Err("Docker sent an oversized response".to_owned());
                 }
+
                 let n = stream.read(&mut chunk).await.map_err(|e| format!("Docker: {e}"))?;
                 if n == 0 {
                     return Err("Docker closed the connection".to_owned());
                 }
+
                 buf.extend_from_slice(&chunk[..n]);
             };
+
             let status_line = String::from_utf8_lossy(&buf[..end]).lines().next().unwrap_or_default().to_owned();
             let code: u16 = status_line.split_whitespace().nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
             if code != 101 && code != 200 {
                 return Err(docker_error(code, &buf[end..]));
             }
+
             Ok(Started { id: id.to_owned(), stream, early: buf[end..].to_vec() })
         };
         tokio::time::timeout(CALL, run).await.map_err(|_| "Docker did not start the shell in time".to_owned())?
@@ -293,18 +316,22 @@ mod docker_exec {
             if status != 200 {
                 return None;
             }
+
             let v: Value = serde_json::from_slice(&bytes).ok()?;
             if v["Running"] != true {
                 return v["ExitCode"].as_i64().and_then(|c| i32::try_from(c).ok());
             }
+
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
+
         None
     }
 
     async fn answer<W: AsyncWrite + Unpin>(to_agent: &mut W, r: &HelperResponse) -> std::io::Result<()> {
         let mut line = serde_json::to_string(r).unwrap_or_else(|_| "{\"ok\":false}".into());
         line.push('\n');
+
         to_agent.write_all(line.as_bytes()).await
     }
 
@@ -320,12 +347,15 @@ mod docker_exec {
             let slot = Slot::take(shells, MAX_EXEC)?;
             let id = create(socket, &spec).await?;
             let started = start(socket, &spec, &id).await?;
+
             // Docker sizes the TTY only once the exec runs.
             if let Err(e) = resize(socket, &id, spec.cols, spec.rows).await {
                 eprintln!("forge-agent-helper: container shell resize failed: {e}");
             }
+
             Ok::<_, String>((slot, started))
         };
+
         let (slot, started) = match opened.await {
             Ok(v) => v,
             Err(e) => {
@@ -333,53 +363,66 @@ mod docker_exec {
                 return;
             }
         };
+
         let ok = HelperResponse { ok: true, state: None, error: None, output: None, details: None, data: None };
         if answer(&mut to_agent, &ok).await.is_err() {
             return;
         }
+
         let _slot = slot;
         let Started { id, stream, early } = started;
         let (mut docker_rd, mut docker_wr) = stream.into_split();
         let last = AtomicI64::new(crate::tunnel::now_ms());
         let touch = || last.store(crate::tunnel::now_ms(), Ordering::Relaxed);
+
         // Docker → agent: output, then the exit code.
         let output = async {
             if !early.is_empty() && to_agent.write_all(&Frame::Data(early).encode()).await.is_err() {
                 return;
             }
+
             let mut buf = vec![0u8; MAX_PAYLOAD];
+
             loop {
                 match docker_rd.read(&mut buf).await {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
                         touch();
+
                         if to_agent.write_all(&Frame::Data(buf[..n].to_vec()).encode()).await.is_err() {
                             return;
                         }
                     }
                 }
             }
+
             let end = match exit_code(socket, &id).await {
                 Some(code) => Frame::Exit(code),
                 None => Frame::Eof,
             };
+
             let _ = to_agent.write_all(&end.encode()).await;
             let _ = to_agent.shutdown().await;
         };
+
         // Agent → Docker: keystrokes and resizes.
         let input = async {
             let mut dec = Decoder::new();
             let mut buf = vec![0u8; MAX_PAYLOAD];
+
             loop {
                 let n = match from_agent.read(&mut buf).await {
                     Ok(0) | Err(_) => return,
                     Ok(n) => n,
                 };
+
                 dec.push(&buf[..n]);
+
                 loop {
                     match dec.next_frame() {
                         Ok(Some(Frame::Data(d))) => {
                             touch();
+
                             if docker_wr.write_all(&d).await.is_err() {
                                 return;
                             }
@@ -403,14 +446,17 @@ mod docker_exec {
                 }
             }
         };
+
         // The shell exiting ends the session; the agent hanging up drops the
         // hijacked stream, which closes the PTY and hangs up the shell.
         let idle_ms = i64::from(spec.idle_secs) * 1000;
         let idle = async {
             // Checked often enough to end within a quarter of the limit.
             let tick = Duration::from_millis(u64::try_from(idle_ms / 4).unwrap_or(1000).clamp(100, 5000));
+
             loop {
                 tokio::time::sleep(tick).await;
+
                 if crate::tunnel::now_ms() - last.load(Ordering::Relaxed) >= idle_ms {
                     return;
                 }
@@ -423,6 +469,7 @@ mod docker_exec {
             () = idle => Some("the container shell was idle for too long"),
             () = lifetime => Some("the container shell reached its lifetime"),
         };
+
         // The helper enforces both limits itself, whatever the agent does.
         if let Some(why) = limit {
             let _ = to_agent.write_all(&Frame::Error(why.into()).encode()).await;
@@ -453,16 +500,20 @@ mod docker_exec {
                     tokio::spawn(async move {
                         let mut buf = Vec::new();
                         let mut chunk = [0u8; 4096];
+
                         let end = loop {
                             if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
                                 break i + 4;
                             }
+
                             let n = s.read(&mut chunk).await.unwrap();
                             if n == 0 {
                                 return;
                             }
+
                             buf.extend_from_slice(&chunk[..n]);
                         };
+
                         let head = String::from_utf8_lossy(&buf[..end]).to_string();
                         let len: usize = head
                             .lines()
@@ -471,11 +522,14 @@ mod docker_exec {
                                 k.eq_ignore_ascii_case("content-length").then(|| v.trim().parse().ok())?
                             })
                             .unwrap_or(0);
+
                         while buf.len() < end + len {
                             let n = s.read(&mut chunk).await.unwrap();
                             buf.extend_from_slice(&chunk[..n]);
                         }
+
                         let body = String::from_utf8_lossy(&buf[end..end + len]).to_string();
+
                         // hyper sends the absolute form (`POST http://docker/v1.43/…`).
                         let line = head.lines().next().unwrap().replacen("http://docker", "", 1);
                         log.lock().unwrap().push(format!("{line} {body}"));
@@ -485,24 +539,29 @@ mod docker_exec {
                                 body.len()
                             )
                         };
+
                         if line.starts_with("POST /v1.43/containers/web-1/exec ") {
                             let r = if not_running {
                                 reply("409 Conflict", r#"{"message":"Container web-1 is not running"}"#)
                             } else {
                                 reply("201 Created", r#"{"Id":"e1"}"#)
                             };
+
                             s.write_all(r.as_bytes()).await.unwrap();
                         } else if line.starts_with("POST /v1.43/exec/e1/start ") {
                             s.write_all(b"HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n$ ")
                                 .await
                                 .unwrap();
                             let mut b = [0u8; 1024];
+
                             loop {
                                 let n = s.read(&mut b).await.unwrap_or(0);
                                 if n == 0 {
                                     break;
                                 }
+
                                 s.write_all(&b[..n]).await.unwrap();
+
                                 if String::from_utf8_lossy(&b[..n]).contains("exit 3") {
                                     break;
                                 }
@@ -517,6 +576,7 @@ mod docker_exec {
                     });
                 }
             });
+
             (path, seen)
         }
 
@@ -541,6 +601,7 @@ mod docker_exec {
             let shells = ShellCount::default();
             let task = tokio::spawn(async move { serve(spec, &sock, &shells, h_rd, h_wr).await });
             let (a_rd, a_wr) = tokio::io::split(agent);
+
             (BufReader::new(a_rd), a_wr, task)
         }
 
@@ -549,12 +610,15 @@ mod docker_exec {
             let mut dec = Decoder::new();
             let mut all = Vec::new();
             let mut b = [0u8; 4096];
+
             loop {
                 let n = rd.read(&mut b).await.unwrap();
                 if n == 0 {
                     return all;
                 }
+
                 dec.push(&b[..n]);
+
                 while let Some(f) = dec.next_frame().unwrap() {
                     all.push(f);
                 }
@@ -574,12 +638,14 @@ mod docker_exec {
             let mut dec = Decoder::new();
             let mut out = Vec::new();
             let mut sent_exit = false;
+
             let exit = loop {
                 let mut b = [0u8; 4096];
                 let n = a_rd.read(&mut b).await.unwrap();
                 assert!(n > 0, "stream ended without an exit frame");
                 dec.push(&b[..n]);
                 let mut code = None;
+
                 while let Some(f) = dec.next_frame().unwrap() {
                     match f {
                         Frame::Data(d) => out.extend_from_slice(&d),
@@ -587,14 +653,17 @@ mod docker_exec {
                         other => panic!("unexpected {other:?}"),
                     }
                 }
+
                 if let Some(c) = code {
                     break c;
                 }
+
                 if !sent_exit && String::from_utf8_lossy(&out).contains("echo hi") {
                     sent_exit = true;
                     a_wr.write_all(&Frame::Data(b"exit 3\n".to_vec()).encode()).await.unwrap();
                 }
             };
+
             assert_eq!(exit, 3);
             let text = String::from_utf8_lossy(&out);
             assert!(text.starts_with("$ ") && text.contains("echo hi") && text.contains("exit 3"), "{text}");
@@ -613,6 +682,7 @@ mod docker_exec {
             let mut line = String::new();
             rd.read_line(&mut line).await.unwrap();
             task.await.unwrap();
+
             line
         }
 
@@ -625,6 +695,7 @@ mod docker_exec {
             let calls = seen.lock().unwrap().len();
             let line = answer_line(ExecSpec { container: "web;id".into(), ..spec() }, sock.clone()).await;
             assert!(line.contains("invalid container id"), "{line}");
+
             // The helper checks the signed expiry and limits itself.
             let expired = ExecSpec { expires_at_ms: crate::tunnel::now_ms() - 1, ..spec() };
             let line = answer_line(expired, sock.clone()).await;
@@ -640,6 +711,7 @@ mod docker_exec {
         async fn the_helper_enforces_idle_and_lifetime_limits() {
             let dir = tempfile::tempdir().unwrap();
             let (sock, _) = fake_docker(dir.path(), false);
+
             for (s, why) in
                 [(ExecSpec { idle_secs: 1, ..spec() }, "idle"), (ExecSpec { lifetime_secs: 1, ..spec() }, "lifetime")]
             {
@@ -680,11 +752,14 @@ mod tests {
         let spec = validate_open(&cmd(), 1_000).unwrap();
         assert_eq!((spec.container.as_str(), spec.cols, spec.rows), ("web-1", 120, 32));
         assert_eq!((spec.idle_secs, spec.lifetime_secs, spec.expires_at_ms), (1800, 3600, 2_000), "limits travel");
+
         let bad = |f: fn(&mut ContainerExecOpen)| {
             let mut c = cmd();
             f(&mut c);
+
             validate_open(&c, 1_000)
         };
+
         assert!(bad(|c| c.session_id = "../x".into()).is_err());
         assert!(bad(|c| c.stream_token = "B".repeat(64)).is_err());
         assert!(bad(|c| c.container = "-web".into()).is_err());
@@ -692,6 +767,7 @@ mod tests {
         assert!(bad(|c| c.idle_secs = 0).is_err());
         assert!(bad(|c| c.lifetime_secs = MAX_LIFETIME_SECS + 1).is_err());
         assert!(bad(|c| c.expires_at_ms = 1_000).unwrap_err().contains("expired"));
+
         // Sizes are clamped, never refused.
         assert_eq!(bad(|c| (c.cols, c.rows) = (0, 99_999)).unwrap().cols, 1);
         assert_eq!(bad(|c| (c.cols, c.rows) = (0, 99_999)).unwrap().rows, 1000);

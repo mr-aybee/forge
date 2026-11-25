@@ -44,6 +44,7 @@ async fn node(h: &Harness) -> forge_core::ServerId {
         created_at: forge_core::Timestamp(0),
     };
     forge_core::ports::ServerRepository::create_server(&h.app.state.store, &server).await.unwrap();
+
     id
 }
 
@@ -62,6 +63,7 @@ async fn app(c: &Client, ns: &Value, name: &str, volume: &str, server: forge_cor
     let id = app["id"].as_str().unwrap().to_owned();
     let (s, r) = c.put(&format!("/api/v1/services/{id}/instances"), json!([{"server_id": server}])).await;
     assert_eq!(s, StatusCode::OK, "{r}");
+
     id
 }
 
@@ -90,8 +92,10 @@ async fn mounts_outside_the_app_folder_need_stack_privileged_with_mfa() {
     // on the node or to another tenant's data.
     let escalations =
         ["/var/spool/cron:/c", "/var/lib/dpkg:/d", "/home:/h", "/srv/forge/apps/prod/db/data:/d", "/opt/vendor:/o"];
+
     for (n, v) in escalations.iter().enumerate() {
         let id = app(&admin, &ns, &format!("esc-{n}"), v, server).await;
+
         // Deploy to every placement, and the per-node deploy action.
         let (s, r) = admin.post(&format!("/api/v1/services/{id}/deploy"), json!({})).await;
         assert_eq!(s, StatusCode::FORBIDDEN, "{v}: a deploy without MFA may not mount it: {r}");
@@ -99,6 +103,7 @@ async fn mounts_outside_the_app_folder_need_stack_privileged_with_mfa() {
             admin.post(&format!("/api/v1/services/{id}/instances/{server}/actions"), json!({"action": "deploy"})).await;
         assert_eq!(s, StatusCode::FORBIDDEN, "{v}: {r}");
     }
+
     // System paths stay refused for everyone, at save time.
     let (s, r) = admin
         .post(

@@ -17,12 +17,15 @@ where
     Fut: std::future::Future<Output = Option<Value>>,
 {
     let end = std::time::Instant::now() + Duration::from_secs(secs);
+
     while std::time::Instant::now() < end {
         if let Some(v) = f().await {
             return v;
         }
+
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
+
     panic!("timed out waiting for {what}");
 }
 
@@ -123,9 +126,11 @@ async fn an_offline_node_opens_an_alarm_that_recovery_resolves() {
     // Audit: the rule and the operator actions, never the evaluator's passes.
     let (_, audit) = admin.get("/api/v1/audit?limit=100").await;
     let text = serde_json::to_string(&audit).unwrap();
+
     for a in ["alert.rule.create", "alert.alarm.acknowledge", "alert.alarm.note"] {
         assert!(text.contains(a), "{a} audited");
     }
+
     // Deleting the rule keeps the alarm as history.
     let path = format!("/api/v1/alert-rules/{}", rule["id"].as_str().unwrap());
     let (s, _) = admin.call(reqwest::Method::DELETE, &path, None).await;
@@ -220,6 +225,7 @@ async fn rules_per_workspace_are_capped() {
 async fn heartbeat_measures_feed_threshold_rules() {
     let h = start().await;
     let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+
     // Any CPU reading at all (>= 0 %) fires at once: the point is the path.
     let rule = json!({
         "name": "CPU seen",

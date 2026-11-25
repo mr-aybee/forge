@@ -239,6 +239,7 @@ fn health_info(purpose: &str, check: &str) -> SubjectInfo {
 pub fn subjects() -> Vec<SubjectInfo> {
     let mut out: Vec<SubjectInfo> = DEFS.iter().map(info).collect();
     out.extend(HEALTH_PURPOSES.iter().map(|p| health_info(p, "{check}")));
+
     out
 }
 
@@ -248,6 +249,7 @@ pub fn describe(subject: &str) -> Option<SubjectInfo> {
     if let Some(d) = DEFS.iter().find(|d| d.subject == subject) {
         return Some(info(d));
     }
+
     let mut parts = subject.splitn(3, '.');
     match (parts.next(), parts.next(), parts.next()) {
         (Some("health"), Some(p), Some(check)) if HEALTH_PURPOSES.contains(&p) && valid_segment(check) => {
@@ -265,15 +267,18 @@ fn valid_segment(s: &str) -> bool {
 fn distance(a: &str, b: &str) -> usize {
     let b: Vec<char> = b.chars().collect();
     let mut row: Vec<usize> = (0..=b.len()).collect();
+
     for (i, ca) in a.chars().enumerate() {
         let mut prev = row[0];
         row[0] = i + 1;
+
         for (j, cb) in b.iter().enumerate() {
             let cur = row[j + 1];
             row[j + 1] = (prev + usize::from(ca != *cb)).min(row[j] + 1).min(cur + 1);
             prev = cur;
         }
     }
+
     row[b.len()]
 }
 
@@ -297,19 +302,24 @@ pub fn check_subject(subject: &str, scope: ScopeKind) -> DomainResult<()> {
             )))
         }
     };
+
     if let Some(i) = describe(subject) {
         return fits(&i);
     }
+
     let near =
         DEFS.iter().map(|d| d.subject).min_by_key(|k| distance(k, subject)).filter(|k| distance(k, subject) <= 3);
+
     if subject.starts_with("health.") {
         return Err(DomainError::Invalid(format!(
             "unknown subject `{subject}`: health subjects are health.<readiness|liveness|startup>.<check>"
         )));
     }
+
     if let Some(k) = near {
         return Err(DomainError::Invalid(format!("unknown subject `{subject}`; did you mean `{k}`?")));
     }
+
     if subject.starts_with("node.") && forge_core::observation::Subject::new(subject).is_ok() {
         // A newer agent's node measurement.
         return if scope == ScopeKind::Servers {
@@ -318,6 +328,7 @@ pub fn check_subject(subject: &str, scope: ScopeKind) -> DomainResult<()> {
             Err(DomainError::Invalid(format!("subject `{subject}` applies to a servers scope, not {}", scope.as_str())))
         };
     }
+
     Err(DomainError::Invalid(format!(
         "unknown subject `{subject}`; known families are {} (GET /api/v1/alert-subjects lists them)",
         KNOWN_SUBJECT_PREFIXES.join(", ")
@@ -334,23 +345,28 @@ pub async fn seen_health_subjects(
 ) -> DomainResult<Vec<String>> {
     let filter = ObservationFilter { subject_prefix: Some("health.".into()), ..ObservationFilter::default() };
     let rows = observations.latest(&filter, SEEN_SCAN_ROWS).await?;
+
     // Subjects per service id.
     let mut by_app: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
     for r in rows {
         if r.key.resource.kind == EntityKind::Service {
             by_app.entry(r.key.resource.id).or_default().insert(r.key.subject.as_str().to_owned());
         }
     }
+
     let apps: Vec<EntityRef> = by_app.keys().map(|id| EntityRef::new(EntityKind::Service, id)).collect();
     let resolved = resolver.resolve_many(&apps).await;
     let ws = EntityRef::new(EntityKind::Workspace, workspace);
     let mut subjects: BTreeSet<String> = BTreeSet::new();
+
     for ((_, subs), r) in by_app.into_iter().zip(resolved) {
         // Deleted or unresolvable services are skipped.
         if r.as_ref().is_ok_and(|r| r.ancestors.contains(&ws)) {
             subjects.extend(subs);
         }
     }
+
     Ok(subjects.into_iter().take(MAX_SEEN_SUBJECTS).collect())
 }
 
@@ -380,6 +396,7 @@ pub async fn check_scope_ids(
         }
         _ => return Ok(()),
     };
+
     match ids.iter().find(|i| !known.contains(*i)) {
         Some(bad) => Err(DomainError::Invalid(format!("no {what} {bad} in this workspace"))),
         None => Ok(()),
@@ -489,6 +506,7 @@ fn build() -> Vec<AlertTemplate> {
     };
     let disk_filling = spec(th(Cmp::Gt, 85.0), sustained(5), plain());
     let mem_pressure = spec(th(Cmp::Gt, 90.0), sustained(10), recover(th(Cmp::Lt, 85.0), 0));
+
     vec![
         // Nodes.
         t(

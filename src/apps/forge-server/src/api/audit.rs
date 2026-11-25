@@ -93,11 +93,13 @@ fn filter_of(q: &AuditQuery, raw: Option<&str>, limit: u32) -> ApiResult<Option<
     {
         return Err(ApiError::bad_request("`since` must be before `until`"));
     }
+
     let actions: Vec<String> = url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes())
         .filter(|(k, _)| k == "action")
         .flat_map(|(_, v)| v.split(',').map(str::trim).filter(|a| !a.is_empty()).map(str::to_owned).collect::<Vec<_>>())
         .take(50)
         .collect();
+
     let outcome = match q.outcome.as_deref().filter(|o| !o.trim().is_empty()) {
         None => None,
         Some(o) => match parse_outcome(o) {
@@ -105,6 +107,7 @@ fn filter_of(q: &AuditQuery, raw: Option<&str>, limit: u32) -> ApiResult<Option<
             None => return Ok(None),
         },
     };
+
     Ok(Some(AuditFilter {
         workspace: q.workspace,
         actions,
@@ -124,7 +127,9 @@ async fn authorize(caller: &Caller, workspace: Option<WorkspaceId>) -> ApiResult
         Some(o) => EntityRef::new(EntityKind::AuditLog, o),
         None => EntityRef::platform(),
     };
+
     caller.authorize(Action::AuditRead, scope).await?;
+
     Ok(())
 }
 
@@ -137,9 +142,11 @@ pub async fn list(
 ) -> ApiResult<Json<Vec<AuditEntry>>> {
     authorize(&caller, q.workspace).await?;
     let limit = q.limit.unwrap_or(100).clamp(1, 500);
+
     let Some(f) = filter_of(&q, raw.as_deref(), limit)? else {
         return Ok(Json(Vec::new()));
     };
+
     Ok(Json(state.store.search_entries(&f).await?))
 }
 
@@ -152,10 +159,12 @@ pub async fn page(
 ) -> ApiResult<Json<AuditPage>> {
     authorize(&caller, q.workspace).await?;
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
+
     let Some(mut f) = filter_of(&q, raw.as_deref(), limit)? else {
         let total = q.total.unwrap_or(false).then_some(0);
         return Ok(Json(AuditPage { entries: Vec::new(), next_cursor: None, total }));
     };
+
     // One extra row tells whether another page exists.
     f.limit = limit + 1;
     let mut entries = state.store.search_entries(&f).await?;
@@ -163,6 +172,7 @@ pub async fn page(
     entries.truncate(limit as usize);
     let next_cursor = if more { entries.last().map(|e| e.seq) } else { None };
     let total = if q.total.unwrap_or(false) { Some(state.store.count_entries(&f).await?) } else { None };
+
     Ok(Json(AuditPage { entries, next_cursor, total }))
 }
 
@@ -175,15 +185,19 @@ pub async fn histogram(
 ) -> ApiResult<Json<AuditHistogram>> {
     authorize(&caller, q.workspace).await?;
     let buckets = q.buckets.unwrap_or(60).clamp(1, forge_audit::MAX_BUCKETS);
+
     let Some(f) = filter_of(&q, raw.as_deref(), 1)? else {
         // An unknown outcome matches nothing: the same window, every bucket empty.
         let window = AuditFilter { workspace: q.workspace, since: q.since, until: q.until, ..AuditFilter::default() };
         let mut h = state.audit.histogram(&window, buckets).await?;
+
         for b in &mut h.buckets {
             (b.success, b.denied, b.failure) = (0, 0, 0);
         }
+
         return Ok(Json(h));
     };
+
     Ok(Json(state.audit.histogram(&f, buckets).await?))
 }
 

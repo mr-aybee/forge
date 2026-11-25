@@ -105,6 +105,7 @@ impl ConnectorRepository for Store {
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
+
         tx.commit().await.map_err(db_err)
     }
 
@@ -152,6 +153,7 @@ impl ConnectorRepository for Store {
             }
         }
         .map_err(db_err)?;
+
         rows.iter().map(connection_row).collect()
     }
 
@@ -168,6 +170,7 @@ impl ConnectorRepository for Store {
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
+
         tx.commit().await.map_err(db_err)
     }
 

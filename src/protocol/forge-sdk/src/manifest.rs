@@ -146,6 +146,7 @@ impl Manifest {
     pub fn parse(src: &str) -> Result<Self, ManifestError> {
         let m: Manifest = toml::from_str(src).map_err(|e| ManifestError::Toml(e.to_string()))?;
         m.validate()?;
+
         Ok(m)
     }
 
@@ -158,12 +159,14 @@ impl Manifest {
         let req =
             VersionReq::parse(&self.plugin.forge_api).map_err(|e| ManifestError::Invalid(format!("forge_api: {e}")))?;
         let v = Version::parse(api_version).map_err(|e| ManifestError::Invalid(e.to_string()))?;
+
         Ok(req.matches(&v))
     }
 
     fn validate(&self) -> Result<(), ManifestError> {
         let invalid = |m: String| Err(ManifestError::Invalid(m));
         let id = &self.plugin.id;
+
         // `publisher.name`: no empty segment (so no `..`, which would reach
         // outside the artifacts folder), and the plugin's own publisher, so
         // one trusted publisher cannot install or upgrade another's plugin.
@@ -171,33 +174,42 @@ impl Manifest {
             && id.contains('.')
             && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '-'))
             && id.split('.').all(|seg| !seg.is_empty());
+
         if !id_ok {
             return invalid(format!("id `{id}` must be lowercase `publisher.name`"));
         }
+
         if !id.starts_with(&format!("{}.", self.plugin.publisher)) {
             return invalid(format!("id `{id}` must start with its publisher `{}.`", self.plugin.publisher));
         }
+
         self.version()?;
         VersionReq::parse(&self.plugin.forge_api).map_err(|e| ManifestError::Invalid(format!("forge_api: {e}")))?;
+
         for p in &self.permissions.requested {
             let known = host_functions::ALL.iter().any(|f| host_functions::permission(f) == *p);
             if !known {
                 return invalid(format!("unknown permission `{p}`"));
             }
         }
+
         let b = &self.budgets;
         if b.fuel == 0 || b.fuel > MAX_FUEL {
             return invalid(format!("budgets.fuel must be 1..={MAX_FUEL}"));
         }
+
         if b.memory_mb == 0 || b.memory_mb > MAX_MEMORY_MB {
             return invalid(format!("budgets.memory_mb must be 1..={MAX_MEMORY_MB}"));
         }
+
         if b.timeout_ms == 0 || b.timeout_ms > MAX_TIMEOUT_MS {
             return invalid(format!("budgets.timeout_ms must be 1..={MAX_TIMEOUT_MS}"));
         }
+
         for (dep, req) in &self.dependencies {
             VersionReq::parse(req).map_err(|e| ManifestError::Invalid(format!("dependency {dep}: {e}")))?;
         }
+
         Ok(())
     }
 }
@@ -254,6 +266,7 @@ timeout_ms = 500
         for id in ["orbyn..x", "orbyn.", ".orbyn", "orbyn.a..", "other.uptime-probe"] {
             assert!(Manifest::parse(&OK.replace("orbyn.uptime-probe", id)).is_err(), "{id}");
         }
+
         assert!(Manifest::parse(&OK.replace("orbyn.uptime-probe", "orbyn.probe.v2")).is_ok());
     }
 }

@@ -43,8 +43,10 @@ impl NodeOps {
         if s.status == AgentStatus::Revoked {
             return Err(StepError::Fatal("server is revoked".into()));
         }
+
         let tracked =
             ctx.state_value(key).and_then(Value::as_str).filter(|op| self.hub.is_tracked(op)).map(str::to_owned);
+
         let op_id = match tracked {
             Some(op_id) => op_id,
             None => {
@@ -60,14 +62,17 @@ impl NodeOps {
                 body.operation_id
             }
         };
+
         let result = self
             .hub
             .wait(&op_id, wait)
             .await
             .ok_or_else(|| StepError::Retryable("the node did not answer in time".into()))?;
+
         if !result.ok {
             return Err(StepError::Fatal(result.error));
         }
+
         serde_json::from_str(&result.output)
             .map_err(|e| StepError::Fatal(format!("the node's answer is not JSON: {e}")))
     }

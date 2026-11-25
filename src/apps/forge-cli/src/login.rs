@@ -19,6 +19,7 @@ use crate::error::{CliError, Exit, Result};
 fn random_b64(n: usize) -> Result<String> {
     let mut buf = vec![0u8; n];
     SystemRandom::new().fill(&mut buf).map_err(|_| CliError::new(Exit::General, "no secure random source"))?;
+
     Ok(URL_SAFE_NO_PAD.encode(buf))
 }
 
@@ -26,6 +27,7 @@ fn random_b64(n: usize) -> Result<String> {
 pub fn pkce() -> Result<(String, String)> {
     let verifier = random_b64(32)?;
     let digest = ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes());
+
     Ok((verifier, URL_SAFE_NO_PAD.encode(digest.as_ref())))
 }
 
@@ -39,6 +41,7 @@ fn open_browser(url: &str) -> bool {
     } else {
         std::process::Command::new("xdg-open").arg(url).status()
     };
+
     status.is_ok_and(|s| s.success())
 }
 
@@ -50,9 +53,11 @@ fn parse_callback(request: &str) -> Option<(Option<String>, Option<String>, Opti
     if url.path() != "/callback" {
         return None;
     }
+
     let mut code = None;
     let mut state = None;
     let mut error = None;
+
     for (k, v) in url.query_pairs() {
         match k.as_ref() {
             "code" => code = Some(v.into_owned()),
@@ -61,6 +66,7 @@ fn parse_callback(request: &str) -> Option<(Option<String>, Option<String>, Opti
             _ => {}
         }
     }
+
     Some((code, state, error))
 }
 
@@ -85,6 +91,7 @@ pub async fn browser(server: &str, ca_file: Option<&str>, timeout: Duration) -> 
         .append_pair("state", &state);
 
     eprintln!("Opening your browser to sign in to {server} …");
+
     if !open_browser(url.as_str()) {
         eprintln!("Could not open a browser. Open this URL on this machine:\n\n  {url}\n");
     } else {
@@ -97,10 +104,12 @@ pub async fn browser(server: &str, ca_file: Option<&str>, timeout: Duration) -> 
             let mut buf = vec![0u8; 8192];
             let n = sock.read(&mut buf).await?;
             let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+
             let Some((code, got_state, error)) = parse_callback(&req) else {
                 let _ = sock.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
                 continue;
             };
+
             let ok = error.is_none() && code.is_some() && got_state.as_deref() == Some(state.as_str());
             let page = if ok { PAGE_OK } else { PAGE_ERR };
             let resp = format!(
@@ -108,13 +117,16 @@ pub async fn browser(server: &str, ca_file: Option<&str>, timeout: Duration) -> 
                 page.len()
             );
             let _ = sock.write_all(resp.as_bytes()).await;
+
             if let Some(e) = error {
                 return Err(CliError::auth(format!("sign-in was refused: {e}")));
             }
+
             if got_state.as_deref() != Some(state.as_str()) {
                 // Not our request (wrong or missing state): keep waiting.
                 continue;
             }
+
             return code.ok_or_else(|| CliError::auth("the callback carried no code"));
         }
     })
@@ -134,10 +146,13 @@ pub async fn browser(server: &str, ca_file: Option<&str>, timeout: Duration) -> 
         .send()
         .await
         .map_err(|e| CliError::new(Exit::Transport, e.to_string()))?;
+
     if !resp.status().is_success() {
         return Err(problem(resp).await);
     }
+
     let v: Value = resp.json().await.map_err(|e| CliError::new(Exit::Transport, e.to_string()))?;
+
     token_pair(server, &v)
 }
 
@@ -155,9 +170,11 @@ pub async fn device(server: &str, ca_file: Option<&str>, timeout: Duration) -> R
         .send()
         .await
         .map_err(|e| CliError::new(Exit::Transport, e.to_string()))?;
+
     if !resp.status().is_success() {
         return Err(problem(resp).await);
     }
+
     let start: Value = resp.json().await.map_err(|e| CliError::new(Exit::Transport, e.to_string()))?;
     let field = |k: &str| start.get(k).and_then(Value::as_str).map(str::to_owned);
     let device_code = field("device_code").ok_or_else(|| CliError::auth("the server did not return a device code"))?;
@@ -168,20 +185,25 @@ pub async fn device(server: &str, ca_file: Option<&str>, timeout: Duration) -> R
     let expires = Duration::from_secs(start.get("expires_in").and_then(Value::as_u64).unwrap_or(600));
 
     eprintln!("To sign in, open this page on any device:\n\n  {uri}\n\nand enter the code:  {user_code}\n");
+
     if let Some(c) = &complete {
         eprintln!("Or open: {c}\n");
     }
+
     eprintln!("Check that the code matches before you approve. Waiting…");
 
     let deadline = tokio::time::Instant::now() + timeout.min(expires);
+
     loop {
         tokio::time::sleep(interval).await;
+
         if tokio::time::Instant::now() >= deadline {
             return Err(CliError::new(
                 Exit::Timeout,
                 "the device code expired before it was approved; run the command again",
             ));
         }
+
         let resp = http
             .post(format!("{server}/oauth/token"))
             .form(&[("grant_type", DEVICE_GRANT), ("device_code", device_code.as_str()), ("client_id", CLIENT_ID)])
@@ -190,9 +212,11 @@ pub async fn device(server: &str, ca_file: Option<&str>, timeout: Duration) -> R
             .map_err(|e| CliError::new(Exit::Transport, e.to_string()))?;
         let ok = resp.status().is_success();
         let v: Value = resp.json().await.unwrap_or(Value::Null);
+
         if ok {
             return token_pair(server, &v);
         }
+
         match v.get("error").and_then(Value::as_str).unwrap_or_default() {
             "authorization_pending" => {}
             "slow_down" => interval += Duration::from_secs(5),

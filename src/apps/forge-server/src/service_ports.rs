@@ -73,6 +73,7 @@ impl ServicePort {
         if q.is_empty() {
             return false;
         }
+
         q == self.id
             || q == self.name
             || q == self.label
@@ -127,10 +128,12 @@ pub async fn catalogue(state: &AppState, ws: WorkspaceId) -> Result<Vec<ServiceP
     // Services: active instances, ports from the stored spec.
     let instances = state.store.list_all_instances(None).await.map_err(e)?;
     let mut apps = HashMap::new();
+
     for i in instances.iter().filter(|i| i.role != "standby" && by_id.contains_key(&i.server_id)) {
         if let std::collections::hash_map::Entry::Vacant(v) = apps.entry(i.service_id) {
             v.insert(state.store.get_service(i.service_id).await.ok().flatten());
         }
+
         let Some(Some(app)) = apps.get(&i.service_id) else { continue };
         let Some(ns) = environments.get(&app.environment_id) else { continue };
         let entry = |port: u16, proto: &str, role: &str, dial_ip: String| ServicePort {
@@ -150,12 +153,14 @@ pub async fn catalogue(state: &AppState, ws: WorkspaceId) -> Result<Vec<ServiceP
             role: role.to_owned(),
             dial_ip,
         };
+
         if let Some(p) =
             app.spec.get("listen_port").and_then(serde_json::Value::as_u64).and_then(|p| u16::try_from(p).ok())
             && p > 0
         {
             out.push(entry(p, "tcp", "http", LOOPBACK.to_owned()));
         }
+
         for p in app.spec.get("ports").and_then(serde_json::Value::as_array).into_iter().flatten() {
             if let Some(pp) = p.as_str().and_then(published_port) {
                 let dial = pp.bind.map_or_else(|| LOOPBACK.to_owned(), |b| b.to_canonical().to_string());
@@ -172,12 +177,14 @@ pub async fn catalogue(state: &AppState, ws: WorkspaceId) -> Result<Vec<ServiceP
         fabrics: &state.store,
         files: &state.store,
     };
+
     for stack in state.store.list_stacks(None).await.map_err(e)?.into_iter().filter(|s| s.workspace_id == ws) {
         let Some(ns) = environments.get(&stack.environment_id) else { continue };
         let rev_no = if stack.deployed_revision > 0 { stack.deployed_revision } else { stack.revision };
         let Ok(Some(rev)) = state.store.get_revision(stack.id, rev_no).await else { continue };
         let Ok(env) = crate::stacks::open_env(&state.envelope, stack.id, stack.env_sealed.as_deref()) else { continue };
         let ns_slug = crate::stacks::ns_slug(&ns.name);
+
         let plan = match crate::stacks::plan(
             &deps,
             ws,
@@ -197,6 +204,7 @@ pub async fn catalogue(state: &AppState, ws: WorkspaceId) -> Result<Vec<ServiceP
                 continue;
             }
         };
+
         let parts: HashMap<ServerId, String> = state
             .store
             .list_nodes(stack.id)
@@ -205,16 +213,20 @@ pub async fn catalogue(state: &AppState, ws: WorkspaceId) -> Result<Vec<ServiceP
             .into_iter()
             .map(|n| (n.server_id, n.status))
             .collect();
+
         for node in plan.nodes.iter().filter(|n| by_id.contains_key(&n.server_id)) {
             if parts.get(&node.server_id).is_none_or(|s| s == "removing") {
                 continue;
             }
+
             for p in &node.ports {
                 let Ok(port) = p.published.trim().parse::<u16>() else { continue };
                 let target = p.target.trim().parse::<u16>().unwrap_or(0);
+
                 if port == 0 {
                     continue;
                 }
+
                 out.push(ServicePort {
                     kind: TunnelTargetKind::Stack,
                     id: format!("{}/{}", stack.id, p.service),
@@ -242,8 +254,10 @@ pub async fn catalogue(state: &AppState, ws: WorkspaceId) -> Result<Vec<ServiceP
         if inst.status != "installed" || !by_id.contains_key(&inst.server_id) {
             continue;
         }
+
         let Some(pkg) = forge_catalog::find(&inst.package) else { continue };
         let ports = package_ports(pkg, &inst.params);
+
         for port in ports {
             out.push(ServicePort {
                 kind: TunnelTargetKind::Package,
@@ -286,10 +300,12 @@ pub async fn catalogue(state: &AppState, ws: WorkspaceId) -> Result<Vec<ServiceP
             dial_ip: LOOPBACK.to_owned(),
         });
     }
+
     out.sort_by(|a, b| {
         (a.label.as_str(), a.server.as_str(), a.port).cmp(&(b.label.as_str(), b.server.as_str(), b.port))
     });
     out.dedup();
+
     Ok(out)
 }
 
@@ -304,11 +320,14 @@ pub fn package_ports(pkg: &forge_catalog::Package, params: &BTreeMap<String, Str
         .filter_map(|p| params.get(p.key).map(String::as_str).or(Some(p.default)).and_then(|v| v.parse().ok()))
         .filter(|p| *p > 0)
         .collect();
+
     if from_params.is_empty() {
         from_params = pkg.ports.to_vec();
     }
+
     from_params.sort_unstable();
     from_params.dedup();
+
     from_params
 }
 

@@ -49,22 +49,29 @@ pub fn normalize_host(input: &str) -> Result<String, HostError> {
     if s.is_empty() {
         return Err(HostError::Empty);
     }
+
     if s.len() > MAX_HOST_LEN {
         return Err(HostError::TooLong);
     }
+
     let invalid = || HostError::Invalid(s.chars().take(80).collect());
+
     if let Some(inner) = s.strip_prefix('[') {
         let inner = inner.strip_suffix(']').ok_or_else(invalid)?;
         let ip: Ipv6Addr = inner.parse().map_err(|_| invalid())?;
+
         return Ok(format!("[{ip}]"));
     }
+
     if s.contains(':') {
         let ip: Ipv6Addr = s.parse().map_err(|_| invalid())?;
         return Ok(format!("[{ip}]"));
     }
+
     if let Ok(ip) = s.parse::<IpAddr>() {
         return Ok(ip.to_string());
     }
+
     let lower = s.to_ascii_lowercase();
     let label_ok = |l: &str| {
         !l.is_empty()
@@ -73,14 +80,17 @@ pub fn normalize_host(input: &str) -> Result<String, HostError> {
             && !l.ends_with('-')
             && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
     };
+
     if !lower.split('.').all(label_ok) {
         return Err(invalid());
     }
+
     // An all-digit dotted name that is not an IPv4 address (`1.2.3`,
     // `999.1.1.1`) is refused: resolvers read such names inconsistently.
     if lower.split('.').next_back().is_some_and(|l| l.bytes().all(|b| b.is_ascii_digit())) {
         return Err(invalid());
     }
+
     Ok(lower)
 }
 
@@ -102,18 +112,23 @@ impl HostPattern {
         if s == "*" {
             return Ok(Self::Any);
         }
+
         if let Some(suffix) = s.strip_prefix("*.") {
             let suffix = normalize_host(suffix).map_err(|_| HostError::Wildcard)?;
+
             // Two labels at least (`*.com` would match a whole TLD), and
             // never under an IP address.
             if suffix.starts_with('[') || suffix.parse::<IpAddr>().is_ok() || !suffix.contains('.') {
                 return Err(HostError::Wildcard);
             }
+
             return Ok(Self::Subdomains(suffix));
         }
+
         if s.contains('*') {
             return Err(HostError::Wildcard);
         }
+
         normalize_host(s).map(Self::Exact)
     }
 
@@ -147,16 +162,20 @@ pub fn parse_list<S: AsRef<str>>(items: &[S]) -> Result<Vec<HostPattern>, HostEr
     if items.is_empty() {
         return Err(HostError::EmptyList);
     }
+
     if items.len() > MAX_PATTERNS {
         return Err(HostError::TooMany);
     }
+
     let mut out: Vec<HostPattern> = Vec::with_capacity(items.len());
+
     for i in items {
         let p = HostPattern::parse(i.as_ref())?;
         if !out.contains(&p) {
             out.push(p);
         }
     }
+
     Ok(out)
 }
 
@@ -216,6 +235,7 @@ mod tests {
         assert_eq!(normalize_host("[2001:DB8::1]").unwrap(), "[2001:db8::1]");
         assert_eq!(normalize_host("2001:db8::1").unwrap(), "[2001:db8::1]");
         assert_eq!(normalize_host("forge_server").unwrap(), "forge_server");
+
         for bad in [
             "",
             "a b",
@@ -236,6 +256,7 @@ mod tests {
         ] {
             assert!(normalize_host(bad).is_err(), "{bad:?} must be refused");
         }
+
         assert_eq!(normalize_host(&"a".repeat(254)), Err(HostError::TooLong));
         assert!(normalize_host(&format!("{}.com", "a".repeat(64))).is_err(), "label over 63");
     }
@@ -244,9 +265,11 @@ mod tests {
     fn patterns_are_validated() {
         assert_eq!(HostPattern::parse("*").unwrap(), HostPattern::Any);
         assert_eq!(HostPattern::parse("*.Example.com").unwrap(), HostPattern::Subdomains("example.com".into()));
+
         for bad in ["*.com", "*example.com", "foo.*.com", "**", "*.", "*.192.0.2.1", "*.[::1]", "a*b", "", "a b"] {
             assert!(HostPattern::parse(bad).is_err(), "{bad:?} must be refused");
         }
+
         assert_eq!(parse_list::<&str>(&[]), Err(HostError::EmptyList));
         let many: Vec<String> = (0..=MAX_PATTERNS).map(|i| format!("h{i}.example.com")).collect();
         assert_eq!(parse_list(&many), Err(HostError::TooMany));
@@ -279,6 +302,7 @@ mod tests {
             (&["forge.example.com", "192.0.2.1"], "192.0.2.1", true),
             (&["forge.example.com", "192.0.2.1"], "198.51.100.1", false),
         ];
+
         for (patterns, host, want) in cases {
             assert_eq!(allowed(patterns, host), *want, "{patterns:?} vs {host}");
         }
@@ -290,11 +314,13 @@ mod tests {
     #[test]
     fn wildcard_needs_a_label_boundary() {
         let p = HostPattern::parse("*.example.com").unwrap();
+
         for prefix in ["a", "ab", "a-b", "x.y", "1", "_"] {
             let h = normalize_host(&format!("{prefix}.example.com")).unwrap();
             assert!(p.matches(&h), "{h}");
             let glued = normalize_host(&format!("{prefix}example.com")).unwrap();
             assert!(!p.matches(&glued), "{glued}");
+
             for tail in ["evil.test", "example.com.evil.test", "com"] {
                 let h = normalize_host(&format!("{prefix}.example.com.{tail}")).unwrap();
                 assert!(!p.matches(&h), "{h}");

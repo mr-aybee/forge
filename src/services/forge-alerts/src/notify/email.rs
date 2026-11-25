@@ -50,16 +50,20 @@ pub const fn marker(event: DeliveryEvent) -> &'static str {
 #[must_use]
 pub fn subject(p: &Payload, prefix: Option<&str>) -> String {
     let mut s = String::new();
+
     if let Some(pre) = prefix.map(mail_plain).filter(|x| !x.trim().is_empty()) {
         s.push_str(pre.trim());
         s.push(' ');
     }
+
     s.push('[');
     s.push_str(marker(p.event.kind));
     s.push(']');
+
     match &p.alarm {
         Some(a) => {
             s.push_str(&format!("[{}] {}", a.severity.as_str(), mail_plain(&a.title)));
+
             if let Some(r) = &p.resource {
                 s.push_str(" \u{2014} ");
                 s.push_str(&mail_plain(r.name.as_deref().unwrap_or(&r.id)));
@@ -67,9 +71,11 @@ pub fn subject(p: &Payload, prefix: Option<&str>) -> String {
         }
         None => s.push_str(" Test notification from Orbyn Forge"),
     }
+
     if p.after_silence.is_some() {
         s.push_str(" (after silence)");
     }
+
     s
 }
 
@@ -77,6 +83,7 @@ pub fn subject(p: &Payload, prefix: Option<&str>) -> String {
 fn utc(ms: i64) -> String {
     let secs = ms.div_euclid(1000);
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+
     // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
@@ -87,6 +94,7 @@ fn utc(ms: i64) -> String {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
+
     format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
@@ -108,6 +116,7 @@ pub fn body(p: &Payload) -> String {
             p.delivery_id
         );
     };
+
     let head = match p.event.kind {
         DeliveryEvent::Fired => "An alarm is firing.",
         DeliveryEvent::Reminder => "An alarm is still firing.",
@@ -115,29 +124,37 @@ pub fn body(p: &Payload) -> String {
         DeliveryEvent::Ended => "Tracking of an alarm ended without recovery.",
         DeliveryEvent::Test => "Test notification.",
     };
+
     let mut lines = vec![head.to_owned(), String::new()];
     lines.push(format!("Alarm:    {}", mail_plain(&alarm.title)));
     lines.push(format!("Severity: {}", alarm.severity.as_str()));
+
     let state = match alarm.state {
         AlarmState::Firing => "firing",
         AlarmState::Resolved => "resolved",
         AlarmState::Ended => "ended",
     };
+
     lines.push(format!("State:    {state}"));
+
     if let Some(r) = &p.resource {
         let name = r.name.as_deref().unwrap_or(&r.id);
         lines.push(format!("Resource: {} {}", mail_plain(&r.kind), mail_plain(name)));
     }
+
     if let Some(o) = &p.observation {
         match observed(&o.value) {
             Some(v) => lines.push(format!("Observed: {} = {v}", mail_plain(&o.subject))),
             None => lines.push(format!("Observed: {}", mail_plain(&o.subject))),
         }
     }
+
     lines.push(format!("Fired at: {}", utc(alarm.fired_at.0)));
+
     if let Some(at) = alarm.resolved_at {
         lines.push(format!("Closed at: {}", utc(at.0)));
     }
+
     match p.event.kind {
         DeliveryEvent::Ended => {
             let why = alarm.end_reason.as_deref().unwrap_or("tracking stopped");
@@ -146,17 +163,21 @@ pub fn body(p: &Payload) -> String {
         DeliveryEvent::Reminder if !alarm.acknowledged => lines.push("Nobody has acknowledged this alarm.".to_owned()),
         _ => {}
     }
+
     if p.after_silence.is_some() {
         lines.push("Sent now because a silence that held this back has ended.".to_owned());
     }
+
     if let Some(l) = &p.links {
         lines.push(String::new());
         lines.push(format!("Open the alarm: {}", l.alarm));
     }
+
     lines.push(String::new());
     lines.push(format!("Alarm {}, delivery {}", alarm.id, p.delivery_id));
     let mut text = lines.join("\n");
     text.push('\n');
+
     text
 }
 
@@ -234,6 +255,7 @@ mod tests {
         if let Some(a) = p.alarm.as_mut() {
             a.title = "x\r\nBcc: victim@example.com\u{202e} see https://evil.example".into();
         }
+
         let s = subject(&p, Some("[ops]\r\nX-Evil: 1"));
         assert!(!s.contains('\n') && !s.contains('\r') && !s.contains('\u{202e}'), "{s}");
         assert!(!s.contains("https://evil"), "{s}");
@@ -245,6 +267,7 @@ mod tests {
     #[test]
     fn the_body_carries_the_facts_and_the_console_link() {
         let b = body(&payload(DeliveryEvent::Fired));
+
         for want in [
             "An alarm is firing.",
             "Alarm:    Node offline",
@@ -256,6 +279,7 @@ mod tests {
         ] {
             assert!(b.contains(want), "{want} in {b}");
         }
+
         let mut r = payload(DeliveryEvent::Reminder);
         r.links = None;
         let b = body(&r);

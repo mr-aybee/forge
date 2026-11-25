@@ -23,6 +23,7 @@ async fn enroll_node(h: &Harness, admin: &Client, account: Option<&str>) -> (Str
     )
     .await
     .unwrap();
+
     (id.server_id, dir)
 }
 
@@ -30,6 +31,7 @@ async fn enroll_node(h: &Harness, admin: &Client, account: Option<&str>) -> (Str
 fn sorted(v: &serde_json::Value) -> Vec<String> {
     let mut l: Vec<String> = serde_json::from_value(v.clone()).unwrap();
     l.sort();
+
     l
 }
 
@@ -53,6 +55,7 @@ async fn step_up(c: &mut Client) {
 async fn logins_list_saved_and_discovered_accounts() {
     let h = start().await;
     let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+
     // The installer created `forge-ops`; enrolling saves it for the node.
     let (id, _dir) = enroll_node(&h, &admin, Some("forge-ops")).await;
     let url = format!("/api/v1/servers/{id}/logins");
@@ -109,6 +112,7 @@ async fn onboarding_saves_the_ssh_user_once_and_audits_it() {
         )
     };
     assert!(save().await.unwrap());
+
     // A retried step adds nothing.
     assert!(!save().await.unwrap());
     let (_, body) = admin.get(&format!("/api/v1/servers/{id}/logins")).await;
@@ -127,13 +131,16 @@ async fn creating_a_terminal_account_checks_rights_and_names() {
     let ws = &h.default_org;
     let viewer = user_with_role(&h, &admin, "v@example.com", "customer", &format!("workspace:{ws}")).await;
     assert_eq!(viewer.post(&url, json!({"name": "forge-ops"})).await.0, StatusCode::FORBIDDEN);
+
     // server.command needs an MFA-verified session.
     let (s, e) = admin.post(&url, json!({"name": "forge-ops"})).await;
     assert_eq!((s, e["title"].as_str()), (StatusCode::FORBIDDEN, Some("step_up_required")));
     step_up(&mut admin).await;
+
     for bad in ["root", "forge-agent", "Ops", "a.b", ""] {
         let (s, body) = admin.post(&url, json!({"name": bad, "sudo": true})).await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}: {body}");
     }
+
     assert_eq!(admin.post(&url, json!({"name": "forge-ops", "extra": 1})).await.0, StatusCode::UNPROCESSABLE_ENTITY);
 }

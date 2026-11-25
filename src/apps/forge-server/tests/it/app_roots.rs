@@ -27,6 +27,7 @@ async fn node(h: &Harness, os: &str) -> forge_core::model::Server {
         created_at: forge_core::Timestamp(0),
     };
     forge_core::ports::ServerRepository::create_server(&h.app.state.store, &server).await.unwrap();
+
     server
 }
 
@@ -68,6 +69,7 @@ async fn placing_a_native_app_prepares_it_and_its_root_follows_the_app() {
     assert_eq!(jobs.len(), 1, "{jobs:?}");
     assert_eq!(jobs[0]["action"], "prepare");
     assert_eq!(jobs[0]["server_id"], json!(linux.id));
+
     // Placing again does not prepare again.
     let (s, _) = admin.put(&format!("/api/v1/services/{id}/instances"), json!([{"server_id": linux.id}])).await;
     assert_eq!(s, StatusCode::OK);

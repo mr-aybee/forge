@@ -243,6 +243,7 @@ pub(crate) fn random_hex(bytes: usize) -> String {
     use ring::rand::SecureRandom as _;
     let mut b = vec![0u8; bytes];
     let _ = ring::rand::SystemRandom::new().fill(&mut b);
+
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
@@ -252,10 +253,12 @@ pub fn node_error(err: &str) -> FileError {
     if let Some(t) = err.strip_prefix("transport:") {
         return FileError::Unavailable(t.trim().to_owned());
     }
+
     // An older agent refuses fields it does not know (`parents`, `replace`).
     if err.starts_with("invalid file operation") && err.contains("unknown field") {
         return FileError::Invalid("this node's agent does not support this option yet; update the agent".into());
     }
+
     if err.starts_with("protected path") || err.contains("permission denied") {
         FileError::Denied(err.to_owned())
     } else if err.contains("was not found") || err.contains("does not exist") {
@@ -395,6 +398,7 @@ impl FileService {
 
     fn remember_archive(&self, actor: &Actor, server: ServerId, root: &str, id: &str) {
         let now = self.clock.now().0;
+
         if let Ok(mut m) = self.archives.lock() {
             m.retain(|_, o| now < o.expires_at);
             m.insert(
@@ -409,6 +413,7 @@ impl FileService {
     pub fn with_grants(mut self, repo: Arc<dyn forge_core::files::FileGrantRepository>, max_hours: u32) -> Self {
         self.grants = Some(repo);
         self.max_grant_minutes = i64::from(max_hours.max(1)) * 60;
+
         self
     }
 
@@ -441,6 +446,7 @@ impl FileService {
         let ev = AuditEvent::new(actor.key(), action, EntityRef::new(EntityKind::Server, server.id), outcome)
             .in_org(Some(server.workspace_id))
             .with_details(details);
+
         if let Err(e) = self.audit.record(ev).await {
             tracing::error!(error = %e, "audit write failed");
         }
@@ -455,6 +461,7 @@ impl FileService {
         if s.status == AgentStatus::Revoked {
             return Err(FileError::Conflict("the server is revoked".into()));
         }
+
         Ok(s)
     }
 
@@ -469,6 +476,7 @@ impl FileService {
             Err(e) => {
                 let msg = e.to_string();
                 self.denied(actor, action.as_str(), server, &msg).await;
+
                 if msg.to_lowercase().contains("mfa") || msg.to_lowercase().contains("step-up") {
                     Err(FileError::StepUp(format!("`{action}` needs a recent MFA check")))
                 } else {
@@ -490,6 +498,7 @@ impl FileService {
         };
         let os = NodeOs::from_reported(&server.os);
         let mut out = Vec::new();
+
         if self.can(actor, Action::FileNode, server_id).await {
             out.push(RootView {
                 id: NODE_ROOT.into(),
@@ -502,12 +511,15 @@ impl FileService {
                 service_id: None,
             });
         }
+
         let approved = self.repo.list_roots(server_id).await.map_err(|e| FileError::Internal(e.to_string()))?;
+
         // Older servers allowed the same folder to be approved twice (F-06).
         // Exact duplicates are shown once (the oldest); the rows stay, so a
         // root id already in use keeps working until an administrator
         // removes it.
         let approved = dedupe_roots(os, approved);
+
         for r in approved {
             let (base, container) = match &r.spec {
                 RootSpec::Node => ("/".to_owned(), None),
@@ -515,11 +527,13 @@ impl FileService {
                 RootSpec::Container { container, base } => (base.to_string(), Some(container.clone())),
                 RootSpec::App { .. } => (r.spec.base().to_string(), None),
             };
+
             let p = if r.read_only {
                 Permissions { read: true, write: false, delete: false, admin: perms.admin }
             } else {
                 perms.clone()
             };
+
             out.push(RootView {
                 id: r.id,
                 kind: r.kind,
@@ -531,6 +545,7 @@ impl FileService {
                 service_id: r.service_id,
             });
         }
+
         Ok((os, out))
     }
 
@@ -539,6 +554,7 @@ impl FileService {
             self.require(actor, Action::FileNode, server).await?;
             return Ok(Resolved { id: NODE_ROOT.into(), spec: RootSpec::Node, read_only: false });
         }
+
         let root = self
             .repo
             .get_root(root_id)
@@ -546,6 +562,7 @@ impl FileService {
             .map_err(|e| FileError::Internal(e.to_string()))?
             .filter(|r| r.server_id == server.id)
             .ok_or_else(|| FileError::NotFound(format!("unknown root `{root_id}`")))?;
+
         // Roots approved before D-083 on an app's folder run as the app now;
         // one around or inside app folders is refused until it is approved again.
         let spec = if Self::os_for(server, &root.spec) == NodeOs::Linux {
@@ -553,6 +570,7 @@ impl FileService {
         } else {
             root.spec
         };
+
         Ok(Resolved { id: root.id, spec, read_only: root.read_only })
     }
 
@@ -574,38 +592,47 @@ impl FileService {
             self.denied(actor, name, server, &e.to_string()).await;
             return Err(e);
         }
+
         for a in actions {
             self.require(actor, a, server).await?;
         }
+
         let root = self.resolve(actor, server, root_id).await?;
         if root.read_only && op.mutates() {
             self.denied(actor, name, server, "the root is read-only").await;
             return Err(FileError::Denied("this root is read-only".into()));
         }
+
         let op = op.with_root(root.spec.clone());
         op.validate().map_err(FileError::Invalid)?;
         let os = Self::os_for(server, &root.spec);
+
         for p in op.paths() {
             if let Some(why) = protected_reason(os, &root.spec.full_path(p)) {
                 let reason = format!("protected path ({why})");
                 self.denied(actor, name, server, &reason).await;
+
                 return Err(FileError::Denied(reason));
             }
         }
+
         // A moved or removed folder takes everything below it along.
         for p in op.subtrees() {
             if let Some(why) = protected_within(os, &root.spec.full_path(p)) {
                 let reason = format!("protected path (it contains protected files: {why})");
                 self.denied(actor, name, server, &reason).await;
+
                 return Err(FileError::Denied(reason));
             }
         }
+
         if let FileOp::TempRead { id, .. } | FileOp::TempDelete { id, .. } = &op
             && !self.owns_archive(actor, server.id, &root.id, id)
         {
             self.denied(actor, name, server, "not the archive's creator or root").await;
             return Err(FileError::NotFound("that archive is gone".into()));
         }
+
         Ok((op, root))
     }
 
@@ -616,6 +643,7 @@ impl FileService {
 
     fn details(root: &Resolved, op: &FileOp, out: Option<&Value>) -> Value {
         let mut d = json!({ "root": root.id });
+
         // An app root (D-083): which app, from our side; the account the
         // node ran it as, as the node reports it.
         if let RootSpec::App { environment, app } = &root.spec {
@@ -628,6 +656,7 @@ impl FileService {
                 d["confined_reported"] = json!(c.chars().take(16).collect::<String>());
             }
         }
+
         match op {
             FileOp::Rename { from, to, .. } | FileOp::Copy { from, to, .. } => {
                 d["from"] = json!(from.to_string());
@@ -666,6 +695,7 @@ impl FileService {
             }
             _ => d["path"] = json!(op.path().to_string()),
         }
+
         if let Some(out) = out {
             // Permission changes: counts and the before/after sample.
             for k in ["changed", "unchanged", "skipped", "sample"] {
@@ -673,6 +703,7 @@ impl FileService {
                     d[k] = out[k].clone();
                 }
             }
+
             for k in ["length", "size", "entries", "bytes", "matches", "trash_id", "status", "purged", "offset"] {
                 let v = &out[k];
                 if !v.is_null() {
@@ -680,6 +711,7 @@ impl FileService {
                 }
             }
         }
+
         d
     }
 
@@ -709,10 +741,12 @@ impl FileService {
             if !set.insert(key.clone()) {
                 return Err(FileError::Busy("a search of yours is already running on this node".into()));
             }
+
             Some(SearchSlot { set: &self.searches, key })
         } else {
             None
         };
+
         let result = self.call(actor, &server, &op).await;
         match (&op, &result) {
             (FileOp::Compress { dest: None, .. }, Ok(v)) => {
@@ -727,6 +761,7 @@ impl FileService {
             }
             _ => {}
         }
+
         if audit == Audit::Record {
             match &result {
                 Ok(v) => {
@@ -741,6 +776,7 @@ impl FileService {
                 Err(_) => {}
             }
         }
+
         result
     }
 
@@ -757,10 +793,12 @@ impl FileService {
         if size > MAX_UPLOAD_BYTES {
             return Err(FileError::TooLarge("uploads are limited to 50 GiB".into()));
         }
+
         let server = self.server(server_id).await?;
         let id = random_hex(16);
         let probe = FileOp::UploadStatus { root: RootSpec::Node, path: path.clone(), upload: id.clone() };
         let (_, root) = self.prepare(actor, &server, root_id, probe).await?;
+
         // Refuse before any byte is sent when the target exists and must not
         // be replaced (F-08). The node checks again at commit.
         if overwrite == Overwrite::Never {
@@ -771,6 +809,7 @@ impl FileService {
                 )));
             }
         }
+
         let now = self.clock.now();
         let up = FileUpload {
             id,
@@ -786,6 +825,7 @@ impl FileService {
             expires_at: Timestamp(now.0 + UPLOAD_TTL_MS),
         };
         self.repo.put_upload(&up).await.map_err(|e| FileError::Internal(e.to_string()))?;
+
         Ok(up)
     }
 
@@ -798,9 +838,11 @@ impl FileService {
             .map_err(|e| FileError::Internal(e.to_string()))?
             .filter(|u| u.created_by == actor.key())
             .ok_or_else(|| FileError::NotFound("upload not found".into()))?;
+
         if up.expires_at.0 < self.clock.now().0 {
             return Err(FileError::NotFound("the upload has expired; start it again".into()));
         }
+
         Ok(up)
     }
 
@@ -809,6 +851,7 @@ impl FileService {
         if gates.len() > 4096 {
             gates.retain(|_, g| Arc::strong_count(g) > 1);
         }
+
         Some(gates.entry(id.to_owned()).or_default().clone())
     }
 
@@ -826,39 +869,48 @@ impl FileService {
         // Before any waiting: only the upload's owner, only within its size,
         // so strangers and bad offsets fail at once and never hold a slot.
         let up = self.upload(actor, id).await?;
+
         if data.len() > forge_core::files::API_TRANSFER_BYTES {
             return Err(FileError::TooLarge(format!(
                 "chunks are limited to {} bytes",
                 forge_core::files::API_TRANSFER_BYTES
             )));
         }
+
         if offset + data.len() as u64 > up.size {
             return Err(FileError::Invalid("the chunk goes past the announced size".into()));
         }
+
         let Some(gate) = self.gate(&up.id) else { return self.upload_chunk_now(actor, id, offset, data).await };
         let deadline = tokio::time::Instant::now() + GATE_WAIT;
         let mut place: Option<Waiting<'_>> = None;
+
         loop {
             let mut next = gate.next.lock().await;
             let expected = match *next {
                 Some(n) => n,
                 None => self.upload(actor, id).await?.received,
             };
+
             // In order, or a retry of bytes the node already has (it skips those).
             if offset <= expected {
                 drop(place);
                 let r = self.upload_chunk_now(actor, id, offset, data).await;
                 *next = r.as_ref().ok().copied();
                 gate.moved.notify_waiters();
+
                 return r;
             }
+
             if place.is_none() {
                 place = Some(self.wait_slot(&gate, data.len())?);
             }
+
             let moved = gate.moved.notified();
             tokio::pin!(moved);
             moved.as_mut().enable();
             drop(next);
+
             if tokio::time::timeout_at(deadline, moved).await.is_err() {
                 return Err(FileError::Conflict(format!(
                     "the upload is at byte {expected}, not {offset}; send the earlier chunks first"
@@ -872,17 +924,21 @@ impl FileService {
     /// beyond that the chunk is refused at once.
     fn wait_slot<'a>(&'a self, gate: &'a UploadGate, bytes: usize) -> FileResult<Waiting<'a>> {
         use std::sync::atomic::Ordering;
+
         if gate.waiting.fetch_add(1, Ordering::SeqCst) >= UPLOAD_PARALLEL {
             gate.waiting.fetch_sub(1, Ordering::SeqCst);
             return Err(FileError::Busy(format!(
                 "at most {UPLOAD_PARALLEL} chunks of an upload may wait for earlier ones; send fewer at once"
             )));
         }
+
         if self.waiting_bytes.fetch_add(bytes, Ordering::SeqCst) + bytes > MAX_WAITING_BYTES {
             self.waiting_bytes.fetch_sub(bytes, Ordering::SeqCst);
             gate.waiting.fetch_sub(1, Ordering::SeqCst);
+
             return Err(FileError::Busy("too many upload chunks are waiting on this server; try again".into()));
         }
+
         Ok(Waiting { gate, total: &self.waiting_bytes, bytes })
     }
 
@@ -892,16 +948,19 @@ impl FileService {
             let chunks: Vec<&[u8]> = data.chunks(MAX_CHUNK_BYTES).collect();
             return self.upload_chunks(actor, id, offset, &chunks).await;
         }
+
         if data.len() > MAX_CHUNK_BYTES {
             return Err(FileError::TooLarge(format!(
                 "chunks are limited to {} bytes",
                 forge_core::files::API_TRANSFER_BYTES
             )));
         }
+
         let mut up = self.upload(actor, id).await?;
         if offset + data.len() as u64 > up.size {
             return Err(FileError::Invalid("the chunk goes past the announced size".into()));
         }
+
         let op = FileOp::UploadChunk {
             root: RootSpec::Node,
             path: up.path.clone(),
@@ -914,6 +973,7 @@ impl FileService {
         let out = self.call(actor, &server, &op).await?;
         up.received = out["received"].as_u64().unwrap_or(offset + data.len() as u64);
         self.repo.put_upload(&up).await.map_err(|e| FileError::Internal(e.to_string()))?;
+
         Ok(up.received)
     }
 
@@ -924,14 +984,17 @@ impl FileService {
         if chunks.iter().any(|c| c.len() > MAX_CHUNK_BYTES) {
             return Err(FileError::TooLarge(format!("chunks are limited to {MAX_CHUNK_BYTES} bytes")));
         }
+
         let mut up = self.upload(actor, id).await?;
         let total: u64 = chunks.iter().map(|c| c.len() as u64).sum();
         if offset + total > up.size {
             return Err(FileError::Invalid("the chunk goes past the announced size".into()));
         }
+
         let server = self.server(up.server_id).await?;
         let mut ops = Vec::with_capacity(chunks.len());
         let mut at = offset;
+
         for c in chunks {
             let op = FileOp::UploadChunk {
                 root: RootSpec::Node,
@@ -943,14 +1006,18 @@ impl FileService {
             ops.push(self.prepare(actor, &server, &up.root_id, op).await?.0);
             at += c.len() as u64;
         }
+
         let results = self.transport.call_many(server.id, &actor.key(), &ops).await;
         let mut received = offset;
+
         for r in results {
             let out = r.map_err(|e| node_error(&e))?;
             received = out["received"].as_u64().unwrap_or(received);
         }
+
         up.received = received;
         self.repo.put_upload(&up).await.map_err(|e| FileError::Internal(e.to_string()))?;
+
         Ok(up.received)
     }
 
@@ -975,6 +1042,7 @@ impl FileService {
         if length == 0 || length > max {
             return Err(FileError::Invalid(format!("length must be between 1 and {max}")));
         }
+
         let read = |offset: u64, length: u32, version: Option<String>| FileOp::Read {
             root: RootSpec::Node,
             path: path.clone(),
@@ -986,33 +1054,41 @@ impl FileService {
         if length <= piece || first["eof"] == true {
             return Ok(first);
         }
+
         let mut data = decode_b64(&first)?;
         if data.len() < piece as usize {
             return Ok(first);
         }
+
         let version = first["version"].as_str().map(str::to_owned);
         let mut ops = Vec::new();
         let mut at = offset + u64::from(piece);
         let end = offset + u64::from(length);
+
         while at < end {
             let n = u32::try_from((end - at).min(u64::from(piece))).unwrap_or(piece);
             ops.push(read(at, n, version.clone()));
             at += u64::from(n);
         }
+
         let mut eof = false;
+
         for r in self.run_many(actor, server_id, root_id, ops).await {
             let v = r?;
             let more = decode_b64(&v)?;
             let short = more.len() < piece as usize;
             data.extend_from_slice(&more);
             eof = v["eof"] == true;
+
             if short || eof {
                 break;
             }
         }
+
         first["content_b64"] = json!(b64(&data));
         first["length"] = json!(data.len());
         first["eof"] = json!(eof || first["size"].as_u64().is_some_and(|s| offset + data.len() as u64 >= s));
+
         Ok(first)
     }
 
@@ -1030,13 +1106,16 @@ impl FileService {
             Ok(s) => s,
             Err(e) => return vec![Err(e)],
         };
+
         let mut prepared = Vec::with_capacity(ops.len());
+
         for op in ops {
             match self.prepare(actor, &server, root_id, op).await {
                 Ok((op, _)) => prepared.push(op),
                 Err(e) => return vec![Err(e)],
             }
         }
+
         self.transport
             .call_many(server.id, &actor.key(), &prepared)
             .await
@@ -1053,6 +1132,7 @@ impl FileService {
         let (op, _) = self.prepare(actor, &server, &up.root_id, op).await?;
         let out = self.call(actor, &server, &op).await?;
         let received = out["received"].as_u64().unwrap_or(0);
+
         Ok((up, received))
     }
 
@@ -1062,6 +1142,7 @@ impl FileService {
         if r.is_ok() {
             self.forget_gate(id);
         }
+
         r
     }
 
@@ -1075,12 +1156,15 @@ impl FileService {
         sha256: &str,
     ) -> FileResult<Value> {
         let mut up = self.upload(actor, id).await?;
+
         if let Some(size) = size {
             if size > up.size {
                 return Err(FileError::Invalid("the upload is larger than announced".into()));
             }
+
             up.size = size;
         }
+
         let op = FileOp::UploadCommit {
             root: RootSpec::Node,
             path: up.path.clone(),
@@ -1089,6 +1173,7 @@ impl FileService {
             sha256: sha256.to_owned(),
             overwrite: up.overwrite.clone(),
         };
+
         let out = match self.run(actor, up.server_id, &up.root_id, op, Audit::Record).await {
             Ok(out) => out,
             Err(e) => {
@@ -1098,10 +1183,13 @@ impl FileService {
                     let _ = self.repo.delete_upload(&up.id).await;
                     self.forget_gate(&up.id);
                 }
+
                 return Err(e);
             }
         };
+
         let _ = self.repo.delete_upload(&up.id).await;
+
         Ok(out)
     }
 
@@ -1109,8 +1197,10 @@ impl FileService {
         let up = self.upload(actor, id).await?;
         self.forget_gate(&up.id);
         let op = FileOp::UploadAbort { root: RootSpec::Node, path: up.path.clone(), upload: up.id.clone() };
+
         // The partial file is removed best-effort; the session goes either way.
         let _ = self.run(actor, up.server_id, &up.root_id, op, Audit::Record).await;
+
         self.repo.delete_upload(&up.id).await.map_err(|e| FileError::Internal(e.to_string()))
     }
 
@@ -1118,22 +1208,27 @@ impl FileService {
     pub async fn cleanup_uploads(&self) -> usize {
         let Ok(expired) = self.repo.expired_uploads(self.clock.now()).await else { return 0 };
         let mut n = 0;
+
         for up in expired {
             let spec = match up.root_id.as_str() {
                 NODE_ROOT => Some(RootSpec::Node),
                 id => self.repo.get_root(id).await.ok().flatten().map(|r| r.spec),
             };
+
             if let Some(spec) = spec {
                 let op = FileOp::UploadAbort { root: spec, path: up.path.clone(), upload: up.id.clone() };
+
                 // Offline nodes keep the partial file until the next sweep.
                 if self.transport.call(up.server_id, "system:file-cleanup", &op).await.is_err() {
                     continue;
                 }
             }
+
             if self.repo.delete_upload(&up.id).await.is_ok() {
                 n += 1;
             }
         }
+
         n
     }
 
@@ -1151,9 +1246,11 @@ impl FileService {
         if content.len() as u64 > EDITABLE_BYTES {
             return Err(FileError::TooLarge("the editor saves files up to 2 MB; upload larger files".into()));
         }
+
         let server = self.server(server_id).await?;
         let id = random_hex(16);
         let mut offset = 0usize;
+
         loop {
             let end = (offset + MAX_CHUNK_BYTES).min(content.len());
             let op = FileOp::UploadChunk {
@@ -1166,10 +1263,12 @@ impl FileService {
             let (op, _) = self.prepare(actor, &server, root_id, op).await?;
             self.call(actor, &server, &op).await?;
             offset = end;
+
             if offset >= content.len() {
                 break;
             }
         }
+
         let sha = ring::digest::digest(&ring::digest::SHA256, content);
         let overwrite = version.map_or(Overwrite::Never, |version| Overwrite::IfVersion { version });
         let op = FileOp::UploadCommit {
@@ -1187,6 +1286,7 @@ impl FileService {
                 let _ = self.call(actor, &server, &abort).await;
             }
         }
+
         result
     }
 
@@ -1209,7 +1309,9 @@ impl FileService {
         if label.is_empty() || label.len() > 80 {
             return Err(FileError::Invalid("the label must be 1–80 characters".into()));
         }
+
         let os = Self::os_for(&server, &spec);
+
         // D-083: on Linux an app's folder becomes an app root (operations
         // run as the app's account); directories around or inside app
         // folders are refused.
@@ -1221,16 +1323,20 @@ impl FileService {
                 if NodeOs::from_reported(&server.os) == NodeOs::Windows {
                     return Err(FileError::Invalid("container roots need a Linux node".into()));
                 }
+
                 base.clone()
             }
             RootSpec::App { .. } => {
                 if os == NodeOs::Windows {
                     return Err(FileError::Invalid("app roots need a Linux node".into()));
                 }
+
                 spec.base()
             }
         };
+
         let base = &base;
+
         // One root per node, kind and folder (F-06): a second approval of the
         // same folder is refused and names the root that exists.
         let existing = self.repo.list_roots(server_id).await.map_err(|e| FileError::Internal(e.to_string()))?;
@@ -1240,15 +1346,18 @@ impl FileService {
                 dup.id, dup.label
             )));
         }
+
         if let Some(why) = protected_reason(os, base) {
             return Err(FileError::Denied(format!("protected path ({why}) cannot be a root")));
         }
+
         // The directory must exist and be a directory (not a link).
         let probe = FileOp::Stat { root: spec.clone(), path: FilePath::root() };
         let out = self.call(actor, &server, &probe).await?;
         if out.pointer("/entry/kind").and_then(Value::as_str) != Some("dir") {
             return Err(FileError::Invalid("the root must be a directory".into()));
         }
+
         let root = ApprovedRoot {
             id: new_root_id(),
             workspace_id: server.workspace_id,
@@ -1270,6 +1379,7 @@ impl FileService {
             json!({ "root": root.id, "kind": root.kind, "spec": root.spec, "read_only": read_only }),
         )
         .await;
+
         Ok(root)
     }
 
@@ -1285,6 +1395,7 @@ impl FileService {
             .ok_or_else(|| FileError::NotFound(format!("unknown root `{id}`")))?;
         self.repo.delete_root(&root.id).await.map_err(|e| FileError::Internal(e.to_string()))?;
         self.record(actor, "file.root.delete", &server, AuditOutcome::Success, json!({ "root": root.id })).await;
+
         Ok(())
     }
 }
@@ -1304,6 +1415,7 @@ fn dedupe_roots(os: NodeOs, mut roots: Vec<ApprovedRoot>) -> Vec<ApprovedRoot> {
     let mut by_age: Vec<usize> = (0..roots.len()).collect();
     by_age.sort_by_key(|&i| (roots[i].created_at.0, roots[i].id.clone()));
     let mut keep = vec![false; roots.len()];
+
     for (n, &i) in by_age.iter().enumerate() {
         let r = &roots[i];
         let dup = by_age[..n].iter().any(|&j| {
@@ -1316,11 +1428,13 @@ fn dedupe_roots(os: NodeOs, mut roots: Vec<ApprovedRoot>) -> Vec<ApprovedRoot> {
         });
         keep[i] = !dup;
     }
+
     let mut i = 0;
     roots.retain(|_| {
         i += 1;
         keep[i - 1]
     });
+
     roots
 }
 

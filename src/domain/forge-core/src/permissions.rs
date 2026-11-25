@@ -170,6 +170,7 @@ pub fn check_name(name: &str) -> DomainResult<String> {
     if n.is_empty() || n.chars().count() > MAX_NAME || n.chars().any(char::is_control) {
         return Err(DomainError::Invalid(format!("name: 1 to {MAX_NAME} characters, no control characters")));
     }
+
     Ok(n.to_owned())
 }
 
@@ -177,6 +178,7 @@ pub fn check_name(name: &str) -> DomainResult<String> {
 /// names are refused, never dropped, and the list may not be empty.
 pub fn parse_actions<S: AsRef<str>>(names: &[S]) -> DomainResult<Vec<Action>> {
     let mut out = Vec::new();
+
     for n in names {
         let n = n.as_ref();
         let a = Action::ALL
@@ -186,11 +188,14 @@ pub fn parse_actions<S: AsRef<str>>(names: &[S]) -> DomainResult<Vec<Action>> {
             .ok_or_else(|| DomainError::Invalid(format!("unknown action `{}`", n.escape_default())))?;
         out.push(a);
     }
+
     if out.is_empty() {
         return Err(DomainError::Invalid("a profile needs at least one action".into()));
     }
+
     out.sort_by_key(|a| a.as_str());
     out.dedup();
+
     Ok(out)
 }
 
@@ -222,9 +227,11 @@ pub fn parse_scope(s: &str) -> DomainResult<EntityRef> {
             "scope must be a workspace, cluster, project, environment, server or service".into(),
         ));
     }
+
     if uuid::Uuid::parse_str(&r.id).is_err() {
         return Err(DomainError::Invalid("scope id must be an id".into()));
     }
+
     Ok(r)
 }
 
@@ -286,6 +293,7 @@ mod tests {
         let a = parse_actions(&["view", "server.manage", "view"]).unwrap_or_default();
         assert_eq!(a, vec![Action::ServerManage, Action::View], "sorted by name, unique");
         assert!(parse_actions::<&str>(&[]).is_err());
+
         for bad in ["View", "view\"); permit(", "role:operator", "", "server.manage "] {
             assert!(parse_actions(&[bad]).is_err(), "{bad:?}");
         }
@@ -296,12 +304,16 @@ mod tests {
         // An upgrade must start over a profile that still names a removed action.
         let a = load_actions(&["network.access", "view", "network.connect"]).unwrap_or_default();
         assert_eq!(a, vec![Action::View]);
+
         // Retired only: the profile grants nothing, so loading it is an error.
         assert!(load_actions(&["network.manage"]).is_err());
+
         // A name that never existed is still refused on the way out.
         assert!(load_actions(&["view", "made.up"]).is_err());
+
         // Input stays strict: retired names are not accepted on the way in.
         assert!(parse_actions(&["view", "network.access"]).is_err());
+
         for r in RETIRED_ACTIONS {
             assert!(Action::ALL.iter().all(|a| a.as_str() != *r), "{r} is still a live action");
         }
@@ -312,6 +324,7 @@ mod tests {
         let id = uuid::Uuid::now_v7();
         assert!(parse_scope(&format!("cluster:{id}")).is_ok());
         assert!(parse_scope(&format!("service:{id}")).is_ok());
+
         for bad in [
             format!("platform:{id}"),
             "platform:root".to_owned(),

@@ -65,24 +65,31 @@ pub async fn load(
         };
         store.sync_builtin(&p, &rev).await?;
     }
+
     let mut revisions: HashMap<PermissionProfileId, u32> = HashMap::new();
+
     for p in store.list_profiles().await? {
         if p.archived_at.is_some() {
             continue;
         }
+
         let Some(rev) = store.get_revision(p.id, p.revision).await? else { continue };
         policy.add_profile_revision(p.id, rev.revision, &rev.actions)?;
         revisions.insert(p.id, rev.revision);
     }
+
     for a in store.list_assignments().await? {
         if a.expired(now) {
             continue;
         }
+
         if let Some(rev) = revisions.get(&a.profile_id) {
             policy.link_assignment(&a, *rev)?;
         }
     }
+
     policy.set_memberships(&store.list_memberships().await?);
+
     Ok(())
 }
 
@@ -113,13 +120,17 @@ pub async fn assign(state: &AppState, a: &ProfileAssignment) -> DomainResult<()>
         .get_profile(a.profile_id)
         .await?
         .ok_or_else(|| DomainError::NotFound("profile not found".into()))?;
+
     if p.archived_at.is_some() {
         return Err(DomainError::Conflict("the profile is archived".into()));
     }
+
     let actions = current_actions(state, &p).await?;
     state.policy.add_profile_revision(p.id, p.revision, &actions).map_err(internal)?;
+
     // Fails closed if the profile was archived or published meanwhile.
     state.store.create_assignment(a, p.revision).await?;
+
     state.policy.link_assignment(a, p.revision).map_err(internal)
 }
 
@@ -133,10 +144,13 @@ pub async fn unassign(state: &AppState, id: forge_core::ProfileAssignmentId) -> 
 /// only starts once it is recorded. Returns whether the user was added now.
 pub async fn add_member(state: &AppState, group: GroupId, user: UserId) -> DomainResult<bool> {
     let added = state.store.add_member(group, user, state.clock.now()).await?;
+
     if state.store.get_group(group).await?.is_none() {
         return Err(DomainError::NotFound("group not found".into()));
     }
+
     state.policy.add_member(group, user);
+
     Ok(added)
 }
 
@@ -151,13 +165,17 @@ pub async fn remove_member(state: &AppState, group: GroupId, user: UserId) -> Do
 /// granting first; returns how many assignments were removed.
 pub async fn delete_group(state: &AppState, group: GroupId) -> DomainResult<usize> {
     state.policy.drop_group(group);
+
     for a in state.store.list_assignments().await?.into_iter().filter(|a| a.group_id == Some(group)) {
         state.policy.unlink_assignment(a.id).map_err(internal)?;
     }
+
     let removed = state.store.delete_group(group).await?;
+
     for id in &removed {
         state.policy.unlink_assignment(*id).map_err(internal)?;
     }
+
     Ok(removed.len())
 }
 
@@ -189,10 +207,12 @@ pub async fn publish(
     };
     state.policy.add_profile_revision(profile.id, rev.revision, &rev.actions).map_err(internal)?;
     state.store.publish_revision(&rev, now).await?;
+
     for a in state.store.list_assignments().await?.into_iter().filter(|a| a.profile_id == profile.id && !a.expired(now))
     {
         state.policy.link_assignment(&a, rev.revision).map_err(internal)?;
     }
+
     Ok(rev)
 }
 
@@ -200,16 +220,19 @@ pub async fn publish(
 pub async fn archive(state: &AppState, profile: &PermissionProfile) -> DomainResult<usize> {
     state.store.archive_profile(profile.id, state.clock.now()).await?;
     let mut n = 0;
+
     for a in state.store.list_assignments().await?.into_iter().filter(|a| a.profile_id == profile.id) {
         state.policy.unlink_assignment(a.id).map_err(internal)?;
         n += 1;
     }
+
     Ok(n)
 }
 
 /// Removes assignments whose expiry passed; audited as the system.
 pub async fn sweep(state: &AppState) {
     let now = state.clock.now();
+
     let all = match state.store.list_assignments().await {
         Ok(all) => all,
         Err(e) => {
@@ -219,6 +242,7 @@ pub async fn sweep(state: &AppState) {
             return;
         }
     };
+
     for a in all.into_iter().filter(|a| a.expired(now)) {
         let removed = match unassign(state, a.id).await {
             Ok(r) => r,
@@ -227,6 +251,7 @@ pub async fn sweep(state: &AppState) {
                 false
             }
         };
+
         if removed {
             state
                 .audit_system(

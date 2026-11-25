@@ -114,6 +114,7 @@ fn when(ms: Option<i64>) -> String {
     let Some(t) = ms.and_then(|ms| time::OffsetDateTime::from_unix_timestamp(ms / 1000).ok()) else {
         return "-".into();
     };
+
     format!(
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
         t.year(),
@@ -157,13 +158,16 @@ fn subject_rows(v: &Value) -> Value {
                 Some(u) => u.to_owned(),
                 None => s["states"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join("|"),
             };
+
             let scope = s["scopes"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join(",");
             json!({ "subject": s["subject"], "kind": s["kind"], "values": values, "scope": scope, "source": s["source"] })
         })
         .collect();
+
     for h in v["seen_health"].as_array().into_iter().flatten() {
         rows.push(json!({ "subject": h, "kind": "state", "values": "(seen)", "scope": "services", "source": "probe" }));
     }
+
     Value::Array(rows)
 }
 
@@ -180,6 +184,7 @@ fn describe_spec(spec: &Value) -> String {
                 Some("eq") => "=",
                 _ => "!=",
             };
+
             format!("{cmp} {}", t["value"])
         }
         Some(k) => {
@@ -188,8 +193,10 @@ fn describe_spec(spec: &Value) -> String {
         }
         None => String::new(),
     };
+
     let m = &spec["mode"];
     let min = |key: &str| m[key].as_i64().unwrap_or(0) / 60_000;
+
     match m["mode"].as_str() {
         Some("sustained") => format!("{cond} for {} min", min("for_ms")),
         Some("window_average") => format!("average {cond} over {} min", min("window_ms")),
@@ -211,28 +218,37 @@ fn enc(s: &str) -> String {
 pub async fn run(g: &Global, cmd: AlertsCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         AlertsCmd::Alarms { active, rule, node, workspace, paging } => {
             let page: out::Page = paging.into();
+
             // The server caps a request at 500 alarms.
             let fetch = page.fetch().unwrap_or(500).min(500);
             let mut q = format!("/api/v1/alarms?limit={fetch}");
+
             if let Some(w) = workspace {
                 q.push_str(&format!("&workspace={}", enc(&w)));
             }
+
             if active {
                 q.push_str("&active=true");
             }
+
             if let Some(r) = rule {
                 q.push_str(&format!("&rule={}", enc(&r)));
             }
+
             if let Some(n) = node {
                 let id = resolve_node(&mut api, &n).await?["id"].as_str().unwrap_or_default().to_owned();
                 q.push_str(&format!("&server={}", enc(&id)));
             }
+
             let mut v = api.get(&q).await?;
+
             // Readable times and node names for the table (JSON keeps the raw fields).
             let nodes = api.get("/api/v1/servers").await.unwrap_or(Value::Null);
+
             for a in v.as_array_mut().into_iter().flatten() {
                 let id = a["server"].as_str().or(a["resource"]["id"].as_str()).unwrap_or_default().to_owned();
                 let name = nodes
@@ -246,6 +262,7 @@ pub async fn run(g: &Global, cmd: AlertsCmd) -> Result<()> {
                 a["fired"] = json!(when(a["fired_at"].as_i64()));
                 a["acknowledged"] = json!(if a["acknowledged_at"].is_number() { "yes" } else { "no" });
             }
+
             let rows = crate::cmds::rows_of(v);
             let total = if rows.len() >= fetch { out::Total::AtLeast } else { out::Total::Rows };
             out::list(g.output, rows, Some(ALARM_COLS), page, total);
@@ -272,6 +289,7 @@ pub async fn run(g: &Global, cmd: AlertsCmd) -> Result<()> {
                 Some(w) => format!("/api/v1/alert-rules?workspace={}", enc(&w)),
                 None => "/api/v1/alert-rules".to_owned(),
             };
+
             let v = api.get(&path).await?;
             out::list_value(g.output, v, "", Some(RULE_COLS), paging);
             Ok(())
@@ -285,29 +303,38 @@ pub async fn run(g: &Global, cmd: AlertsCmd) -> Result<()> {
                 Some(w) => format!("/api/v1/alert-subjects?workspace={}", enc(&w)),
                 None => "/api/v1/alert-subjects".to_owned(),
             };
+
             let v = api.get(&path).await?;
+
             if g.output != out::Format::Table {
                 return show(g, &v, None);
             }
+
             show(g, &subject_rows(&v), Some(SUBJECT_COLS))
         }
         AlertsCmd::Templates { place, workspace } => {
             let mut q = Vec::new();
+
             if let Some(p) = place {
                 q.push(format!("place={}", p.as_str()));
             }
+
             if let Some(w) = workspace {
                 q.push(format!("workspace={}", enc(&w)));
             }
+
             let path = if q.is_empty() {
                 "/api/v1/alert-rule-templates".to_owned()
             } else {
                 format!("/api/v1/alert-rule-templates?{}", q.join("&"))
             };
+
             let mut v = api.get(&path).await?;
+
             for t in v.as_array_mut().into_iter().flatten() {
                 t["condition"] = json!(describe_spec(&t["spec"]));
             }
+
             show(g, &v, Some(TEMPLATE_COLS))
         }
         AlertsCmd::CreateRule { file, from } => {
@@ -320,6 +347,7 @@ pub async fn run(g: &Global, cmd: AlertsCmd) -> Result<()> {
                 }
                 (None, None) => return Err(crate::error::CliError::usage("pass a JSON file or --template <id>")),
             };
+
             let v = api.post("/api/v1/alert-rules", &body).await?;
             show(g, &v, None)
         }
@@ -351,6 +379,7 @@ mod tests {
     fn parse(args: &[&str]) -> std::result::Result<AlertsCmd, clap::Error> {
         let mut all = vec!["forge", "alerts"];
         all.extend_from_slice(args);
+
         Cli::try_parse_from(all).map(|c| match c.cmd {
             Cmd::Alerts(a) => a,
             other => panic!("{other:?}"),
@@ -366,6 +395,7 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+
         let cmd = parse(&[
             "create-rule",
             "--template",
@@ -385,12 +415,15 @@ mod tests {
         assert_eq!(from.nodes, vec!["web-1", "web-2"]);
         assert_eq!(from.severity, Some(alerttemplates::Severity::Critical));
         assert_eq!(from.name.as_deref(), Some("Disk"));
+
         let AlertsCmd::CreateRule { from, .. } =
             parse(&["create-rule", "--template", "database-stopped", "--package", "postgresql"]).unwrap()
         else {
             panic!()
         };
+
         assert_eq!(from.packages, vec!["postgresql"]);
+
         let AlertsCmd::CreateRule { from, .. } = parse(&[
             "create-rule",
             "--template",
@@ -404,6 +437,7 @@ mod tests {
         .unwrap() else {
             panic!()
         };
+
         assert_eq!((from.apps, from.check, from.disabled), (vec!["shop".to_owned()], Some("http".to_owned()), true));
         assert!(parse(&["create-rule"]).is_err(), "a file or a template");
         assert!(parse(&["create-rule", "@r.json", "--template", "x"]).is_err(), "not both");

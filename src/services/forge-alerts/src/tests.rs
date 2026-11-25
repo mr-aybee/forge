@@ -83,6 +83,7 @@ async fn env() -> Env {
     let source = Arc::new(Fake::default());
     let eval =
         Evaluator { alerts: store.clone(), state: store.clone(), source: source.clone(), resolver: store.clone() };
+
     Env { store, source, eval, ws: ws.id, node: node.id, _dir: dir }
 }
 
@@ -111,6 +112,7 @@ fn cpu_rule(ws: WorkspaceId) -> AlertRule {
 /// Runs one pass a minute from `from` with the given CPU values.
 async fn run(e: &Env, from: i64, values: &[f64]) -> PassReport {
     let mut total = PassReport::default();
+
     for (i, v) in values.iter().enumerate() {
         let at = (from + i64::try_from(i).unwrap()) * MIN;
         e.source.set("node.cpu.percent", e.node, at, *v);
@@ -119,6 +121,7 @@ async fn run(e: &Env, from: i64, values: &[f64]) -> PassReport {
         total.resolved += r.resolved;
         total.ended += r.ended;
     }
+
     total
 }
 
@@ -139,11 +142,13 @@ async fn a_sustained_breach_opens_one_alarm_and_recovery_resolves_it() {
     assert_eq!(a.len(), 1);
     assert_eq!((a[0].state, a[0].resource.id.clone()), (AlarmState::Firing, e.node.to_string()));
     assert_eq!(a[0].fired_value, json!({"type": "num", "value": 90.0}));
+
     // Still above the recovery threshold: still one firing alarm.
     run(&e, 10, &[80.0; 5]).await;
     assert_eq!(alarms(&e).await.iter().filter(|a| a.state == AlarmState::Firing).count(), 1);
     let r = run(&e, 15, &[50.0; 3]).await;
     assert_eq!(r.resolved, 1);
+
     // A recurrence is a new episode linked to the first.
     run(&e, 20, &[95.0; 7]).await;
     let all = alarms(&e).await;
@@ -157,6 +162,7 @@ async fn trackers_survive_a_restarted_evaluator() {
     let e = env().await;
     e.store.create_rule(&cpu_rule(e.ws)).await.unwrap();
     run(&e, 0, &[90.0; 5]).await;
+
     // A new evaluator over the same store continues the 5-minute timer.
     let fresh = Evaluator {
         alerts: e.store.clone(),
@@ -179,6 +185,7 @@ async fn other_workspaces_and_scopes_are_not_evaluated() {
     e.store.create_rule(&narrow).await.unwrap();
     run(&e, 0, &[99.0; 10]).await;
     assert!(alarms(&e).await.is_empty(), "a rule never sees another workspace's or out-of-scope nodes");
+
     // Unknown resources are dropped too.
     e.source.set("node.cpu.percent", ServerId::new(), 11 * MIN, 99.0);
     assert_eq!(e.eval.pass(Timestamp(11 * MIN)).await.unwrap().series, 0);
@@ -191,11 +198,14 @@ async fn silence_does_not_resolve_and_rule_changes_end_the_alarm() {
     e.store.create_rule(&rule).await.unwrap();
     run(&e, 0, &[90.0; 7]).await;
     assert_eq!(alarms(&e).await[0].state, AlarmState::Firing);
+
     // The node stops reporting: passes continue, nothing resolves.
     for m in 10..40 {
         e.eval.pass(Timestamp(m * MIN)).await.unwrap();
     }
+
     assert_eq!(alarms(&e).await[0].state, AlarmState::Firing, "unknown is not recovery");
+
     // An edit ends the alarm explicitly (no fabricated recovery).
     rule.revision = 2;
     e.store.update_rule(&rule).await.unwrap();
@@ -203,6 +213,7 @@ async fn silence_does_not_resolve_and_rule_changes_end_the_alarm() {
     assert_eq!(r.ended, 1);
     let a = &alarms(&e).await[0];
     assert_eq!((a.state, a.end_reason.as_deref()), (AlarmState::Ended, Some("the rule changed")));
+
     // Deleting the rule forgets its trackers.
     e.store.delete_rule(rule.id).await.unwrap();
     e.eval.pass(Timestamp(42 * MIN)).await.unwrap();

@@ -79,6 +79,7 @@ fn unb64(s: &str, what: &str) -> Result<Vec<u8>, PasskeyError> {
     if s.len() > 64 * 1024 {
         return Err(PasskeyError::Invalid(format!("{what} too large")));
     }
+
     forge_secrets::crypto::b64url_decode(s).ok_or_else(|| PasskeyError::Invalid(format!("{what}: base64url")))
 }
 
@@ -95,6 +96,7 @@ fn challenge_of(client_data_json: &[u8]) -> Result<Vec<u8>, PasskeyError> {
     let v: Value =
         serde_json::from_slice(client_data_json).map_err(|_| PasskeyError::Invalid("client data JSON".into()))?;
     let c = v.get("challenge").and_then(Value::as_str).ok_or(PasskeyError::Challenge)?;
+
     forge_secrets::crypto::b64url_decode(c).ok_or(PasskeyError::Challenge)
 }
 
@@ -110,6 +112,7 @@ impl PasskeyService {
         ring::rand::SystemRandom::new().fill(&mut c).map_err(|_| DomainError::Internal("no randomness".into()))?;
         let expires = self.clock.now().plus(CHALLENGE_TTL);
         self.repo.put_challenge(&hash(&c), user, purpose, expires).await?;
+
         Ok(c)
     }
 
@@ -126,6 +129,7 @@ impl PasskeyService {
         if p != purpose || expires <= self.clock.now() || (user.is_some() && owner != user) {
             return Err(PasskeyError::Challenge);
         }
+
         Ok((c, owner))
     }
 
@@ -140,8 +144,10 @@ impl PasskeyService {
         if existing.len() >= MAX_PASSKEYS {
             return Err(PasskeyError::Invalid(format!("at most {MAX_PASSKEYS} passkeys per account")));
         }
+
         let c = self.new_challenge(Some(user.id), purpose::REGISTER).await?;
         let name = user.username.clone().or_else(|| user.email.clone()).unwrap_or_else(|| user.id.to_string());
+
         Ok(json!({
             "challenge": b64(&c),
             "rp": { "id": rp.id, "name": self.rp_name },
@@ -168,19 +174,23 @@ impl PasskeyService {
         let cd = unb64(&r.client_data_json, "client data")?;
         let att = unb64(&r.attestation_object, "attestation")?;
         let (challenge, _) = self.take(&cd, purpose::REGISTER, Some(user.id)).await?;
+
         // Checked again here: several begins could otherwise exceed the limit.
         if self.repo.list_passkeys(user.id).await?.len() >= MAX_PASSKEYS {
             return Err(PasskeyError::Invalid(format!("at most {MAX_PASSKEYS} passkeys per account")));
         }
+
         let cred = webauthn::verify_registration(rp, &challenge, &cd, &att)?;
         let credential_id = b64(&cred.credential_id);
         if self.repo.passkey_by_credential(&credential_id).await?.is_some() {
             return Err(PasskeyError::Invalid("this passkey is already registered".into()));
         }
+
         let name = r.name.as_deref().map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Passkey");
         if name.chars().count() > 60 || name.chars().any(char::is_control) {
             return Err(PasskeyError::Invalid("name: up to 60 characters".into()));
         }
+
         let p = Passkey {
             id: forge_secrets::crypto::random_token::<12>(),
             user_id: user.id,
@@ -192,6 +202,7 @@ impl PasskeyService {
             last_used_at: None,
         };
         self.repo.add_passkey(&p).await?;
+
         Ok(p)
     }
 
@@ -219,6 +230,7 @@ impl PasskeyService {
         if user.disabled {
             return Err(PasskeyError::Disabled);
         }
+
         Ok((user, key.id))
     }
 
@@ -230,7 +242,9 @@ impl PasskeyService {
                 "no passkey registered; add one in Profile → Password & security".into(),
             ));
         }
+
         let c = self.new_challenge(Some(user.id), purpose::STEP_UP).await?;
+
         Ok(json!({
             "challenge": b64(&c),
             "rpId": rp.id,
@@ -257,6 +271,7 @@ impl PasskeyService {
             .filter(|k| k.user_id == user.id)
             .ok_or(PasskeyError::UnknownCredential)?;
         self.verify(rp, &challenge, &key, &cd, a).await?;
+
         Ok(key.id)
     }
 
@@ -280,10 +295,12 @@ impl PasskeyService {
             &stored,
             &Assertion { credential_id: &id, client_data_json: cd, authenticator_data: &auth, signature: &sig },
         )?;
+
         // Conditional update: a concurrent sign-in with a higher counter wins.
         if !self.repo.touch_passkey(&key.id, count, self.clock.now()).await? {
             return Err(WebAuthnError::CounterRegression.into());
         }
+
         Ok(())
     }
 
@@ -296,6 +313,7 @@ impl PasskeyService {
         if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
             return Err(PasskeyError::Invalid("name: 1 to 60 characters".into()));
         }
+
         Ok(self.repo.rename_passkey(id, user, name).await?)
     }
 

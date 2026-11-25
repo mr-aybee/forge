@@ -24,14 +24,17 @@ async fn enroll_agent(
     let (stop, rx) = tokio::sync::watch::channel(false);
     tokio::spawn(Agent::load(paths).unwrap().run(rx));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+
     loop {
         let (_, s) = admin.get(&format!("/api/v1/servers/{}", id.server_id)).await;
         if s["status"] == "online" {
             break;
         }
+
         assert!(tokio::time::Instant::now() < deadline, "agent never came online");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+
     (id.server_id, stop, dir)
 }
 
@@ -62,6 +65,7 @@ async fn rollouts_go_batch_by_batch_and_stop_at_the_first_failure() {
     let (s, e) = admin.post("/api/v1/agents/rollouts", json!({ "server_ids": [a, b], "batch": 1 })).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "{e}");
     step_up(&mut admin).await;
+
     // Nothing outdated (test agents run this version) → nothing to do.
     let (s, _) = admin.post("/api/v1/agents/rollouts", json!({ "batch": 1 })).await;
     assert_eq!(s, StatusCode::CONFLICT);
@@ -90,6 +94,7 @@ async fn a_failed_single_update_can_be_retried() {
     let h = start().await;
     let mut admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
     step_up(&mut admin).await;
+
     // An outdated node that is offline: its update fails after its retries.
     let (n, stop, _d) = enroll_agent(&h, &admin, "retry-a").await;
     let _ = stop.send(true);
@@ -111,6 +116,7 @@ async fn a_failed_single_update_can_be_retried() {
     // Many newer jobs (more than one page of the job list) must not hide the
     // failed attempt: the retry still gets a new key, not the failed job.
     use forge_core::ports::JobRepository;
+
     for i in 0..520 {
         let job = forge_core::model::NewJob {
             kind: "test.filler".into(),
@@ -122,6 +128,7 @@ async fn a_failed_single_update_can_be_retried() {
             payload: json!({}),
             max_attempts: 1,
         };
+
         // Dated in the future: newest in the list, and never due to run.
         h.app.state.store.insert_job(job, forge_core::Timestamp(i64::MAX / 2)).await.unwrap();
     }
@@ -146,6 +153,7 @@ async fn automatic_updates_are_off_by_default_and_need_mfa_to_change() {
     let on = json!({ "enabled": true, "days": ["sat", "sun"], "start": "02:00", "end": "05:00", "batch": 2 });
     let (s, e) = admin.call(reqwest::Method::PUT, "/api/v1/agents/auto-update", Some(on.clone())).await;
     assert_eq!((s, e["title"].as_str()), (StatusCode::FORBIDDEN, Some("step_up_required")));
+
     // The generic settings editor cannot be used around it.
     let (s, _) = admin
         .call(
@@ -164,6 +172,7 @@ async fn automatic_updates_are_off_by_default_and_need_mfa_to_change() {
     assert_eq!(s, StatusCode::OK, "{a}");
     assert_eq!((a["enabled"].as_bool(), a["batch"].as_u64()), (Some(true), Some(2)));
     assert!(a["enabled_by"].as_str().unwrap().starts_with("user:"));
+
     // The captured MFA is good for 90 days; the setting says when it lapses.
     let at = a["enabled_at"].as_i64().unwrap();
     assert_eq!(a["expires_at"].as_i64().unwrap() - at, 90 * 86_400_000, "{a}");
@@ -183,6 +192,7 @@ async fn stalled_node(h: &Harness, admin: &Client, name: &str) -> (String, tempf
     use forge_core::ports::ServerRepository;
     h.app.state.store.record_heartbeat(id, forge_core::Timestamp(0), "0.0.1-old").await.unwrap();
     h.app.state.store.set_status(id, forge_core::model::AgentStatus::Offline).await.unwrap();
+
     (n, dir)
 }
 
@@ -229,6 +239,7 @@ async fn one_rollout_at_a_time_one_update_per_node_and_rollouts_live_on_the_plat
     let (s, r) = admin.post("/api/v1/agents/rollouts", json!({ "server_ids": [c, a], "batch": 1 })).await;
     assert_eq!(s, StatusCode::ACCEPTED, "{r}");
     let rollout = r["job"]["id"].as_str().unwrap().to_owned();
+
     // The parent sits on the platform, outside every workspace.
     assert!(r["job"]["resource"].to_string().contains("platform"), "{r}");
     assert!(r["job"]["workspace_id"].is_null(), "{r}");
@@ -258,6 +269,7 @@ async fn one_rollout_at_a_time_one_update_per_node_and_rollouts_live_on_the_plat
     assert!(s == StatusCode::FORBIDDEN || s == StatusCode::NOT_FOUND, "{s}");
     let (s, _) = op.post(&format!("/api/v1/jobs/{rollout}/cancel"), json!({})).await;
     assert!(s == StatusCode::FORBIDDEN || s == StatusCode::NOT_FOUND, "{s}");
+
     // ...and cannot change the platform-wide automatic update setting.
     let on = json!({ "enabled": true, "days": [], "start": "02:00", "end": "05:00", "batch": 1 });
     let (s, e) = op.call(reqwest::Method::PUT, "/api/v1/agents/auto-update", Some(on)).await;
@@ -270,6 +282,7 @@ async fn one_rollout_at_a_time_one_update_per_node_and_rollouts_live_on_the_plat
     assert_eq!(job["status"], "cancelled", "{job}");
     let (_, jobs) = admin.get("/api/v1/jobs?limit=200").await;
     assert!(!jobs.as_array().unwrap().iter().any(|j| j["payload"]["rollout"] == rollout.as_str()), "{jobs}");
+
     // Once it ended, a new rollout may start.
     let (s, r) = admin.post("/api/v1/agents/rollouts", json!({ "server_ids": [a], "batch": 1 })).await;
     assert_eq!(s, StatusCode::ACCEPTED, "{r}");
@@ -323,10 +336,12 @@ async fn rollouts_skip_offline_and_unsupported_nodes_and_stop_at_a_real_failure(
     let dist = tempfile::tempdir().unwrap();
     let sha = |b: &[u8]| forge_secrets::crypto::sha256_hex(b);
     let mut files = std::collections::BTreeMap::new();
+
     for (name, body) in [("forge-agent-linux-x86_64", b"agent"), ("forge-agent-helper-linux-x86_64", b"helpr")] {
         std::fs::write(dist.path().join(name), body).unwrap();
         files.insert(name.to_owned(), sha(body));
     }
+
     forge_server::install::DistManifest { version: "99.0.0".into(), files }.write(dist.path()).unwrap();
     let dir = dist.path().to_path_buf();
     let h = start_configured(move |c| {
@@ -336,10 +351,12 @@ async fn rollouts_skip_offline_and_unsupported_nodes_and_stop_at_a_real_failure(
     .await;
     let mut admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
     step_up(&mut admin).await;
+
     // c: offline. b: its local policy does not allow `update` (unsupported).
     // a: allows it, but this host has no root helper: a real failure.
     let (c, _dc) = stalled_node(&h, &admin, "skip-c").await;
     let (b, _sb, db) = enroll_agent(&h, &admin, "skip-b").await;
+
     // The agent reads its policy at start: restart b without `update`.
     let _ = _sb.send(true);
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -394,10 +411,12 @@ async fn a_node_that_cannot_self_update_needs_a_reinstall_but_can_be_named() {
     let dist = tempfile::tempdir().unwrap();
     let sha = |b: &[u8]| forge_secrets::crypto::sha256_hex(b);
     let mut files = std::collections::BTreeMap::new();
+
     for (name, body) in [("forge-agent-linux-x86_64", b"agent"), ("forge-agent-helper-linux-x86_64", b"helpr")] {
         std::fs::write(dist.path().join(name), body).unwrap();
         files.insert(name.to_owned(), sha(body));
     }
+
     forge_server::install::DistManifest { version: "99.0.0".into(), files }.write(dist.path()).unwrap();
     let dir = dist.path().to_path_buf();
     let h = start_configured(move |c| c.agent_dist_dir = Some(dir)).await;
@@ -410,10 +429,12 @@ async fn a_node_that_cannot_self_update_needs_a_reinstall_but_can_be_named() {
     // looks the same), so the node is eligible with the verdict `unknown`.
     use forge_core::tags::FactsRepository;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+
     while !h.app.state.store.all_facts().await.unwrap().contains_key(&id) {
         assert!(tokio::time::Instant::now() < deadline, "facts never collected");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+
     let (_, v) = admin.get("/api/v1/agents/versions").await;
     let row = |v: &serde_json::Value| v["nodes"].as_array().unwrap().iter().find(|n| n["id"] == a.as_str()).cloned();
     assert_eq!(row(&v).unwrap()["verdict"], "unknown", "{v}");
@@ -432,6 +453,7 @@ async fn a_node_that_cannot_self_update_needs_a_reinstall_but_can_be_named() {
     // "Every outdated node" leaves it out...
     let (s, e) = admin.post("/api/v1/agents/rollouts", json!({ "batch": 1 })).await;
     assert_eq!(s, StatusCode::CONFLICT, "{e}");
+
     // ...but naming it still sends the update.
     let (s, r) = admin.post("/api/v1/agents/rollouts", json!({ "server_ids": [a], "batch": 1 })).await;
     assert_eq!(s, StatusCode::ACCEPTED, "{r}");

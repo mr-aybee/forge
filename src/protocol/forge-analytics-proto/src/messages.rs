@@ -146,6 +146,7 @@ pub type Response = Result<Reply, WorkerError>;
 impl From<forge_core::analytics::AnalyticsError> for WorkerError {
     fn from(e: forge_core::analytics::AnalyticsError) -> Self {
         use forge_core::analytics::AnalyticsError as A;
+
         match e {
             A::Off => WorkerError::Off,
             A::WorkerDown => WorkerError::Stopped,
@@ -162,6 +163,7 @@ impl From<forge_core::analytics::AnalyticsError> for WorkerError {
 impl From<WorkerError> for forge_core::analytics::AnalyticsError {
     fn from(e: WorkerError) -> Self {
         use forge_core::analytics::AnalyticsError as A;
+
         match e {
             WorkerError::Off => A::Off,
             WorkerError::Unavailable { reason } => A::Unavailable(reason),

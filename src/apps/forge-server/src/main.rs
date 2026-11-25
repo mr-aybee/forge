@@ -214,20 +214,25 @@ enum ReleaseCmd {
 
 fn init_logging(json: bool, stderr: bool) {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,sqlx=warn".into());
+
     if stderr {
         // Commands whose stdout is read by scripts (`enroll-token`) log to stderr.
         let builder = tracing_subscriber::fmt().with_ansi(false).with_env_filter(filter).with_writer(std::io::stderr);
+
         if json {
             builder.json().init();
         } else {
             builder.init();
         }
+
         return;
     }
+
     // No colour codes in journald or redirected logs.
     let builder = tracing_subscriber::fmt()
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stdout()))
         .with_env_filter(filter);
+
     if json {
         builder.json().init();
     } else {
@@ -239,6 +244,7 @@ fn init_logging(json: bool, stderr: bool) {
 async fn main() -> anyhow::Result<()> {
     // Files the server creates (database, WAL, backups, keys) are owner-only.
     forge_server::perms::owner_only_umask();
+
     // Before an update can rename the running file (`*.prev`).
     forge_server::update::remember_install_path();
     let cli = Cli::parse();
@@ -250,12 +256,14 @@ async fn main() -> anyhow::Result<()> {
             // A freshly installed update that keeps failing is rolled back here.
             forge_server::update::startup_guard(&config.data_dir, &config.agent_dist_dir());
             let data_dir = config.data_dir.clone();
+
             // Off is the default: MFA is each user's choice and guards their
             // sign-in. `forge-server mfa on` opts in to guarded actions.
             let mfa_required = config.mfa_required();
             tracing::info!(required_for_guarded_actions = mfa_required, "MFA policy");
             let app = App::start(config).await?;
             tracing::info!(api = %app.api_addr, agents = %app.agent_addr, version = forge_server::VERSION, "Orbyn Forge control plane started");
+
             if let Some((old, new)) = forge_server::mfa_config::changed_since_last_start(&data_dir, mfa_required) {
                 let name = |v: bool| if v { "required" } else { "off" };
                 tracing::info!(old = old.map(name), new = name(new), "MFA setting");
@@ -263,6 +271,7 @@ async fn main() -> anyhow::Result<()> {
                     .audit_system("config.mfa", serde_json::json!({ "old": old.map(name), "new": name(new) }))
                     .await;
             }
+
             if let Some(a) = forge_server::update::mark_serving(&data_dir) {
                 tracing::info!(from = %a.from, to = %a.to, "update completed");
                 app.state
@@ -271,6 +280,7 @@ async fn main() -> anyhow::Result<()> {
                         serde_json::json!({ "from": a.from, "to": a.to, "backup": a.backup }),
                     )
                     .await;
+
                 // Agents follow the server when the update asked for it.
                 forge_server::api::system_update::start_agent_follow_up(&app.state, &a);
             } else if let Some(a) = forge_server::update::detect_stale_restart(&data_dir) {
@@ -282,6 +292,7 @@ async fn main() -> anyhow::Result<()> {
                     )
                     .await;
             }
+
             // An update restart needs a known install path; without one the
             // server keeps serving and the update is marked failed.
             let restart = loop {
@@ -289,9 +300,11 @@ async fn main() -> anyhow::Result<()> {
                     () = shutdown_signal() => false,
                     () = forge_server::update::restart_signal().notified() => true,
                 };
+
                 if !wants_restart {
                     break None;
                 }
+
                 match forge_server::update::restart_target() {
                     Ok(exe) => break Some(exe),
                     Err(e) => {
@@ -305,8 +318,10 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
             };
+
             tracing::info!(restart = restart.is_some(), "shutting down");
             app.stop().await;
+
             if let Some(exe) = restart {
                 forge_server::update::restart_into_self(&exe);
             }
@@ -321,9 +336,11 @@ async fn main() -> anyhow::Result<()> {
                 state.store.find_user_by_username(&login).await?
             }
             .ok_or_else(|| anyhow::anyhow!("no user `{login}`"))?;
+
             let removed = state.passkeys.remove_all(user.id).await.map_err(|e| anyhow::anyhow!("{e}"))?;
             state.store.set_totp_secret(user.id, None).await?;
             state.identity.revoke_all(user.id).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+
             // A reset is account-compromise recovery: API keys go too.
             let keys = forge_core::ports::ApiKeyRepository::delete_user_api_keys(&state.store, user.id).await?;
             state
@@ -350,6 +367,7 @@ async fn main() -> anyhow::Result<()> {
             {
                 println!("created database {}", config.database_name());
             }
+
             let password = match std::env::var("FORGE_ADMIN_PASSWORD") {
                 Ok(p) => p,
                 Err(_) => {
@@ -358,10 +376,12 @@ async fn main() -> anyhow::Result<()> {
                     line.trim_end_matches(['\r', '\n']).to_owned()
                 }
             };
+
             let username = match (&username, &email) {
                 (None, None) => Some("admin".to_owned()),
                 _ => username,
             };
+
             // Check everything before the database is created, so a rejected
             // password leaves no half-initialised installation behind.
             let (username, email) = forge_identity::sign_in_names(username.as_deref(), email.as_deref())?;
@@ -387,9 +407,11 @@ async fn main() -> anyhow::Result<()> {
             let text = std::fs::read_to_string(path)?;
             let in_file = forge_server::mfa_config::read(&text)?;
             let word = |v: bool| if v { "required" } else { "not required" };
+
             match action {
                 MfaAction::Status => {
                     println!("MFA is {} ({}).", word(config.mfa_required()), path.display());
+
                     if in_file != config.mfa_required() {
                         println!("The file says {}; an environment variable overrides it.", word(in_file));
                     }
@@ -403,7 +425,9 @@ async fn main() -> anyhow::Result<()> {
                         forge_server::mfa_config::write_atomic(path, &new)?;
                         println!("MFA is now {} in {}.", word(required), path.display());
                     }
+
                     println!("Restart forge-server to apply it: systemctl restart forge-server");
+
                     if std::env::var("FORGE_REQUIRE_MFA").is_ok() || std::env::var("FORGE_DEV_SKIP_MFA").is_ok() {
                         println!("Note: FORGE_REQUIRE_MFA or FORGE_DEV_SKIP_MFA is set and overrides the file.");
                     }
@@ -417,9 +441,11 @@ async fn main() -> anyhow::Result<()> {
             let text = std::fs::read_to_string(path)?;
             let in_file = forge_server::mfa_config::read_elevated(&text)?;
             let word = |v: bool| if v { "allowed" } else { "not allowed" };
+
             match action {
                 MfaAction::Status => {
                     println!("Elevated tokens are {} ({}).", word(config.elevated_tokens_allowed()), path.display());
+
                     if in_file != config.elevated_tokens_allowed() {
                         println!("The file says {}; FORGE_ALLOW_ELEVATED_TOKENS overrides it.", word(in_file));
                     }
@@ -433,6 +459,7 @@ async fn main() -> anyhow::Result<()> {
                         forge_server::mfa_config::write_atomic(path, &new)?;
                         println!("Elevated tokens are now {} in {}.", word(allowed), path.display());
                     }
+
                     println!("Restart forge-server to apply it: systemctl restart forge-server");
                 }
             }
@@ -453,6 +480,7 @@ async fn main() -> anyhow::Result<()> {
             let unknown = forge_store::Store::unknown_migrations(&config.database_url())
                 .await
                 .map_err(|e| anyhow::anyhow!("cannot read the database: {e}"))?;
+
             if !unknown.is_empty() {
                 let list: Vec<String> = unknown.iter().map(i64::to_string).collect();
                 eprintln!(
@@ -462,6 +490,7 @@ async fn main() -> anyhow::Result<()> {
                 );
                 std::process::exit(3);
             }
+
             println!("every applied migration is known to forge-server {}", forge_server::VERSION);
         }
         Cmd::EnrollToken { cluster, hostname, ttl_minutes } => {
@@ -484,6 +513,7 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", forge_server::update::keys::sign(&key, &data).map_err(anyhow::Error::msg)?);
         }
     }
+
     Ok(())
 }
 
@@ -492,6 +522,7 @@ async fn allowed_hosts(config: ServerConfig, action: HostsAction) -> anyhow::Res
     use forge_server::api::server_settings::{AUDIT_ALLOWED_HOSTS_CLEAR, AUDIT_ALLOWED_HOSTS_UPDATE};
     let state = Services::build(config).await?;
     let hosts = &state.allowed_hosts;
+
     let (audit, value) = match action {
         HostsAction::Get => {
             println!("{}", hosts.list().join(" "));
@@ -503,6 +534,7 @@ async fn allowed_hosts(config: ServerConfig, action: HostsAction) -> anyhow::Res
         }
         HostsAction::Clear => (AUDIT_ALLOWED_HOSTS_CLEAR, None),
     };
+
     let from = hosts.list();
     forge_server::allowed_hosts::save(&state.store, hosts, value.as_deref(), state.clock.now())
         .await
@@ -513,6 +545,7 @@ async fn allowed_hosts(config: ServerConfig, action: HostsAction) -> anyhow::Res
         "Allowed hosts: {}. Restart forge-server to apply it to a running server: systemctl restart forge-server",
         to.join(" ")
     );
+
     Ok(())
 }
 
@@ -525,19 +558,24 @@ async fn agent_key(config: ServerConfig, cmd: AgentKeyCmd) -> anyhow::Result<()>
     let keys = &state.agent_keys;
     let now = state.clock.now();
     let fp = |s: &str| format!("{}{s}", forge_pki::server_key::FINGERPRINT_PREFIX);
+
     match cmd {
         AgentKeyCmd::Show => {
             for k in keys.keys().iter().filter(|k| k.label == LABEL_CURRENT || k.label == LABEL_NEXT) {
                 println!("{:<8} {}", k.label, fp(&k.sha256));
             }
+
             println!("rotation {}", serde_json::to_string(&keys.rotation_status(now))?);
         }
         AgentKeyCmd::List => {
             let list = keys.keys();
+
             for k in &list {
                 println!("{:<8} {}  created {}", k.label, fp(&k.sha256), k.created_at.0);
             }
+
             println!();
+
             for (server, ack) in keys.acknowledgements() {
                 let has: Vec<&str> = list.iter().filter(|k| ack.keys.contains(&k.sha256)).map(|k| k.label).collect();
                 println!(
@@ -554,15 +592,19 @@ async fn agent_key(config: ServerConfig, cmd: AgentKeyCmd) -> anyhow::Result<()>
                 (true, false, _) => RotateMode::Now,
                 (false, ..) => RotateMode::WhenReady,
             };
+
             let next = keys.keys().into_iter().find(|k| k.label == LABEL_NEXT).map(|k| k.sha256).unwrap_or_default();
             let (online, acknowledged) = keys.ack_counts(&next, now);
+
             match keys.rotate(now, mode).await? {
                 Some(r) => {
                     let action = if r.revoked.is_empty() { AUDIT_KEY_ROTATE } else { AUDIT_KEY_REVOKE };
                     state.audit_system(action, serde_json::json!(r)).await;
+
                     for k in &r.revoked {
                         println!("Revoked {}: agents unpin it at their next heartbeat.", fp(k));
                     }
+
                     if r.fresh {
                         println!(
                             "New keys, never announced: no agent has them. On every node run, as root:\n  forge-agent pins add {}\n  forge-agent pins add {} --label analytics\nor 'forge-agent pins fetch' and compare the key with {}.",
@@ -572,6 +614,7 @@ async fn agent_key(config: ServerConfig, cmd: AgentKeyCmd) -> anyhow::Result<()>
                         );
                         return Ok(());
                     }
+
                     println!(
                         "Switched to {} ({acknowledged} of {online} agents that pin had it). A running server serves it within a minute. Agents without it: run 'forge-agent pins add {}' on them.",
                         fp(&r.to),
@@ -593,6 +636,7 @@ async fn agent_key(config: ServerConfig, cmd: AgentKeyCmd) -> anyhow::Result<()>
             }
         }
     }
+
     Ok(())
 }
 
@@ -601,15 +645,18 @@ async fn public_address(config: ServerConfig, action: AddressAction) -> anyhow::
     use forge_server::api::server_settings::{AUDIT_PUBLIC_ADDRESS_CLEAR, AUDIT_PUBLIC_ADDRESS_UPDATE};
     let state = Services::build(config).await?;
     let addr = &state.public_address;
+
     let (audit, value) = match action {
         AddressAction::Get => {
             let configured = Some(addr.configured()).filter(|c| !c.is_empty()).unwrap_or("not set");
+
             match (addr.runtime(), addr.last_admin()) {
                 (Some(v), _) => println!("{v} (setting; public_url in forge.toml: {configured})"),
                 (None, _) if configured != "not set" => println!("{configured} (public_url in forge.toml; no setting)"),
                 (None, Some(last)) => println!("{last} (not pinned: the address an administrator last signed in on)"),
                 (None, None) => println!("not pinned, and no administrator has signed in yet"),
             }
+
             return Ok(());
         }
         AddressAction::Set { url } => {
@@ -618,6 +665,7 @@ async fn public_address(config: ServerConfig, action: AddressAction) -> anyhow::
         }
         AddressAction::Clear => (AUDIT_PUBLIC_ADDRESS_CLEAR, None),
     };
+
     let from = addr.get();
     forge_server::public_address::save(&state.store, addr, value.as_deref(), state.clock.now())
         .await
@@ -629,6 +677,7 @@ async fn public_address(config: ServerConfig, action: AddressAction) -> anyhow::
     println!(
         "Links now use {to}. Restart forge-server to apply it to a running server: systemctl restart forge-server"
     );
+
     Ok(())
 }
 
@@ -655,10 +704,12 @@ async fn shutdown_signal() {
 /// `## forge-server <path>` (or `### …`) heading and every flag and argument appears.
 async fn db_command(config: &ServerConfig, cmd: DbCmd) -> anyhow::Result<()> {
     use forge_store::provision::{self, Contents};
+
     match cmd {
         DbCmd::Show => {
             println!("operational: {}", config.database_display());
             println!("analytics:   engine={:?} database={}", config.analytics.engine, config.analytics_name());
+
             if let Some(u) = config.analytics_url() {
                 println!("             {}", forge_server::config::redact_url(&u));
             }
@@ -669,20 +720,25 @@ async fn db_command(config: &ServerConfig, cmd: DbCmd) -> anyhow::Result<()> {
                 .await
                 .map_err(|e| anyhow::anyhow!("cannot reach {}: {e}", config.database_display()))?;
             let mut created = false;
+
             if create && report.contents == Contents::Missing && report.can_create != Some(false) {
                 created = provision::create_if_missing(&url)
                     .await
                     .map_err(|e| anyhow::anyhow!("creating the database: {e}"))?;
                 report = provision::check(&url).await.map_err(|e| anyhow::anyhow!("{e}"))?;
             }
+
             let usable = report.usable(allow_shared);
+
             if json {
                 println!("{}", serde_json::json!({ "report": report, "created": created, "usable": usable }));
             } else {
                 println!("database: {}", config.database_display());
+
                 if let Some(v) = &report.server_version {
                     println!("server:   {v}");
                 }
+
                 let what = match report.contents {
                     Contents::Missing if report.can_create == Some(false) => format!(
                         "missing, and this role may not create databases. Ask an administrator to run: CREATE DATABASE {} OWNER <role>;",
@@ -699,17 +755,21 @@ async fn db_command(config: &ServerConfig, cmd: DbCmd) -> anyhow::Result<()> {
                         report.tables
                     ),
                 };
+
                 if created {
                     println!("created:  {}", config.database_name());
                 }
+
                 println!("contents: {what}");
                 println!("usable:   {}", if usable { "yes" } else { "no" });
             }
+
             if !usable {
                 std::process::exit(4);
             }
         }
     }
+
     Ok(())
 }
 
@@ -729,20 +789,24 @@ mod docs_coverage {
             if matches!(id, "help" | "version") {
                 continue;
             }
+
             let shown = match a.get_long() {
                 Some(l) => format!("--{l}"),
                 None => format!("<{}>", id.to_uppercase()),
             };
+
             let alt = format!("[{}]", id.to_uppercase());
             if !doc.contains(&shown) && !doc.contains(&alt) {
                 missing.push(format!("{path}: {shown}"));
             }
         }
+
         for sub in cmd.get_subcommands().filter(|s| s.get_name() != "help") {
             let p = format!("{path} {}", sub.get_name());
             if !doc.contains(&format!("## {p}\n")) && !doc.contains(&format!("### {p}\n")) {
                 missing.push(format!("heading `## {p}`"));
             }
+
             walk(sub, &p, doc, missing);
         }
     }

@@ -18,6 +18,7 @@ async fn username_admin_signs_in_edits_profile_and_rotates_the_generated_passwor
     let mut config = test_config(dir.path());
     config.public_url = Some(format!("http://{}", api.local_addr().unwrap()));
     let state = Services::build(config).await.unwrap();
+
     // What install.sh does: save the generated password, then init.
     let saved = dir.path().join(INITIAL_PASSWORD_FILE);
     std::fs::write(&saved, PASSWORD).unwrap();
@@ -37,11 +38,13 @@ async fn username_admin_signs_in_edits_profile_and_rotates_the_generated_passwor
     let (s, b) =
         c.call(Method::PATCH, "/api/v1/me", Some(json!({ "username": "admin", "display_name": "Admin" }))).await;
     assert_eq!(s, StatusCode::OK, "{b}");
+
     // A sign-in name needs the current password (#13 inventory): a stolen
     // session must not be able to take the account over.
     let add_email = json!({ "username": "admin", "email": "Ops@Example.com", "display_name": "Ops" });
     let (s, b) = c.call(Method::PATCH, "/api/v1/me", Some(add_email.clone())).await;
     assert_eq!((s, b["title"].as_str()), (StatusCode::UNAUTHORIZED, Some("password_required")), "{b}");
+
     // Add an email later from the console, with the password.
     let mut with_pw = add_email;
     with_pw["current_password"] = json!(PASSWORD);
@@ -64,6 +67,7 @@ async fn username_admin_signs_in_edits_profile_and_rotates_the_generated_passwor
     let (s, b) = c.post("/api/v1/me/password", json!({ "current_password": PASSWORD, "new_password": new })).await;
     assert_eq!(s, StatusCode::NO_CONTENT, "{b}");
     assert!(!saved.exists(), "the generated password file should be deleted");
+
     // Security review: every other sign-in ends; the browser that changed
     // the password gets a fresh session and stays signed in.
     let (s, _) = other.get("/api/v1/me").await;

@@ -22,10 +22,12 @@ pub fn action_for(op: &DockerOp) -> Action {
     if op.read_only() {
         return Action::ServerManage;
     }
+
     // A push uses the workspace's stored registry credentials.
     if matches!(op, DockerOp::ImagePush { .. }) {
         return Action::RegistryManage;
     }
+
     match op.kind() {
         "image" => Action::ImageManage,
         "volume" => Action::VolumeManage,
@@ -51,6 +53,7 @@ pub const fn is_slow(op: &DockerOp) -> bool {
 pub fn command(op: &DockerOp) -> DomainResult<Command> {
     op.validate().map_err(DomainError::Invalid)?;
     let op_json = serde_json::to_string(op).map_err(DomainError::internal)?;
+
     Ok(Command::DockerAction(DockerAction { op_json }))
 }
 

@@ -78,6 +78,7 @@ pub async fn validate(_caller: Caller, Json(input): Json<DocInput>) -> ApiResult
     let doc = crate::deploy::read_document(&input.yaml, input.environment.as_deref())?;
     let artifact = doc.spec.artifact.resolve(doc.spec.runtime).map_err(|e| ApiError::bad_request(e.to_string()))?;
     let policy = doc.policy().map_err(|e| ApiError::bad_request(e.to_string()))?;
+
     Ok(Json(Validated {
         valid: true,
         service: doc.metadata.name,
@@ -94,17 +95,21 @@ pub async fn validate(_caller: Caller, Json(input): Json<DocInput>) -> ApiResult
 async fn authorize(state: &AppState, caller: &Caller, p: &Prepared) -> ApiResult<Vec<String>> {
     let target = if p.is_new { ns_ref(p.app.environment_id) } else { svc_ref(p.app.id) };
     caller.authorize(Action::Deploy, target).await?;
+
     for n in &p.added {
         caller.authorize(Action::ServerManage, EntityRef::new(EntityKind::Server, *n)).await?;
     }
+
     if !p.removed.is_empty() {
         for n in &p.removed {
             caller.authorize(Action::ServerManage, EntityRef::new(EntityKind::Server, *n)).await?;
         }
     }
+
     let spec = crate::jobs::app::build_spec(&crate::deploy::release_app(&p.app, &p.release), None)
         .map_err(ApiError::bad_request)?;
     let mut mounts = std::collections::BTreeSet::new();
+
     if let Some(sw) = &p.swarm {
         // In a swarm a task may run on any node: host binds are approved
         // only inside an approved root on every node (D-156).
@@ -118,13 +123,16 @@ async fn authorize(state: &AppState, caller: &Caller, p: &Prepared) -> ApiResult
         .map_err(ApiError::bad_request)?;
         mounts.extend(state.swarm.privileged_binds(sw.cluster, &def.bind_sources()).await?);
     }
+
     for n in &p.nodes {
         let roots = crate::stacks::bind_roots(&state.store, *n).await;
         mounts.extend(crate::jobs::app::privileged_mounts(&spec, &roots));
     }
+
     if !mounts.is_empty() {
         caller.authorize(Action::StackPrivileged, ns_ref(p.app.environment_id)).await?;
     }
+
     Ok(mounts.into_iter().collect())
 }
 
@@ -137,6 +145,7 @@ async fn prepare(
     let doc = crate::deploy::read_document(&input.yaml, input.environment.as_deref())?;
     let p = state.deploy.prepare(ws, &doc, &input.yaml, &caller.principal()).await?;
     state.swarm.check_runtime(p.app.environment_id, &p.app.runtime).await?;
+
     Ok(p)
 }
 
@@ -154,6 +163,7 @@ pub async fn plan(
     authorize(&state, &caller, &p).await?;
     let n = next_number(&state, p.app.id).await?;
     let env = p.release.spec["environment"].as_str().unwrap_or_default().to_owned();
+
     Ok(Json(p.view(&env, n)))
 }
 
@@ -191,6 +201,7 @@ pub async fn apply(
             }),
         )
         .await;
+
     Ok((StatusCode::ACCEPTED, Json(Started { deployment: d, plan: view, installs })))
 }
 
@@ -213,6 +224,7 @@ pub async fn releases(
 ) -> ApiResult<Json<Vec<Release>>> {
     let app = load_app(&state, id).await?;
     caller.authorize(Action::View, svc_ref(app.id)).await?;
+
     Ok(Json(state.store.list_releases(app.id, q.limit.unwrap_or(MAX_LISTED).clamp(1, MAX_LISTED)).await?))
 }
 
@@ -225,6 +237,7 @@ pub async fn release(
     caller.authorize(Action::View, svc_ref(app.id)).await?;
     let r =
         state.store.release_by_number(app.id, number).await?.ok_or_else(|| ApiError::not_found("release not found"))?;
+
     Ok(Json(r))
 }
 
@@ -236,6 +249,7 @@ pub async fn deployments(
 ) -> ApiResult<Json<Vec<Deployment>>> {
     let app = load_app(&state, id).await?;
     caller.authorize(Action::View, svc_ref(app.id)).await?;
+
     Ok(Json(state.store.list_deployments(app.id, q.limit.unwrap_or(MAX_LISTED).clamp(1, MAX_LISTED)).await?))
 }
 
@@ -253,6 +267,7 @@ pub async fn slots(
 ) -> ApiResult<Json<SlotsView>> {
     let app = load_app(&state, id).await?;
     caller.authorize(Action::View, svc_ref(app.id)).await?;
+
     Ok(Json(SlotsView {
         current_release: state.store.current_release(app.id).await?,
         slots: state.store.list_slots(app.id).await?,
@@ -289,6 +304,7 @@ async fn redeploy(
             json!({ "service": app.name, "release": number, "from": d.from_release, "deployment_id": d.id }),
         )
         .await;
+
     Ok((StatusCode::ACCEPTED, Json(Started { deployment: d, plan: view, installs: Vec::new() })))
 }
 
@@ -300,6 +316,7 @@ pub async fn deploy_release(
 ) -> ApiResult<(StatusCode, Json<Started>)> {
     let app = load_app(&state, id).await?;
     let number = input.release.ok_or_else(|| ApiError::bad_request("release is required"))?;
+
     redeploy(&state, &caller, &app, number, DeploymentKind::Apply).await
 }
 
@@ -312,6 +329,7 @@ pub async fn rollback(
     let app = load_app(&state, id).await?;
     caller.authorize(Action::Deploy, svc_ref(app.id)).await?;
     let number = state.deploy.rollback_target(&app, input.release).await?;
+
     redeploy(&state, &caller, &app, number, DeploymentKind::Rollback).await
 }
 
@@ -333,6 +351,7 @@ async fn load_deployment(state: &AppState, caller: &Caller, id: DeploymentId) ->
     let d = state.store.get_deployment(id).await?.ok_or_else(|| ApiError::not_found("deployment not found"))?;
     let app = load_app(state, d.service_id).await?;
     caller.authorize(Action::View, svc_ref(app.id)).await?;
+
     Ok((d, app))
 }
 
@@ -346,6 +365,7 @@ pub async fn get(
     let events = state.store.list_events(d.id, 0, 1_000).await?;
     let can_control = caller.can(Action::Deploy, svc_ref(app.id)).await;
     let can_approve = d.created_by != caller.principal() && caller.can(Action::DeployApprove, svc_ref(app.id)).await;
+
     Ok(Json(DeploymentView { steps, service: app.name, deployment: d, events, can_control, can_approve }))
 }
 
@@ -356,15 +376,19 @@ async fn step_lines(state: &AppState, stored: &serde_json::Value) -> DomainResul
     if stored.get("targets").is_some() {
         let plan: cat::Plan = serde_json::from_value(stored.clone()).map_err(forge_core::DomainError::internal)?;
         let names = node_names(state, &plan).await?;
+
         return Ok(plan.steps.iter().map(|s| s.describe(&names)).collect());
     }
+
     let plan: forge_catalog::swarm_rollout::SwarmPlan =
         serde_json::from_value(stored.clone()).map_err(forge_core::DomainError::internal)?;
+
     Ok(plan.steps.iter().map(forge_catalog::swarm_rollout::SwarmStep::describe).collect())
 }
 
 async fn node_names(state: &AppState, plan: &cat::Plan) -> DomainResult<std::collections::BTreeMap<String, String>> {
     let mut names = std::collections::BTreeMap::new();
+
     for t in &plan.targets {
         if let Ok(id) = t.server_id.parse::<ServerId>()
             && let Ok(s) = state.store.get_server(id).await
@@ -372,6 +396,7 @@ async fn node_names(state: &AppState, plan: &cat::Plan) -> DomainResult<std::col
             names.insert(t.server_id.clone(), s.display_name.unwrap_or(s.hostname));
         }
     }
+
     Ok(names)
 }
 
@@ -399,12 +424,15 @@ pub async fn request(
 ) -> ApiResult<Json<Deployment>> {
     let req = DeploymentRequest::parse(&what).ok_or_else(|| ApiError::not_found("unknown deployment action"))?;
     let (d, app) = load_deployment(&state, &caller, id).await?;
+
     match req {
         DeploymentRequest::Approve | DeploymentRequest::Reject => {
             caller.authorize(Action::DeployApprove, svc_ref(app.id)).await?;
+
             if d.created_by == caller.principal() {
                 return Err(ApiError::forbidden("someone other than its author approves a deployment"));
             }
+
             if d.state != forge_core::deploy::DeploymentState::AwaitingApproval {
                 return Err(ApiError::conflict("the deployment is not waiting for an approval"));
             }
@@ -413,9 +441,11 @@ pub async fn request(
             caller.authorize(Action::Deploy, svc_ref(app.id)).await?;
         }
     }
+
     if !d.state.active() {
         return Err(ApiError::conflict("the deployment has finished"));
     }
+
     state.store.request_deployment(d.id, req, state.clock.now()).await?;
     let who = caller.principal().to_string();
     let e = DeploymentEvent {
@@ -436,6 +466,7 @@ pub async fn request(
         )
         .await;
     let d = state.store.get_deployment(d.id).await?.ok_or_else(|| ApiError::not_found("deployment not found"))?;
+
     Ok(Json(d))
 }
 
@@ -472,10 +503,12 @@ impl RolloutEffects for ApiEffects {
             super::routing::Resolver::new(&state).await.map_err(|e| forge_core::DomainError::Internal(e.message))?;
         let slots = state.store.list_slots(app).await?;
         let mut wanted = std::collections::HashSet::new();
+
         for c in copies {
             let Ok(server) = c.server_id.parse::<ServerId>() else { continue };
             let name = cat::Slot::name(c.slot);
             let Some(row) = slots.iter().find(|s| s.server_id == server && s.slot == name) else { continue };
+
             for port in crate::deploy::port_map(row).values() {
                 for host in resolver.addresses_of(&c.server_id) {
                     wanted.insert(if host.contains(':') {
@@ -486,18 +519,22 @@ impl RolloutEffects for ApiEffects {
                 }
             }
         }
+
         let mut out = TrafficSample::default();
+
         for (_, sites) in state.telemetry.traffic(since.0) {
             for site in sites {
                 for u in site.upstreams.iter().filter(|u| wanted.contains(&u.address)) {
                     out.requests += u.requests;
                     out.errors += u.errors;
+
                     if u.p95_ms > 0 {
                         out.p95_ms = Some(out.p95_ms.unwrap_or(0).max(u.p95_ms));
                     }
                 }
             }
         }
+
         Ok(out)
     }
 }

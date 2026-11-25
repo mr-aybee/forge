@@ -177,9 +177,11 @@ impl RuleSpec {
     /// Checks bounds: finite thresholds, spans within a day, sane counts.
     pub fn validate(&self) -> Result<(), String> {
         self.trigger.validate()?;
+
         if let Some(c) = &self.recovery.condition {
             c.validate()?;
         }
+
         let span = |name: &str, v: i64, min: i64| {
             if (min..=MAX_SPAN_MS).contains(&v) {
                 Ok(())
@@ -188,14 +190,17 @@ impl RuleSpec {
             }
         };
         span("the recovery hold", self.recovery.hold_ms, 0)?;
+
         match &self.mode {
             Mode::Immediate => {}
             Mode::Sustained { for_ms } => span("the duration", *for_ms, 1_000)?,
             Mode::WindowAverage { window_ms, min_coverage_pct } => {
                 span("the window", *window_ms, 1_000)?;
+
                 if !(1..=100).contains(min_coverage_pct) {
                     return Err("the minimum coverage is 1 to 100 %".into());
                 }
+
                 if !matches!(self.trigger, Condition::Threshold { .. }) {
                     return Err("an average needs a numeric threshold".into());
                 }
@@ -203,12 +208,14 @@ impl RuleSpec {
             Mode::Repeated { count, window_ms, min_spacing_ms } => {
                 span("the window", *window_ms, 1_000)?;
                 span("the spacing", *min_spacing_ms, 0)?;
+
                 if !(1..=1000).contains(count) {
                     return Err("the count is 1 to 1000".into());
                 }
             }
             Mode::AnyInWindow { window_ms } => span("the window", *window_ms, 1_000)?,
         }
+
         Ok(())
     }
 
@@ -219,6 +226,7 @@ impl RuleSpec {
         let mins = |ms: i64| {
             if ms % 60_000 == 0 { format!("{} min", ms / 60_000) } else { format!("{} s", ms / 1000) }
         };
+
         match &self.mode {
             Mode::Immediate => c,
             Mode::Sustained { for_ms } => format!("{c} for {}", mins(*for_ms)),
@@ -338,12 +346,15 @@ impl Tracker {
         if s.valid_until < s.at {
             return Err(Refused::Invalid);
         }
+
         if s.at > now + MAX_FUTURE_MS {
             return Err(Refused::Future);
         }
+
         if self.last_at.is_some_and(|l| s.at <= l) {
             return Err(Refused::Late);
         }
+
         // A gap between the previous sample's validity and this one breaks
         // every run: nothing is known about that time.
         let gap = self.latest.as_ref().is_some_and(|p| s.at > p.valid_until);
@@ -351,8 +362,10 @@ impl Tracker {
             self.breach_since = None;
             self.clear_since = None;
         }
+
         let meets = s.value.as_ref().is_some_and(|v| spec.trigger.holds(v));
         let recovers = s.value.as_ref().is_some_and(|v| self.recovery_holds(spec, v));
+
         match &s.value {
             None => {
                 self.breach_since = None;
@@ -363,10 +376,12 @@ impl Tracker {
                     if self.breach_since.is_none() {
                         self.note_breach_start(spec, s.at);
                     }
+
                     self.breach_since.get_or_insert(s.at);
                 } else {
                     self.breach_since = None;
                 }
+
                 if recovers {
                     self.clear_since.get_or_insert(s.at);
                 } else {
@@ -374,14 +389,19 @@ impl Tracker {
                 }
             }
         }
+
         self.last_at = Some(s.at);
+
         if matches!(spec.mode, Mode::WindowAverage { .. } | Mode::AnyInWindow { .. }) {
             self.window.push_back(s.clone());
+
             while self.window.len() > MAX_WINDOW_SAMPLES {
                 self.window.pop_front();
             }
         }
+
         self.latest = Some(s);
+
         Ok(self.tick(spec, now))
     }
 
@@ -415,7 +435,9 @@ impl Tracker {
             self.breach_since = None;
             self.clear_since = None;
         }
+
         self.trim_window(spec, now);
+
         match self.phase {
             Phase::Normal | Phase::Pending { .. } => {
                 let (met, value) = self.trigger_met(spec, now);
@@ -442,6 +464,7 @@ impl Tracker {
                 }
             }
         }
+
         out
     }
 
@@ -452,10 +475,12 @@ impl Tracker {
                 while self.breach_starts.front().is_some_and(|t| *t < now - window_ms) {
                     self.breach_starts.pop_front();
                 }
+
                 return;
             }
             _ => return,
         };
+
         // Keep one sample that started before the window: it may cover its
         // beginning.
         while self.window.len() > 1 && self.window.get(1).is_some_and(|s| s.at <= now - w) {
@@ -502,7 +527,9 @@ impl Tracker {
         if !self.known(now) {
             return false;
         }
+
         let hold = spec.recovery.hold_ms;
+
         match (&spec.mode, &spec.recovery.condition) {
             // Window modes without their own recovery: the window no longer
             // qualifies, held for the hold time with valid evidence.

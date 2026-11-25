@@ -17,11 +17,14 @@ fn hmac(key: &str, body: &[u8]) -> String {
 
 async fn post(base: &str, path: &str, headers: &[(&str, String)], body: &str) -> (StatusCode, Value) {
     let mut r = reqwest::Client::new().post(format!("{base}{path}")).body(body.to_owned());
+
     for (k, v) in headers {
         r = r.header(*k, v);
     }
+
     let resp = r.send().await.unwrap();
     let s = resp.status();
+
     (s, resp.json().await.unwrap_or(Value::Null))
 }
 
@@ -148,6 +151,7 @@ async fn service(admin: &Client, name: &str) -> (String, String) {
         )
         .await;
     assert_eq!(s, StatusCode::CREATED, "{svc}");
+
     (svc["id"].as_str().unwrap().to_owned(), env["id"].as_str().unwrap().to_owned())
 }
 
@@ -155,6 +159,7 @@ async fn service(admin: &Client, name: &str) -> (String, String) {
 async fn a_failed_webhook_deploy_keeps_the_stored_image() {
     let h = start().await;
     let mut admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+
     // No nodes chosen: the deploy itself fails.
     let (sid, _) = service(&admin, "web").await;
     step_up(&mut admin).await;
@@ -198,6 +203,7 @@ async fn a_gitlab_delivery_needs_its_event_id() {
     assert_eq!(s, StatusCode::BAD_REQUEST, "{out}");
     let headers = [("x-gitlab-token", secret), ("x-gitlab-event-uuid", "e-1".to_owned())];
     let (s, out) = post(&h.base, &path, &headers, "{}").await;
+
     // Signature and id accepted; the deploy then fails (no nodes chosen).
     assert_eq!(s, StatusCode::CONFLICT, "{out}");
     let (s, out) = post(&h.base, &path, &headers, "{}").await;

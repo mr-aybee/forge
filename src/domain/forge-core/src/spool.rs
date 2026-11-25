@@ -59,6 +59,7 @@ impl Counts {
             Kind::TopProcess => &mut self.top_process,
             Kind::ContainerMinute => &mut self.container_minute,
         };
+
         *c = c.saturating_add(1);
     }
 
@@ -239,9 +240,11 @@ impl FileName {
         let (node, id) = stem.split_at_checked(36)?;
         let id = id.strip_prefix('-')?;
         let node = uuid::Uuid::try_parse(node).ok()?;
+
         if id.len() != 32 || !id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
             return None;
         }
+
         Some(Self { node, id: id.to_owned() })
     }
 }
@@ -270,6 +273,7 @@ mod tests {
         assert_eq!(FileName::parse(&n.stem()), Some(n.clone()));
         let later = FileName::new(n.node);
         assert!(later.id > n.id || later.id[..12] == n.id[..12], "time ordered");
+
         for bad in ["", "../x", &format!("{}-{}", n.node, "Z".repeat(32)), &format!("{}/{}", n.node, n.id)] {
             assert_eq!(FileName::parse(bad), None, "{bad}");
         }

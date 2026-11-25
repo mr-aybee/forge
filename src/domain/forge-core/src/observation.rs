@@ -46,12 +46,14 @@ impl Subject {
             !seg.is_empty()
                 && seg.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
         };
+
         if s.is_empty() || s.len() > MAX_SUBJECT_LEN || !s.split('.').all(ok_segment) {
             return Err(DomainError::Invalid(format!(
                 "invalid observation subject `{}`: use lowercase dotted segments (a-z, 0-9, -, _), at most {MAX_SUBJECT_LEN} bytes",
                 s.chars().take(MAX_SUBJECT_LEN).collect::<String>()
             )));
         }
+
         Ok(Self(s))
     }
 
@@ -330,14 +332,18 @@ pub fn decide(prev: Option<&Latest>, next: &Observation, observed_at: Timestamp,
         at: now,
         evidence_at: observed_at,
     };
+
     let Some(prev) = prev else {
         return Outcome::Apply { transition: Some(transition(None)) };
     };
+
     let same_generation = prev.generation == next.generation;
     if same_generation && observed_at < prev.observed_at {
         return Outcome::Outdated;
     }
+
     let before = prev.effective(now);
+
     // A measurement changes on almost every sample: only going unknown or
     // coming back is a transition, or the feed would flood (D-085 amendment).
     let changed = match (before, next.value) {
@@ -346,6 +352,7 @@ pub fn decide(prev: Option<&Latest>, next: &Observation, observed_at: Timestamp,
         }
         _ => before != next.value || !same_generation,
     };
+
     Outcome::Apply { transition: changed.then(|| transition(Some(before))) }
 }
 
@@ -356,6 +363,7 @@ pub fn stale_transition(prev: &Latest, now: Timestamp) -> Option<Transition> {
     if prev.is_fresh(now) || prev.value.is_unknown() {
         return None;
     }
+
     Some(Transition {
         seq: 0,
         key: prev.key.clone(),
@@ -527,6 +535,7 @@ mod tests {
             decide(Some(&latest(&gone, 3_000)), &back, back.observed_at, Timestamp(4_000)),
             Outcome::Apply { transition: Some(_) }
         ));
+
         // A stale measurement reads as unknown, which then comes back as a transition.
         assert!(matches!(
             decide(Some(&prev), &next, next.observed_at, Timestamp(60_000)),
@@ -540,9 +549,11 @@ mod tests {
     #[test]
     fn subjects_are_validated() {
         assert!(Subject::new("health.liveness.db-ping_1").is_ok());
+
         for bad in ["", "Health.x", "a..b", ".a", "a.", "a b", "a/b", &"x".repeat(129)] {
             assert!(Subject::new(bad).is_err(), "{bad:?}");
         }
+
         let json = serde_json::to_string(&Subject::new("a.b").unwrap()).unwrap();
         assert_eq!(json, "\"a.b\"");
         assert!(serde_json::from_str::<Subject>("\"A\"").is_err());
@@ -551,9 +562,11 @@ mod tests {
     #[test]
     fn the_first_observation_is_a_transition_from_nothing() {
         let o = obs(HealthState::Passing, 1_000, "g1");
+
         let Outcome::Apply { transition: Some(t) } = decide(None, &o, o.observed_at, Timestamp(1_000)) else {
             panic!("expected a transition")
         };
+
         assert_eq!((t.from, t.to), (None, ObservedValue::Health(HealthState::Passing)));
     }
 
@@ -589,12 +602,15 @@ mod tests {
         let t = stale_transition(&prev, Timestamp(11_000)).unwrap();
         assert_eq!(t.reason, Some(ReasonCode::Stale));
         assert!(stale_transition(&prev, Timestamp(10_000)).is_none());
+
         // A later pass after going stale: the transition starts from unknown,
         // not from the old failure.
         let b = obs(HealthState::Passing, 20_000, "g1");
+
         let Outcome::Apply { transition: Some(t) } = decide(Some(&prev), &b, b.observed_at, Timestamp(20_000)) else {
             panic!()
         };
+
         assert_eq!(t.from, Some(ObservedValue::Health(HealthState::Unknown)));
     }
 

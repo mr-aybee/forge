@@ -78,22 +78,27 @@ pub async fn in_use(
     Query(q): Query<KindQuery>,
 ) -> ApiResult<Json<Value>> {
     let k = kind(&q.kind)?;
+
     // Only count items the caller can see.
     let map = visible(&state, &caller, k).await?;
     let mut counts: HashMap<String, u64> = HashMap::new();
+
     for tags in map.values() {
         for t in tags {
             *counts.entry(t.clone()).or_default() += 1;
         }
     }
+
     let mut rows: Vec<Value> = counts.into_iter().map(|(tag, count)| json!({ "tag": tag, "count": count })).collect();
     rows.sort_by_key(|r| r["tag"].as_str().unwrap_or_default().to_lowercase());
+
     Ok(Json(Value::Array(rows)))
 }
 
 async fn visible(state: &AppState, caller: &Caller, k: TagKind) -> ApiResult<HashMap<String, Vec<String>>> {
     let all = state.store.tags_of_kind(k).await?;
     let mut out = HashMap::new();
+
     for (id, tags) in all {
         if let Ok(t) = target(state, k, &id).await
             && caller.can(Action::View, t).await
@@ -101,6 +106,7 @@ async fn visible(state: &AppState, caller: &Caller, k: TagKind) -> ApiResult<Has
             out.insert(id, tags);
         }
     }
+
     Ok(out)
 }
 
@@ -117,6 +123,7 @@ pub async fn of_item(
 ) -> ApiResult<Json<Value>> {
     let k = kind(&k)?;
     caller.authorize(Action::View, target(&state, k, &id).await?).await?;
+
     Ok(Json(json!({ "tags": state.store.tags_of(k, &id).await? })))
 }
 
@@ -135,6 +142,7 @@ pub async fn set(
     let k = kind(&k)?;
     let t = target(&state, k, &id).await?;
     caller.authorize(manage_action(k), t.clone()).await?;
+
     let tags = match normalise_tags(&req.tags) {
         Ok(t) => t,
         Err(e) => {
@@ -142,8 +150,10 @@ pub async fn set(
             return Err(ApiError::bad_request(e));
         }
     };
+
     let before = state.store.tags_of(k, &id).await?;
     state.store.set_tags(k, &id, &tags, state.clock.now()).await?;
     caller.audit("tags.update", &t, None, json!({ "kind": k.as_str(), "id": id, "from": before, "to": tags })).await;
+
     Ok(Json(json!({ "tags": tags })))
 }

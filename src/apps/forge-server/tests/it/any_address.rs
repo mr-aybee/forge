@@ -21,17 +21,22 @@ async fn send_as(
     body: Option<Value>,
 ) -> (StatusCode, String) {
     let mut req = c.http.request(method, format!("{}{path}", c.base)).header("host", host);
+
     if let Some(csrf) = &c.csrf {
         req = req.header("x-csrf-token", csrf);
     }
+
     for (k, v) in extra {
         req = req.header(*k, *v);
     }
+
     if let Some(b) = body {
         req = req.json(&b);
     }
+
     let r = req.send().await.unwrap();
     let s = r.status();
+
     (s, r.text().await.unwrap())
 }
 
@@ -43,9 +48,11 @@ async fn events_as(c: &Client, host: &str, origin: Option<&str>) -> StatusCode {
         ("sec-websocket-version", "13"),
         ("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ=="),
     ];
+
     if let Some(o) = origin {
         h.push(("origin", o));
     }
+
     send_as(c, Method::GET, "/api/v1/events", host, &h, None).await.0
 }
 
@@ -61,11 +68,13 @@ async fn install_script_names_the_agent_on_the_host_the_node_used() {
     let (s, body) = send_as(&anon, Method::GET, "/install.ps1", "lab-a.example:3880", &[], None).await;
     assert_eq!(s, StatusCode::OK);
     assert!(body.contains(&format!("https://lab-a.example:{agent_port}")), "{body}");
+
     // A malformed Host is refused before anything renders.
     let (s, _) = send_as(&anon, Method::GET, "/install.sh", "a..b", &[], None).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
     let (s, _) = send_as(&anon, Method::GET, "/install.sh", "user@192.0.2.5", &[], None).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
+
     // Forwarded headers from an untrusted peer change nothing.
     let (_, body) = send_as(
         &anon,
@@ -94,14 +103,19 @@ async fn sockets_accept_their_own_origin_under_any_name_and_refuse_others() {
     let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
     let p = port(&h.base);
     let other = format!("localhost:{p}");
+
     // A name that is not the configured public_url, with its own Origin.
     assert_eq!(events_as(&admin, &other, Some(&format!("http://{other}"))).await, StatusCode::SWITCHING_PROTOCOLS);
+
     // No Origin (a CLI): allowed, as before.
     assert_eq!(events_as(&admin, &other, None).await, StatusCode::SWITCHING_PROTOCOLS);
+
     // Another site's page: refused.
     assert_eq!(events_as(&admin, &other, Some("http://evil.test")).await, StatusCode::FORBIDDEN);
+
     // The scheme is part of the origin.
     assert_eq!(events_as(&admin, &other, Some(&format!("https://{other}"))).await, StatusCode::FORBIDDEN);
+
     // The pinned address stays accepted on any host (proxies not listed in
     // trusted_proxies).
     assert_eq!(events_as(&admin, &other, Some(&h.base)).await, StatusCode::SWITCHING_PROTOCOLS);
@@ -138,10 +152,12 @@ async fn allowed_hosts_refuse_other_names_with_421_and_are_audited() {
     let (s, _) = admin.put("/api/v1/server/allowed-hosts", json!({ "hosts": ["127.0.0.1"] })).await;
     assert_eq!(s, StatusCode::FORBIDDEN);
     step_up(&mut admin).await;
+
     for bad in [json!([]), json!(["*.com"]), json!(["a b"]), json!(["foo.*.example.com"])] {
         let (s, body) = admin.put("/api/v1/server/allowed-hosts", json!({ "hosts": bad })).await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}: {body}");
     }
+
     let (s, v) = admin.put("/api/v1/server/allowed-hosts", json!({ "hosts": ["127.0.0.1", "*.example.com"] })).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["hosts"], json!(["127.0.0.1", "*.example.com"]));
@@ -156,6 +172,7 @@ async fn allowed_hosts_refuse_other_names_with_421_and_are_audited() {
     assert_eq!(s, StatusCode::OK);
     let (s, _) = anon.get("/api/version").await;
     assert_eq!(s, StatusCode::OK, "127.0.0.1 is allowed");
+
     // The liveness probe answers on any host.
     let (s, _) = send_as(&anon, Method::GET, "/api/health", &format!("localhost:{p}"), &[], None).await;
     assert_eq!(s, StatusCode::OK);
@@ -177,15 +194,18 @@ async fn last_admin_address_is_recorded_only_on_trusted_hosts_and_audited() {
     let h = start_configured(|c| c.agent_hostnames.push("forge.test".into())).await;
     let p = port(&h.base);
     let anon = Client::anonymous(&h.base);
+
     // Signing in on a name nobody configured, or on loopback, records nothing.
     for host in [format!("evil.test:{p}"), format!("localhost:{p}"), format!("127.0.0.1:{p}")] {
         let body = login_body(&h.base, ADMIN_EMAIL, PASSWORD).await;
         let (s, b) = send_as(&anon, Method::POST, "/api/v1/auth/login", &host, &[], Some(body)).await;
         assert_eq!(s, StatusCode::OK, "signing in on {host} works: {b}");
     }
+
     let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
     let (_, v) = admin.get("/api/v1/server/settings").await;
     assert!(v["public_address"]["last_admin"].is_null(), "{v}");
+
     // A configured name is recorded and audited.
     let body = login_body(&h.base, ADMIN_EMAIL, PASSWORD).await;
     let (s, b) = send_as(&anon, Method::POST, "/api/v1/auth/login", &format!("forge.test:{p}"), &[], Some(body)).await;
@@ -204,11 +224,13 @@ async fn last_admin_address_is_recorded_only_on_trusted_hosts_and_audited() {
 #[tokio::test]
 async fn install_scripts_are_never_cached() {
     let h = start().await;
+
     for path in ["/install.sh", "/install.ps1"] {
         let r = reqwest::get(format!("{}{path}", h.base)).await.unwrap();
         assert_eq!(r.status(), StatusCode::OK);
         assert_eq!(r.headers()["cache-control"], "no-store", "{path}");
         assert_eq!(r.headers()["vary"], "Host, X-Forwarded-Host, X-Forwarded-Proto", "{path}");
     }
+
     h.app.stop().await;
 }

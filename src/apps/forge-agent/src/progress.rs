@@ -26,6 +26,7 @@ pub async fn scope<F: Future>(op: String, f: F) -> F::Output {
     RUNNING.fetch_add(1, Ordering::SeqCst);
     let out = OP.scope(op, f).await;
     RUNNING.fetch_sub(1, Ordering::SeqCst);
+
     out
 }
 

@@ -494,6 +494,7 @@ impl FromStr for EntityRef {
         if id.is_empty() {
             return Err(format!("bad entity ref `{s}`"));
         }
+
         Ok(Self { kind: k.parse()?, id: id.to_owned() })
     }
 }
@@ -519,6 +520,7 @@ impl ResourceRef {
         let mut chain = vec![entity];
         chain.extend(ancestors);
         r.add_chain(&chain);
+
         r
     }
 
@@ -537,9 +539,11 @@ impl ResourceRef {
                 Some(_) => {}
                 None => self.parents.push((child.clone(), vec![parent.clone()])),
             }
+
             if !self.parents.iter().any(|(e, _)| e == parent) {
                 self.parents.push((parent.clone(), vec![]));
             }
+
             if parent != &self.entity && !self.ancestors.contains(parent) {
                 self.ancestors.push(parent.clone());
             }

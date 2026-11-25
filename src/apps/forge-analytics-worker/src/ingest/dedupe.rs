@@ -57,7 +57,9 @@ impl Stored {
         if !self.keys.insert(k) {
             return;
         }
+
         self.order.push_back(k);
+
         while self.order.len() > CAPACITY {
             if let Some(old) = self.order.pop_front() {
                 self.keys.remove(&old);
@@ -85,9 +87,11 @@ mod tests {
         let node = ServerId::new();
         let mut s = Stored::default();
         let key = |seq| BatchKey::of(node, &ContainerLogBatch { seq, lines: vec![], dropped: 0 });
+
         for seq in 0..(CAPACITY as u64 + 10) {
             s.insert(key(seq));
         }
+
         assert_eq!(s.len(), CAPACITY);
         assert!(!s.contains(&key(0)), "the oldest are forgotten");
         assert!(s.contains(&key(CAPACITY as u64 + 9)));

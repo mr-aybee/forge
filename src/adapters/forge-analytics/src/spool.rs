@@ -122,12 +122,14 @@ pub fn token(table: &str, ids: &[(ServerId, &str)]) -> String {
         [(_, id)] => format!("{id}:{table}"),
         _ => {
             let mut all = String::with_capacity(ids.len() * 70);
+
             for (node, id) in ids {
                 all.push_str(&node.to_string());
                 all.push('/');
                 all.push_str(id);
                 all.push('\n');
             }
+
             format!("g{}:{table}", forge_secrets::crypto::sha256_hex(all.as_bytes()))
         }
     }
@@ -178,6 +180,7 @@ impl ClickHouseSpoolWriter {
     pub(crate) fn with_sink(sink: Arc<dyn TableSink>, batch_rows: usize, retries: &'static [Duration]) -> Self {
         let (tx, rx) = mpsc::channel(QUEUE);
         tokio::spawn(run(sink, rx, batch_rows.max(1), retries));
+
         Self { tx }
     }
 }
@@ -187,6 +190,7 @@ impl SpoolFileWriter for ClickHouseSpoolWriter {
     async fn write_spool_file(&self, file: SpoolRows) -> DomainResult<FileWrite> {
         let (reply, rx) = oneshot::channel();
         self.tx.send(Job { file, reply }).await.map_err(|_| stopped())?;
+
         rx.await.map_err(|_| stopped())?
     }
 }
@@ -211,11 +215,13 @@ impl Stored {
             *m |= mask;
             return;
         }
+
         if self.order.len() >= REMEMBERED
             && let Some(old) = self.order.pop_front()
         {
             self.tables.remove(&old);
         }
+
         self.tables.insert(key.clone(), mask);
         self.order.push_back(key);
     }
@@ -223,9 +229,11 @@ impl Stored {
 
 async fn run(sink: Arc<dyn TableSink>, mut rx: mpsc::Receiver<Job>, batch_rows: usize, retries: &'static [Duration]) {
     let mut stored = Stored::default();
+
     while let Some(first) = rx.recv().await {
         let mut rows = first.file.rows();
         let mut batch = vec![first];
+
         while batch.len() < MAX_FILES && rows < batch_rows as u64 {
             match rx.try_recv() {
                 Ok(j) => {
@@ -235,6 +243,7 @@ async fn run(sink: Arc<dyn TableSink>, mut rx: mpsc::Receiver<Job>, batch_rows: 
                 Err(_) => break,
             }
         }
+
         write_batch(sink.as_ref(), &mut stored, batch, retries).await;
     }
 }
@@ -257,27 +266,33 @@ async fn write_batch(sink: &dyn TableSink, stored: &mut Stored, batch: Vec<Job>,
     let mut first_of: HashMap<(ServerId, &str), usize> = HashMap::new();
     let mut todo = vec![0u8; batch.len()];
     let mut dup = vec![None; batch.len()];
+
     for (i, j) in batch.iter().enumerate() {
         let f = &j.file;
         if let Some(&k) = first_of.get(&(f.node, f.file_id.as_str())) {
             dup[i] = Some(k);
             continue;
         }
+
         first_of.insert((f.node, f.file_id.as_str()), i);
         todo[i] = needed(f) & !stored.get(f.node, &f.file_id);
     }
+
     let inserts = match build(&batch, &todo) {
         Ok(v) => v,
         Err(e) => {
             for j in batch {
                 let _ = j.reply.send(Err(DomainError::Internal(e.to_string())));
             }
+
             return;
         }
     };
+
     let results = futures::future::join_all(inserts.iter().map(|ins| attempt(sink, ins, retries))).await;
     let mut ok_mask = 0u8;
     let mut error: Option<String> = None;
+
     for (ins, r) in inserts.iter().zip(results) {
         match r {
             Ok(()) => ok_mask |= ins.table.bit(),
@@ -287,6 +302,7 @@ async fn write_batch(sink: &dyn TableSink, stored: &mut Stored, batch: Vec<Job>,
             }
         }
     }
+
     let outcome: Vec<Result<FileWrite, String>> = batch
         .iter()
         .enumerate()
@@ -296,9 +312,11 @@ async fn write_batch(sink: &dyn TableSink, stored: &mut Stored, batch: Vec<Job>,
             if need & !ok_mask != 0 {
                 return Err(error.clone().unwrap_or_default());
             }
+
             Ok(if want != 0 && need == 0 { FileWrite::AlreadyStored } else { FileWrite::Stored })
         })
         .collect();
+
     for (i, j) in batch.iter().enumerate() {
         if dup[i].is_none() {
             let f = &j.file;
@@ -308,6 +326,7 @@ async fn write_batch(sink: &dyn TableSink, stored: &mut Stored, batch: Vec<Job>,
             }
         }
     }
+
     for (j, o) in batch.into_iter().zip(outcome) {
         let _ = j.reply.send(o.map_err(|e| DomainError::Internal(format!("analytics: {e}"))));
     }
@@ -317,32 +336,41 @@ async fn write_batch(sink: &dyn TableSink, stored: &mut Stored, batch: Vec<Job>,
 /// needs it, with the token of those files.
 fn build(batch: &[Job], todo: &[u8]) -> DomainResult<Vec<Insert>> {
     let mut out = Vec::new();
+
     for table in Table::ALL {
         let members: Vec<&SpoolRows> =
             batch.iter().zip(todo).filter(|(_, t)| *t & table.bit() != 0).map(|(j, _)| &j.file).collect();
+
         if members.is_empty() {
             continue;
         }
+
         let ids: Vec<(ServerId, &str)> = members.iter().map(|f| (f.node, f.file_id.as_str())).collect();
         let mut body = String::with_capacity(members.iter().map(|f| table.rows(f) * 200).sum());
+
         for f in &members {
             table.encode(f, &mut body)?;
         }
+
         out.push(Insert { table, token: token(table.name(), &ids), body });
     }
+
     Ok(out)
 }
 
 /// One insert, retried after each of `retries` with the same rows and token.
 async fn attempt(sink: &dyn TableSink, ins: &Insert, retries: &[Duration]) -> DomainResult<()> {
     let mut last = sink.insert_once(ins.table, ins.body.clone(), &ins.token).await;
+
     for delay in retries {
         if last.is_ok() {
             break;
         }
+
         tokio::time::sleep(*delay).await;
         last = sink.insert_once(ins.table, ins.body.clone(), &ins.token).await;
     }
+
     last
 }
 
@@ -372,14 +400,17 @@ mod tests {
         async fn insert_once(&self, table: Table, body: String, token: &str) -> DomainResult<()> {
             self.inserts.lock().unwrap().push((table, body.lines().count(), token.to_owned()));
             let _open = self.gate.read().await;
+
             if self.failing.lock().unwrap().contains(&table) {
                 return Err(DomainError::Internal("down".into()));
             }
+
             let mut tokens = self.tokens.lock().unwrap();
             if !tokens.iter().any(|t| t == token) {
                 tokens.push(token.to_owned());
                 *self.stored.lock().unwrap().entry(table.name()).or_default() += body.lines().count();
             }
+
             Ok(())
         }
     }
@@ -416,6 +447,7 @@ mod tests {
                 samples: 1,
             })
             .collect();
+
         SpoolRows { node, file_id: id.into(), logs, minutes, processes: vec![], containers: vec![] }
     }
 
@@ -453,21 +485,27 @@ mod tests {
         let held = fake.gate.write().await;
         let first = send(file(ServerId::new(), &format!("{:032x}", 0), 2, 0));
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+
         while fake.inserts.lock().unwrap().is_empty() {
             assert!(tokio::time::Instant::now() < deadline, "the first batch never started");
             tokio::task::yield_now().await;
         }
+
         // Five files queue up while the first batch is being written.
         let rest: Vec<_> = (1..=5).map(|i| send(file(ServerId::new(), &format!("{i:032x}"), 3, 1))).collect();
+
         while w.tx.capacity() > QUEUE - 5 {
             assert!(tokio::time::Instant::now() < deadline, "the files never queued");
             tokio::task::yield_now().await;
         }
+
         drop(held);
         assert_eq!(first.await.unwrap().unwrap(), FileWrite::Stored);
+
         for h in rest {
             assert_eq!(h.await.unwrap().unwrap(), FileWrite::Stored);
         }
+
         assert_eq!((fake.stored(Table::Logs), fake.stored(Table::NodeMinutes)), (17, 5));
         let inserts = fake.inserts.lock().unwrap().clone();
         assert_eq!(inserts.len(), 3, "the first file, then one insert per table for the other five");
@@ -492,6 +530,7 @@ mod tests {
         assert_eq!(w.write_spool_file(f.clone()).await.unwrap(), FileWrite::Stored);
         assert_eq!((fake.stored(Table::Logs), fake.stored(Table::NodeMinutes)), (4, 2), "each table once");
         assert_eq!(w.write_spool_file(f.clone()).await.unwrap(), FileWrite::AlreadyStored);
+
         // A new writer (the worker restarted) forgets; the token still holds.
         let w = ClickHouseSpoolWriter::with_sink(fake.clone(), 10_000, &[]);
         assert_eq!(w.write_spool_file(f).await.unwrap(), FileWrite::Stored);

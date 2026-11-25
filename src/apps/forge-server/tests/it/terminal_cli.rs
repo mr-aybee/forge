@@ -42,6 +42,7 @@ async fn exec_and_terminal_refuse_ambiguous_or_missing_credentials() {
     let h = start().await;
     let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
     let (_, nodes) = admin.get("/api/v1/servers").await;
+
     // No node needed: authentication and credential checks come first.
     let id = nodes
         .as_array()
@@ -53,15 +54,19 @@ async fn exec_and_terminal_refuse_ambiguous_or_missing_credentials() {
 
     for route in ["exec", "terminal"] {
         let url = format!("{}/api/v1/servers/{id}/{route}?login=root", h.base);
+
         // No credentials at all.
         let r = upgrade(&reqwest::Client::new(), &url).send().await.unwrap();
         assert_eq!(r.status(), StatusCode::UNAUTHORIZED, "{route}");
+
         // A bearer token and a session cookie together are refused.
         let r = upgrade(&admin.http, &url).bearer_auth(&key).send().await.unwrap();
         assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{route}");
+
         // A token in the URL is never read: still unauthenticated.
         let r = upgrade(&reqwest::Client::new(), &format!("{url}&access_token={key}")).send().await.unwrap();
         assert_eq!(r.status(), StatusCode::UNAUTHORIZED, "{route}");
+
         // An API key never holds MFA, so `terminal.open` is refused.
         let r = upgrade(&reqwest::Client::new(), &url).bearer_auth(&key).send().await.unwrap();
         assert!(matches!(r.status(), StatusCode::FORBIDDEN | StatusCode::NOT_FOUND), "{route}: {}", r.status());

@@ -24,6 +24,7 @@ fn split(v: &str) -> (u64, &str, &str) {
         Some((e, r)) if e.bytes().all(|b| b.is_ascii_digit()) => (e.parse().unwrap_or(0), r),
         _ => (0, v),
     };
+
     match rest.rsplit_once('-') {
         Some((u, r)) => (epoch, u, r),
         None => (epoch, rest, ""),
@@ -43,6 +44,7 @@ fn order(c: u8) -> i32 {
 fn cmp_part(a: &str, b: &str) -> Ordering {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     let (mut i, mut j) = (0, 0);
+
     while i < a.len() || j < b.len() {
         // Non-digit prefix.
         while (i < a.len() && !a[i].is_ascii_digit()) || (j < b.len() && !b[j].is_ascii_digit()) {
@@ -51,33 +53,42 @@ fn cmp_part(a: &str, b: &str) -> Ordering {
             if ac != bc {
                 return ac.cmp(&bc);
             }
+
             if i < a.len() && !a[i].is_ascii_digit() {
                 i += 1;
             }
+
             if j < b.len() && !b[j].is_ascii_digit() {
                 j += 1;
             }
         }
+
         // Numeric run.
         while i < a.len() && a[i] == b'0' {
             i += 1;
         }
+
         while j < b.len() && b[j] == b'0' {
             j += 1;
         }
+
         let (si, sj) = (i, j);
+
         while i < a.len() && a[i].is_ascii_digit() {
             i += 1;
         }
+
         while j < b.len() && b[j].is_ascii_digit() {
             j += 1;
         }
+
         let (na, nb) = (&a[si..i], &b[sj..j]);
         match na.len().cmp(&nb.len()).then_with(|| na.cmp(nb)) {
             Ordering::Equal => {}
             o => return o,
         }
     }
+
     Ordering::Equal
 }
 
@@ -86,6 +97,7 @@ fn cmp_part(a: &str, b: &str) -> Ordering {
 pub fn compare(a: &str, b: &str) -> Ordering {
     let (ea, ua, ra) = split(a);
     let (eb, ub, rb) = split(b);
+
     ea.cmp(&eb).then_with(|| cmp_part(ua, ub)).then_with(|| cmp_part(ra, rb))
 }
 
@@ -113,8 +125,10 @@ pub fn classify(from: &str, to: &str) -> Option<UpdateKind> {
     if compare(to, from) != Ordering::Greater {
         return None;
     }
+
     let (a, b) = (numbers(from), numbers(to));
     let at = |v: &[u64], i: usize| v.get(i).copied().unwrap_or(0);
+
     Some(if at(&a, 0) != at(&b, 0) {
         UpdateKind::Major
     } else if at(&a, 1) != at(&b, 1) {
@@ -149,6 +163,7 @@ impl NodeVersions {
         let line = output.lines().rev().find(|l| l.trim_start().starts_with('{'))?;
         let v: Self = serde_json::from_str(line.trim()).ok()?;
         let ok = |s: &str| s.is_empty() || valid_build(s) || s.len() <= 120;
+
         (ok(&v.installed) && ok(&v.candidate)).then_some(v)
     }
 
@@ -158,6 +173,7 @@ impl NodeVersions {
         if self.installed.is_empty() || self.candidate.is_empty() {
             return None;
         }
+
         classify(&self.installed, &self.candidate)
     }
 }

@@ -32,6 +32,7 @@ impl AuditSigner {
             let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).map_err(DomainError::internal)?;
             forge_secrets::write_private(path, pkcs8.as_ref()).map_err(DomainError::internal)?;
         }
+
         Self::from_pkcs8(&std::fs::read(path).map_err(DomainError::internal)?)
     }
 

@@ -155,11 +155,13 @@ impl Services {
         let access_lists = config.access_lists();
         let data = config.data_dir.clone();
         std::fs::create_dir_all(data.join("keys")).with_context(|| format!("creating {}", data.display()))?;
+
         // Only the service user may read or write the database, its WAL, the
         // keys, the CA, backups and staged updates (also mitigates
         // RUSTSEC-2026-0459, see DECISIONS.md D-032). The data directory
         // itself must work; anything else that can't be changed is reported.
         let unfixed = crate::perms::harden(&data).map_err(anyhow::Error::msg)?;
+
         for (path, err) in &unfixed {
             tracing::warn!(
                 path = %path.display(),
@@ -167,15 +169,18 @@ impl Services {
                 "could not make this file owner-only; fix it with `chown forge:forge <path> && chmod go-rwx <path>`"
             );
         }
+
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
 
         let store = Store::connect(&config.database_url()).await.context("opening database")?;
+
         // Analytics settings: forge.toml plus the administrators' overrides (D-136).
         if config.analytics.removed_memory_limit_mb.is_some() {
             tracing::warn!(
                 "[analytics] memory_limit_mb is no longer used and is ignored; embedded_memory_mb caps the engine's memory"
             );
         }
+
         let tuning_defaults = crate::analytics_tuning::from_config(&config);
         let tuning_overrides = crate::analytics_tuning::load(&store).await?;
         let (tuning_tx, tuning_rx) = tokio::sync::watch::channel(tuning_defaults.with(&tuning_overrides));
@@ -210,6 +215,7 @@ impl Services {
             services: Arc::new(store.clone()),
             keys: Arc::new(store.clone()),
         }));
+
         // Tunnel sockets live in memory: rows still open are from before this
         // start and are closed as such (D-100).
         match forge_core::tunnels::TunnelRepository::close_open_tunnels(&store, clock.now(), "server_restart").await {
@@ -224,9 +230,11 @@ impl Services {
 
         // Authorization: load every persisted role binding as a template link.
         let policy = Arc::new(PolicyEngine::with_clock(clock.clone())?);
+
         for b in store.list_bindings().await? {
             policy.link_binding(&b)?;
         }
+
         // Access profiles (D-086): built-ins equal to their roles, then every
         // active profile's latest revision and every unexpired assignment.
         crate::access::load(&store, &policy, clock.now()).await?;
@@ -241,6 +249,7 @@ impl Services {
         let ca = Arc::new(CertificateAuthority::load_or_create(&data.join("pki"), clock.now())?);
         let envelope = Envelope::new(Arc::new(LocalKeyProvider::load_or_create(&data.join("keys/master.key"))?));
         let signer = Arc::new(CommandSigner::load_or_create(&data.join("keys/command.key"))?);
+
         // The control-plane key agents pin (D-167): made by `init` or on the
         // first start after an upgrade.
         let (agent_keys, keys_created) = crate::agent_keys::AgentKeys::load_or_create(
@@ -257,6 +266,7 @@ impl Services {
         )
         .await?;
         let agent_keys = Arc::new(agent_keys);
+
         if keys_created {
             let ev = forge_core::model::AuditEvent::new(
                 "system:forge",
@@ -267,10 +277,12 @@ impl Services {
             .with_details(serde_json::json!({ "keys": agent_keys.keys() }));
             audit.append(ev).await?;
         }
+
         let mut worker_config = worker_config;
         if let Some(w) = &mut worker_config {
             attach_agent_listener(w, &config, &ca, &agent_keys);
         }
+
         let analytics_worker =
             Arc::new(crate::analytics_worker::WorkerSupervisor::new(crate::analytics_worker::SupervisorDeps {
                 config: worker_config,
@@ -310,6 +322,7 @@ impl Services {
             Arc::new(store.clone()),
             clock.clone(),
         );
+
         let oidc = match &config.oidc {
             Some(o) => {
                 // The redirect URL must be stable: OIDC needs a pinned address.
@@ -473,14 +486,17 @@ impl Services {
             swarms: Arc::new(store.clone()),
             envelope: envelope.clone(),
         }));
+
         for enable in [true, false] {
             let link = crate::jobs::docker_endpoint::NodeLink { ops: node_ops.clone(), engines: docker.clone() };
+
             if enable {
                 registry.register(Arc::new(crate::jobs::docker_endpoint::DockerEndpointEnableJob { link }));
             } else {
                 registry.register(Arc::new(crate::jobs::docker_endpoint::DockerEndpointDisableJob { link }));
             }
         }
+
         registry.register(Arc::new(crate::jobs::StackJob {
             hub: hub.clone(),
             signer: signer.clone(),
@@ -549,9 +565,11 @@ impl Services {
         let _ = rollout_engine.set(jobs.clone());
 
         let mut trust = TrustStore::new();
+
         for p in &config.trusted_publishers {
             trust.trust(&p.publisher, &p.public_key).with_context(|| format!("trusted publisher {}", p.publisher))?;
         }
+
         let plugins = Arc::new(PluginHost::new(
             Arc::new(store.clone()),
             authz.clone(),
@@ -575,6 +593,7 @@ impl Services {
         } else {
             None
         };
+
         let files = forge_files::FileService::new(
             Arc::new(store.clone()),
             Arc::new(store.clone()),
@@ -726,8 +745,10 @@ impl Services {
             public_address,
             allowed_hosts,
         });
+
         // The rollout job reaches endpoints and health through the API (#73).
         let _ = rollout_effects.set(crate::api::deployments::effects(&state));
+
         Ok(state)
     }
 
@@ -745,6 +766,7 @@ impl Services {
             scopes: vec!["openid".into(), "email".into(), "profile".into()],
         })
         .await?;
+
         Ok(Arc::new(provider))
     }
 
@@ -774,6 +796,7 @@ impl Services {
     ) {
         let ev = forge_core::model::AuditEvent::new("system:forge", action, forge_core::EntityRef::platform(), outcome)
             .with_details(details);
+
         if let Err(e) = self.audit.append(ev).await {
             tracing::error!(error = %e, "audit write failed");
         }
@@ -824,11 +847,13 @@ fn analytics_worker_config(
 ) -> anyhow::Result<Option<crate::analytics_worker::SupervisorConfig>> {
     use crate::config::AnalyticsEngine;
     use forge_analytics_proto::config::{Endpoint, StoreSelection, WorkerConfig};
+
     if config.analytics.removed_memory_limit_mb.is_some() {
         tracing::warn!(
             "[analytics] memory_limit_mb is no longer used and is ignored; embedded_memory_mb caps the engine's memory"
         );
     }
+
     let store = match config.analytics.engine {
         AnalyticsEngine::Off => return Ok(None),
         AnalyticsEngine::Postgres => {
@@ -846,6 +871,7 @@ fn analytics_worker_config(
                     "the embedded analytics engine runs on Linux only; use engine = \"clickhouse\" or \"off\""
                 );
             }
+
             StoreSelection::Embedded {
                 paths: Box::new(crate::analytics_install::paths(config)),
                 port: config.analytics.embedded_port,
@@ -860,13 +886,16 @@ fn analytics_worker_config(
                     "[analytics] worker_memory_limit_mb ({limit}) must be at least duckdb_memory_mb plus {DUCKDB_HEADROOM_MB} MiB ({need}): DuckDB runs inside the worker"
                 );
             }
+
             StoreSelection::Duckdb { dir: config.data_dir.join("analytics").join("duckdb") }
         }
         AnalyticsEngine::Memory => StoreSelection::Memory,
     };
+
     let dir = config.data_dir.join("analytics-worker");
     let endpoint = if cfg!(unix) { Endpoint::Unix { path: dir.join("control.sock") } } else { Endpoint::Loopback };
     let limit = config.analytics.worker_memory_limit_mb;
+
     Ok(Some(crate::analytics_worker::SupervisorConfig {
         binary: config.analytics_worker_path(),
         dir,

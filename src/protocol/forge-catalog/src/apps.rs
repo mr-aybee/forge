@@ -171,6 +171,7 @@ impl std::fmt::Debug for AppSpec {
             swarm,
         } = self;
         let env: Vec<String> = env.iter().map(|(k, _)| format!("{k}=***")).collect();
+
         f.debug_struct("AppSpec")
             .field("environment", environment)
             .field("name", name)
@@ -305,6 +306,7 @@ fn valid_port_map(p: &str) -> bool {
     let (body, proto) = p.split_once('/').map_or((p, "tcp"), |(b, pr)| (b, pr));
     let parts: Vec<&str> = body.split(':').collect();
     let port = |s: &str| s.parse::<u16>().is_ok_and(|n| n > 0);
+
     matches!(proto, "tcp" | "udp")
         && match parts.as_slice() {
             [h, c] => port(h) && port(c),
@@ -322,8 +324,10 @@ fn valid_volume(v: &str) -> bool {
         [s, t] | [s, t, "ro" | "rw"] => (*s, *t),
         _ => return false,
     };
+
     let source_ok =
         if source.starts_with('/') { valid_abs_path(source) } else { crate::swarm_service::volume_name_ok(source) };
+
     source_ok && valid_abs_path(target)
 }
 
@@ -379,10 +383,12 @@ pub fn app_user_candidates(environment: &str, app: &str) -> Vec<String> {
 
 fn short_hash(s: &str) -> String {
     let mut h: u32 = 0x811c_9dc5;
+
     for b in s.bytes() {
         h ^= u32::from(b);
         h = h.wrapping_mul(0x0100_0193);
     }
+
     format!("{:06x}", h & 0x00ff_ffff)
 }
 
@@ -392,57 +398,74 @@ impl AppSpec {
         if let Some(e) = self.health.as_ref().and_then(|h| h.validate().into_iter().next()) {
             return Err(format!("health.{}: {}", e.field, e.message));
         }
+
         if !matches!(self.slot.as_str(), "" | "a" | "b") {
             return Err("slot must be a or b".into());
         }
+
         if self.release.len() > 12 || !self.release.bytes().all(|b| b.is_ascii_digit()) {
             return Err("release must be a number".into());
         }
+
         if let Some(a) = &self.artifact {
             if self.runtime == Runtime::Container || !a.staged() {
                 return Err("only native services and jobs fetch code (git or archive)".into());
             }
+
             if self.release.is_empty() {
                 return Err("fetched code needs a release number".into());
             }
+
             a.validate()?;
         }
+
         if !valid_slug(&self.environment, 40) || !valid_slug(&self.name, 40) {
             return Err("environment and name must be lowercase letters, digits and dashes".into());
         }
+
         if self.env.len() > 500 {
             return Err("too many environment variables".into());
         }
+
         for (k, v) in &self.env {
             if !valid_env_key(k) {
                 return Err(format!("invalid environment variable name `{k}`"));
             }
+
             if !clean_text(v, 32 * 1024) {
                 return Err(format!("value of `{k}` may not contain line breaks"));
             }
         }
+
         for f in &self.env_files {
             if crate::find(f).is_none() {
                 return Err(format!("unknown package env file `{f}`"));
             }
         }
+
         let mut seen = std::collections::HashSet::new();
+
         for d in &self.dependencies {
             let pkg = crate::find(&d.package).ok_or_else(|| format!("unknown runtime `{}`", d.package))?;
             if pkg.category != crate::Category::Runtimes {
                 return Err(format!("`{}` is not a runtime", pkg.name));
             }
+
             if !seen.insert(d.package.as_str()) {
                 return Err(format!("{} is listed twice", pkg.name));
             }
+
             crate::validate(&d.package, &d.version, "install", &d.params)?;
         }
+
         if self.dependencies.len() > 10 {
             return Err("at most 10 runtimes".into());
         }
+
         if self.cpu_millis > 256_000 || self.memory_mb > 1_048_576 {
             return Err("CPU or memory limit out of range".into());
         }
+
         let container_only = !self.entrypoint.is_empty()
             || !self.user.is_empty()
             || !self.hostname.is_empty()
@@ -452,25 +475,33 @@ impl AppSpec {
             || self.stop_timeout_secs > 0
             || self.read_only
             || self.log_max_mb > 0;
+
         if container_only && self.runtime != Runtime::Container {
             return Err("entrypoint, user, host name, labels, hosts, health check, stop timeout, read-only and log size apply to containers only".into());
         }
+
         if !clean_text(&self.entrypoint, 1024) {
             return Err("entrypoint may not contain line breaks".into());
         }
+
         let user_ok =
             self.user.len() <= 64 && self.user.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-:.".contains(&b));
+
         if !self.user.is_empty() && !user_ok {
             return Err("user: a name, uid or uid:gid".into());
         }
+
         let host_ok =
             self.hostname.len() <= 63 && self.hostname.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+
         if !self.hostname.is_empty() && !host_ok {
             return Err("host name: letters, digits and dashes".into());
         }
+
         if self.labels.len() > 50 {
             return Err("at most 50 labels".into());
         }
+
         for (k, v) in &self.labels {
             if k.is_empty()
                 || k.len() > 128
@@ -479,10 +510,12 @@ impl AppSpec {
             {
                 return Err(format!("invalid label `{k}` (forge.* is reserved)"));
             }
+
             if !clean_text(v, 1024) {
                 return Err(format!("label `{k}` may not contain line breaks"));
             }
         }
+
         for h in &self.extra_hosts {
             let ok = h.split_once(':').is_some_and(|(n, ip)| {
                 !n.is_empty()
@@ -490,14 +523,17 @@ impl AppSpec {
                     && n.bytes().all(|b| b.is_ascii_alphanumeric() || b".-".contains(&b))
                     && ip.parse::<std::net::Ipv4Addr>().is_ok()
             });
+
             if !ok {
                 return Err(format!("invalid host entry `{h}` (name:ipv4)"));
             }
         }
+
         if let Some(hc) = &self.healthcheck {
             if hc.command.trim().is_empty() || !clean_text(&hc.command, 1024) {
                 return Err("health check: a single-line command is required".into());
             }
+
             if !(1..=3600).contains(&hc.interval_secs)
                 || !(1..=600).contains(&hc.timeout_secs)
                 || !(1..=20).contains(&hc.retries)
@@ -506,9 +542,11 @@ impl AppSpec {
                 return Err("health check timings out of range".into());
             }
         }
+
         if self.stop_timeout_secs > 3600 || self.log_max_mb > 10_240 {
             return Err("stop timeout or log size out of range".into());
         }
+
         match (self.runtime, self.listen_port) {
             (_, Some(0)) => return Err("the port must be between 1 and 65535".into()),
             (Runtime::Container, Some(_)) => {
@@ -516,14 +554,17 @@ impl AppSpec {
             }
             _ => {}
         }
+
         match self.runtime {
             Runtime::Systemd => {
                 if self.command.trim().is_empty() || !clean_text(&self.command, 4096) {
                     return Err("a single-line command is required".into());
                 }
+
                 if !self.working_dir.is_empty() && !valid_abs_path(&self.working_dir) {
                     return Err("working directory must be an absolute path".into());
                 }
+
                 if !self.image.is_empty() || !self.ports.is_empty() || !self.volumes.is_empty() {
                     return Err("image, ports and volumes apply to containers only".into());
                 }
@@ -532,14 +573,17 @@ impl AppSpec {
                 if !valid_image(&self.image) {
                     return Err("a valid image reference is required".into());
                 }
+
                 if let Some(p) = self.ports.iter().find(|p| !valid_port_map(p)) {
                     return Err(format!("invalid port mapping `{p}`"));
                 }
+
                 if let Some(v) = self.volumes.iter().find(|v| !valid_volume(v)) {
                     return Err(format!(
                         "invalid volume `{v}` (use /host/path:/container/path[:ro] or volume-name:/container/path[:ro])"
                     ));
                 }
+
                 // The same host-mount rules as compose stacks: never the
                 // Docker socket, system paths or Forge's own folders.
                 for v in &self.volumes {
@@ -548,11 +592,13 @@ impl AppSpec {
                         return Err(format!("volume `{v}` is not allowed: {why}"));
                     }
                 }
+
                 if !self.command.is_empty() && !clean_text(&self.command, 4096) {
                     return Err("command may not contain line breaks".into());
                 }
             }
         }
+
         Ok(())
     }
 
@@ -641,12 +687,14 @@ impl AppSpec {
     #[must_use]
     pub fn env_file(&self) -> String {
         let mut s = format!("# Managed by Orbyn Forge: {}/{}\n", self.environment, self.name);
+
         for (k, v) in &self.env {
             s.push_str(k);
             s.push('=');
             s.push_str(v);
             s.push('\n');
         }
+
         s
     }
 
@@ -666,8 +714,10 @@ impl AppSpec {
     /// to interpolate.
     fn runtime_env(&self) -> String {
         let mut s = String::new();
+
         for d in &self.dependencies {
             let v = &d.version;
+
             match d.package.as_str() {
                 "dotnet" => s.push_str(&format!("DOTNET_ROOT=/opt/forge/pkgs/dotnet/{v}; export DOTNET_ROOT\nPATH=\"$DOTNET_ROOT:$PATH\"\n")),
                 "go" => s.push_str(&format!("GOROOT=/opt/forge/pkgs/go/{v}; export GOROOT\nPATH=\"$GOROOT/bin:$PATH\"\n")),
@@ -675,12 +725,15 @@ impl AppSpec {
                 _ => {}
             }
         }
+
         if !self.runtime_links().is_empty() {
             s.push_str(&format!("PATH=\"{}/.forge/bin:$PATH\"\n", self.home()));
         }
+
         if !s.is_empty() {
             s.push_str("export PATH\n");
         }
+
         s
     }
 
@@ -699,11 +752,13 @@ impl AppSpec {
     #[must_use]
     pub fn pkg_env_files(&self) -> Vec<String> {
         let mut out = self.env_files.clone();
+
         for d in &self.dependencies {
             if !out.contains(&d.package) {
                 out.push(d.package.clone());
             }
         }
+
         out
     }
 
@@ -716,17 +771,23 @@ impl AppSpec {
     #[must_use]
     pub fn service_unit(&self, user: &str) -> String {
         let mut env_files = String::new();
+
         for f in &self.pkg_env_files() {
             env_files.push_str(&format!("EnvironmentFile=-/etc/forge/pkgs/{f}.env\n"));
         }
+
         let mut limits = String::new();
+
         if self.cpu_millis > 0 {
             limits.push_str(&format!("CPUQuota={}%\n", self.cpu_millis.div_ceil(10)));
         }
+
         if self.memory_mb > 0 {
             limits.push_str(&format!("MemoryMax={}M\n", self.memory_mb));
         }
+
         let restart = if self.restart { "Restart=always\nRestartSec=3\n" } else { "" };
+
         format!(
             "# Managed by Orbyn Forge\n[Unit]\nDescription=Orbyn Forge app {ns}/{name}\nAfter=network-online.target\nWants=network-online.target\n\n\
              [Service]\nUser={user}\nGroup={user}\nWorkingDirectory={wd}\nEnvironment={LOG_URL_ENV}={LOG_URL_HOST}\n{env_files}EnvironmentFile={env}\nExecStart={launcher}\n{restart}{limits}\
@@ -800,6 +861,7 @@ mod tests {
         long.name = "billing-reconciliation-worker".into();
         let c = long.user_candidates();
         assert_eq!(c.len(), 1, "too long for the readable form: {c:?}");
+
         for s in [&svc(), &long] {
             for u in s.user_candidates() {
                 assert!(u.len() <= APP_USER_MAX, "{u}");
@@ -807,7 +869,9 @@ mod tests {
                 assert!(u.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'), "{u}");
             }
         }
+
         assert!(c[0].starts_with("production-europe-west-bi-") && c[0].len() == APP_USER_MAX, "{c:?}");
+
         // The fallback differs from the readable name and is stable.
         let fb = &svc().user_candidates()[1];
         assert!(fb.starts_with("staging-api-") && fb.len() == "staging-api-".len() + 6, "{fb}");
@@ -862,6 +926,7 @@ mod tests {
         c.ports = vec![];
         c.volumes = vec!["/../x:/data".into()];
         assert!(c.validate().is_err());
+
         // Host takeover through volumes is refused (security regression).
         for v in [
             "/:/host",
@@ -876,13 +941,16 @@ mod tests {
             c.volumes = vec![v.into()];
             assert!(c.validate().is_err(), "{v}");
         }
+
         c.volumes = vec!["/srv/data/api:/data".into()];
         c.validate().unwrap();
+
         // Named Docker volumes: a safe name and an absolute target.
         c.volumes = vec!["pgdata:/var/lib/postgresql/data".into(), "cache_1:/cache:ro".into()];
         c.validate().unwrap();
         assert_eq!(volume_host_path("pgdata:/data"), None);
         assert_eq!(volume_host_path("/srv/x:/data"), Some("/srv/x"));
+
         for v in ["../etc:/x", "pg data:/x", "pgdata:relative", "-flag:/x", "pgdata", "a:/b:rx"] {
             c.volumes = vec![v.into()];
             assert!(c.validate().is_err(), "{v}");

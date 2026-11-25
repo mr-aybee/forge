@@ -276,6 +276,7 @@ impl ContainerOp {
         reveal_env: bool,
     ) -> Result<Self, String> {
         let id = id.to_owned();
+
         let v = match op {
             "info" => Self::Info,
             "list" => Self::List,
@@ -294,7 +295,9 @@ impl ContainerOp {
             "pull" => Self::Pull { image: image.to_owned() },
             other => return Err(format!("unknown container operation `{other}`")),
         };
+
         v.validate()?;
+
         Ok(v)
     }
 }
@@ -356,7 +359,9 @@ impl HelperRequest {
         if line.len() > MAX_REQUEST_BYTES {
             return Err("request too large".into());
         }
+
         let req: Self = serde_json::from_str(line).map_err(|e| format!("rejected: {e}"))?;
+
         req.validate()
     }
 
@@ -379,6 +384,7 @@ impl HelperRequest {
                 ) {
                     return Err(format!("rejected: unknown site action `{action}`"));
                 }
+
                 spec.validate().map_err(|e| format!("rejected: {e}"))?;
                 Ok(req)
             }
@@ -432,9 +438,11 @@ impl HelperRequest {
                 {
                     return Err("rejected: invalid app name".into());
                 }
+
                 if let Some(e) = health.policy.validate().first() {
                     return Err(format!("rejected: invalid health policy: {}: {}", e.field, e.message));
                 }
+
                 Ok(req)
             }
             Self::ContainerExec { exec } => {
@@ -461,6 +469,7 @@ impl HelperRequest {
                 {
                     return Err(format!("rejected: unknown app action `{action}`"));
                 }
+
                 spec.validate().map_err(|e| format!("rejected: {e}"))?;
                 Ok(req)
             }
@@ -478,6 +487,7 @@ impl HelperRequest {
     /// helper.
     pub fn from_command(cmd: &forge_proto::Command) -> Result<Option<Self>, String> {
         use forge_proto::Command as C;
+
         let req = match cmd {
             C::PackageAction(p) => Self::Package {
                 package: p.package.clone(),
@@ -561,6 +571,7 @@ impl HelperRequest {
             | C::TunnelOpen(_)
             | C::ProcessList(_) => return Ok(None),
         };
+
         req.validate().map(Some)
     }
 
@@ -612,12 +623,14 @@ pub async fn call_signed(
         // Windows: requests run in the agent's own process (LocalSystem).
         return call(req, timeout).await;
     }
+
     let envelope =
         HelperRequest::Signed { command: forge_secrets::crypto::b64url(&prost::Message::encode_to_vec(signed)) };
     let r = call(&envelope, timeout).await;
     if !r.ok && r.error.as_deref().is_some_and(is_old_helper) {
         return call(req, timeout).await;
     }
+
     r
 }
 
@@ -638,19 +651,23 @@ pub async fn call(req: &HelperRequest, timeout: std::time::Duration) -> HelperRe
         line.push('\n');
         stream.write_all(line.as_bytes()).await.map_err(|e| e.to_string())?;
         let mut reader = BufReader::new(stream);
+
         // Zero or more `{"progress": "<line>"}` lines, then the response.
         loop {
             let mut resp = String::new();
             if reader.read_line(&mut resp).await.map_err(|e| e.to_string())? == 0 {
                 return Err("helper closed the connection".into());
             }
+
             if let Ok(p) = serde_json::from_str::<Progress>(&resp) {
                 crate::progress::push(&p.progress);
                 continue;
             }
+
             return serde_json::from_str::<HelperResponse>(&resp).map_err(|e| format!("bad helper response: {e}"));
         }
     };
+
     match tokio::time::timeout(timeout, run).await {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => HelperResponse::failed(e),
@@ -750,6 +767,7 @@ mod tests {
             let req = HelperRequest::parse(&format!(r#"{{"op":"container_state","name":"{ok}"}}"#)).unwrap();
             assert!(req.allowed_unsigned());
         }
+
         for bad in [
             "postgres",
             "forge-app-",
@@ -762,6 +780,7 @@ mod tests {
             assert!(!valid_app_container(bad), "{bad}");
             assert!(HelperRequest::parse(&format!(r#"{{"op":"container_state","name":"{bad}"}}"#)).is_err(), "{bad}");
         }
+
         // Other container operations still need a signed command.
         let inspect = HelperRequest::Container {
             container: ContainerOp::Inspect { id: "forge-app-uat-web".into(), reveal_env: false },
@@ -819,6 +838,7 @@ mod tests {
         );
         assert!(HelperRequest::parse(r#"{"op":"container","container":{"kind":"stop","id":"../../x"}}"#).is_err());
         assert!(HelperRequest::parse(r#"{"op":"container","container":{"kind":"exec","id":"web"}}"#).is_err());
+
         // D-114: a container shell is never a plain request line.
         assert!(
             HelperRequest::parse(r#"{"op":"container_exec","exec":{"container":"web","cols":80,"rows":24}}"#).is_err()
@@ -851,6 +871,7 @@ mod tests {
             ContainerOp::from_wire("inspect", "web", "", 0, "", true),
             Ok(ContainerOp::Inspect { id: "web".into(), reveal_env: true })
         );
+
         // Other operations never carry values, whatever the flag says.
         assert_eq!(
             ContainerOp::from_wire("stats", "web", "", 0, "", true),

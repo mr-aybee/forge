@@ -114,24 +114,29 @@ pub struct EdgeArg {
 /// Parses `<node>[:primary|backup][=<public-ip>]`.
 pub fn parse_edge(spec: &str) -> Result<EdgeArg> {
     let bad = |why: &str| CliError::usage(format!("--edge {spec}: {why}"));
+
     let (left, ip) = match spec.split_once('=') {
         Some((l, ip)) => (l, Some(ip)),
         None => (spec, None),
     };
+
     if let Some(ip) = ip
         && ip.parse::<std::net::IpAddr>().is_err()
     {
         return Err(bad("the public IP is not an IP address"));
     }
+
     let (node, role) = match left.rsplit_once(':') {
         None => (left, None),
         Some((n, "primary")) => (n, Some(EdgeRole::Primary)),
         Some((n, "backup")) => (n, Some(EdgeRole::Backup)),
         Some((_, _)) => return Err(bad("the role is primary or backup")),
     };
+
     if node.is_empty() {
         return Err(bad("name the node"));
     }
+
     Ok(EdgeArg { node: node.to_owned(), role, public_ip: ip.map(str::to_owned) })
 }
 
@@ -144,10 +149,12 @@ pub fn profile_body(base: Option<Value>, mode: Option<Mode>, edges: &[(String, E
         Some(Value::Null) | None => Map::new(),
         Some(_) => return Err(CliError::usage("the profile must be a JSON object")),
     };
+
     let mut ingress = match body.remove("ingress") {
         Some(Value::Object(m)) => m,
         _ => Map::new(),
     };
+
     if !edges.is_empty() {
         let list: Vec<Value> = edges
             .iter()
@@ -155,18 +162,22 @@ pub fn profile_body(base: Option<Value>, mode: Option<Mode>, edges: &[(String, E
             .map(|(i, (id, e))| {
                 let role = e.role.unwrap_or(if i == 0 { EdgeRole::Primary } else { EdgeRole::Backup });
                 let mut edge = json!({ "server_id": id, "role": role.as_str() });
+
                 if let Some(ip) = &e.public_ip {
                     edge["public_ip"] = json!(ip);
                 }
+
                 edge
             })
             .collect();
         ingress.insert("edges".into(), Value::Array(list));
     }
+
     let count = ingress.get("edges").and_then(Value::as_array).map_or(0, Vec::len);
     if count == 0 {
         return Err(CliError::usage("the profile has no edge node: pass --edge <node> or --file"));
     }
+
     match mode {
         Some(m) => {
             ingress.insert("mode".into(), json!(m.as_str()));
@@ -181,7 +192,9 @@ pub fn profile_body(base: Option<Value>, mode: Option<Mode>, edges: &[(String, E
             )));
         }
     }
+
     body.insert("ingress".into(), Value::Object(ingress));
+
     Ok(Value::Object(body))
 }
 
@@ -217,6 +230,7 @@ fn edge_rows(edges: &Value, names: &HashMap<String, String>) -> Vec<Value> {
         })
         .collect();
     rows.sort_by(|a, b| a["node"].as_str().cmp(&b["node"].as_str()));
+
     rows
 }
 
@@ -227,6 +241,7 @@ fn summary(v: &Value) -> Value {
     if !ingress.is_object() {
         return json!({ "cluster": cluster, "profile": "none (save one with `forge clusters ingress set`)" });
     }
+
     let names = member_names(v);
     let edges: Vec<Value> = ingress["edges"]
         .as_array()
@@ -248,18 +263,23 @@ fn summary(v: &Value) -> Value {
     s.insert("cluster".into(), cluster);
     s.insert("mode".into(), ingress["mode"].clone());
     s.insert("failover".into(), ingress["failover"].clone());
+
     if let Some(vips) = ingress["vrrp"]["vips"].as_array().filter(|a| !a.is_empty()) {
         s.insert("virtual_ips".into(), json!(vips));
     }
+
     // `dirty`: saved but not applied since.
     s.insert(
         "applied".into(),
         json!(if v["status"]["dirty"] == false { "yes" } else { "no (run `forge clusters ingress apply`)" }),
     );
+
     if let Some(at) = v["status"]["applied_at"].as_i64() {
         s.insert("applied_at".into(), json!(at));
     }
+
     s.insert("edges".into(), Value::Array(edges));
+
     Value::Object(s)
 }
 
@@ -271,6 +291,7 @@ fn edges_result(g: &Global, what: &str, cluster: &str, v: &Value, names: &HashMa
         .filter(|r| r["status"] == "failed")
         .map(|r| format!("{}: {}", r["node"].as_str().unwrap_or("?"), r["error"].as_str().unwrap_or("failed")))
         .collect();
+
     if g.output.is_machine() {
         if failed.is_empty() {
             out::result(g.output, v, None);
@@ -278,9 +299,11 @@ fn edges_result(g: &Global, what: &str, cluster: &str, v: &Value, names: &HashMa
     } else {
         out::result(g.output, &Value::Array(rows), Some(EDGE_COLS));
     }
+
     if failed.is_empty() {
         return Ok(());
     }
+
     Err(CliError::new(
         Exit::JobFailed,
         format!("{what} of the ingress of cluster {cluster} failed: {}", failed.join("; ")),
@@ -302,32 +325,40 @@ fn edge_list(profile: &Value, names: &HashMap<String, String>) -> String {
 pub async fn run(g: &Global, cmd: IngressCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         IngressCmd::Get { cluster } => {
             let id = cluster_id(&mut api, &cluster).await?;
             let v = api.get(&format!("/api/v1/clusters/{id}/profile")).await?;
+
             if g.output.is_machine() {
                 out::result(g.output, &v, None);
             } else {
                 out::result(g.output, &summary(&v), None);
             }
+
             Ok(())
         }
         IngressCmd::Set { cluster, file, edges, mode, yes } => {
             if file.is_none() && edges.is_empty() && mode.is_none() {
                 return Err(CliError::usage("pass --file, or --edge <node> (and --mode)"));
             }
+
             let args: Vec<EdgeArg> = edges.iter().map(|e| parse_edge(e)).collect::<Result<_>>()?;
             let id = cluster_id(&mut api, &cluster).await?;
             let path = format!("/api/v1/clusters/{id}/profile");
+
             let base = match &file {
                 Some(f) => read_json(f)?,
                 None => api.get(&path).await?["profile"].take(),
             };
+
             let mut resolved = Vec::new();
+
             for e in args {
                 resolved.push((node_id(&mut api, &e.node).await?, e));
             }
+
             let body = profile_body(Some(base), mode, &resolved)?;
             check_body(&mut api, "PUT", &path, &body).await?;
             confirm(
@@ -341,9 +372,11 @@ pub async fn run(g: &Global, cmd: IngressCmd) -> Result<()> {
                 ),
             )?;
             let v = api.call(Method::PUT, &path, Some(&body)).await?;
+
             if !g.output.is_machine() {
                 eprintln!("Saved. Run `forge clusters ingress apply {cluster}` to push it to the edge nodes.");
             }
+
             out::result(g.output, &v, None);
             Ok(())
         }
@@ -403,6 +436,7 @@ mod tests {
             Some(edge("lab-b", Some(EdgeRole::Primary), Some("203.0.113.10")))
         );
         assert_eq!(parse_edge("lab-b=2001:db8::1").ok(), Some(edge("lab-b", None, Some("2001:db8::1"))));
+
         for bad in ["lab-b:active", "lab-b=not-an-ip", ":primary", "=203.0.113.10"] {
             assert!(parse_edge(bad).is_err_and(|e| e.exit == Exit::Usage), "{bad}");
         }
@@ -416,6 +450,7 @@ mod tests {
             one,
             json!({ "ingress": { "mode": "standalone", "edges": [{ "server_id": "s1", "role": "primary" }] } })
         );
+
         // Several: the first is the primary unless roles are given, and a mode is required.
         let two = [("s1".to_owned(), edge("a", None, Some("203.0.113.10"))), ("s2".to_owned(), edge("b", None, None))];
         assert!(profile_body(None, None, &two).is_err_and(|e| e.message.contains("--mode")));
@@ -446,6 +481,7 @@ mod tests {
         assert_eq!(body["ingress"]["mode"], "active_active", "the saved mode stays");
         assert_eq!(body["ingress"]["nginx"]["client_max_body_mb"], 100);
         assert_eq!(body["ingress"]["edges"][0], json!({ "server_id": "s1", "role": "backup" }));
+
         // --mode alone keeps the saved edges.
         let body = profile_body(Some(saved), Some(Mode::Standalone), &[]).unwrap_or_default();
         assert_eq!(
@@ -482,6 +518,7 @@ mod tests {
         );
         assert_eq!(rows[0]["node"], "lab-b");
         assert_eq!((&rows[1]["node"], &rows[1]["error"]), (&json!("lab-c"), &json!("nginx: test failed")));
+
         // No profile yet.
         let none = summary(&json!({ "cluster": { "name": "lab" }, "profile": null, "status": {} }));
         assert!(none["profile"].as_str().is_some_and(|p| p.starts_with("none")));
@@ -503,6 +540,7 @@ mod tests {
             "active_standby",
             "--yes",
         ]);
+
         match cli.map(|c| c.cmd) {
             Ok(Cmd::Clusters(ClustersCmd::Ingress(IngressCmd::Set { cluster, file, edges, mode, yes }))) => {
                 assert_eq!(
@@ -512,6 +550,7 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+
         assert!(
             Cli::try_parse_from(["forge", "clusters", "ingress", "set", "lab", "--mode", "active-standby"]).is_err()
         );

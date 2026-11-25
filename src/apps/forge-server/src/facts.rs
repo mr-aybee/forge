@@ -42,7 +42,9 @@ pub async fn node_address(state: &AppState, server: ServerId) -> forge_core::Dom
     if let Some(ip) = live_address(server) {
         return Ok(Some(ip));
     }
+
     let facts = forge_core::tags::FactsRepository::all_facts(&state.store).await?;
+
     Ok(facts.get(&server).and_then(|(f, _)| f["address"].as_str()).map(str::to_owned))
 }
 
@@ -70,6 +72,7 @@ fn due(last: Option<i64>, now: i64, agent_changed: bool) -> bool {
 /// heartbeat reports another agent version than the one on record.
 pub fn maybe_collect(state: &AppState, server: ServerId, agent_changed: bool) {
     let now = state.clock.now().0;
+
     let due = {
         let Ok(mut a) = attempts().lock() else { return };
         if due(a.get(&server).copied(), now, agent_changed) {
@@ -79,9 +82,11 @@ pub fn maybe_collect(state: &AppState, server: ServerId, agent_changed: bool) {
             false
         }
     };
+
     if !due {
         return;
     }
+
     let state = state.clone();
     tokio::spawn(async move {
         match collect(&state, server).await {
@@ -89,6 +94,7 @@ pub fn maybe_collect(state: &AppState, server: ServerId, agent_changed: bool) {
                 // Next run after a full day, not after the retry gap.
                 let next = now + i64::try_from(REFRESH.as_millis()).unwrap_or(0)
                     - i64::try_from(RETRY.as_millis()).unwrap_or(0);
+
                 if let Ok(mut a) = attempts().lock() {
                     a.insert(server, next);
                 }
@@ -101,6 +107,7 @@ pub fn maybe_collect(state: &AppState, server: ServerId, agent_changed: bool) {
 /// Keeps the useful facts and drops large or sensitive ones (host keys).
 fn keep(v: &Value) -> Value {
     let mut out = serde_json::Map::new();
+
     for k in [
         "hostname",
         "os",
@@ -128,6 +135,7 @@ fn keep(v: &Value) -> Value {
             out.insert(k.to_owned(), x.clone());
         }
     }
+
     Value::Object(out)
 }
 
@@ -146,11 +154,14 @@ pub(crate) async fn collect(state: &AppState, server: ServerId) -> Result<(), St
     if !r.ok {
         return Err(r.error);
     }
+
     let mut v: Value = serde_json::from_str(&r.output).map_err(|_| "invalid facts".to_owned())?;
+
     // Where the agent connects from: the default address for SSH (terminal).
     if let Some(ip) = live_address(server) {
         v["address"] = Value::from(ip);
     }
+
     state.store.put_facts(server, &keep(&v), state.clock.now()).await.map_err(|e| e.to_string())
 }
 
@@ -159,12 +170,15 @@ pub(crate) async fn collect(state: &AppState, server: ServerId) -> Result<(), St
 #[must_use]
 pub fn with_live(state: &AppState, server: ServerId, stored: Option<&(Value, forge_core::Timestamp)>) -> Value {
     let mut f = stored.map(|(v, _)| v.clone()).unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+
     if let Some((_, at)) = stored {
         f["collected_at_ms"] = Value::from(at.0);
     }
+
     if let Some(ip) = live_address(server) {
         f["address"] = Value::from(ip);
     }
+
     if let Some(sample) = state.telemetry.latest(server)
         && let Ok(Value::Object(m)) = serde_json::to_value(sample)
     {
@@ -174,6 +188,7 @@ pub fn with_live(state: &AppState, server: ServerId, stored: Option<&(Value, for
             }
         }
     }
+
     f
 }
 

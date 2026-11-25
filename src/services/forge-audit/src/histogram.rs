@@ -68,6 +68,7 @@ pub struct AuditHistogramBucket {
 fn step_for(span: i64, buckets: u32) -> i64 {
     let n = i64::from(buckets.clamp(1, MAX_BUCKETS));
     let raw = (span + n - 1) / n;
+
     STEPS.iter().copied().find(|s| *s >= raw).unwrap_or_else(|| ((raw + DAY - 1) / DAY) * DAY)
 }
 
@@ -80,10 +81,12 @@ pub(crate) async fn build(
     now: i64,
 ) -> DomainResult<AuditHistogram> {
     let to = filter.until.unwrap_or(now);
+
     let from = match filter.since {
         Some(s) => s,
         None => repo.entries_from(0, 1).await?.first().map_or(to - EMPTY_WINDOW, |e| e.at.0),
     };
+
     let to = to.max(from + 1);
     let step_ms = step_for(to - from, buckets);
     let start = from - from.rem_euclid(step_ms);
@@ -92,16 +95,19 @@ pub(crate) async fn build(
         .map(|i| AuditHistogramBucket { t: start + step_ms * i as i64, success: 0, denied: 0, failure: 0 })
         .collect();
     let f = AuditFilter { before: None, ..filter.clone() };
+
     for c in repo.bucket_counts(&f, start, step_ms).await? {
         // An entry written after `now` was read lands in the last bucket.
         let i = usize::try_from(c.bucket).unwrap_or(0).min(len - 1);
         let b = &mut out[i];
+
         match c.outcome {
             AuditOutcome::Success => b.success += c.count,
             AuditOutcome::Denied => b.denied += c.count,
             AuditOutcome::Failure => b.failure += c.count,
         }
     }
+
     Ok(AuditHistogram { from, to, step_ms, buckets: out })
 }
 

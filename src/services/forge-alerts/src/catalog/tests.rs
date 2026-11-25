@@ -9,16 +9,20 @@ fn every_template_parses_validates_and_names_a_known_subject() {
     let all = templates(None);
     assert!(all.len() >= 20);
     let mut ids = HashSet::new();
+
     for t in &all {
         assert!(ids.insert(t.id.clone()), "duplicate id {}", t.id);
         t.spec.validate().unwrap_or_else(|e| panic!("{}: {e}", t.id));
+
         // The JSON form the API stores parses back through the rule parser.
         let json = serde_json::to_value(&t.spec).unwrap();
         assert_eq!(crate::parse_spec(&json).unwrap(), t.spec, "{}", t.id);
         let subject = t.subject_for(Some("http")).unwrap();
         check_subject(&subject, t.scope).unwrap_or_else(|e| panic!("{}: {e}", t.id));
+
         // State triggers only use states the subject can take.
         let info = describe(&subject).unwrap();
+
         match &t.spec.trigger {
             Condition::StateIn { states } | Condition::StateNotIn { states } => {
                 assert_eq!(info.kind, ValueKind::State, "{}", t.id);
@@ -26,6 +30,7 @@ fn every_template_parses_validates_and_names_a_known_subject() {
             }
             Condition::Threshold { .. } => assert_eq!(info.kind, ValueKind::Number, "{}", t.id),
         }
+
         assert!(!t.name.is_empty() && t.name.chars().count() <= forge_core::alerts::MAX_RULE_NAME);
     }
 }
@@ -53,6 +58,7 @@ fn check_placeholders_need_a_valid_check() {
 #[test]
 fn subjects_are_checked_against_the_catalogue() {
     use ScopeKind::*;
+
     for (s, scope) in [
         ("node.agent.status", Servers),
         ("node.disk.max_used_percent", Servers),
@@ -67,6 +73,7 @@ fn subjects_are_checked_against_the_catalogue() {
     ] {
         check_subject(s, scope).unwrap_or_else(|e| panic!("{s}: {e}"));
     }
+
     let err = |s: &str, scope| check_subject(s, scope).unwrap_err().to_string();
     assert!(err("node.cpu.precent", Servers).contains("did you mean `node.cpu.percent`"));
     assert!(err("package.state", Servers).contains("installations"));
@@ -79,10 +86,12 @@ fn subjects_are_checked_against_the_catalogue() {
 #[test]
 fn the_subject_list_covers_patterns_and_control_plane_subjects() {
     let all = subjects();
+
     for s in CONTROL_PLANE_SUBJECTS {
         let i = all.iter().find(|i| i.subject == *s).unwrap();
         assert_eq!(i.source, SubjectSource::ControlPlane, "{s}");
     }
+
     assert_eq!(all.iter().filter(|i| i.pattern).count(), 3);
     assert!(all.iter().all(|i| (i.kind == ValueKind::State) != i.unit.is_some()));
 }

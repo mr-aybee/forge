@@ -19,6 +19,7 @@ impl TagRepository for Store {
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
+
         for t in tags {
             sqlx::query("INSERT INTO entity_tags (kind, entity_id, tag, created_at) VALUES ($1, $2, $3, $4)")
                 .bind(kind.as_str())
@@ -29,7 +30,9 @@ impl TagRepository for Store {
                 .await
                 .map_err(db_err)?;
         }
+
         tx.commit().await.map_err(db_err)?;
+
         Ok(())
     }
 
@@ -50,9 +53,11 @@ impl TagRepository for Store {
             .await
             .map_err(db_err)?;
         let mut out: HashMap<String, Vec<String>> = HashMap::new();
+
         for r in &rows {
             out.entry(text(r, "entity_id")?).or_default().push(text(r, "tag")?);
         }
+
         Ok(out)
     }
 
@@ -75,6 +80,7 @@ impl NodeLoginRepository for Store {
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
+
         for l in logins {
             sqlx::query("INSERT INTO server_logins (server_id, login, created_at) VALUES ($1, $2, $3)")
                 .bind(server.to_string())
@@ -84,7 +90,9 @@ impl NodeLoginRepository for Store {
                 .await
                 .map_err(db_err)?;
         }
+
         tx.commit().await.map_err(db_err)?;
+
         Ok(())
     }
 
@@ -116,6 +124,7 @@ impl FactsRepository for Store {
             .await
             .map_err(db_err)?;
         tx.commit().await.map_err(db_err)?;
+
         Ok(())
     }
 
@@ -125,11 +134,13 @@ impl FactsRepository for Store {
             .await
             .map_err(db_err)?;
         let mut out = HashMap::new();
+
         for r in &rows {
             let id: ServerId = parsed(r, "server_id")?;
             let facts = serde_json::from_str(&text(r, "facts")?).map_err(DomainError::internal)?;
             out.insert(id, (facts, ts(r, "collected_at")?));
         }
+
         Ok(out)
     }
 

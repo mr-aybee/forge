@@ -94,6 +94,7 @@ pub async fn start_configured(change: impl FnOnce(&mut ServerConfig)) -> Harness
     let state = Services::build(config).await.unwrap();
     let init = bootstrap::init_admin(&state, None, Some(ADMIN_EMAIL), "Admin", PASSWORD, false).await.unwrap();
     let app = App::start_with(state, api, agent).unwrap();
+
     Harness {
         base: format!("http://{}", app.api_addr),
         agent_url: format!("https://127.0.0.1:{}", app.agent_addr.port()),
@@ -129,23 +130,29 @@ impl Client {
         let (status, body) = c.call(Method::POST, "/api/v1/auth/login", Some(body)).await;
         assert_eq!(status, StatusCode::OK, "login failed: {body}");
         c.csrf = body["csrf_token"].as_str().map(str::to_owned);
+
         c
     }
 
     pub async fn call(&self, method: Method, path: &str, body: Option<Value>) -> (StatusCode, Value) {
         let mut req = self.http.request(method, format!("{}{}", self.base, path));
+
         if let Some(csrf) = &self.csrf {
             req = req.header("x-csrf-token", csrf);
         }
+
         if let Some(b) = &self.bearer {
             req = req.bearer_auth(b);
         }
+
         if let Some(b) = body {
             req = req.json(&b);
         }
+
         let resp = req.send().await.unwrap();
         let status = resp.status();
         let text = resp.text().await.unwrap();
+
         (status, serde_json::from_str(&text).unwrap_or(Value::String(text)))
     }
 
@@ -173,6 +180,7 @@ pub async fn login_body(base: &str, login: &str, password: &str) -> Value {
         body["challenge_id"] = c["id"].clone();
         body["nonce"] = json!(forge_secrets::pow::solve(&salt, bits));
     }
+
     body
 }
 
@@ -195,6 +203,7 @@ pub async fn user_with_role(h: &Harness, _admin: &Client, email: &str, role: &st
         created_at: state.clock.now(),
     };
     state.grant(&binding).await.unwrap();
+
     Client::login(&h.base, email, PASSWORD).await
 }
 
@@ -218,17 +227,20 @@ pub async fn step_up(c: &mut Client) -> Vec<u8> {
         c.post("/api/v1/auth/step-up", json!({"code": format!("{:06}", totp::code_at(&secret, now() + 30))})).await;
     assert_eq!(s, StatusCode::OK, "{r}");
     c.csrf = r["csrf_token"].as_str().map(str::to_owned);
+
     secret
 }
 
 /// Polls a job until it reaches a terminal state.
 pub async fn wait_job(c: &Client, id: &str, timeout: Duration) -> Value {
     let deadline = tokio::time::Instant::now() + timeout;
+
     loop {
         let (_, job) = c.get(&format!("/api/v1/jobs/{id}")).await;
         if matches!(job["status"].as_str(), Some("succeeded" | "failed" | "cancelled")) {
             return job;
         }
+
         assert!(tokio::time::Instant::now() < deadline, "job {id} did not finish: {job}");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

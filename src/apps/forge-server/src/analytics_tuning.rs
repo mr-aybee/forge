@@ -36,6 +36,7 @@ pub fn retention(config: &ServerConfig) -> Retention {
 pub fn from_config(c: &ServerConfig) -> Tuning {
     let a = &c.analytics;
     let r = retention(c);
+
     Tuning {
         node_metrics_days: r.node_metrics_days,
         top_processes_days: r.top_processes_days,
@@ -80,8 +81,10 @@ fn parse_stored(raw: &str) -> Result<Overrides, StoredError> {
             }
         }
     }
+
     let o: Overrides = serde_json::from_value(v)?;
     validate(&o)?;
+
     Ok(o)
 }
 

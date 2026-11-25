@@ -215,10 +215,12 @@ impl SearchSlot {
         use std::sync::atomic::Ordering;
         let n = Self::count();
         let mut cur = n.load(Ordering::Acquire);
+
         loop {
             if cur >= MAX_SEARCHES {
                 return Err("the node is busy with other searches; try again shortly".into());
             }
+
             match n.compare_exchange(cur, cur + 1, Ordering::AcqRel, Ordering::Acquire) {
                 Ok(_) => return Ok(Self),
                 Err(now) => cur = now,
@@ -257,12 +259,14 @@ async fn run_search(op: FileOp) -> Result<Value, String> {
             let _ = tx.send(r);
         })
         .map_err(|e| format!("cannot start the search: {e}"))?;
+
     rx.await.map_err(|_| "the search stopped unexpectedly".to_owned())?
 }
 
 /// Runs one operation against this node's filesystem.
 pub async fn run_async(op: FileOp) -> Result<Value, String> {
     op.validate()?;
+
     // D-083: an app's folder is worked on as the app's account. A plain
     // directory on an app's folder (from an older control plane) is treated
     // as that app's root; one around or inside app folders is refused.
@@ -273,12 +277,14 @@ pub async fn run_async(op: FileOp) -> Result<Value, String> {
         }
         _ => op,
     };
+
     if matches!(op.root(), RootSpec::App { .. }) {
         #[cfg(target_os = "linux")]
         return app_worker::run(op).await;
         #[cfg(not(target_os = "linux"))]
         return Err("app roots need a Linux node".into());
     }
+
     run_local(op).await
 }
 
@@ -288,10 +294,12 @@ pub(crate) async fn run_local(op: FileOp) -> Result<Value, String> {
     if matches!(op, FileOp::Search { .. }) && !matches!(op.root(), RootSpec::Container { .. }) {
         return run_search(op).await;
     }
+
     let pid = match op.root() {
         RootSpec::Container { container, .. } => Some(container_pid(container).await?),
         _ => None,
     };
+
     let spec = op.root().clone();
     let result = tokio::task::spawn_blocking(move || {
         let root = Root::open(op.root(), pid)?;
@@ -299,6 +307,7 @@ pub(crate) async fn run_local(op: FileOp) -> Result<Value, String> {
     })
     .await
     .map_err(|_| "file operation panicked".to_owned())?;
+
     // A container replaced or restarted while the operation ran: say so
     // rather than report a result from another process's filesystem.
     if let (Some(before), RootSpec::Container { container, .. }) = (pid, &spec)
@@ -306,6 +315,7 @@ pub(crate) async fn run_local(op: FileOp) -> Result<Value, String> {
     {
         return Err("the container was restarted or replaced during the operation; check the result and retry".into());
     }
+
     result
 }
 
@@ -321,12 +331,15 @@ async fn container_pid(id: &str) -> Result<u32, String> {
     let v = crate::docker::api("GET", &format!("/containers/{id}/json"), None, std::time::Duration::from_secs(10))
         .await?
         .ok_or("the container was not found")?;
+
     if v["Id"].as_str() != Some(id) {
         return Err("the container was replaced; reopen it".into());
     }
+
     if v.pointer("/State/Running").and_then(Value::as_bool) != Some(true) {
         return Err("the container is not running; start it to browse its files".into());
     }
+
     v.pointer("/State/Pid")
         .and_then(Value::as_u64)
         .and_then(|p| u32::try_from(p).ok())
@@ -351,6 +364,7 @@ pub(crate) fn protected(root: &RootSpec, path: &FilePath) -> Result<(), String> 
 /// protected may lie below it either.
 pub(crate) fn protected_tree(root: &RootSpec, path: &FilePath) -> Result<(), String> {
     protected(root, path)?;
+
     match protected_within(policy_os(root), &root.full_path(path)) {
         Some(why) => Err(format!("protected path (it contains protected files: {why})")),
         None => Ok(()),
@@ -374,6 +388,7 @@ pub(crate) const STALE_PART_MS: i64 = 24 * 60 * 60 * 1000;
 pub(crate) fn sweep_stale_parts<F: Fs>(fs: &F, dir: &[String]) {
     let Ok((names, _, _)) = fs.read_dir(dir) else { return };
     let cutoff = now_ms() - STALE_PART_MS;
+
     for n in names.into_iter().filter(|n| n.starts_with(UPLOAD_PREFIX) && n.ends_with(".part")) {
         let p = with(dir, n);
         if let Ok(m) = fs.stat(&p)
@@ -403,6 +418,7 @@ pub(crate) fn random_id() -> String {
     use ring::rand::SecureRandom as _;
     let mut b = [0u8; 12];
     let _ = ring::rand::SystemRandom::new().fill(&mut b);
+
     hex(&b)
 }
 
@@ -420,6 +436,7 @@ impl PathLock {
         if !set.insert(key.clone()) {
             return Err("another change to this path is in progress; try again".into());
         }
+
         Ok(Self(key))
     }
 }
@@ -458,8 +475,10 @@ impl Ids {
         {
             return ids.clone();
         }
+
         let ids = std::sync::Arc::new(Self::load());
         *cached = Some((std::time::Instant::now(), ids.clone()));
+
         ids
     }
 
@@ -507,6 +526,7 @@ pub(crate) fn c(p: &FilePath) -> &[String] {
 pub(crate) fn with(p: &[String], name: impl Into<String>) -> Vec<String> {
     let mut v = p.to_vec();
     v.push(name.into());
+
     v
 }
 
@@ -523,12 +543,15 @@ impl Budget {
 
     fn take(&mut self, m: &Meta) -> Result<(), String> {
         self.entries += 1;
+
         if m.kind == Kind::File {
             self.bytes = self.bytes.saturating_add(m.size);
         }
+
         if self.entries > MAX_COPY_ENTRIES || self.bytes > MAX_COPY_BYTES {
             return Err("too large to copy at once (limit: 10,000 entries or 1 GiB)".into());
         }
+
         Ok(())
     }
 }
@@ -536,25 +559,30 @@ impl Budget {
 fn write_small<F: Fs>(fs: &F, path: &[String], data: &[u8]) -> Result<(), String> {
     let f = fs.open_write(path, true, true)?;
     f.write_all_at(data, 0)?;
+
     f.sync()
 }
 
 fn read_all<F: Fs>(fs: &F, path: &[String], max: u64) -> Result<Vec<u8>, String> {
     let f = fs.open_read(path)?;
     let size = f.meta()?.size.min(max);
+
     read_range(&f, 0, size)
 }
 
 pub(crate) fn read_range<T: FileIo>(f: &T, offset: u64, want: u64) -> Result<Vec<u8>, String> {
     let mut buf = vec![0u8; usize::try_from(want).unwrap_or(0)];
     let mut got = 0usize;
+
     while got < buf.len() {
         match f.read_at(&mut buf[got..], offset + got as u64)? {
             0 => break,
             n => got += n,
         }
     }
+
     buf.truncate(got);
+
     Ok(buf)
 }
 
@@ -562,29 +590,36 @@ fn sha256_of<T: FileIo>(f: &T, size: u64) -> Result<String, String> {
     let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
     let mut buf = vec![0u8; 1024 * 1024];
     let mut off = 0u64;
+
     while off < size {
         let n = f.read_at(&mut buf, off)?;
         if n == 0 {
             break;
         }
+
         ctx.update(&buf[..n]);
         off += n as u64;
     }
+
     Ok(hex(ctx.finish().as_ref()))
 }
 
 /// Removes a tree without following links.
 pub(crate) fn remove_tree<F: Fs>(fs: &F, path: &[String], count: &mut usize) -> Result<(), String> {
     *count += 1;
+
     if *count > MAX_DELETE_ENTRIES {
         return Err("too many entries to delete at once".into());
     }
+
     let m = fs.stat(path)?;
     if m.kind == Kind::Dir {
         let (names, _, _) = fs.read_dir(path)?;
+
         for n in names {
             remove_tree(fs, &with(path, n), count)?;
         }
+
         fs.remove_dir(path)
     } else {
         fs.remove_file(path)
@@ -599,34 +634,42 @@ fn copy_file<F: Fs>(src_fs: &F, from: &[String], dst_fs: &F, to: &[String], repl
     if m.kind != Kind::File {
         return Err("not a regular file".into());
     }
+
     if let Some(free) = dst_fs.free_bytes(to)
         && free < m.size
     {
         return Err("not enough free space at the destination".into());
     }
+
     let mut tmp = to.to_vec();
     if let Some(last) = tmp.last_mut() {
         *last = format!("{UPLOAD_PREFIX}{}.part", random_id());
     }
+
     let out = dst_fs.open_write(&tmp, true, true)?;
     let result = (|| {
         let mut buf = vec![0u8; 1024 * 1024];
         let mut off = 0u64;
+
         while off < m.size {
             let n = src.read_at(&mut buf, off)?;
             if n == 0 {
                 break;
             }
+
             out.write_all_at(&buf[..n], off)?;
             off += n as u64;
         }
+
         out.sync()?;
         out.chown_like(&m)?;
         dst_fs.rename(&tmp, dst_fs, to, replace).map_err(FsError::msg)
     })();
+
     if result.is_err() {
         let _ = dst_fs.remove_file(&tmp);
     }
+
     result
 }
 
@@ -647,6 +690,7 @@ fn copy_tree<F: Fs>(
     check(from, to)?;
     let m = src_fs.stat(from)?;
     budget.take(&m)?;
+
     match m.kind {
         Kind::File => {
             copy_file(src_fs, from, dst_fs, to, replace)?;
@@ -656,6 +700,7 @@ fn copy_tree<F: Fs>(
             if replace {
                 let _ = dst_fs.remove_file(to);
             }
+
             dst_fs.symlink(m.link_target.as_deref().unwrap_or_default(), to)
         }
         Kind::Dir => {
@@ -664,10 +709,13 @@ fn copy_tree<F: Fs>(
                 Err(FsError::Exists) if replace => {}
                 Err(e) => return Err(e.msg()),
             }
+
             let (names, _, _) = src_fs.read_dir(from)?;
+
             for n in names.into_iter().filter(|n| !is_forge_internal(n)) {
                 copy_tree(src_fs, &with(from, n.clone()), dst_fs, &with(to, n), replace, budget, check)?;
             }
+
             Ok(())
         }
         // Sockets, devices and FIFOs are not copied.
@@ -680,11 +728,14 @@ fn tree_size<F: Fs>(fs: &F, path: &[String]) -> u64 {
     let mut total = 0u64;
     let mut stack = vec![path.to_vec()];
     let mut seen = 0usize;
+
     while let Some(p) = stack.pop() {
         seen += 1;
+
         if seen > MAX_COPY_ENTRIES * 10 {
             return u64::MAX;
         }
+
         let Ok(m) = fs.stat(&p) else { continue };
         if m.kind == Kind::Dir {
             if let Ok((names, _, _)) = fs.read_dir(&p) {
@@ -694,6 +745,7 @@ fn tree_size<F: Fs>(fs: &F, path: &[String]) -> u64 {
             total = total.saturating_add(m.size);
         }
     }
+
     total
 }
 
@@ -714,9 +766,11 @@ impl<'a, F: Fs> Ops<'a, F> {
         for p in op.paths() {
             protected(self.spec, p)?;
         }
+
         for p in op.subtrees() {
             protected_tree(self.spec, p)?;
         }
+
         match op {
             FileOp::List { path, offset, limit, hidden, .. } => self.list(path, *offset, *limit, *hidden),
             FileOp::Stat { path, .. } => {
@@ -730,6 +784,7 @@ impl<'a, F: Fs> Ops<'a, F> {
                 if version.as_ref().is_some_and(|x| *x != m.version) {
                     return Err("source changed: the file was modified or replaced".into());
                 }
+
                 let data = read_range(&f, *offset, m.size.saturating_sub(*offset).min(u64::from(*length)))?;
                 Ok(json!({
                     "path": path.to_string(),
@@ -782,12 +837,14 @@ impl<'a, F: Fs> Ops<'a, F> {
                 if !manage::supports_permissions(self.spec) {
                     return Err("permissions can be changed on Linux node and directory roots only".into());
                 }
+
                 self.set_permissions(path, *mode, *recursive, *dry_run)
             }
             FileOp::SetOwner { path, owner, group, recursive, dry_run, .. } => {
                 if !manage::supports_permissions(self.spec) {
                     return Err("owners can be changed on Linux node and directory roots only".into());
                 }
+
                 self.set_owner(path, owner.as_deref(), group.as_deref(), *recursive, *dry_run)
             }
             FileOp::Acl { path, .. } => self.acl(path),
@@ -812,9 +869,11 @@ impl<'a, F: Fs> Ops<'a, F> {
         if dir.kind == Kind::Symlink {
             return Err(format!("`{path}` is a link; Forge does not follow links"));
         }
+
         if dir.kind != Kind::Dir {
             return Err(format!("`{path}` is not a directory"));
         }
+
         let (names, skipped, truncated) = self.fs.read_dir(c(path))?;
         let mut items: Vec<(String, Meta)> = names
             .into_iter()
@@ -842,6 +901,7 @@ impl<'a, F: Fs> Ops<'a, F> {
                 e
             })
             .collect();
+
         Ok(json!({
             "path": path.to_string(),
             "offset": offset,
@@ -859,9 +919,11 @@ impl<'a, F: Fs> Ops<'a, F> {
         if m.kind != Kind::File {
             return Err(format!("`{}` is not a regular file", path.last().map_or("/", String::as_str)));
         }
+
         if m.nlink > 1 && self.fs.is_protected_inode(m.dev, m.ino) {
             return Err("protected path (hard link to a protected file)".into());
         }
+
         Ok((f, m))
     }
 
@@ -895,20 +957,26 @@ impl<'a, F: Fs> Ops<'a, F> {
                     format!("parent folder {m} does not exist; create it first or use `parents`")
                 });
             }
+
             match self.fs.mkdir(c(path)) {
                 Ok(()) => {}
                 Err(FsError::Exists) => return Err(format!("`{path}` already exists")),
                 Err(e) => return Err(e.msg()),
             }
+
             self.fs.inherit_owner(c(path))?;
+
             return Ok(json!({ "path": path.to_string(), "created": 1 }));
         }
+
         let comps = c(path);
         let mut created = 0u32;
+
         for i in 1..=comps.len() {
             let sub = &comps[..i];
             let shown = FilePath::from_components(sub);
             protected(self.spec, &shown)?;
+
             match self.fs.mkdir(sub) {
                 Ok(()) => {
                     self.fs.inherit_owner(sub)?;
@@ -922,6 +990,7 @@ impl<'a, F: Fs> Ops<'a, F> {
                 Err(e) => return Err(e.msg()),
             }
         }
+
         Ok(json!({ "path": path.to_string(), "created": created }))
     }
 
@@ -932,10 +1001,13 @@ impl<'a, F: Fs> Ops<'a, F> {
 
     fn chunk(&self, path: &FilePath, upload: &str, offset: u64, data_b64: &str) -> Result<Value, String> {
         let data = b64().decode(data_b64).map_err(|_| "chunk is not valid base64".to_owned())?;
+
         if !matches!(self.fs.stat(c(&path.parent())), Ok(m) if m.kind == Kind::Dir) {
             return Err(self.missing_folder("the destination folder", &path.parent()));
         }
+
         let tmp = Self::partial(path, upload);
+
         let f = if offset == 0 {
             sweep_stale_parts(self.fs, c(&path.parent()));
             self.fs.open_write(&tmp, true, true)?
@@ -949,18 +1021,23 @@ impl<'a, F: Fs> Ops<'a, F> {
                 // A retried chunk that was already written.
                 return Ok(json!({ "received": have }));
             }
+
             if have != offset {
                 return Err(format!("upload is at byte {have}, not {offset}; resume from there"));
             }
+
             f
         };
+
         if let Err(e) = f.write_all_at(&data, offset) {
             // A half-written chunk (disk full, I/O error) cannot be resumed
             // reliably: drop the partial file so nothing large stays behind.
             drop(f);
             let _ = self.fs.remove_file(&tmp);
+
             return Err(e);
         }
+
         Ok(json!({ "received": offset + data.len() as u64 }))
     }
 
@@ -988,6 +1065,7 @@ impl<'a, F: Fs> Ops<'a, F> {
         {
             let _ = self.fs.remove_file(&Self::partial(path, upload));
         }
+
         r
     }
 
@@ -1008,9 +1086,11 @@ impl<'a, F: Fs> Ops<'a, F> {
         if have != size {
             return Err(format!("upload incomplete: {have} of {size} bytes received"));
         }
+
         if !sha256_of(&f, size)?.eq_ignore_ascii_case(sha256) {
             return Err("checksum mismatch: the uploaded bytes differ from the source".into());
         }
+
         f.sync()?;
         let existing = self.fs.stat(c(path)).ok();
         match (&existing, overwrite) {
@@ -1024,12 +1104,14 @@ impl<'a, F: Fs> Ops<'a, F> {
             }
             _ => {}
         }
+
         match &existing {
             Some(m) => {
                 // New content keeps the owner and permissions but never
                 // setuid/setgid: replacing a setuid binary must not hand
                 // the new bytes its privileges (re-add with `file.admin`).
                 f.chown_like(&Meta { mode: m.mode.map(|x| x & !0o6000), ..m.clone() })?;
+
                 if m.size <= EDITABLE_BYTES && !self.container {
                     // Best effort: a failed revision never blocks a save.
                     let _ = self.save_revision(path);
@@ -1043,17 +1125,20 @@ impl<'a, F: Fs> Ops<'a, F> {
                 self.fs.inherit_owner(&tmp)?;
             }
         }
+
         self.fs.rename(&tmp, self.fs, c(path), existing.is_some()).map_err(|e| match e {
             FsError::Exists => "the destination was created by someone else meanwhile".to_owned(),
             e => e.msg(),
         })?;
         let m = self.fs.stat(c(path))?;
+
         Ok(json!({ "path": path.to_string(), "size": m.size, "version": m.version, "replaced": existing.is_some() }))
     }
 
     fn rename(&self, from: &FilePath, to: &FilePath, overwrite: bool) -> Result<Value, String> {
         let _lock = PathLock::take(self.lock_key(to))?;
         let src = self.fs.stat(c(from))?;
+
         match self.fs.rename(c(from), self.fs, c(to), overwrite) {
             Ok(()) => {}
             Err(FsError::CrossDevice) => {
@@ -1063,19 +1148,24 @@ impl<'a, F: Fs> Ops<'a, F> {
             }
             Err(e) => return Err(e.msg()),
         }
+
         Ok(json!({ "from": from.to_string(), "to": to.to_string(), "kind": EntryKind::from(src.kind) }))
     }
 
     fn delete(&self, path: &FilePath, permanent: bool) -> Result<Value, String> {
         let m = self.fs.stat(c(path))?;
+
         if permanent {
             let mut n = 0;
             remove_tree(self.fs, c(path), &mut n)?;
+
             return Ok(json!({ "path": path.to_string(), "permanent": true, "entries": n }));
         }
+
         if self.container {
             return Err("containers have no trash; delete permanently instead".into());
         }
+
         let trash = self.fs.store("trash")?;
         let id = format!("{}-{}", now_ms(), random_id());
         trash.mkdir(std::slice::from_ref(&id)).map_err(FsError::msg)?;
@@ -1101,13 +1191,16 @@ impl<'a, F: Fs> Ops<'a, F> {
                         "too large to move to the trash from this filesystem; delete permanently instead".into(),
                     ));
                 }
+
                 let mut budget = Budget::new();
                 copy_tree(self.fs, c(path), &trash, &dest, false, &mut budget, &|_, _| Ok(())).map_err(undo)?;
                 remove_tree(self.fs, c(path), &mut 0)?;
             }
             Err(e) => return Err(undo(e.msg())),
         }
+
         prune_trash(&trash);
+
         Ok(json!({ "path": path.to_string(), "trash_id": id, "size": size }))
     }
 
@@ -1126,6 +1219,7 @@ impl<'a, F: Fs> Ops<'a, F> {
         if self.container {
             return Ok(json!({ "entries": [] }));
         }
+
         let trash = self.fs.store("trash")?;
         let mut entries = self.trash_entries(&trash);
         entries.sort_by_key(|(_, m)| std::cmp::Reverse(m.deleted_at));
@@ -1133,6 +1227,7 @@ impl<'a, F: Fs> Ops<'a, F> {
             .into_iter()
             .map(|(id, m)| json!({ "id": id, "path": m.path.to_string(), "deleted_at": m.deleted_at, "size": m.size, "kind": m.kind }))
             .collect();
+
         Ok(json!({ "entries": entries }))
     }
 
@@ -1148,8 +1243,10 @@ impl<'a, F: Fs> Ops<'a, F> {
         if parent.map(|m| m.kind) != Ok(Kind::Dir) {
             return Err("the original folder no longer exists; recreate it first".into());
         }
+
         let item = with(&[id.to_owned()], "item");
         let _lock = PathLock::take(self.lock_key(&meta.path))?;
+
         match trash.rename(&item, self.fs, c(&meta.path), overwrite) {
             Ok(()) => {}
             Err(FsError::CrossDevice) => {
@@ -1161,22 +1258,27 @@ impl<'a, F: Fs> Ops<'a, F> {
             Err(FsError::Exists) => return Err("something now exists at the original path".into()),
             Err(e) => return Err(e.msg()),
         }
+
         remove_tree(&trash, &[id.to_owned()], &mut 0)?;
+
         Ok(json!({ "path": meta.path.to_string(), "restored": true }))
     }
 
     fn trash_purge(&self, id: Option<&str>) -> Result<Value, String> {
         let trash = self.fs.store("trash")?;
         let mut purged = 0usize;
+
         for (i, _) in self.trash_entries(&trash) {
             if id.is_none_or(|x| x == i) {
                 remove_tree(&trash, &[i], &mut 0)?;
                 purged += 1;
             }
         }
+
         if id.is_some() && purged == 0 {
             return Err("that trash entry does not exist for this root".into());
         }
+
         Ok(json!({ "purged": purged }))
     }
 
@@ -1192,6 +1294,7 @@ impl<'a, F: Fs> Ops<'a, F> {
             Ok(()) | Err(FsError::Exists) => {}
             Err(e) => return Err(e.msg()),
         }
+
         copy_file(
             self.fs,
             c(path),
@@ -1202,12 +1305,14 @@ impl<'a, F: Fs> Ops<'a, F> {
         let (mut names, _, _) = store.read_dir(std::slice::from_ref(&key))?;
         names.sort_unstable_by(|a, b| b.cmp(a));
         let cutoff = now_ms() - REVISION_DAYS * 86_400_000;
+
         for (i, n) in names.iter().enumerate() {
             let ts: i64 = n.split('-').next().and_then(|t| t.parse().ok()).unwrap_or(0);
             if i >= MAX_REVISIONS || ts < cutoff {
                 let _ = store.remove_file(&with(std::slice::from_ref(&key), n.clone()));
             }
         }
+
         Ok(())
     }
 
@@ -1215,6 +1320,7 @@ impl<'a, F: Fs> Ops<'a, F> {
         if self.container {
             return Ok(json!({ "path": path.to_string(), "revisions": [] }));
         }
+
         let store = self.fs.store("revisions")?;
         let key = self.revision_key(path);
         let (mut names, _, _) = store.read_dir(std::slice::from_ref(&key)).unwrap_or_default();
@@ -1227,6 +1333,7 @@ impl<'a, F: Fs> Ops<'a, F> {
                 Some(json!({ "id": n, "saved_at": ts, "size": m.size }))
             })
             .collect();
+
         Ok(json!({ "path": path.to_string(), "revisions": revs }))
     }
 
@@ -1237,6 +1344,7 @@ impl<'a, F: Fs> Ops<'a, F> {
             .map_err(|_| "that revision does not exist".to_owned())?;
         let m = f.meta()?;
         let data = read_range(&f, offset, m.size.saturating_sub(offset).min(u64::from(length)))?;
+
         Ok(json!({
             "path": path.to_string(),
             "revision": rev,
@@ -1252,16 +1360,19 @@ impl<'a, F: Fs> Ops<'a, F> {
 /// Drops trash entries past the age limit, then the oldest past the size cap.
 fn prune_trash<F: Fs>(trash: &F) {
     let Ok((mut ids, _, _)) = trash.read_dir(&[]) else { return };
+
     // Ids start with the deletion time: newest first.
     ids.sort_unstable_by(|a, b| b.cmp(a));
     let cutoff = now_ms() - TRASH_DAYS * 86_400_000;
     let mut total = 0u64;
+
     for id in ids {
         let meta = read_all(trash, &with(std::slice::from_ref(&id), "meta.json"), 64 * 1024)
             .ok()
             .and_then(|r| serde_json::from_slice::<TrashMeta>(&r).ok());
         let (ts, size) = meta.map_or((0, 0), |m| (m.deleted_at, m.size));
         total = total.saturating_add(size);
+
         if ts < cutoff || total > TRASH_BYTES {
             let _ = remove_tree(trash, &[id], &mut 0);
         }

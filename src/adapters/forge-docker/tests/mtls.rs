@@ -60,6 +60,7 @@ async fn fake_dockerd(ca: &CertificateAuthority, server_id: &str) -> String {
             });
         }
     });
+
     addr
 }
 

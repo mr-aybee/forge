@@ -88,6 +88,7 @@ async fn projects_group_environments() {
         let (s, _) = admin.post("/api/v1/projects", json!({"name": bad})).await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{bad:?}");
     }
+
     let (s, shop) = admin.post("/api/v1/projects", json!({"name": "shop", "description": "Web shop"})).await;
     assert_eq!(s, StatusCode::CREATED, "{shop}");
     assert_eq!(shop["description"], "Web shop");
@@ -182,6 +183,7 @@ async fn projects_group_environments() {
 
     let (_, audit) = admin.get("/api/v1/audit?limit=300").await;
     let text = audit.to_string();
+
     for a in [
         "project.create",
         "project.update",

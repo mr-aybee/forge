@@ -58,14 +58,19 @@ impl Maps {
         if !m.within_limits() {
             return Err(TooLarge);
         }
+
         let mut apps: HashMap<ServerId, HashMap<String, ServiceId>> = HashMap::new();
+
         for a in m.app_keys {
             apps.entry(a.server_id).or_default().insert(a.app, a.service_id);
         }
+
         let mut placements: HashMap<ServiceId, Vec<PlacedNode>> = HashMap::new();
+
         for p in m.placements {
             placements.entry(p.service_id).or_default().push(PlacedNode { server_id: p.server_id, names: p.names });
         }
+
         let indexed = Indexed {
             active: m.active_nodes.into_iter().collect(),
             keys: m.key_services.into_iter().map(|k| (k.token_hash, k.service_id)).collect(),
@@ -74,6 +79,7 @@ impl Maps {
             certs: m.node_certs.into_iter().map(|c| (c.server_id, forge_pki::canonical_serial(&c.serial))).collect(),
         };
         *self.current.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(indexed);
+
         Ok(())
     }
 }
@@ -101,6 +107,7 @@ mod tests {
         assert!(m.admits(node, "0a1B"), "the current certificate, in any case");
         assert!(!m.admits(node, "0a1c"), "a replaced or revoked certificate");
         assert!(!m.admits(ServerId::new(), "0a1b"), "another node");
+
         // A serial recorded with the leading zero byte DER drops (before D-145).
         maps.replace(AnalyticsMaps {
             active_nodes: vec![node],

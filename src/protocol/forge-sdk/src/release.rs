@@ -28,6 +28,7 @@ pub fn verify_signature(public_key_b64url: &str, data: &[u8], sig_b64: &str) -> 
     let sig = base64::engine::general_purpose::STANDARD
         .decode(sig_b64.trim())
         .map_err(|_| "the release signature is not valid base64")?;
+
     ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, pk)
         .verify(data, &sig)
         .map_err(|_| "the release signature does not match the Forge release key".to_owned())
@@ -74,6 +75,7 @@ pub fn sha256_hex(b: &[u8]) -> String {
 pub fn compare_release(a: &str, b: &str) -> Ordering {
     let (ca, pa) = split_release(a);
     let (cb, pb) = split_release(b);
+
     cmp_core(ca, cb).then_with(|| match (pa, pb) {
         (None, None) => Ordering::Equal,
         (None, Some(_)) => Ordering::Greater,
@@ -102,6 +104,7 @@ fn split_release(v: &str) -> (&str, Option<&str>) {
 
 fn cmp_core(a: &str, b: &str) -> Ordering {
     let (mut x, mut y) = (a.split('.'), b.split('.'));
+
     loop {
         match (x.next(), y.next()) {
             (None, None) => return Ordering::Equal,
@@ -124,6 +127,7 @@ fn nonzero(s: Option<&str>) -> &str {
 fn cmp_pre(a: &str, b: &str) -> Ordering {
     let sep = |c: char| c == '.' || c == '-';
     let (mut x, mut y) = (a.split(sep), b.split(sep));
+
     loop {
         match (x.next(), y.next()) {
             (None, None) => return Ordering::Equal,
@@ -209,10 +213,12 @@ mod tests {
             ("", "0.0.1", Less),
             ("", "0.0.0", Equal),
         ];
+
         for (a, b, want) in table {
             assert_eq!(compare_release(a, b), want, "{a} vs {b}");
             assert_eq!(compare_release(b, a), want.reverse(), "{b} vs {a}");
         }
+
         assert!(is_prerelease("1.0.0-rc-01"));
         assert!(is_prerelease("0.1.1-dev.1"));
         assert!(!is_prerelease("1.0.0"));

@@ -59,6 +59,7 @@ async fn analytics_settings_are_validated_confirmed_audited_and_reported() {
         let (s, e) = admin.put("/api/v1/analytics/settings", json!({ "settings": foreign })).await;
         assert_eq!((s, e["title"].as_str()), (StatusCode::CONFLICT, Some("managed_externally")), "{e}");
     }
+
     let (s, e) = admin.put("/api/v1/analytics/settings", json!({ "settings": { "cpu_quota_vcpu": null } })).await;
     assert_eq!(s, StatusCode::OK, "{e}");
 
@@ -73,6 +74,7 @@ async fn analytics_settings_are_validated_confirmed_audited_and_reported() {
     confirmed["confirm"] = json!({ "shorten_retention": true });
     let (s, report) = admin.put("/api/v1/analytics/settings", confirmed).await;
     assert_eq!(s, StatusCode::OK, "{report}");
+
     // Analytics is off here: retention waits, Forge's own limits apply at
     // once.
     assert_eq!(result(&report, "app_logs_days")["status"], "pending", "{report}");

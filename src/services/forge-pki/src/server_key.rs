@@ -71,6 +71,7 @@ impl ControlPlaneKey {
 pub fn parse_fingerprint(s: &str) -> Option<String> {
     let s = s.trim();
     let hex = s.strip_prefix(FINGERPRINT_PREFIX).unwrap_or(s);
+
     (hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit())).then(|| hex.to_ascii_lowercase())
 }
 
@@ -116,10 +117,12 @@ pub fn inspect_server_leaf(der: &[u8], now: Timestamp) -> Result<ServerLeaf, Lea
     if now.0 + skew < not_before || now.0 - skew > not_after {
         return Err(LeafError::Expired { not_before, not_after });
     }
+
     let server_auth = matches!(cert.extended_key_usage(), Ok(Some(eku)) if eku.value.server_auth);
     if !server_auth {
         return Err(LeafError::NotServerAuth);
     }
+
     Ok(ServerLeaf { key_fingerprint: sha256_hex(cert.public_key().raw) })
 }
 
@@ -128,6 +131,7 @@ pub fn inspect_server_leaf(der: &[u8], now: Timestamp) -> Result<ServerLeaf, Lea
 pub fn cert_key_fingerprint(pem: &str) -> Option<String> {
     let der = crate::ca::pem_to_der(pem).ok()?;
     let (_, cert) = X509Certificate::from_der(&der).ok()?;
+
     Some(sha256_hex(cert.public_key().raw))
 }
 
@@ -154,6 +158,7 @@ mod tests {
         assert_eq!(inspect_server_leaf(&der(&a.cert_pem), NOW).unwrap().key_fingerprint, key.fingerprint());
         assert_eq!(inspect_server_leaf(&der(&b.cert_pem), later).unwrap().key_fingerprint, key.fingerprint());
         assert_eq!(cert_key_fingerprint(&a.cert_pem).as_deref(), Some(key.fingerprint()));
+
         // The sealed form round-trips to the same fingerprint.
         assert_eq!(ControlPlaneKey::from_pem(&key.key_pem()).unwrap().fingerprint(), key.fingerprint());
     }

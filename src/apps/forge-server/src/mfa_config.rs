@@ -13,6 +13,7 @@ pub fn read(text: &str) -> anyhow::Result<bool> {
     let v: toml::Value = toml::from_str(text)?;
     let dev_skip = v.get("dev_skip_mfa").and_then(toml::Value::as_bool).unwrap_or(false);
     let require = v.get("security").and_then(|s| s.get("require_mfa")).and_then(toml::Value::as_bool).unwrap_or(true);
+
     Ok(require && !dev_skip)
 }
 
@@ -21,7 +22,9 @@ fn key_of(line: &str) -> Option<&str> {
     if t.starts_with('#') || t.starts_with('[') {
         return None;
     }
+
     let (k, _) = t.split_once('=')?;
+
     Some(k.trim().trim_matches('"'))
 }
 
@@ -30,6 +33,7 @@ fn header_of(line: &str) -> Option<&str> {
     let inner = t.strip_prefix('[')?;
     let inner = inner.split('#').next().unwrap_or(inner).trim_end();
     let inner = inner.strip_suffix(']')?;
+
     Some(inner.trim_matches(|c| c == '[' || c == ']').trim())
 }
 
@@ -40,15 +44,19 @@ pub fn set(text: &str, required: bool) -> anyhow::Result<String> {
     let mut table: Option<String> = None;
     let mut done = false;
     let mut security_header_at: Option<usize> = None;
+
     for line in text.lines() {
         if let Some(h) = header_of(line) {
             table = Some(h.to_owned());
             out.push(line.to_owned());
+
             if h == "security" && security_header_at.is_none() {
                 security_header_at = Some(out.len());
             }
+
             continue;
         }
+
         match (table.as_deref(), key_of(line)) {
             (None, Some("dev_skip_mfa")) => out.push("dev_skip_mfa = false".into()),
             (Some("security"), Some("require_mfa")) if !done => {
@@ -58,6 +66,7 @@ pub fn set(text: &str, required: bool) -> anyhow::Result<String> {
             _ => out.push(line.to_owned()),
         }
     }
+
     if !done {
         match security_header_at {
             Some(i) => out.insert(i, format!("require_mfa = {required}")),
@@ -65,16 +74,20 @@ pub fn set(text: &str, required: bool) -> anyhow::Result<String> {
                 if out.last().is_some_and(|l| !l.trim().is_empty()) {
                     out.push(String::new());
                 }
+
                 out.push("[security]".into());
                 out.push(format!("require_mfa = {required}"));
             }
         }
     }
+
     let mut s = out.join("\n");
     s.push('\n');
+
     if read(&s)? != required {
         anyhow::bail!("could not set [security] require_mfa in this file; edit it by hand");
     }
+
     Ok(s)
 }
 
@@ -92,15 +105,19 @@ pub fn set_elevated(text: &str, allowed: bool) -> anyhow::Result<String> {
     let mut table: Option<String> = None;
     let mut done = false;
     let mut security_header_at: Option<usize> = None;
+
     for l in text.lines() {
         if let Some(h) = header_of(l) {
             table = Some(h.to_owned());
             out.push(l.to_owned());
+
             if h == "security" && security_header_at.is_none() {
                 security_header_at = Some(out.len());
             }
+
             continue;
         }
+
         if !done && table.as_deref() == Some("security") && key_of(l) == Some("allow_elevated_tokens") {
             out.push(line.clone());
             done = true;
@@ -108,6 +125,7 @@ pub fn set_elevated(text: &str, allowed: bool) -> anyhow::Result<String> {
             out.push(l.to_owned());
         }
     }
+
     if !done {
         match security_header_at {
             Some(i) => out.insert(i, line),
@@ -115,16 +133,20 @@ pub fn set_elevated(text: &str, allowed: bool) -> anyhow::Result<String> {
                 if out.last().is_some_and(|l| !l.trim().is_empty()) {
                     out.push(String::new());
                 }
+
                 out.push("[security]".into());
                 out.push(line);
             }
         }
     }
+
     let mut s = out.join("\n");
     s.push('\n');
+
     if read_elevated(&s)? != allowed {
         anyhow::bail!("could not set [security] allow_elevated_tokens in this file; edit it by hand");
     }
+
     Ok(s)
 }
 
@@ -143,9 +165,11 @@ pub fn write_atomic(path: &Path, content: &str) -> anyhow::Result<()> {
         std::fs::rename(&tmp, path)?;
         Ok(())
     })();
+
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
+
     result
 }
 
@@ -155,12 +179,15 @@ pub fn changed_since_last_start(data_dir: &Path, required: bool) -> Option<(Opti
     let file = data_dir.join(STATE_FILE);
     let old = std::fs::read_to_string(&file).ok().map(|s| s.trim() == "required");
     let now = if required { "required" } else { "off" };
+
     if old == Some(required) {
         return None;
     }
+
     if let Err(e) = std::fs::write(&file, format!("{now}\n")) {
         tracing::warn!(error = %e, "could not record the MFA setting");
     }
+
     Some((old, required))
 }
 

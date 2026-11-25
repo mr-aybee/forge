@@ -113,14 +113,17 @@ pub fn rule_body(t: &Value, flags: &TemplateFlags, targets: &Targets) -> Result<
     let wrong = |flag: &str| {
         usage(format!("{flag} does not apply to template `{id}`: it watches {scope}; see `forge alerts templates`"))
     };
+
     let ids: Vec<String> = match scope {
         "servers" => {
             if !targets.apps.is_empty() {
                 return Err(wrong("--service"));
             }
+
             if !targets.certificates.is_empty() {
                 return Err(wrong("--certificate"));
             }
+
             let mut ids = targets.nodes.clone();
             ids.extend(targets.installation_nodes.iter().cloned());
             ids.sort();
@@ -137,6 +140,7 @@ pub fn rule_body(t: &Value, flags: &TemplateFlags, targets: &Targets) -> Result<
                     return Err(wrong(flag));
                 }
             }
+
             targets.apps.clone()
         }
         "installations" => {
@@ -147,6 +151,7 @@ pub fn rule_body(t: &Value, flags: &TemplateFlags, targets: &Targets) -> Result<
                     return Err(wrong(flag));
                 }
             }
+
             targets.installations.clone()
         }
         "certificates" => {
@@ -157,19 +162,23 @@ pub fn rule_body(t: &Value, flags: &TemplateFlags, targets: &Targets) -> Result<
                     return Err(wrong(flag));
                 }
             }
+
             targets.certificates.clone()
         }
         other => return Err(CliError::new(Exit::General, format!("template `{id}` has an unknown scope `{other}`"))),
     };
+
     let mut subject = t["subject"].as_str().unwrap_or_default().to_owned();
     if subject.contains("{check}") {
         let Some(check) = &flags.check else {
             return Err(usage(format!("template `{id}` watches a health check: pass --check <name>")));
         };
+
         subject = subject.replace("{check}", check);
     } else if flags.check.is_some() {
         return Err(usage(format!("template `{id}` does not watch a health check; drop --check")));
     }
+
     let mut body = json!({
         "name": flags.name.clone().unwrap_or_else(|| t["name"].as_str().unwrap_or(id).to_owned()),
         "description": t["description"],
@@ -179,9 +188,11 @@ pub fn rule_body(t: &Value, flags: &TemplateFlags, targets: &Targets) -> Result<
         "subject": subject,
         "spec": t["spec"],
     });
+
     if let Some(w) = &flags.workspace {
         body["workspace_id"] = json!(w);
     }
+
     Ok(body)
 }
 
@@ -210,14 +221,18 @@ fn one<'a>(what: &str, key: &str, matches: &[&'a Value]) -> Result<&'a Value> {
 /// Resolves every target flag to ids.
 pub async fn resolve(api: &mut Api, flags: &TemplateFlags) -> Result<Targets> {
     let mut t = Targets::default();
+
     for n in &flags.nodes {
         t.nodes.push(resolve_node(api, n).await?["id"].as_str().unwrap_or_default().to_owned());
     }
+
     for a in &flags.apps {
         t.apps.push(crate::rescmd::resolve_app(api, a, None).await?["id"].as_str().unwrap_or_default().to_owned());
     }
+
     if !flags.packages.is_empty() {
         let all = api.get("/api/v1/installations").await?;
+
         for p in &flags.packages {
             let m: Vec<&Value> = all
                 .as_array()
@@ -232,8 +247,10 @@ pub async fn resolve(api: &mut Api, flags: &TemplateFlags) -> Result<Targets> {
             t.installation_nodes.push(i["server_id"].as_str().unwrap_or_default().to_owned());
         }
     }
+
     if !flags.certificates.is_empty() {
         let all = api.get("/api/v1/certificates").await?;
+
         for c in &flags.certificates {
             let m: Vec<&Value> = all
                 .as_array()
@@ -244,6 +261,7 @@ pub async fn resolve(api: &mut Api, flags: &TemplateFlags) -> Result<Targets> {
             t.certificates.push(one("certificate", c, &m)?["id"].as_str().unwrap_or_default().to_owned());
         }
     }
+
     Ok(t)
 }
 

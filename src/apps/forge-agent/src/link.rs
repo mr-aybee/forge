@@ -29,9 +29,11 @@ impl Endpoint {
             Some((h, p)) if !h.ends_with(']') || h.starts_with('[') => (h, p.parse().context("bad port")?),
             _ => (authority, 3843),
         };
+
         if host.is_empty() {
             bail!("missing host in server URL");
         }
+
         Ok(Self { host: host.trim_matches(['[', ']']).to_owned(), port })
     }
 }
@@ -115,6 +117,7 @@ impl Link {
         if self.sender.as_ref().is_some_and(|s| !s.is_closed()) {
             return self.sender.as_mut().context("sender");
         }
+
         let tcp = TcpStream::connect((self.endpoint.host.as_str(), self.endpoint.port)).await?;
         tcp.set_nodelay(true)?;
         let name = ServerName::try_from(self.endpoint.host.clone())?;
@@ -131,6 +134,7 @@ impl Link {
             }
         });
         self.sender = Some(sender);
+
         self.sender.as_mut().context("sender")
     }
 
@@ -141,6 +145,7 @@ impl Link {
         if !status.is_success() {
             bail!("control plane returned {status}: {}", String::from_utf8_lossy(&bytes));
         }
+
         Ok(bytes)
     }
 
@@ -157,9 +162,11 @@ impl Link {
                 .method(out.method)
                 .uri(uri)
                 .header(http::header::CONTENT_TYPE, out.content_type);
+
             if let Some((k, v)) = out.header {
                 req = req.header(k, v);
             }
+
             let resp = sender.send_request(req.body(Full::new(Bytes::from(out.body)))?).await?;
             let status = resp.status();
             let bytes = Limited::new(resp.into_body(), MAX_RESPONSE)
@@ -169,6 +176,7 @@ impl Link {
                 .to_bytes();
             Ok((status, bytes.to_vec()))
         };
+
         match tokio::time::timeout(timeout, result).await {
             Ok(Ok(b)) => Ok(b),
             Ok(Err(e)) => {
@@ -219,6 +227,7 @@ mod tests {
     fn analytics_uploads_go_to_the_servers_own_address() {
         let e = Endpoint::parse("https://192.0.2.10:3843").unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(analytics_url(&e, "https://localhost:3832", 3832), "https://192.0.2.10:3832");
+
         // An older server sends no port: the URL is used as sent.
         assert_eq!(analytics_url(&e, "https://forge.example:3832", 0), "https://forge.example:3832");
         let v6 = Endpoint::parse("https://[2001:db8::1]:3843").unwrap_or_else(|e| panic!("{e}"));

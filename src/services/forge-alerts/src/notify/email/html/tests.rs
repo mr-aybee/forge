@@ -63,14 +63,17 @@ fn titles_names_and_values_are_escaped() {
     if let Some(a) = p.alarm.as_mut() {
         a.title = "<script>alert(\"x\")</script> & 'q'".into();
     }
+
     if let Some(r) = p.resource.as_mut() {
         r.name = Some("<img src=x onerror=alert(1)>\"".into());
     }
+
     let h = html(&p, Why { policy: "<b>p</b>", channel: "\"c\"" });
     assert!(!h.contains("<script>") && !h.contains("<img src=x") && !h.contains("<b>p</b>"), "{h}");
     assert!(h.contains("&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; &#39;q&#39;"), "{h}");
     assert!(h.contains("&lt;img src=x onerror=alert(1)&gt;&quot;"), "{h}");
     assert!(h.contains("&quot;c&quot;"), "{h}");
+
     // The only images are the inline brand mark; nothing remote.
     assert_eq!(h.matches("<img ").count(), 1);
     assert!(h.contains(&format!("src=\"cid:{MARK_CID}\"")));
@@ -80,11 +83,13 @@ fn titles_names_and_values_are_escaped() {
 #[test]
 fn the_banner_is_coloured_by_event_and_severity() {
     let fired = |s| html(&payload(DeliveryEvent::Fired, s, "node.cpu.percent", serde_json::json!({"value": 97})), WHY);
+
     for (s, colour) in
         [(Severity::Critical, RED), (Severity::Major, ORANGE), (Severity::Warning, AMBER), (Severity::Info, ACCENT)]
     {
         assert!(fired(s).contains(&format!("background:{colour};padding:10px 24px")), "{s:?}");
     }
+
     for (event, colour, words) in [
         (DeliveryEvent::Resolved, GREEN, "RESOLVED"),
         (DeliveryEvent::Ended, GREY, "ENDED"),
@@ -94,6 +99,7 @@ fn the_banner_is_coloured_by_event_and_severity() {
         assert!(h.contains(&format!("background:{colour};padding:10px 24px")), "{event:?}");
         assert!(h.contains(words), "{event:?}");
     }
+
     let mut p = offline(DeliveryEvent::Fired);
     p.after_silence = Some(AfterSilence { silence_id: SilenceId::new() });
     assert!(html(&p, WHY).contains("sent after a silence ended"));
@@ -108,6 +114,7 @@ fn the_banner_is_coloured_by_event_and_severity() {
 fn the_explanation_follows_the_subject_family() {
     let num = |n: f64| serde_json::json!({"type": "num", "value": n});
     let state = |s: &str| serde_json::json!({"type": "state", "value": s});
+
     for (subject, value, want, check) in [
         ("node.agent.status", state("offline"), "Node lab-b has not reported to Forge for 12 minutes", "forge-agent"),
         ("node.cpu.percent", num(97.5), "Node lab-b is reporting high CPU use: 97.5%", "processes"),
@@ -124,6 +131,7 @@ fn the_explanation_follows_the_subject_family() {
         assert!(h.contains(&escape(want)) || h.contains(want), "{subject}: {want} in {h}");
         assert!(h.contains(check), "{subject}: {check}");
     }
+
     let h = html(&offline(DeliveryEvent::Resolved), WHY);
     assert!(h.contains("Node lab-b is back to normal") && h.contains("recovered after 11 minutes"), "{h}");
     let h = html(&offline(DeliveryEvent::Ended), WHY);
@@ -136,11 +144,14 @@ fn the_explanation_follows_the_subject_family() {
 fn details_show_times_rule_and_node() {
     let mut p = offline(DeliveryEvent::Resolved);
     let node = ServerId::new();
+
     if let Some(r) = p.resource.as_mut() {
         r.kind = "service".into();
         r.server_id = Some(node);
     }
+
     let h = html(&p, WHY);
+
     for want in [
         "2025-11-16 09:30:00 UTC",
         "(12 minutes ago)",
@@ -153,6 +164,7 @@ fn details_show_times_rule_and_node() {
     ] {
         assert!(h.contains(want), "{want} in {h}");
     }
+
     assert_eq!(span(0), "less than a minute");
     assert_eq!(span(65 * 60_000), "1 hour 5 minutes");
     assert_eq!(span((2 * 1440 + 3 * 60) * 60_000), "2 days 3 hours");
@@ -166,6 +178,7 @@ fn links_appear_only_with_a_public_url() {
     let mut p = offline(DeliveryEvent::Fired);
     p.links = None;
     assert!(!html(&p, WHY).contains("href="));
+
     // No public URL configured: the payload's link is relative.
     p.links = Some(Links { alarm: "/alerts?alarm=a-1".into() });
     let h = html(&p, WHY);
@@ -179,6 +192,7 @@ fn links_appear_only_with_a_public_url() {
 fn email_preview() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target/email-preview");
     std::fs::create_dir_all(&dir).unwrap();
+
     // A browser cannot resolve `cid:`; point it at the committed PNG.
     let mark = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../apps/forge-server/assets/email/forge-mark-128.png")
@@ -229,6 +243,7 @@ fn email_preview() {
     test.links = None;
     test.message = Some("Test notification from Orbyn Forge. No alarm fired.".into());
     cases.push(("test", test));
+
     for (name, p) in cases {
         let h = html(&p, WHY).replace(&format!("cid:{MARK_CID}"), &mark);
         std::fs::write(dir.join(format!("{name}.html")), h).unwrap();

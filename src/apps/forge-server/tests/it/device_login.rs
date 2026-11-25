@@ -11,6 +11,7 @@ const GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 async fn form(h: &Harness, path: &str, body: &[(&str, &str)]) -> (StatusCode, Value) {
     let r = reqwest::Client::new().post(format!("{}{path}", h.base)).form(body).send().await.unwrap();
     let s = r.status();
+
     (s, r.json().await.unwrap_or(Value::Null))
 }
 
@@ -20,6 +21,7 @@ async fn start_device(h: &Harness) -> (String, String) {
     assert_eq!(d["verification_uri"], format!("{}/device", h.base));
     assert!(d["verification_uri_complete"].as_str().unwrap().ends_with(d["user_code"].as_str().unwrap()));
     assert_eq!(d["interval"], 5);
+
     (d["device_code"].as_str().unwrap().to_owned(), d["user_code"].as_str().unwrap().to_owned())
 }
 
@@ -48,6 +50,7 @@ async fn a_device_signs_in_only_after_a_person_approves_it() {
     assert_eq!(s, StatusCode::OK, "{info}");
     assert_eq!(info["user_code"], user_code);
     assert_eq!(info["client_id"], "forge-app");
+
     // Security review: the person sees where the request came from.
     assert_eq!(info["requested_from"], "127.0.0.1", "{info}");
     assert!(info["user_agent"].as_str().is_some());
@@ -72,6 +75,7 @@ async fn a_device_signs_in_only_after_a_person_approves_it() {
     let (s, me) = cli.get("/api/v1/me").await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(me["session_kind"], "bearer");
+
     // Security review: device tokens never carry MFA, whatever the approving
     // session had; the CLI steps up when it needs to.
     assert_eq!(me["mfa"], false, "{me}");
@@ -94,6 +98,7 @@ async fn a_device_signs_in_only_after_a_person_approves_it() {
 async fn bearer_tokens_step_up_with_a_code_and_never_without() {
     let h = start().await;
     let mut web = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+
     // Enroll an authenticator app.
     let (_, t) = web.post("/api/v1/auth/totp", json!({})).await;
     let secret = forge_identity::totp::base32_decode(t["secret"].as_str().unwrap()).unwrap();

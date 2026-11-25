@@ -19,6 +19,7 @@ fn resources() -> Vec<ResourceRef> {
     let srv = EntityRef::new(EntityKind::Server, "01900000-0000-7000-8000-0000000000d1");
     let app = EntityRef::new(EntityKind::Service, "01900000-0000-7000-8000-0000000000e1");
     let job = EntityRef::new(EntityKind::Job, "01900000-0000-7000-8000-0000000000f1");
+
     vec![
         ResourceRef::new(EntityRef::platform(), vec![]),
         ResourceRef::new(ws(), vec![]),
@@ -52,6 +53,7 @@ fn assign(
         created_at: Timestamp(0),
     };
     e.link_assignment(&a, revision).unwrap();
+
     a
 }
 
@@ -61,6 +63,7 @@ fn assign(
 #[test]
 fn builtin_profiles_decide_exactly_like_their_roles() {
     let e = PolicyEngine::new().unwrap();
+
     for role in Role::ALL {
         let actions = e.role_actions(role).unwrap();
         assert!(!actions.is_empty(), "{role:?} grants something");
@@ -74,6 +77,7 @@ fn builtin_profiles_decide_exactly_like_their_roles() {
             EntityRef::new(EntityKind::Server, "01900000-0000-7000-8000-0000000000d1"),
             EntityRef::new(EntityKind::Service, "01900000-0000-7000-8000-0000000000e1"),
         ];
+
         for scope in scopes {
             let (by_role, by_profile) = (UserId::new(), UserId::new());
             let b = RoleBinding {
@@ -85,6 +89,7 @@ fn builtin_profiles_decide_exactly_like_their_roles() {
             };
             e.link_binding(&b).unwrap();
             assign(&e, by_profile, profile, 1, scope.clone());
+
             for action in Action::ALL {
                 for r in &resources() {
                     for mfa in [false, true] {
@@ -135,6 +140,7 @@ fn a_custom_profile_grants_only_its_actions_at_its_scope_and_mfa_still_applies()
 #[test]
 fn crafted_input_cannot_inject_policy_text() {
     use forge_core::permissions::{parse_actions, parse_scope};
+
     for bad in [
         "view\"]; permit(principal, action, resource); //",
         "view, Forge::Action::\"secret.read\"",
@@ -144,6 +150,7 @@ fn crafted_input_cannot_inject_policy_text() {
     ] {
         assert!(parse_actions(&[bad]).is_err(), "{bad}");
     }
+
     for bad in [
         "environment:x\" || true",
         "environment:01900000-0000-7000-8000-0000000000b1\"); permit(principal,action,resource);//",
@@ -152,6 +159,7 @@ fn crafted_input_cannot_inject_policy_text() {
     ] {
         assert!(parse_scope(bad).is_err(), "{bad}");
     }
+
     // Even a scope id with quotes (if one reached the engine) is an entity id
     // in a slot: it matches nothing and grants nothing beyond itself.
     let e = PolicyEngine::new().unwrap();
@@ -159,6 +167,7 @@ fn crafted_input_cannot_inject_policy_text() {
     e.add_profile_revision(profile, 1, &[Action::View]).unwrap();
     let user = UserId::new();
     assign(&e, user, profile, 1, EntityRef::new(EntityKind::Environment, "x\") || true || (\""));
+
     for r in &resources() {
         assert!(!allowed(&e, user, Action::View, r, true), "{}", r.entity);
     }
@@ -188,6 +197,7 @@ fn an_assignment_stops_granting_when_the_clock_passes_its_expiry() {
     assert!(allowed(&e, user, Action::View, &r, false), "before expiry");
     clock.set(Timestamp(2_000));
     assert!(!allowed(&e, user, Action::View, &r, false), "at expiry");
+
     // An assignment already expired is never linked.
     e.link_assignment(&a, 1).unwrap();
     assert!(!allowed(&e, user, Action::View, &r, false));
@@ -205,6 +215,7 @@ fn assign_group(e: &PolicyEngine, group: GroupId, profile: PermissionProfileId, 
         created_at: Timestamp(0),
     };
     e.link_assignment(&a, 1).unwrap();
+
     a
 }
 
@@ -239,12 +250,15 @@ fn group_assignments_grant_members_only_at_their_scope() {
     assert!(allowed(&e, alice, Action::View, &srv_a, false));
     assert!(!allowed(&e, alice, Action::View, &srv_b, false));
     assert!(!allowed(&e, alice, Action::ContainerManage, &srv_a, false));
+
     // A user in two groups gets the union.
     assert!(allowed(&e, bob, Action::View, &srv_a, false));
     assert!(allowed(&e, bob, Action::ContainerManage, &srv_b, false));
     assert!(!allowed(&e, bob, Action::ContainerManage, &srv_a, false));
+
     // Not a member: nothing.
     assert!(!allowed(&e, carol, Action::View, &srv_a, false));
+
     // Batched decisions agree.
     let many = e
         .evaluate_many(
@@ -261,6 +275,7 @@ fn group_assignments_grant_members_only_at_their_scope() {
     assert!(allowed(&e, carol, Action::View, &srv_a, false));
     e.remove_member(support, carol);
     assert!(!allowed(&e, carol, Action::View, &srv_a, false));
+
     // Deleting a group ends every grant through it.
     e.drop_group(ops);
     assert!(!allowed(&e, bob, Action::ContainerManage, &srv_b, false));
@@ -312,6 +327,7 @@ fn holds_over_a_scope_covers_actions_of_other_resource_types() {
     assert!(!over(local, Action::ContainerManage, &ns_b, vec![ws()]), "sibling environment");
     assert!(!over(node_only, Action::ContainerManage, &ns_a, vec![ws()]), "a node grant is not over its environment");
     assert!(!over(local, Action::View, &ns_a, vec![ws()]), "only listed actions");
+
     // Real requests still follow the schema: the action is refused on an environment.
     assert!(!allowed(&e, admin, Action::ContainerManage, &ResourceRef::new(ns_a, vec![ws()]), true));
 }

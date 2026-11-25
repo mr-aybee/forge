@@ -430,6 +430,7 @@ pub enum Decision {
 /// wait for a person.
 fn decision(t: &Tool, mode: AgentMode) -> Decision {
     let sensitive = needs_mfa(t) || t.effect == Effect::Destructive;
+
     match (t.effect, mode) {
         (Effect::Read, _) if !sensitive => Decision::Run,
         (_, AgentMode::ReadOnly) => Decision::Refuse,
@@ -448,6 +449,7 @@ const CONTENT_READS: [&str; 2] = ["forge_read_file", "forge_search_files"];
 /// [`decision`] for one call, which also looks at its arguments.
 fn call_decision(t: &Tool, mode: AgentMode, args: &Value) -> Decision {
     let whole_node = args.get("root").and_then(Value::as_str) == Some(NODE_ROOT);
+
     match decision(t, mode) {
         Decision::Run if whole_node && CONTENT_READS.contains(&t.name) => Decision::Approve,
         d => d,
@@ -468,16 +470,20 @@ pub(crate) fn still_allowed(name: &str, mode: AgentMode) -> bool {
 fn input_schema(t: &Tool) -> Value {
     let mut props = Map::new();
     let mut required = Vec::new();
+
     for a in t.args {
         let schema = match a.ty {
             "array" => json!({ "type": "array", "items": { "type": "string" }, "description": a.description }),
             ty => json!({ "type": ty, "description": a.description }),
         };
+
         props.insert(a.name.into(), schema);
+
         if a.required {
             required.push(a.name);
         }
     }
+
     json!({ "type": "object", "properties": props, "required": required, "additionalProperties": false })
 }
 
@@ -487,6 +493,7 @@ fn tool_view(t: &Tool, approval: bool) -> Value {
     } else {
         t.description.to_owned()
     };
+
     json!({
         "name": t.name,
         "title": t.title,
@@ -540,18 +547,23 @@ impl McpLimits {
         if m.len() > 10_000 {
             m.retain(|_, b| b.in_flight > 0 || b.at.elapsed().as_secs() < 300);
         }
+
         let b = m.entry(connection.to_owned()).or_insert(Bucket { tokens: BURST, at: Instant::now(), in_flight: 0 });
         let now = Instant::now();
         b.tokens = (b.tokens + now.duration_since(b.at).as_secs_f64() * CALLS_PER_MINUTE / 60.0).min(BURST);
         b.at = now;
+
         if b.in_flight >= MAX_IN_FLIGHT {
             return Err("too many tool calls at once for this connection");
         }
+
         if b.tokens < 1.0 {
             return Err("too many tool calls; wait a moment");
         }
+
         b.tokens -= 1.0;
         b.in_flight += 1;
+
         Ok(())
     }
 
@@ -571,10 +583,13 @@ fn unauthorized(state: &AppState, error: Option<&str>) -> Response {
         Ok(h) => h,
         Err(e) => return e.into_response(),
     };
+
     let mut r = (StatusCode::UNAUTHORIZED, Json(json!({ "error": error.unwrap_or("invalid_token") }))).into_response();
+
     if let Ok(v) = HeaderValue::from_str(&header) {
         r.headers_mut().insert(header::WWW_AUTHENTICATE, v);
     }
+
     r
 }
 
@@ -599,6 +614,7 @@ fn origin_ok(state: &AppState, origin: &crate::request_origin::RequestOrigin, he
 pub async fn not_allowed() -> Response {
     let mut r = StatusCode::METHOD_NOT_ALLOWED.into_response();
     r.headers_mut().insert(header::ALLOW, HeaderValue::from_static("POST"));
+
     r
 }
 
@@ -613,18 +629,22 @@ pub async fn post(
     if !state.config.mcp.enabled {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "MCP is not enabled on this Forge" }))).into_response();
     }
+
     if !origin_ok(&state, &origin, &headers) {
         return (StatusCode::FORBIDDEN, Json(json!({ "error": "origin not allowed" }))).into_response();
     }
+
     let resource = match resource_url(&state) {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
+
     // Only a connector's token for this resource; never API keys, CLI or
     // browser sessions (RFC 8707 audience separation).
     let Some(token) = bearer(&headers).filter(|t| !t.starts_with("fk_")) else {
         return unauthorized(&state, None);
     };
+
     let session = match state.identity.authenticate(token, SessionKind::Bearer).await {
         Ok(Some(s)) => s,
         Ok(None) => return unauthorized(&state, Some("invalid_token")),
@@ -633,28 +653,34 @@ pub async fn post(
             return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "try again" }))).into_response();
         }
     };
+
     let Some(mut connection) = session.connection.clone().filter(|c| c.resource == resource) else {
         return unauthorized(&state, Some("invalid_token"));
     };
+
     // The server-wide cap applies to connections approved before it was lowered.
     connection.mode = connection.mode.min(state.config.mcp.max_mode);
     state.identity.touch_connection(&connection).await;
+
     if let Some(v) = headers.get("mcp-protocol-version").and_then(|v| v.to_str().ok())
         && !PROTOCOL_VERSIONS.contains(&v)
     {
         return (StatusCode::BAD_REQUEST, Json(rpc_error(Value::Null, -32600, "unsupported MCP-Protocol-Version")))
             .into_response();
     }
+
     if body.len() > MAX_REQUEST_BYTES {
         return (StatusCode::PAYLOAD_TOO_LARGE, Json(rpc_error(Value::Null, -32600, "request too large")))
             .into_response();
     }
+
     let msg: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(_) => {
             return (StatusCode::BAD_REQUEST, Json(rpc_error(Value::Null, -32700, "parse error"))).into_response();
         }
     };
+
     let Some(obj) = msg.as_object() else {
         return (
             StatusCode::BAD_REQUEST,
@@ -662,12 +688,16 @@ pub async fn post(
         )
             .into_response();
     };
+
     let method = obj.get("method").and_then(Value::as_str).unwrap_or_default();
+
     let Some(id) = obj.get("id").cloned() else {
         // Notifications and responses: acknowledged, nothing to return.
         return StatusCode::ACCEPTED.into_response();
     };
+
     let params = obj.get("params").cloned().unwrap_or(Value::Null);
+
     let reply = match method {
         "initialize" => rpc_result(id, initialize(&params, &connection)),
         "ping" => rpc_result(id, json!({})),
@@ -681,19 +711,23 @@ pub async fn post(
         "prompts/list" => rpc_result(id, json!({ "prompts": [] })),
         _ => rpc_error(id, -32601, "method not found"),
     };
+
     let mut r = Json(reply).into_response();
     r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+
     r
 }
 
 fn initialize(params: &Value, c: &AgentConnection) -> Value {
     let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or_default();
     let version = if PROTOCOL_VERSIONS.contains(&asked) { asked } else { PROTOCOL_VERSIONS[0] };
+
     let mode = match c.mode {
         AgentMode::ReadOnly => "read-only: you can look but not change anything",
         AgentMode::Ask => "ask: every change waits for the person's approval in the Forge console",
         AgentMode::Auto => "auto: reversible changes run directly; destructive ones wait for approval",
     };
+
     json!({
         "protocolVersion": version,
         "capabilities": { "tools": { "listChanged": false } },
@@ -732,6 +766,7 @@ async fn call(
         Decision::Refuse => {
             let why = "this connection is read-only";
             denied(state, c, name, why).await;
+
             return Ok(tool_error(format!("{name}: {why}")));
         }
         Decision::Approve => {
@@ -743,14 +778,17 @@ async fn call(
                     return Ok(tool_error(m));
                 }
             };
+
             return queue(state, c, t, &args, console).await;
         }
         Decision::Run => {}
     }
+
     let req = match build_request(t, &args, token, c) {
         Ok(r) => r,
         Err(m) => return Ok(tool_error(m)),
     };
+
     let slot = match state.mcp_limits.acquire(&c.id) {
         Ok(s) => s,
         Err(m) => {
@@ -758,36 +796,48 @@ async fn call(
             return Ok(tool_error(m));
         }
     };
+
     let resp = router.0.clone().oneshot(req).await;
     let resp = match resp {
         Ok(r) => r,
         Err(e) => match e {},
     };
+
     let status = resp.status();
+
     let Ok(bytes) = axum::body::to_bytes(resp.into_body(), MAX_RESPONSE_BYTES).await else {
         return Ok(tool_error("the result is too large: narrow the request (limit, path, offset)"));
     };
+
     drop(slot);
     let mut value: Value = serde_json::from_slice(&bytes).unwrap_or_else(|_| json!(String::from_utf8_lossy(&bytes)));
+
     if !status.is_success() {
         return Ok(tool_error(explain(status, &value)));
     }
+
     decode_text(&mut value);
     let text = serde_json::to_string(&value).unwrap_or_default();
     if text.len() > MAX_RESULT_BYTES {
         let mut end = MAX_RESULT_BYTES;
+
         while !text.is_char_boundary(end) {
             end -= 1;
         }
+
         let cut = &text[..end];
+
         return Ok(json!({ "content": [{ "type": "text", "text": format!(
             "{cut}\n[result cut at {} KiB: narrow the request (limit, path, offset)]", MAX_RESULT_BYTES / 1024
         ) }] }));
     }
+
     let mut out = json!({ "content": [{ "type": "text", "text": text }] });
+
     if value.is_object() {
         out["structuredContent"] = value;
     }
+
     Ok(out)
 }
 
@@ -809,10 +859,12 @@ async fn queue(
     console: &str,
 ) -> Result<Value, (i64, String)> {
     use forge_core::ports::ApprovalRepository;
+
     let (method, uri, body) = match plan_request(t, args) {
         Ok(p) => p,
         Err(m) => return Ok(tool_error(m)),
     };
+
     // Expired requests no longer count against the limit; old decided ones go.
     let now = state.clock.now();
     state
@@ -825,6 +877,7 @@ async fn queue(
         denied(state, c, t.name, "too many requests waiting for approval").await;
         return Ok(tool_error("too many requests are waiting for approval; ask the person to decide them first"));
     }
+
     let a = forge_core::model::Approval {
         id: format!("ap_{}", forge_secrets::crypto::random_token::<12>()),
         kind: "mcp.tool".into(),
@@ -850,10 +903,13 @@ async fn queue(
             "approval": a.id, "tool": t.name, "summary": a.summary,
             "via": { "connector": c.client_name, "client_id": c.client_id, "connection": c.id, "mode": c.mode },
         }));
+
     if let Err(e) = state.audit.append(ev).await {
         tracing::error!(error = %e, "audit write failed");
     }
+
     let url = format!("{console}/approvals?id={}", a.id);
+
     Ok(json!({
         "content": [{ "type": "text", "text": format!(
             "Waiting for approval {}: the person who connected you approves or denies it in the Forge console \
@@ -873,6 +929,7 @@ async fn denied(state: &AppState, c: &AgentConnection, tool: &str, reason: &str)
             "tool": tool, "reason": reason,
             "via": { "connector": c.client_name, "client_id": c.client_id, "connection": c.id, "mode": c.mode },
         }));
+
     if let Err(e) = state.audit.append(ev).await {
         tracing::error!(error = %e, "audit write failed");
     }
@@ -881,9 +938,11 @@ async fn denied(state: &AppState, c: &AgentConnection, tool: &str, reason: &str)
 /// An HTTP error as a sentence the agent can act on.
 pub(crate) fn explain(status: StatusCode, v: &Value) -> String {
     let code = v.get("title").and_then(Value::as_str).unwrap_or_default();
+
     // Extractor rejections (bad JSON, bad ids) answer with plain text.
     let detail = v.get("detail").and_then(Value::as_str).or_else(|| v.as_str()).unwrap_or_default();
     let detail: String = detail.chars().take(500).collect();
+
     match (status, code) {
         (_, "step_up_required" | "mfa_required") => {
             "this action needs multi-factor authentication; a person must do it in the Forge console".into()
@@ -898,6 +957,7 @@ pub(crate) fn explain(status: StatusCode, v: &Value) -> String {
 fn decode_text(v: &mut Value) {
     let Some(m) = v.as_object_mut() else { return };
     let keys: Vec<String> = m.keys().filter(|k| k.ends_with("_b64")).cloned().collect();
+
     for k in keys {
         let Some(s) = m.get(&k).and_then(Value::as_str) else { continue };
         let Ok(raw) = base64::engine::general_purpose::STANDARD.decode(s) else { continue };
@@ -912,26 +972,32 @@ fn decode_text(v: &mut Value) {
 /// and JSON body of its REST request.
 fn plan_request(t: &Tool, args: &Value) -> Result<(Method, String, Option<Value>), String> {
     let empty = Map::new();
+
     let args = match args {
         Value::Object(m) => m,
         Value::Null => &empty,
         _ => return Err("arguments must be an object".into()),
     };
+
     for k in args.keys() {
         if !t.args.iter().any(|a| a.name == k) {
             return Err(format!("unknown argument `{k}`"));
         }
     }
+
     let mut path = t.route.to_owned();
     let mut query = url::form_urlencoded::Serializer::new(String::new());
     let mut has_query = false;
     let mut body = Map::new();
+
     for a in t.args {
         let v = args.get(a.name);
         if a.required && v.is_none_or(Value::is_null) {
             return Err(format!("missing argument `{}`", a.name));
         }
+
         let Some(v) = v.filter(|v| !v.is_null()) else { continue };
+
         let ok = match a.ty {
             "string" => v.is_string(),
             "integer" => v.is_i64() || v.is_u64(),
@@ -939,14 +1005,17 @@ fn plan_request(t: &Tool, args: &Value) -> Result<(Method, String, Option<Value>
             "array" => v.as_array().is_some_and(|x| x.iter().all(Value::is_string)),
             _ => v.is_object(),
         };
+
         if !ok {
             return Err(format!("`{}` must be a {}", a.name, a.ty));
         }
+
         if a.name == "root" && v.as_str().is_some_and(|r| r.trim().is_empty() || r.trim() == NODE_ROOT) {
             return Err("agents cannot use the whole-node root: pick an approved folder or a container from \
                         forge_file_roots"
                 .into());
         }
+
         match a.loc {
             Loc::Path(p) => {
                 let s = v.as_str().unwrap_or_default();
@@ -956,6 +1025,7 @@ fn plan_request(t: &Tool, args: &Value) -> Result<(Method, String, Option<Value>
                 {
                     return Err(format!("`{}` is not a valid id", a.name));
                 }
+
                 path = path.replace(&format!("{{{p}}}"), s);
             }
             Loc::Query => {
@@ -963,6 +1033,7 @@ fn plan_request(t: &Tool, args: &Value) -> Result<(Method, String, Option<Value>
                     Value::String(s) => s.clone(),
                     other => other.to_string(),
                 };
+
                 query.append_pair(a.name, &s);
                 has_query = true;
             }
@@ -971,9 +1042,11 @@ fn plan_request(t: &Tool, args: &Value) -> Result<(Method, String, Option<Value>
             }
         }
     }
+
     let uri = if has_query { format!("{path}?{}", query.finish()) } else { path };
     let method = Method::from_bytes(t.method.as_bytes()).map_err(|_| "bad method".to_string())?;
     let body = (method != Method::GET).then_some(Value::Object(body));
+
     Ok((method, uri, body))
 }
 
@@ -992,10 +1065,13 @@ fn build_request(t: &Tool, args: &Value, token: &str, c: &AgentConnection) -> Re
             None => Body::empty(),
         })
         .map_err(|e| e.to_string())?;
+
     if has_body {
         req.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
     }
+
     req.extensions_mut().insert(McpDispatch { connection_id: c.id.clone() });
+
     Ok(req)
 }
 
@@ -1010,16 +1086,20 @@ mod tests {
             let r = super::super::openapi::ROUTES.iter().find(|r| r.method == t.method && r.path == full);
             assert!(r.is_some(), "{}: no {} {} in the route inventory", t.name, t.method, full);
             assert!(r.is_some_and(|r| r.authenticated), "{}: route must authenticate the caller", t.name);
+
             if t.method == "GET" {
                 assert_eq!(t.effect, Effect::Read, "{}: GET tools are read-only", t.name);
             }
+
             for a in t.args {
                 if let Loc::Path(p) = a.loc {
                     assert!(t.route.contains(&format!("{{{p}}}")), "{}: {p} not in {}", t.name, t.route);
                 }
             }
+
             assert!(t.name.starts_with("forge_") && t.name.len() <= 64, "{}", t.name);
         }
+
         let mut names: Vec<&str> = TOOLS.iter().map(|t| t.name).collect();
         names.sort_unstable();
         names.dedup();
@@ -1030,11 +1110,13 @@ mod tests {
     fn whole_node_file_contents_wait_for_the_person_in_every_mode() {
         for name in CONTENT_READS {
             let t = tool(name).unwrap_or_else(|| unreachable!());
+
             for mode in [AgentMode::ReadOnly, AgentMode::Ask, AgentMode::Auto] {
                 assert_eq!(call_decision(t, mode, &json!({"root": "node"})), Decision::Approve, "{name}");
                 assert_eq!(call_decision(t, mode, &json!({"root": "fr_app"})), Decision::Run, "{name}");
             }
         }
+
         let list = tool("forge_list_files").unwrap_or_else(|| unreachable!());
         assert_eq!(
             call_decision(list, AgentMode::ReadOnly, &json!({"root": "node"})),
@@ -1047,11 +1129,13 @@ mod tests {
     fn modes_limit_what_is_listed() {
         let ro: Vec<&Tool> = TOOLS.iter().filter(|t| usable(t, AgentMode::ReadOnly)).collect();
         assert!(ro.iter().all(|t| t.effect == Effect::Read));
+
         for t in TOOLS.iter().filter(|t| t.effect == Effect::Write) {
             assert_eq!(decision(t, AgentMode::Auto), Decision::Run, "{}", t.name);
             assert_eq!(decision(t, AgentMode::Ask), Decision::Approve, "{}", t.name);
             assert_eq!(decision(t, AgentMode::ReadOnly), Decision::Refuse, "{}", t.name);
         }
+
         for t in TOOLS.iter().filter(|t| t.effect == Effect::Destructive) {
             assert_eq!(decision(t, AgentMode::Auto), Decision::Approve, "destructive never runs directly: {}", t.name);
         }
@@ -1083,6 +1167,7 @@ mod tests {
         assert!(req.uri().query().unwrap_or_default().contains("path=%2Fetc%2Fnginx"));
         assert_eq!(req.headers().len(), 1, "only Authorization");
         assert_eq!(req.extensions().get::<McpDispatch>().map(|d| d.connection_id.as_str()), Some("ac_x"));
+
         for bad in [
             json!({"node": "../x", "root": "fr_app"}),
             json!({"node": "a/b", "root": "fr_app"}),

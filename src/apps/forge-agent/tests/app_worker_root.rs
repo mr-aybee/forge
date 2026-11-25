@@ -44,6 +44,7 @@ fn make_app(name: &str) -> (u32, u32) {
     ));
     let uid: u32 = sh(&format!("id -u {user}")).parse().unwrap();
     let gid: u32 = sh(&format!("id -g {user}")).parse().unwrap();
+
     (uid, gid)
 }
 
@@ -51,6 +52,7 @@ fn cleanup() {
     for name in ["alpha", "beta"] {
         sh(&format!("userdel {NS}-{name} 2>/dev/null; groupdel {NS}-{name} 2>/dev/null; true"));
     }
+
     sh(&format!("rm -rf /srv/forge/apps/{NS} /etc/forge/apps/{NS} /var/lib/forge-app-store/{NS}"));
 }
 
@@ -64,7 +66,9 @@ async fn app_folders_are_worked_on_as_the_app() {
         eprintln!("skipped: needs root and FORGE_ROOT_TESTS=1");
         return;
     }
+
     cleanup();
+
     // The app accounts must be able to run the helper: a copy outside the
     // build user's (private) home.
     let helper = format!("/tmp/forge-agent-helper-test-{}", std::process::id());
@@ -93,12 +97,14 @@ async fn app_folders_are_worked_on_as_the_app() {
             run(FileOp::Read { root: app("alpha"), path: p("/hello.txt"), offset: 0, length: 100, version: None })
                 .await;
         assert!(read.is_ok(), "{read:?}");
+
         // Links are listed, never followed.
         for link in ["/shadow-link", "/beta-link"] {
             let r =
                 run(FileOp::Read { root: app("alpha"), path: p(link), offset: 0, length: 100, version: None }).await;
             assert!(r.is_err(), "{link} was followed: {r:?}");
         }
+
         // New files belong to the app.
         run(FileOp::Mkdir { root: app("alpha"), path: p("/made"), parents: false }).await.unwrap();
         assert_eq!(std::fs::metadata(format!("{alpha}/made")).unwrap().uid(), alpha_uid);
@@ -125,11 +131,13 @@ async fn app_folders_are_worked_on_as_the_app() {
         .await
         .unwrap();
         assert_eq!(std::fs::metadata(format!("{alpha}/up.txt")).unwrap().uid(), alpha_uid);
+
         // Trash goes to the app's store, outside its folder.
         run(FileOp::Delete { root: app("alpha"), path: p("/hello.txt"), permanent: false }).await.unwrap();
         let store = format!("/var/lib/forge-app-store/{NS}/alpha");
         assert_eq!(std::fs::metadata(&store).unwrap().uid(), alpha_uid);
         assert!(!sh(&format!("find {store} -type f | head -1")).is_empty(), "nothing in the app's store");
+
         // Never: owners, the launcher folder, the folder itself, folders around apps.
         let own = FileOp::SetOwner {
             root: app("alpha"),
@@ -143,6 +151,7 @@ async fn app_folders_are_worked_on_as_the_app() {
         assert!(run(FileOp::Delete { root: app("alpha"), path: p("/.forge"), permanent: false }).await.is_err());
         let around = RootSpec::Dir { base: p(&format!("/srv/forge/apps/{NS}")) };
         assert!(run(FileOp::List { root: around, path: p("/"), offset: 0, limit: 10, hidden: false }).await.is_err());
+
         // Even if the helper picked the wrong folder, the kernel stops the
         // app's account: a worker as alpha on beta's folder gets nothing.
         let op = FileOp::Read {
@@ -168,6 +177,7 @@ async fn app_folders_are_worked_on_as_the_app() {
             .unwrap();
         let answer = String::from_utf8_lossy(&out.stdout);
         assert!(answer.contains("\"ok\":false"), "alpha read beta's file: {answer}");
+
         // Landlock ran (full, partial or none on a kernel without it), never failed.
         eprintln!("worker confinement on this kernel: {answer}");
         assert!(answer.contains("\"confined\":\"") && !answer.contains("\"confined\":\"error"), "{answer}");
@@ -186,6 +196,7 @@ async fn app_folders_are_worked_on_as_the_app() {
             .output()
             .unwrap();
         assert!(String::from_utf8_lossy(&env.stdout).contains("\"ok\":false"));
+
         // The worker refuses ids that are not all the app's.
         let mixed = Command::new(&worker)
             .args(["file-worker", &beta_uid.to_string(), &beta_gid.to_string(), &beta, "/nonexistent-store"])
@@ -200,6 +211,7 @@ async fn app_folders_are_worked_on_as_the_app() {
     let outcome = futures_catch(result).await;
     cleanup();
     let _ = std::fs::remove_file(&helper);
+
     if let Err(e) = outcome {
         std::panic::resume_unwind(e);
     }

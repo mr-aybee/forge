@@ -52,10 +52,13 @@ where
     prefix[4..].copy_from_slice(&blen.to_be_bytes());
     w.write_all(&prefix).await?;
     w.write_all(&header).await?;
+
     if !blob.is_empty() {
         w.write_all(blob).await?;
     }
+
     w.flush().await?;
+
     Ok(())
 }
 
@@ -71,19 +74,25 @@ where
         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Err(FrameError::Closed),
         Err(e) => return Err(e.into()),
     }
+
     let hlen = u32::from_be_bytes([prefix[0], prefix[1], prefix[2], prefix[3]]);
     let blen = u32::from_be_bytes([prefix[4], prefix[5], prefix[6], prefix[7]]);
+
     if hlen > limits.header {
         return Err(FrameError::TooLarge { what: "header", len: hlen, max: limits.header });
     }
+
     if blen > limits.blob {
         return Err(FrameError::TooLarge { what: "blob", len: blen, max: limits.blob });
     }
+
     let mut header = vec![0u8; hlen as usize];
     r.read_exact(&mut header).await?;
     let mut blob = vec![0u8; blen as usize];
+
     if blen > 0 {
         r.read_exact(&mut blob).await?;
     }
+
     Ok((serde_json::from_slice(&header)?, blob))
 }

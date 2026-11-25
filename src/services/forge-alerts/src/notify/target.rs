@@ -83,6 +83,7 @@ fn reserved_v4(a: Ipv4Addr) -> bool {
 
 fn private_v6(a: Ipv6Addr) -> bool {
     let s = a.segments()[0];
+
     // fc00::/7 unique local, fec0::/10 site-local (deprecated).
     (s & 0xfe00) == 0xfc00 || (s & 0xffc0) == 0xfec0
 }
@@ -95,24 +96,30 @@ pub fn check_address(ip: IpAddr, rules: TargetRules) -> Result<(), TargetError> 
     if transition_address(ip) {
         return Err(TargetError::Forbidden);
     }
+
     let ip = canonical(ip);
     if forbidden_address(ip) {
         return Err(TargetError::Forbidden);
     }
+
     if ip.is_loopback() {
         return if rules.allow_loopback { Ok(()) } else { Err(TargetError::Loopback) };
     }
+
     let (private, reserved) = match ip {
         IpAddr::V4(a) => (private_v4(a), reserved_v4(a)),
         // 2001:db8::/32 is documentation space.
         IpAddr::V6(a) => (private_v6(a), a.segments()[0] == 0x2001 && a.segments()[1] == 0x0db8),
     };
+
     if reserved {
         return Err(TargetError::Forbidden);
     }
+
     if private && !rules.allow_private {
         return Err(TargetError::Private);
     }
+
     Ok(())
 }
 
@@ -129,15 +136,18 @@ pub fn parse_target(raw: &str, rules: TargetRules) -> Result<Target, TargetError
     if raw.len() > MAX_URL {
         return Err(TargetError::TooLong);
     }
+
     let url = url::Url::parse(raw).map_err(|_| TargetError::Malformed)?;
     match url.scheme() {
         "https" => {}
         "http" if rules.allow_http => {}
         _ => return Err(TargetError::Scheme),
     }
+
     if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
         return Err(TargetError::Credentials);
     }
+
     let host = match url.host().ok_or(TargetError::Malformed)? {
         url::Host::Ipv4(a) => {
             check_address(IpAddr::V4(a), rules)?;
@@ -152,22 +162,28 @@ pub fn parse_target(raw: &str, rules: TargetRules) -> Result<Target, TargetError
             if name.is_empty() {
                 return Err(TargetError::Malformed);
             }
+
             if numeric_host(&name) {
                 return Err(TargetError::NumericHost);
             }
+
             if forbidden_name(&name) {
                 return Err(TargetError::Forbidden);
             }
+
             if (name == "localhost" || name.ends_with(".localhost")) && !rules.allow_loopback {
                 return Err(TargetError::Loopback);
             }
+
             name
         }
     };
+
     let display = match url.port() {
         Some(p) => format!("{}://{host}:{p}", url.scheme()),
         None => format!("{}://{host}", url.scheme()),
     };
+
     Ok(Target { url, display })
 }
 
@@ -177,6 +193,7 @@ pub fn parse_target(raw: &str, rules: TargetRules) -> Result<Target, TargetError
 /// by every address it resolves to when a message is sent.
 pub fn parse_smtp_host(raw: &str, port: u16, rules: TargetRules) -> Result<String, TargetError> {
     let raw = raw.trim();
+
     // Only what a host name or an address literal is made of: nothing that
     // would add a path, a user or a port to the URL checked below.
     if raw.is_empty()
@@ -185,6 +202,7 @@ pub fn parse_smtp_host(raw: &str, port: u16, rules: TargetRules) -> Result<Strin
     {
         return Err(TargetError::Malformed);
     }
+
     let bracketed = if raw.contains(':') && !raw.starts_with('[') { format!("[{raw}]") } else { raw.to_owned() };
     let target = parse_target(&format!("https://{bracketed}:{port}/"), rules)?;
     let host = match target.url.host() {
@@ -193,6 +211,7 @@ pub fn parse_smtp_host(raw: &str, port: u16, rules: TargetRules) -> Result<Strin
         Some(url::Host::Domain(d)) => d.trim_end_matches('.').to_ascii_lowercase(),
         None => return Err(TargetError::Malformed),
     };
+
     Ok(host)
 }
 
@@ -206,9 +225,11 @@ mod tests {
         assert_eq!(parse_smtp_host(" SMTP.Example.com ", 587, STRICT).unwrap(), "smtp.example.com");
         assert_eq!(parse_smtp_host("2606:4700::1111", 465, STRICT).unwrap(), "2606:4700::1111");
         assert_eq!(parse_smtp_host("[2606:4700::1111]", 465, STRICT).unwrap(), "2606:4700::1111");
+
         for bad in ["", "smtp.example.com/x", "user@smtp.example.com", "smtp.example.com:25", "smtp example.com"] {
             assert!(parse_smtp_host(bad, 25, LAB).is_err(), "{bad}");
         }
+
         assert_eq!(parse_smtp_host("169.254.169.254", 25, LAB), Err(TargetError::Forbidden));
         assert_eq!(parse_smtp_host("metadata.google.internal", 25, LAB), Err(TargetError::Forbidden));
         assert_eq!(parse_smtp_host("127.0.0.1", 25, STRICT), Err(TargetError::Loopback));
@@ -270,6 +291,7 @@ mod tests {
             assert_eq!(check_address(ip(a), ONPREM), Err(TargetError::Loopback), "{a}: private does not mean loopback");
             assert!(address_allowed(ip(a), LAB), "{a}");
         }
+
         for a in [
             "10.0.0.5",
             "172.16.0.1",
@@ -285,6 +307,7 @@ mod tests {
             assert_eq!(check_address(ip(a), STRICT), Err(TargetError::Private), "{a}");
             assert!(address_allowed(ip(a), ONPREM), "{a}");
         }
+
         for a in ["1.1.1.1", "172.32.0.1", "100.128.0.1", "198.20.0.1", "2606:4700::1111", "2001:4860:4860::8888"] {
             assert!(address_allowed(ip(a), STRICT), "{a} is public");
         }
@@ -302,15 +325,19 @@ mod tests {
         );
         assert_eq!(parse_target("http://hooks.example.com/x", STRICT), Err(TargetError::Scheme));
         assert_eq!(parse_target("http://hooks.example.com/x", ONPREM).unwrap().display, "http://hooks.example.com");
+
         for bad in ["ftp://example.com/", "file:///etc/passwd", "gopher://example.com/", "javascript:alert(1)"] {
             assert_eq!(parse_target(bad, LAB), Err(TargetError::Scheme), "{bad}");
         }
+
         for bad in ["", "hooks.example.com/x", "https://", "//example.com/x"] {
             assert_eq!(parse_target(bad, LAB), Err(TargetError::Malformed), "{bad}");
         }
+
         for bad in ["https://user@example.com/", "https://user:pw@example.com/", "https://example.com/#frag"] {
             assert_eq!(parse_target(bad, LAB), Err(TargetError::Credentials), "{bad}");
         }
+
         let long = format!("https://example.com/{}", "a".repeat(MAX_URL));
         assert_eq!(parse_target(&long, LAB), Err(TargetError::TooLong));
     }
@@ -331,6 +358,7 @@ mod tests {
         ] {
             assert_eq!(parse_target(bad, LAB), Err(TargetError::Forbidden), "{bad}");
         }
+
         for (bad, why) in [
             ("https://127.0.0.1/", TargetError::Loopback),
             ("https://2130706433/", TargetError::Loopback),
@@ -345,6 +373,7 @@ mod tests {
         ] {
             assert_eq!(parse_target(bad, STRICT), Err(why), "{bad}");
         }
+
         assert_eq!(parse_target("https://10.0.0.5/hook", ONPREM).unwrap().display, "https://10.0.0.5");
         assert_eq!(parse_target("http://127.0.0.1:8080/hook", LAB).unwrap().display, "http://127.0.0.1:8080");
         assert_eq!(parse_target("https://[::1]:8443/", LAB).unwrap().display, "https://[::1]:8443");

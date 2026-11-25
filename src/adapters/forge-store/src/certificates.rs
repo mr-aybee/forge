@@ -73,6 +73,7 @@ impl CertificateRepository for Store {
             None => sqlx::query("SELECT * FROM tls_certificates ORDER BY name").fetch_all(self.pool()).await,
         }
         .map_err(db_err)?;
+
         rows.iter().map(cert_row).collect()
     }
 

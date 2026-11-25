@@ -48,12 +48,16 @@ impl SshUserCa {
             let key = PrivateKey::from_openssh(pem.as_bytes()).map_err(DomainError::internal)?;
             return Ok(Self { key });
         }
+
         let key = new_ed25519("orbyn-forge-user-ca")?;
         let pem = key.to_openssh(LineEnding::LF).map_err(DomainError::internal)?;
+
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(DomainError::internal)?;
         }
+
         write_private(path, pem.as_bytes())?;
+
         Ok(Self { key })
     }
 
@@ -94,10 +98,13 @@ impl SshUserCa {
             .and_then(|b| b.cert_type(CertType::User))
             .and_then(|b| b.valid_principal(principal))
             .map_err(DomainError::internal)?;
+
         for ext in extensions {
             b.extension(*ext, "").map_err(DomainError::internal)?;
         }
+
         let cert = b.sign(&self.key).map_err(DomainError::internal)?;
+
         Ok(IssuedCert {
             key_openssh: session_key.to_openssh(LineEnding::LF).map_err(DomainError::internal)?.to_string(),
             cert_openssh: cert.to_openssh().map_err(DomainError::internal)?,

@@ -84,6 +84,7 @@ impl SmtpMailer {
             Some(url::Host::Ipv6(a)) => (ClientId::Ipv6(a), FALLBACK_DOMAIN.to_owned()),
             _ => (ClientId::Domain("localhost".to_owned()), FALLBACK_DOMAIN.to_owned()),
         };
+
         Self { rules, hello, id_domain }
     }
 
@@ -94,13 +95,16 @@ impl SmtpMailer {
             .message_id(Some(format!("<{}@{}>", m.delivery_id, self.id_domain)))
             .date(SystemTime::UNIX_EPOCH + Duration::from_millis(u64::try_from(m.at.0).unwrap_or(0)))
             .header(AutoSubmitted);
+
         for to in &m.to {
             b = b.to(to.parse::<Mailbox>().map_err(|_| lettre::error::Error::MissingTo)?);
         }
+
         // Envelope recipients only: the header is not written (D-117).
         for bcc in &m.bcc {
             b = b.bcc(bcc.parse::<Mailbox>().map_err(|_| lettre::error::Error::MissingTo)?);
         }
+
         match &m.html {
             None => b.header(ContentType::TEXT_PLAIN).body(m.body.clone()),
             Some(html) => b.multipart(alternative(&m.body, html)),
@@ -111,11 +115,13 @@ impl SmtpMailer {
     async fn address(&self, m: &OutboundMail) -> Result<IpAddr, FailureClass> {
         let addrs: Vec<SocketAddr> =
             tokio::net::lookup_host((m.host.as_str(), m.port)).await.map_err(|_| FailureClass::Connect)?.collect();
+
         // A name that answers with a public and an internal address is not
         // one to send to.
         if addrs.iter().any(|a| !address_allowed(a.ip(), self.rules)) {
             return Err(FailureClass::BlockedTarget);
         }
+
         addrs.first().map(SocketAddr::ip).ok_or(FailureClass::Connect)
     }
 
@@ -123,11 +129,14 @@ impl SmtpMailer {
         if m.tls == SmtpTls::None && (!self.rules.allow_http || m.username.is_some()) {
             return SendOutcome::Failed(FailureClass::BlockedTarget);
         }
+
         let Ok(message) = self.message(m) else { return SendOutcome::Failed(FailureClass::Config) };
+
         let ip = match self.address(m).await {
             Ok(ip) => ip,
             Err(class) => return SendOutcome::Failed(class),
         };
+
         let tls = match m.tls {
             SmtpTls::None => Tls::None,
             mode => {
@@ -135,17 +144,21 @@ impl SmtpMailer {
                 let Ok(params) = TlsParameters::builder(m.host.clone()).build_rustls() else {
                     return SendOutcome::Failed(FailureClass::Tls);
                 };
+
                 if mode == SmtpTls::Tls { Tls::Wrapper(params) } else { Tls::Required(params) }
             }
         };
+
         let mut builder = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(ip.to_string())
             .port(m.port)
             .tls(tls)
             .hello_name(self.hello.clone())
             .timeout(Some(COMMAND_TIMEOUT));
+
         if let (Some(user), Some(password)) = (&m.username, &m.password) {
             builder = builder.credentials(Credentials::new(user.clone(), password.clone()));
         }
+
         // One transport per message: each channel has its own server and
         // credentials, and messages are few.
         let transport = builder.build();
@@ -172,6 +185,7 @@ fn classify(e: &lettre::transport::smtp::Error) -> SendOutcome {
     if let Some(code) = e.status() {
         return SendOutcome::Smtp(u16::from(code));
     }
+
     SendOutcome::Failed(if e.is_timeout() {
         FailureClass::Timeout
     } else if e.is_tls() || e.is_client() {
@@ -228,6 +242,7 @@ mod tests {
         let m = SmtpMailer::new(TargetRules::default(), "https://forge.example.com");
         assert_eq!(m.mailbox("ops@example.com").unwrap(), "ops@example.com");
         assert!(m.mailbox("Ops Team <ops@example.com>").unwrap().contains("<ops@example.com>"));
+
         for bad in ["", "ops", "ops@", "@example.com", "a b@example.com", "ops@example.com\r\nBcc: x@y.z"] {
             assert!(m.mailbox(bad).is_err(), "{bad}");
         }
@@ -259,6 +274,7 @@ mod tests {
         assert!(text.contains(&format!("Content-ID: <{MARK_CID}>")), "{text}");
         assert!(text.contains("Content-Disposition: inline"), "{text}");
         assert!(text.contains("hello"), "{text}");
+
         // Plain text only when there is no HTML.
         let plain_only =
             String::from_utf8(m.message(&mail("smtp.example.com", 587, SmtpTls::Tls)).unwrap().formatted()).unwrap();
@@ -268,6 +284,7 @@ mod tests {
     #[tokio::test]
     async fn forbidden_hosts_and_plain_text_are_refused_before_any_connection() {
         let strict = SmtpMailer::new(TargetRules::default(), "https://forge.example.com");
+
         for (host, tls) in [
             ("169.254.169.254", SmtpTls::Tls),
             ("127.0.0.1", SmtpTls::Starttls),
@@ -281,6 +298,7 @@ mod tests {
                 "{host}"
             );
         }
+
         let lab = SmtpMailer::new(LAB, "https://forge.example.com");
         let mut with_user = mail("127.0.0.1", 25, SmtpTls::None);
         with_user.username = Some("forge".into());

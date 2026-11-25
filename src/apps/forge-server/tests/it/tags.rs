@@ -37,6 +37,7 @@ async fn cluster_tags_round_trip_with_validation_authz_and_audit() {
         let (s, _) = admin.call(Method::PUT, &format!("/api/v1/tags/cluster/{id}"), Some(json!({ "tags": bad }))).await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
     }
+
     // Unknown kind and missing item.
     let (s, _) = admin.get("/api/v1/tags/bogus").await;
     assert_eq!(s, StatusCode::BAD_REQUEST);

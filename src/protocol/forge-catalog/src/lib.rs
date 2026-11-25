@@ -1048,12 +1048,15 @@ impl Param {
             ParamKind::List => valid_ident_list(v),
             ParamKind::Address => valid_address(v),
         };
+
         if !ok {
             return Err(format!("invalid value for `{}`", self.key));
         }
+
         if self.must_accept && v != "true" {
             return Err(format!("`{}` must be accepted", self.label));
         }
+
         Ok(())
     }
 }
@@ -1078,30 +1081,38 @@ pub fn validate(
         if !matches!(action, "install" | "upgrade") {
             return Err(format!("`{BUILD_PARAM}` only applies to install and upgrade"));
         }
+
         if !versions::valid_build(b) {
             return Err(format!("invalid build `{b}`"));
         }
     }
+
     if let Some(k) =
         params.keys().find(|k| k.as_str() != BUILD_PARAM && !pkg.params.iter().any(|p| p.key == k.as_str()))
     {
         return Err(format!("{} has no parameter `{k}`", pkg.name));
     }
+
     let mut env = BTreeMap::new();
     env.insert("FORGE_PKG_ID".to_owned(), pkg.id.to_owned());
     env.insert("FORGE_PKG_VERSION".to_owned(), version.to_owned());
+
     if let Some(b) = build {
         env.insert("FORGE_PKG_BUILD".to_owned(), b.clone());
     }
+
     for p in pkg.params {
         let v = params.get(p.key).map_or(p.default, String::as_str);
+
         // Lifecycle actions other than install reuse what was installed;
         // licence acceptance only gates installation.
         if action == "install" || !p.must_accept {
             p.check(v)?;
         }
+
         env.insert(format!("FORGE_P_{}", p.key.to_ascii_uppercase()), v.to_owned());
     }
+
     Ok(Validated { package: pkg, version, action, env })
 }
 
@@ -1113,10 +1124,12 @@ pub fn winget_env(v: &Validated) -> Option<BTreeMap<String, String>> {
     if v.package.winget.is_empty() {
         return None;
     }
+
     let mut env = v.env.clone();
     env.insert("FORGE_WINGET".to_owned(), v.package.winget.to_owned());
     env.insert("FORGE_WINGET_SERVICE".to_owned(), v.package.winget_service.to_owned());
     env.insert("FORGE_ACTION".to_owned(), v.action.to_owned());
+
     Some(env)
 }
 
@@ -1153,14 +1166,17 @@ mod tests {
     fn every_apt_run_waits_for_the_dpkg_lock() {
         assert!(PRELUDE.contains(r#"APT_LOCK="-o DPkg::Lock::Timeout="#));
         let sources = std::iter::once(PRELUDE).chain(CATALOG.iter().map(|p| p.recipe));
+
         for src in sources {
             for line in src.lines().filter(|l| !l.trim_start().starts_with('#')) {
                 for (i, _) in line.match_indices("apt-get ") {
                     let before = &line[..i];
                     let after = &line[i + "apt-get ".len()..];
+
                     if before.ends_with("step ") || before.ends_with("command -v ") {
                         continue;
                     }
+
                     assert!(after.starts_with("$APT_LOCK"), "apt-get without $APT_LOCK: {line}");
                 }
             }
@@ -1172,14 +1188,17 @@ mod tests {
         // sh rejects CRLF scripts (`set: Illegal option -`).
         assert!(!PRELUDE.contains('\r'), "the prelude has CRLF line endings");
         let mut ids = std::collections::HashSet::new();
+
         for p in CATALOG {
             assert!(ids.insert(p.id), "duplicate id {}", p.id);
             assert!(!p.versions.is_empty(), "{} has no versions", p.id);
             assert!(p.recipe.contains("pkg_install()"), "{} recipe lacks pkg_install", p.id);
             assert!(!p.recipe.contains('\r'), "{} recipe has CRLF line endings", p.id);
+
             for r in p.requires {
                 assert!(find(r).is_some(), "{} requires unknown {r}", p.id);
             }
+
             for prm in p.params {
                 prm.check(prm.default).or_else(|e| if prm.must_accept { Ok(()) } else { Err(e) }).unwrap();
             }

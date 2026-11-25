@@ -29,7 +29,9 @@ pub fn spec_for(app: &Service) -> Option<RootSpec> {
     if spec.runtime == Runtime::Container {
         return None;
     }
+
     let root = RootSpec::App { environment: spec.environment, app: spec.name };
+
     root.validate().ok().map(|()| root)
 }
 
@@ -54,6 +56,7 @@ async fn record(
     let ev = AuditEvent::new(actor, action, EntityRef::new(EntityKind::Server, server), AuditOutcome::Success)
         .in_org(Some(app.workspace_id))
         .with_details(details);
+
     if let Err(e) = audit.record(ev).await {
         tracing::error!(error = %e, "audit write failed");
     }
@@ -71,12 +74,15 @@ pub async fn ensure(
     server: &Server,
 ) -> DomainResult<Option<ApprovedRoot>> {
     let Some(target) = spec_for(app) else { return Ok(None) };
+
     if !supported(server) {
         return Ok(None);
     }
+
     if files.list_roots(server.id).await?.iter().any(|r| same(&r.spec, &target)) {
         return Ok(None);
     }
+
     let root = ApprovedRoot {
         id: forge_files::new_root_id(),
         workspace_id: server.workspace_id,
@@ -95,6 +101,7 @@ pub async fn ensure(
         "service_id": app.id, "service": app.name, "automatic": true,
     });
     record(audit, actor, "file.root.create", app, server.id, details).await;
+
     Ok(Some(root))
 }
 
@@ -111,6 +118,7 @@ pub async fn remove(
     let Some(target) = spec_for(app) else { return Ok(0) };
     let service_id = app.id.to_string();
     let mut n = 0;
+
     for r in files.list_roots(server_id).await? {
         if r.kind == RootKind::Service && r.service_id.as_deref() == Some(service_id.as_str()) && same(&r.spec, &target)
         {
@@ -120,5 +128,6 @@ pub async fn remove(
             n += 1;
         }
     }
+
     Ok(n)
 }

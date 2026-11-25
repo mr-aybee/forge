@@ -62,6 +62,7 @@ pub struct PassReport {
 pub fn parse_spec(spec: &serde_json::Value) -> Result<RuleSpec, String> {
     let s: RuleSpec = serde_json::from_value(spec.clone()).map_err(|e| format!("invalid rule condition: {e}"))?;
     s.validate()?;
+
     Ok(s)
 }
 
@@ -122,20 +123,24 @@ impl Evaluator {
             })
             .collect();
         let mut trackers: HashMap<String, (i64, Tracker)> = HashMap::new();
+
         for (fp, rev, v) in self.state.trackers().await? {
             if let Ok(t) = serde_json::from_value::<Tracker>(v) {
                 trackers.insert(fp, (rev, t));
             }
         }
+
         // Evidence per subject, with each resource's workspace.
         let subjects: HashSet<&str> =
             rules.iter().filter(|(r, _)| r.enabled).map(|(r, _)| r.subject.as_str()).collect();
         let mut series: HashMap<&str, Vec<(SeriesSample, WorkspaceId)>> = HashMap::new();
+
         for subject in subjects {
             let samples = self.source.latest(subject).await?;
             let resources: Vec<EntityRef> = samples.iter().map(|s| s.resource.clone()).collect();
             let resolved = self.resolver.resolve_many(&resources).await;
             let mut kept = Vec::new();
+
             for (s, r) in samples.into_iter().zip(resolved) {
                 // Deleted or unresolvable resources are dropped (D-085).
                 let Ok(r) = r else { continue };
@@ -144,19 +149,23 @@ impl Evaluator {
                     kept.push((s, ws));
                 }
             }
+
             series.insert(subject, kept);
         }
 
         let mut seen: HashSet<String> = HashSet::new();
         let mut save: Vec<(String, AlertRuleId, i64, serde_json::Value)> = Vec::new();
+
         for (rule, spec) in rules.iter().filter(|(r, _)| r.enabled) {
             for (s, ws) in series.get(rule.subject.as_str()).into_iter().flatten() {
                 if *ws != rule.workspace_id || !in_scope(&rule.scope, &s.resource) {
                     continue;
                 }
+
                 report.series += 1;
                 let fp = fingerprint(rule.id, &s.resource, s.server, &rule.subject);
                 seen.insert(fp.clone());
+
                 let mut tracker = match trackers.remove(&fp) {
                     Some((rev, t)) if rev == rule.revision => t,
                     Some(_) => {
@@ -167,11 +176,13 @@ impl Evaluator {
                     }
                     None => Tracker::new(),
                 };
+
                 let events = match tracker.observe(spec, s.sample.clone(), now.0) {
                     Ok(ev) => ev,
                     // Not newer than the last sample: nothing new, only time passed.
                     Err(_) => tracker.tick(spec, now.0),
                 };
+
                 self.apply(rule, s, &fp, &events, now, &mut report).await?;
                 save.push((fp, rule.id, rule.revision, serde_json::to_value(&tracker).map_err(DomainError::internal)?));
             }
@@ -180,10 +191,12 @@ impl Evaluator {
         // Series without evidence this pass: time still passes for them.
         let by_id: HashMap<AlertRuleId, &(AlertRule, RuleSpec)> = rules.iter().map(|r| (r.0.id, r)).collect();
         let mut forget = Vec::new();
+
         for (fp, (rev, mut tracker)) in trackers {
             if seen.contains(&fp) {
                 continue;
             }
+
             let rule = rule_of(&fp).and_then(|id| by_id.get(&id));
             let reason = match rule {
                 None => Some("the rule was deleted"),
@@ -196,13 +209,17 @@ impl Evaluator {
                     _ => None,
                 },
             };
+
             if let Some(why) = reason {
                 report.ended += self.end_active(&fp, now, why).await?;
                 forget.push(fp);
+
                 continue;
             }
+
             if let Some((r, spec)) = rule {
                 let events = tracker.tick(spec, now.0);
+
                 if let Some(res) = resource_of(&fp) {
                     let server = fp.split('|').nth(2).and_then(|s| s.parse().ok());
                     let fake = SeriesSample {
@@ -212,15 +229,19 @@ impl Evaluator {
                     };
                     self.apply(r, &fake, &fp, &events, now, &mut report).await?;
                 }
+
                 save.push((fp, r.id, r.revision, serde_json::to_value(&tracker).map_err(DomainError::internal)?));
             }
         }
+
         if !forget.is_empty() {
             self.state.delete_trackers(&forget).await?;
         }
+
         if !save.is_empty() {
             self.state.save_trackers(&save, now).await?;
         }
+
         Ok(report)
     }
 
@@ -240,6 +261,7 @@ impl Evaluator {
                     if self.alerts.active_alarm(fp).await?.is_some() {
                         continue;
                     }
+
                     let alarm = Alarm {
                         id: AlarmId::new(),
                         workspace_id: rule.workspace_id,
@@ -267,6 +289,7 @@ impl Evaluator {
                         actor: None,
                         detail: json!({ "value": value, "revision": rule.revision }),
                     };
+
                     match self.alerts.open_alarm(&alarm, &ev).await {
                         Ok(()) => report.fired += 1,
                         // Another pass opened it first: one active episode.
@@ -283,6 +306,7 @@ impl Evaluator {
                             actor: None,
                             detail: json!({ "value": value }),
                         };
+
                         if self.alerts.close_alarm(a.id, AlarmState::Resolved, now, None, &ev).await? {
                             report.resolved += 1;
                         }
@@ -291,6 +315,7 @@ impl Evaluator {
                 Event::Pending { .. } | Event::PendingCancelled { .. } => {}
             }
         }
+
         Ok(())
     }
 
@@ -300,6 +325,7 @@ impl Evaluator {
         let Some(a) = self.alerts.active_alarm(fp).await? else { return Ok(0) };
         let ev =
             AlarmEvent { alarm_id: a.id, at: now, kind: "ended".into(), actor: None, detail: json!({ "reason": why }) };
+
         Ok(usize::from(self.alerts.close_alarm(a.id, AlarmState::Ended, now, Some(why), &ev).await?))
     }
 }

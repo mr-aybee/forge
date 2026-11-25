@@ -139,10 +139,12 @@ pub static SUBMIT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new((
 /// Queued (or waiting to retry) and running jobs of `kind`.
 pub async fn active_jobs(jobs: &dyn JobRepository, kind: &str) -> DomainResult<Vec<Job>> {
     let mut out = Vec::new();
+
     for status in [JobStatus::Running, JobStatus::Queued] {
         let filter = JobFilter { workspace_id: None, status: Some(status), limit: 500 };
         out.extend(jobs.list_jobs(&filter).await?.into_iter().filter(|j| j.kind == kind));
     }
+
     Ok(out)
 }
 
@@ -176,6 +178,7 @@ fn rolled_back(node: &Server, target: &str, sent_ms: i64) -> bool {
 /// the payload's `target` when the submitter recorded one.
 fn job_target<'a>(payload: &Value, dist: &'a AgentDist) -> Result<&'a str, StepError> {
     let offered = dist.version();
+
     match payload.get("target").and_then(Value::as_str) {
         Some(t) if t != offered => Err(StepError::Fatal(format!(
             "this update was for {t}, but this control plane now hands out agents {offered}; start a new update"
@@ -223,6 +226,7 @@ impl AgentUpdateJob {
         sent_ms: i64,
     ) -> Result<(), StepError> {
         let deadline = tokio::time::Instant::now() + HELPER_WAIT;
+
         loop {
             let facts = self.facts.facts_of(id).await.map_err(|e| StepError::Retryable(e.to_string()))?;
             match helper_check(facts.as_ref(), target, sent_ms) {
@@ -268,10 +272,12 @@ impl AgentUpdateJob {
         let Some(parent) = payload.get("rollout").and_then(Value::as_str).and_then(|s| s.parse().ok()) else {
             return Ok(());
         };
+
         let j = self.jobs.get_job(parent).await.map_err(|e| StepError::Retryable(e.to_string()))?;
         if j.status == JobStatus::Cancelled {
             return Err(StepError::Fatal("the rollout was cancelled; this node was not updated".into()));
         }
+
         Ok(())
     }
 
@@ -284,7 +290,9 @@ impl AgentUpdateJob {
             skip(ctx, SkipReason::Current, "already on or past the target version");
             return Ok(());
         }
+
         self.check_rollout(&ctx.job.payload).await?;
+
         if !node.os.eq_ignore_ascii_case("linux") {
             return Self::skip_or_fail(
                 ctx,
@@ -292,6 +300,7 @@ impl AgentUpdateJob {
                 "self-update is available for Linux nodes; reinstall Windows agents".into(),
             );
         }
+
         if node.status != AgentStatus::Online {
             // A rollout waited for the node already; a single update retries
             // with the engine's backoff (no worker slot held meanwhile).
@@ -299,13 +308,17 @@ impl AgentUpdateJob {
                 skip(ctx, SkipReason::Offline, "the node went offline; it was not updated");
                 return Ok(());
             }
+
             return Err(StepError::Retryable("the node is offline".into()));
         }
+
         let arch = node.arch.clone();
         let sum = |bin: &str| self.dist.binary("linux", &arch, bin).map(|(_, s)| s.to_owned());
+
         let (Some(agent_sha256), Some(helper_sha256)) = (sum("forge-agent"), sum("forge-agent-helper")) else {
             return Err(StepError::Fatal(format!("this control plane has no agent binaries for linux/{arch}")));
         };
+
         let (body, signed) = self.signer.issue(
             &id.to_string(),
             &ctx.job.principal.to_string(),
@@ -323,6 +336,7 @@ impl AgentUpdateJob {
             Duration::from_secs(240),
         );
         self.hub.enqueue(id, &body.operation_id, signed).map_err(|e| StepError::Retryable(e.to_string()))?;
+
         let Some(r) = self.hub.wait(&body.operation_id, self.answer_wait(&ctx.job.payload)).await else {
             if ctx.job.payload.get("deadline_ms").is_some() && self.answer_wait(&ctx.job.payload).is_zero() {
                 return Self::skip_or_fail(
@@ -331,16 +345,21 @@ impl AgentUpdateJob {
                     "the node did not answer before the end of its batch".into(),
                 );
             }
+
             return Err(StepError::Retryable("the node did not answer".into()));
         };
+
         if r.ok {
             ctx.state["from"] = json!(node.agent_version);
             ctx.state["to"] = json!(target);
             ctx.state["sent_ms"] = json!(self.clock.now().millis());
             ctx.state["node"] = serde_json::from_str(&r.output).unwrap_or(Value::Null);
+
             return Ok(());
         }
+
         let msg = format!("the node refused the update: {}", r.error);
+
         match RefusalCode::parse(&r.error_code) {
             Some(RefusalCode::Unsupported) => Self::skip_or_fail(ctx, SkipReason::Unsupported, msg),
             Some(RefusalCode::Downgrade) => Self::skip_or_fail(ctx, SkipReason::Downgrade, msg),
@@ -370,34 +389,40 @@ impl JobHandler for AgentUpdateJob {
         let dist = self.dist.clone();
         let target = job_target(&ctx.job.payload, &dist)?;
         let node = self.servers.get_server(id).await.map_err(|e| StepError::Fatal(format!("node: {e}")))?;
+
         match index {
             0 => self.send(ctx, id, target, node).await,
             _ => {
                 if ctx.state.get("skipped").is_some() {
                     return Ok(());
                 }
+
                 // A step run again after a crash has no better time than now.
                 let sent_ms =
                     ctx.state.get("sent_ms").and_then(Value::as_i64).unwrap_or_else(|| self.clock.now().millis());
                 let deadline = tokio::time::Instant::now() + self.come_back;
+
                 loop {
                     let n = self.servers.get_server(id).await.map_err(|e| StepError::Retryable(e.to_string()))?;
                     if has_reached(&n.agent_version, target) && n.status == AgentStatus::Online {
                         ctx.state["reported"] = json!(n.agent_version);
                         return self.await_helper(ctx, id, target, sent_ms).await;
                     }
+
                     if rolled_back(&n, target, sent_ms) {
                         return Err(StepError::Fatal(format!(
                             "the node is back on {}: the new agent did not stay up and the node's helper restored the previous one",
                             n.agent_version
                         )));
                     }
+
                     if tokio::time::Instant::now() >= deadline {
                         return Err(StepError::Fatal(format!(
                             "the node did not come back on {target} (it reports {}); its helper restores the previous agent automatically",
                             n.agent_version
                         )));
                     }
+
                     tokio::time::sleep(Duration::from_secs(3)).await;
                 }
             }
@@ -418,6 +443,7 @@ mod tests {
         let at = |ms| forge_core::Timestamp(ms);
         let f = |v: &str| json!({ "self_update": { "helper_version": v } });
         assert_eq!(helper_check(None, "2.0.0", sent), HelperCheck::NotYet);
+
         // Facts from before the update say nothing about it.
         assert_eq!(helper_check(Some(&(f("1.0.0"), at(sent))), "2.0.0", sent), HelperCheck::NotYet);
         assert_eq!(
@@ -470,15 +496,18 @@ mod tests {
     fn a_rollback_is_a_fresh_heartbeat_on_another_version() {
         let sent = 1_000_000;
         let gone = sent + 120_000;
+
         // The old agent's last heartbeats, before it stops: keep waiting. An
         // older agent's restart timer can take just over a minute.
         assert!(!rolled_back(&node("0.1.0", AgentStatus::Online, sent + 2_000), "0.2.0", sent));
         assert!(!rolled_back(&node("0.1.0", AgentStatus::Online, sent + 63_000), "0.2.0", sent));
         assert!(!rolled_back(&node("0.1.0", AgentStatus::Online, gone), "0.2.0", sent));
+
         // Offline, or on the target: not a rollback.
         assert!(!rolled_back(&node("0.1.0", AgentStatus::Offline, gone + 1), "0.2.0", sent));
         assert!(!rolled_back(&node("0.2.0", AgentStatus::Online, gone + 1), "0.2.0", sent));
         assert!(!rolled_back(&node("0.2.1", AgentStatus::Online, gone + 1), "0.2.0", sent), "past the target");
+
         // A heartbeat on the old version after the old agent is gone.
         assert!(rolled_back(&node("0.1.0", AgentStatus::Online, gone + 1), "0.2.0", sent));
     }

@@ -99,6 +99,7 @@ pub(super) async fn start_join(
     req: JoinInput,
 ) -> ApiResult<JoinStarted> {
     caller.authorize(Action::SwarmManage, cluster_ref(id)).await?;
+
     // Validated like the node will: address and pools.
     forge_catalog::swarm::SwarmOp::Init {
         advertise_addr: req.advertise_addr.clone(),
@@ -109,10 +110,12 @@ pub(super) async fn start_join(
     .validate()
     .map_err(ApiError::bad_request)?;
     state.swarm.begin_join(id, req.server_id, req.role, req.advertise_addr.as_deref()).await?;
+
     // Docker Engine first on a node that says it has none (package.manage).
     let principal = caller.principal().to_string();
     let missing = crate::container_runtime::nodes_without_engine(state, &principal, &[req.server_id]).await?;
     let mut installs = Vec::new();
+
     if !missing.is_empty() {
         let install = super::packages::InstallRequest {
             package: forge_catalog::apps::DOCKER_PACKAGE.to_owned(),
@@ -122,6 +125,7 @@ pub(super) async fn start_join(
         };
         installs = super::packages::start_install(state, caller, install).await?.into_iter().map(|s| s.job).collect();
     }
+
     let payload = Payload {
         cluster_id: id,
         server_id: req.server_id,
@@ -140,6 +144,7 @@ pub(super) async fn start_join(
             json!({ "server_id": req.server_id, "role": req.role.as_str(), "job_id": job.id }),
         )
         .await;
+
     Ok(JoinStarted { job, installs })
 }
 
@@ -171,6 +176,7 @@ pub async fn leave(
     caller
         .audit(AUDIT_LEAVE, &cluster_ref(id), None, json!({ "server_id": server, "force": q.force, "job_id": job.id }))
         .await;
+
     Ok((StatusCode::ACCEPTED, Json(job)))
 }
 
@@ -229,13 +235,16 @@ pub async fn rotate_tokens(
 ) -> ApiResult<StatusCode> {
     caller.authorize(Action::SwarmManage, cluster_ref(id)).await?;
     let details = json!({ "worker": req.worker, "manager": req.manager });
+
     if let Err(e) = state.swarm.rotate_tokens(id, &caller.principal().to_string(), req.worker, req.manager).await {
         caller.audit_failed(AUDIT_TOKENS_ROTATE, &cluster_ref(id), None, details, &e.to_string()).await;
         return Err(e.into());
     }
+
     caller
         .audit(AUDIT_TOKENS_ROTATE, &cluster_ref(id), None, json!({ "worker": req.worker, "manager": req.manager }))
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -274,17 +283,20 @@ pub async fn service_get(
     let slot = state.swarm.serving_slot(app.id).await?;
     let legacy = forge_catalog::swarm_service::service_name(&app.id.to_string(), &slot);
     let op = forge_catalog::swarm::SwarmOp::ServiceStatus { service_id: app.id.to_string(), slot };
+
     let (status, status_error): (Option<forge_catalog::swarm::SwarmServiceStatus>, _) =
         match state.swarm.run(cluster, &caller.principal().to_string(), &op).await {
             Ok(v) => (Some(serde_json::from_value(v).map_err(forge_core::DomainError::internal)?), None),
             Err(e) => (None, Some(e.to_string())),
         };
+
     // The name Docker reports; an older agent reports none, and then its
     // services carry the id-based name.
     let name = status.as_ref().map(|s| s.name.clone()).filter(|n| !n.is_empty()).unwrap_or(legacy);
     let settings = spec.swarm.clone().unwrap_or_default();
     let managers = state.swarm.view_managers(cluster).await?;
     let ha = forge_catalog::swarm_service::ha_report(&settings, spec.healthcheck.is_some(), managers);
+
     Ok(Json(ServiceSwarmView { cluster_id: cluster, name, settings, status, status_error, ha }))
 }
 
@@ -296,8 +308,10 @@ pub(super) async fn start_service_action(
     action: ServiceAction,
 ) -> ApiResult<Job> {
     let cluster = service_cluster(state, app).await?;
+
     // Fails early (409) when the swarm has no manager yet.
     state.swarm.manager(cluster).await?;
+
     // Host folders outside the approved roots of every swarm node need
     // stack.privileged on the environment, as they do on Default clusters.
     let privileged_binds = if action == ServiceAction::Deploy {
@@ -306,21 +320,25 @@ pub(super) async fn start_service_action(
         if !needed.is_empty() {
             caller.authorize(Action::StackPrivileged, super::services::ns_ref(app.environment_id)).await?;
         }
+
         needed
     } else {
         Vec::new()
     };
+
     let slot = state.swarm.serving_slot(app.id).await?;
     if matches!(action, ServiceAction::Deploy | ServiceAction::Rollback) && !slot.is_empty() {
         return Err(ApiError::conflict(
             "this service runs in slots (Blue-Green or Canary): deploy or roll back a release from Deployments",
         ));
     }
+
     let resource = if privileged_binds.is_empty() {
         super::services::svc_ref(app.id)
     } else {
         super::services::ns_ref(app.environment_id)
     };
+
     let payload =
         crate::jobs::swarm_service::Payload { service_id: app.id, cluster_id: cluster, action, privileged_binds, slot };
     let job = state
@@ -348,6 +366,7 @@ pub(super) async fn start_service_action(
             }),
         )
         .await;
+
     Ok(job)
 }
 
@@ -373,12 +392,14 @@ pub async fn service_action(
         return Err(ApiError::bad_request("at most 1000 replicas"));
     }
     let job = start_service_action(&state, &caller, &app, req.action).await?;
+
     // Recorded once the job is accepted, so a refused scale (no manager, a
     // slotted service) leaves the definition alone. If this write fails the
     // swarm still scales; the error says so and a retry is harmless.
     if let ServiceAction::Scale { replicas } = req.action {
         state.swarm.set_replicas(&app, replicas).await?;
     }
+
     Ok((StatusCode::ACCEPTED, Json(job)))
 }
 
@@ -404,5 +425,6 @@ pub async fn service_logs(
     let slot = state.swarm.serving_slot(app.id).await?;
     let op =
         forge_catalog::swarm::SwarmOp::ServiceLogs { service_id: app.id.to_string(), slot, tail: q.tail.min(10_000) };
+
     Ok(Json(state.swarm.run(cluster, &caller.principal().to_string(), &op).await?))
 }

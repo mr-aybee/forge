@@ -32,40 +32,50 @@ pub async fn for_factor_change(
     let user = &caller.session.user;
     let me = EntityRef::new(EntityKind::User, user.id);
     let deny = |reason: &'static str| caller.audit_denied(action, &me, None, reason);
+
     if caller.via_api_key() {
         deny("API keys cannot change sign-in factors").await;
         return Err(ApiError::forbidden("sign-in factors are changed in the console, not with an API key"));
     }
+
     let has_passkeys = state
         .passkeys
         .has_passkeys(user.id)
         .await
         .map_err(|e| ApiError::from(forge_core::DomainError::internal(e.to_string())))?;
+
     if user.mfa_enabled() || has_passkeys {
         if caller.factor_verified() {
             return Ok(());
         }
+
         deny("a session that verified a factor is required").await;
+
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "step_up_required",
             "verify it's you with your code or passkey (step up) first",
         ));
     }
+
     if user.password_hash.is_none() {
         let fresh = caller.session.session.kind == SessionKind::Web
             && state.clock.now().0 - caller.session.session.created_at.0
                 <= i64::try_from(FRESH_SSO.as_millis()).unwrap_or(i64::MAX);
+
         if fresh {
             return Ok(());
         }
+
         deny("single sign-on account: a fresh sign-in is required").await;
+
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "reauthentication_required",
             "sign out and sign in again with single sign-on, then add it within 5 minutes",
         ));
     }
+
     let throttle = format!("factor-change:{}", user.id);
     if !state.login_throttle.allowed(&throttle) {
         deny("throttled").await;
@@ -75,13 +85,17 @@ pub async fn for_factor_change(
             "too many attempts; try again in 15 minutes",
         ));
     }
+
     let login = user.username.clone().or_else(|| user.email.clone()).unwrap_or_default();
     let pw = password.unwrap_or_default();
     if pw.is_empty() || state.identity.login_password(&login, pw, None).await.is_err() {
         state.login_throttle.record_failure(&throttle);
         deny("current password required").await;
+
         return Err(ApiError::new(StatusCode::UNAUTHORIZED, "password_required", "enter your current password first"));
     }
+
     state.login_throttle.reset(&throttle);
+
     Ok(())
 }

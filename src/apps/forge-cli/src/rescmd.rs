@@ -33,6 +33,7 @@ pub(crate) async fn resolve_environment(api: &mut Api, ns: &str) -> Result<Strin
     if looks_like_id(ns) {
         return Ok(ns.to_owned());
     }
+
     let all = api.get("/api/v1/environments").await?;
     let m: Vec<&Value> = all.as_array().into_iter().flatten().filter(|n| n["name"].as_str() == Some(ns)).collect();
     match m.as_slice() {
@@ -238,6 +239,7 @@ fn read_text(spec: &str) -> Result<String> {
     if spec == "-" {
         return Ok(std::io::read_to_string(std::io::stdin())?);
     }
+
     std::fs::read_to_string(spec).map_err(|e| CliError::usage(format!("{spec}: {e}")))
 }
 
@@ -256,10 +258,12 @@ async fn stack_edit(g: &Global, api: &mut Api, server: &str, cmd: StackEditCmd) 
                 "env": read_env(env_file.as_deref())?,
                 "dir": dir,
             });
+
             // The preview takes no revision note (it refuses unknown fields).
             if !dry_run {
                 body["note"] = json!(note);
             }
+
             let path = if dry_run { "/api/v1/stacks/preview" } else { "/api/v1/stacks" };
             show(g, &api.post(path, &body).await?, None)
         }
@@ -267,6 +271,7 @@ async fn stack_edit(g: &Global, api: &mut Api, server: &str, cmd: StackEditCmd) 
             if compose.is_none() && env_file.is_none() {
                 return Err(CliError::usage("pass --compose and/or --env-file"));
             }
+
             let s = resolve_stack(api, &stack, environment.as_deref()).await?;
             let id = s["stack"]["id"].as_str().unwrap_or_default().to_owned();
             let body = json!({
@@ -311,13 +316,16 @@ async fn resolve_stack(api: &mut Api, stack: &str, environment: Option<&str>) ->
     if looks_like_id(stack) {
         return api.get(&format!("/api/v1/stacks/{stack}")).await;
     }
+
     let path = match environment {
         Some(ns) => format!("/api/v1/stacks?environment_id={}", resolve_environment(api, ns).await?),
         None => "/api/v1/stacks".to_owned(),
     };
+
     let all = api.get(&path).await?;
     let m: Vec<&Value> =
         all.as_array().into_iter().flatten().filter(|s| s["stack"]["name"].as_str() == Some(stack)).collect();
+
     match m.as_slice() {
         [one] => api.get(&format!("/api/v1/stacks/{}", one["stack"]["id"].as_str().unwrap_or_default())).await,
         [] => Err(CliError::new(Exit::NotFound, format!("no stack named `{stack}` that you can see"))),
@@ -343,7 +351,9 @@ async fn jobs_result(g: &Global, api: &mut Api, started: Value, wait: bool, time
     if !wait {
         return show(g, &started, Some(&[("JOB", "/id"), ("KIND", "/kind"), ("STATUS", "/status")]));
     }
+
     let done = wait_jobs(api, &job_ids(&started), Duration::from_secs(timeout)).await?;
+
     show(g, &Value::Array(done), Some(&[("JOB", "/id"), ("KIND", "/kind"), ("STATUS", "/status")]))
 }
 
@@ -351,19 +361,24 @@ pub async fn stacks(g: &Global, cmd: StacksCmd) -> Result<()> {
     if let StacksCmd::Templates(c) = cmd {
         return crate::containercmd::templates(g, c).await;
     }
+
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         StacksCmd::Templates(_) => Ok(()),
         StacksCmd::Edit(e) => stack_edit(g, &mut api, &t.server, e).await,
         StacksCmd::List { environment, node, paging } => {
             let mut q = Vec::new();
+
             if let Some(ns) = environment {
                 q.push(format!("environment_id={}", resolve_environment(&mut api, &ns).await?));
             }
+
             if let Some(n) = node {
                 q.push(format!("server_id={}", resolve_node(&mut api, &n).await?["id"].as_str().unwrap_or_default()));
             }
+
             let path =
                 if q.is_empty() { "/api/v1/stacks".to_owned() } else { format!("/api/v1/stacks?{}", q.join("&")) };
             let v = api.get(&path).await?;
@@ -420,6 +435,7 @@ pub async fn stacks(g: &Global, cmd: StacksCmd) -> Result<()> {
             let s = resolve_stack(&mut api, &stack, environment.as_deref()).await?;
             let id = s["stack"]["id"].as_str().unwrap_or_default().to_owned();
             let deployed = s["stack"]["deployed_revision"].as_i64().unwrap_or(0);
+
             let to = match to {
                 Some(r) => r,
                 None if deployed > 1 => deployed - 1,
@@ -428,6 +444,7 @@ pub async fn stacks(g: &Global, cmd: StacksCmd) -> Result<()> {
                         .with_code("no_previous_revision"));
                 }
             };
+
             confirm(
                 g,
                 yes,
@@ -442,10 +459,12 @@ pub async fn stacks(g: &Global, cmd: StacksCmd) -> Result<()> {
         StacksCmd::Down { stack, environment, node, volumes, wait, wait_timeout_secs, yes } => {
             let s = resolve_stack(&mut api, &stack, environment.as_deref()).await?;
             let id = s["stack"]["id"].as_str().unwrap_or_default().to_owned();
+
             let server = match &node {
                 Some(n) => Some(resolve_node(&mut api, n).await?["id"].as_str().unwrap_or_default().to_owned()),
                 None => None,
             };
+
             let what = format!(
                 "Take stack {} down{}{} on {}?",
                 s["stack"]["name"],
@@ -463,6 +482,7 @@ pub async fn stacks(g: &Global, cmd: StacksCmd) -> Result<()> {
             if !matches!(action.as_str(), "start" | "stop" | "restart" | "pull") {
                 return Err(CliError::usage("action: start, stop, restart or pull"));
             }
+
             let s = resolve_stack(&mut api, &stack, environment.as_deref()).await?;
             let id = s["stack"]["id"].as_str().unwrap_or_default().to_owned();
             let server = resolve_node(&mut api, &node).await?["id"].as_str().unwrap_or_default().to_owned();
@@ -477,6 +497,7 @@ pub async fn stacks(g: &Global, cmd: StacksCmd) -> Result<()> {
             let v = api
                 .get(&format!("/api/v1/stacks/{id}/logs?server_id={server}&service={}&tail={tail}", enc(&service)))
                 .await?;
+
             match (g.output, v["logs"].as_str()) {
                 (out::Format::Table, Some(text)) => {
                     print!("{text}");
@@ -755,10 +776,12 @@ pub(crate) async fn resolve_app(api: &mut Api, app: &str, environment: Option<&s
     if looks_like_id(app) {
         return api.get(&format!("/api/v1/services/{app}")).await;
     }
+
     let path = match environment {
         Some(ns) => format!("/api/v1/services?environment_id={}", resolve_environment(api, ns).await?),
         None => "/api/v1/services".to_owned(),
     };
+
     let all = api.get(&path).await?;
     let m: Vec<&Value> = all.as_array().into_iter().flatten().filter(|a| a["name"].as_str() == Some(app)).collect();
     match m.as_slice() {
@@ -777,28 +800,35 @@ pub async fn services(g: &Global, cmd: ServicesCmd) -> Result<()> {
     if let ServicesCmd::Swarm(c) = cmd {
         return crate::containercmd::service_swarm(g, c).await;
     }
+
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         ServicesCmd::Swarm(_) => Ok(()),
         ServicesCmd::List { environment, cluster, paging } => {
             let mut q = Vec::new();
+
             if let Some(ns) = environment {
                 q.push(format!("environment_id={}", resolve_environment(&mut api, &ns).await?));
             }
+
             if let Some(c) = cluster {
                 q.push(format!("cluster_id={}", crate::admincmd::cluster_id(&mut api, &c).await?));
             }
+
             let path =
                 if q.is_empty() { "/api/v1/services".to_owned() } else { format!("/api/v1/services?{}", q.join("&")) };
             let mut v = api.get(&path).await?;
             let ns_names = environment_names(&mut api).await;
+
             for a in v.as_array_mut().into_iter().flatten() {
                 let inst = a["instances"].as_array().cloned().unwrap_or_default();
                 a["instances_summary"] = json!(format!("{}/{}", running_count(&inst), inst.len()));
                 let ns = a["environment_id"].as_str().unwrap_or_default().to_owned();
                 a["environment"] = json!(ns_names.get(&ns).cloned().unwrap_or(ns));
             }
+
             out::list_value(
                 g.output,
                 v,
@@ -816,9 +846,11 @@ pub async fn services(g: &Global, cmd: ServicesCmd) -> Result<()> {
         }
         ServicesCmd::Show { app, environment } => {
             let v = resolve_app(&mut api, &app, environment.as_deref()).await?;
+
             if g.output.is_machine() {
                 return show(g, &v, None);
             }
+
             let names = crate::admincmd::node_names(&mut api).await;
             let ns_names = environment_names(&mut api).await;
             show(g, &app_summary(&v, &names, &ns_names), None)
@@ -829,12 +861,15 @@ pub async fn services(g: &Global, cmd: ServicesCmd) -> Result<()> {
                     "pass --file, or --environment, --name and --runtime with the fields the service needs",
                 ));
             }
+
             let secrets = secrets_for(&flags, file.as_deref())?;
             let base = file.as_deref().map(crate::admincmd::read_json).transpose()?;
+
             let ns = match &environment {
                 Some(ns) => Some(resolve_environment(&mut api, ns).await?),
                 None => None,
             };
+
             let changes = Changes { flags: &flags, secrets, unset_env: &[] };
             let body = appspec::create_body(base, ns, name.as_deref(), changes)?;
             crate::admincmd::check_body(&mut api, "POST", "/api/v1/services", &body).await?;
@@ -844,16 +879,19 @@ pub async fn services(g: &Global, cmd: ServicesCmd) -> Result<()> {
             if file.is_none() && !flags.any() && unset_env.is_empty() {
                 return Err(CliError::usage("pass --file, or the flags of the fields to change"));
             }
+
             let secrets = secrets_for(&flags, file.as_deref())?;
             let a = resolve_app(&mut api, &app, environment.as_deref()).await?;
             let id = service_id(&a);
             let path = format!("/api/v1/services/{id}");
+
             // A file replaces the stored definition; without one the flags
             // change the definition that was just read.
             let mut body = match &file {
                 Some(f) => crate::admincmd::read_json(f)?,
                 None => appspec::definition(&a),
             };
+
             appspec::apply(&mut body, Changes { flags: &flags, secrets, unset_env: &unset_env })?;
             crate::admincmd::check_body(&mut api, "PUT", &path, &body).await?;
             let what = if file.is_some() { "Replace" } else { "Change" };
@@ -868,10 +906,12 @@ pub async fn services(g: &Global, cmd: ServicesCmd) -> Result<()> {
             let a = resolve_app(&mut api, &app, environment.as_deref()).await?;
             let id = service_id(&a);
             let mut placements = Vec::new();
+
             for (n, role) in &wanted {
                 let sid = resolve_node(&mut api, n).await?["id"].as_str().unwrap_or_default().to_owned();
                 placements.push((sid, *role));
             }
+
             let listed: Vec<String> = wanted.iter().map(|(n, r)| format!("{n} ({})", r.as_str())).collect();
             confirm(g, yes, &format!("Place service {app} on {} ({})?", listed.join(", "), t.server))?;
             let v = api
@@ -881,9 +921,11 @@ pub async fn services(g: &Global, cmd: ServicesCmd) -> Result<()> {
                     Some(&appspec::placement_body(&placements)),
                 )
                 .await?;
+
             if g.output.is_machine() {
                 return show(g, &v, None);
             }
+
             let names = crate::admincmd::node_names(&mut api).await;
             show(g, &Value::Array(instance_rows(&v, &names)), Some(INSTANCE_COLS))
         }
@@ -892,9 +934,11 @@ pub async fn services(g: &Global, cmd: ServicesCmd) -> Result<()> {
             let id = service_id(&a);
             let server = resolve_node(&mut api, &node).await?["id"].as_str().unwrap_or_default().to_owned();
             let path = format!("/api/v1/services/{id}/instances/{server}/actions");
+
             if follow {
                 return follow_logs(g, &mut api, &path, tail).await;
             }
+
             let v = api.post(&path, &json!({ "action": "logs", "tail": tail.min(5000) })).await?;
             if v["status"] == "failed" {
                 return Err(CliError::new(
@@ -903,9 +947,11 @@ pub async fn services(g: &Global, cmd: ServicesCmd) -> Result<()> {
                 )
                 .with_code("action_failed"));
             }
+
             if g.output.is_machine() {
                 return show(g, &v, None);
             }
+
             let text = log_text(&v["result"]);
             out::emit(&if text.is_empty() || text.ends_with('\n') { text } else { format!("{text}\n") });
             Ok(())
@@ -925,16 +971,19 @@ pub async fn services(g: &Global, cmd: ServicesCmd) -> Result<()> {
             let v = api
                 .post(&format!("/api/v1/services/{id}/instances/{server}/actions"), &json!({ "action": "remove" }))
                 .await?;
+
             if v["status"] == "failed" {
                 if !g.output.is_machine() {
                     show(g, &v, None)?;
                 }
+
                 return Err(CliError::new(
                     Exit::JobFailed,
                     format!("remove of {app} on {node} failed: {}", v["error"].as_str().unwrap_or("-")),
                 )
                 .with_code("action_failed"));
             }
+
             show(g, &v, None)
         }
         ServicesCmd::Files { app, node, environment, op } => {
@@ -945,9 +994,11 @@ pub async fn services(g: &Global, cmd: ServicesCmd) -> Result<()> {
             let a = resolve_app(&mut api, &app, environment.as_deref()).await?;
             let id = a["id"].as_str().unwrap_or_default().to_owned();
             let v = api.get(&format!("/api/v1/services/{id}/health")).await?;
+
             if g.output.is_machine() {
                 return show(g, &v, None);
             }
+
             let rows: Vec<Value> = v["summaries"]
                 .as_array()
                 .into_iter()
@@ -971,24 +1022,31 @@ pub async fn services(g: &Global, cmd: ServicesCmd) -> Result<()> {
             if !matches!(action.as_str(), "start" | "stop" | "restart" | "status" | "prepare") {
                 return Err(CliError::usage("action: start, stop, restart, status or prepare"));
             }
+
             let a = resolve_app(&mut api, &app, environment.as_deref()).await?;
             let id = a["id"].as_str().or_else(|| a["app"]["id"].as_str()).unwrap_or_default().to_owned();
             let server = resolve_node(&mut api, &node).await?["id"].as_str().unwrap_or_default().to_owned();
+
             if action != "status" {
                 confirm(g, yes, &format!("{action} {app} on {node} ({})?", t.server))?;
             }
+
             let v = api
                 .post(&format!("/api/v1/services/{id}/instances/{server}/actions"), &json!({ "action": action }))
                 .await?;
+
             // A node-side failure is not a success (exit 10, like a failed job).
             if v["status"] == "failed" {
                 let why = v["error"].as_str().or_else(|| v["last_error"].as_str()).unwrap_or("-");
+
                 if g.output == out::Format::Table {
                     show(g, &v, None)?;
                 }
+
                 return Err(CliError::new(Exit::JobFailed, format!("{action} of {app} on {node} failed: {why}"))
                     .with_code("action_failed"));
             }
+
             show(g, &v, None)
         }
         ServicesCmd::Deploy { app, environment, wait, wait_timeout_secs, yes } => {
@@ -999,6 +1057,7 @@ pub async fn services(g: &Global, cmd: ServicesCmd) -> Result<()> {
             if let Some(note) = install_note(&started).filter(|_| !g.output.is_machine()) {
                 eprintln!("{note}");
             }
+
             jobs_result(g, &mut api, started, wait, wait_timeout_secs).await
         }
         ServicesCmd::Delete { app, environment, yes } => {
@@ -1026,12 +1085,15 @@ fn running_count(instances: &[Value]) -> usize {
 fn install_note(started: &Value) -> Option<String> {
     let installs: Vec<&Value> =
         started.as_array().into_iter().flatten().filter(|j| j["kind"] == "package.action").collect();
+
     if installs.is_empty() {
         return None;
     }
+
     let mut names: Vec<&str> = installs.iter().filter_map(|j| j["payload"]["package"].as_str()).collect();
     names.sort_unstable();
     names.dedup();
+
     Some(format!(
         "Installing what the nodes lack first ({}): {} install job(s). The deploy jobs wait for them.",
         if names.is_empty() { "runtimes".to_owned() } else { names.join(", ") },
@@ -1044,17 +1106,20 @@ fn install_note(started: &Value) -> Option<String> {
 fn secrets_for(flags: &AppFlags, file: Option<&str>) -> Result<Vec<(String, String)>> {
     use std::io::IsTerminal as _;
     let specs = appspec::parse_secret_env(&flags.secret_env)?;
+
     appspec::read_secrets(&specs, || {
         if file == Some("@-") {
             return Err(CliError::usage(
                 "--file @- and --secret-env KEY both read stdin; give the secret as `KEY=@<file>`",
             ));
         }
+
         if std::io::stdin().is_terminal() {
             return Err(CliError::usage(
                 "pipe the secret value on stdin (it is never taken from a flag), or pass `--secret-env KEY=@<file>`",
             ));
         }
+
         Ok(std::io::read_to_string(std::io::stdin())?)
     })
 }
@@ -1093,6 +1158,7 @@ fn show_attachments(g: &Global, v: &Value) -> Result<()> {
     if g.output.is_machine() {
         return show(g, v, None);
     }
+
     show(g, &attachment_rows(v), Some(ATTACHMENT_COLS))
 }
 
@@ -1109,11 +1175,13 @@ async fn app_storage(g: &Global, api: &mut Api, server: &str, op: AppStorageCmd)
             let sid = crate::admincmd::store_id(api, &store).await?;
             let body = attach_body(&sid, &bucket, create_bucket, &access, &prefix);
             let v = api.post(&format!("/api/v1/services/{}/storage", service_id(&a)), &body).await?;
+
             if !g.output.is_machine() {
                 eprintln!(
                     "Bucket {bucket} of {store} is attached to {app} ({access}). Deploy {app} to give it the {prefix}_* variables."
                 );
             }
+
             show_attachments(g, &v)
         }
         AppStorageCmd::Detach { app, access_key, environment, yes } => {
@@ -1201,6 +1269,7 @@ fn app_summary(
     s.insert("id".into(), v["id"].clone());
     s.insert("runtime".into(), json!(runtime));
     s.insert("environment".into(), json!(ns));
+
     if runtime != "container" {
         s.insert("unit".into(), json!(format!("forge-app-{ns}-{name}.service")));
         s.insert("folder".into(), json!(forge_catalog::apps::app_home(&ns, name)));
@@ -1209,10 +1278,13 @@ fn app_summary(
             json!(forge_catalog::apps::app_user_candidates(&ns, name).into_iter().next().unwrap_or_default()),
         );
     }
+
     let mut spec = serde_json::Map::new();
+
     for (k, x) in v["spec"].as_object().into_iter().flatten() {
         let hidden = matches!(k.as_str(), "name" | "runtime" | "environment" | "env")
             || (runtime != "container" && CONTAINER_ONLY.contains(&k.as_str()));
+
         let empty = match x {
             Value::Null => true,
             Value::String(t) => t.is_empty(),
@@ -1221,10 +1293,12 @@ fn app_summary(
             Value::Number(n) => n.as_u64() == Some(0),
             Value::Bool(b) => !b,
         };
+
         if !hidden && !empty {
             spec.insert(k.clone(), x.clone());
         }
     }
+
     s.insert("spec".into(), Value::Object(spec));
     let env: Vec<String> = v["env"]
         .as_array()
@@ -1232,6 +1306,7 @@ fn app_summary(
         .flatten()
         .map(|e| {
             let key = e["key"].as_str().unwrap_or("?");
+
             if e["secret"] == true {
                 format!("{key}=(secret)")
             } else {
@@ -1242,6 +1317,7 @@ fn app_summary(
     s.insert("env".into(), json!(env));
     s.insert("instances".into(), Value::Array(instance_rows(&v["instances"], names)));
     s.insert("updated_at".into(), v["updated_at"].clone());
+
     Value::Object(s)
 }
 
@@ -1262,19 +1338,23 @@ async fn follow_logs(g: &Global, api: &mut Api, path: &str, tail: u32) -> Result
     use std::io::Write as _;
     let mut cursor = String::new();
     let mut first = true;
+
     loop {
         let body = if first {
             json!({ "action": "follow", "cursor": cursor, "tail": tail.min(5000) })
         } else {
             json!({ "action": "follow", "cursor": cursor })
         };
+
         first = false;
         let seg = api.post(path, &body).await?;
         let job = seg["job_id"].as_str().unwrap_or_default().to_owned();
         if job.is_empty() {
             return Err(CliError::new(Exit::General, "the server did not start a follow segment"));
         }
+
         let mut printed = 0usize;
+
         loop {
             let live = api.get(&format!("/api/v1/jobs/{job}/live")).await.unwrap_or(Value::Null);
             if let Some(text) = live["output"].as_str()
@@ -1284,17 +1364,21 @@ async fn follow_logs(g: &Global, api: &mut Api, path: &str, tail: u32) -> Result
                 let _ = std::io::stdout().flush();
                 printed = text.len();
             }
+
             let j = api.get(&format!("/api/v1/jobs/{job}")).await?;
             match j["status"].as_str().unwrap_or_default() {
                 "succeeded" => {
                     let o = &j["state"]["output"];
+
                     // The final result is authoritative: print what the live view missed.
                     let all = log_text(o);
                     if all.len() > printed {
                         print!("{}", all.get(printed..).unwrap_or_default());
                         let _ = std::io::stdout().flush();
                     }
+
                     cursor = o["cursor"].as_str().unwrap_or(&cursor).to_owned();
+
                     break;
                 }
                 "failed" | "cancelled" => {
@@ -1307,6 +1391,7 @@ async fn follow_logs(g: &Global, api: &mut Api, path: &str, tail: u32) -> Result
                 _ => tokio::time::sleep(Duration::from_secs(1)).await,
             }
         }
+
         if g.output.is_machine() {
             // Machine formats get one segment, then stop.
             return Ok(());
@@ -1329,6 +1414,7 @@ async fn app_root(api: &mut Api, server: &str, app: &Value) -> Result<Option<Str
                     .any(|p| p.as_str().is_some_and(|p| p.starts_with("/srv/forge/apps/") && p.ends_with(&suffix)))
         })
     };
+
     Ok(by_id.or_else(by_path).and_then(|r| r["id"].as_str().map(str::to_owned)))
 }
 
@@ -1338,8 +1424,10 @@ async fn app_files(g: &Global, api: &mut Api, app: &Value, nodes: &[String], op:
     use crate::filescmd::FilesCmd;
     let name = app["name"].as_str().unwrap_or("?").to_owned();
     let mut targets: Vec<(String, String)> = Vec::new();
+
     if nodes.is_empty() {
         let names = crate::admincmd::node_names(api).await;
+
         for i in app["instances"].as_array().into_iter().flatten() {
             let sid = i["server_id"].as_str().unwrap_or_default().to_owned();
             targets.push((names.get(&sid).cloned().unwrap_or_else(|| sid.clone()), sid));
@@ -1353,22 +1441,28 @@ async fn app_files(g: &Global, api: &mut Api, app: &Value, nodes: &[String], op:
             ));
         }
     }
+
     if targets.is_empty() {
         return Err(CliError::usage(format!(
             "{name} is placed on no node: run `forge services place {name} --node <node>` first"
         )));
     }
+
     let mut failed = Vec::new();
+
     for (label, sid) in &targets {
         let Some(root) = app_root(api, sid, app).await? else {
             failed.push(format!("{label}: no app root for {name} (deploy it there first)"));
             continue;
         };
+
         if !g.output.is_machine() && targets.len() > 1 {
             eprintln!("== {label}");
         }
+
         let root = Some(root);
         let node = sid.clone();
+
         let cmd = match &op {
             AppFilesCmd::Ls { path, all } => {
                 FilesCmd::Ls { node, path: path.clone(), root, all: *all, hidden: false, limit: 1000, offset: 0 }
@@ -1388,10 +1482,12 @@ async fn app_files(g: &Global, api: &mut Api, app: &Value, nodes: &[String], op:
                 FilesCmd::Mkdir { node, path: path.clone(), root, parents: *parents }
             }
         };
+
         if let Err(e) = Box::pin(crate::filescmd::run(g, cmd)).await {
             failed.push(format!("{label}: {}", e.message));
         }
     }
+
     if failed.is_empty() {
         Ok(())
     } else {
@@ -1425,6 +1521,7 @@ mod tests {
 
     fn parse(args: &[&str]) -> ServicesCmd {
         use clap::Parser as _;
+
         match crate::Cli::try_parse_from(args).map(|c| c.cmd) {
             Ok(crate::Cmd::Services(c)) => c,
             other => panic!("{other:?}"),
@@ -1460,17 +1557,20 @@ mod tests {
         ]) else {
             panic!("create")
         };
+
         assert_eq!((file, environment.as_deref(), name.as_deref()), (None, Some("shop-prod"), Some("web")));
         assert_eq!(flags.runtime, Some(appspec::Runtime::Container));
         assert_eq!(flags.ports, ["8080:80", "8443:443"]);
         assert_eq!((flags.env.len(), flags.secret_env.len(), flags.volumes.len()), (1, 1, 1));
         assert_eq!(flags.restart, Some(false));
         assert!(flags.any());
+
         // A file alone still works, and an unknown runtime is refused by the parser.
         let ServicesCmd::Create { file, flags, .. } = parse(&["forge", "services", "create", "--file", "app.json"])
         else {
             panic!("create --file")
         };
+
         assert!(file.as_deref() == Some("app.json") && !flags.any());
         use clap::Parser as _;
         assert!(crate::Cli::try_parse_from(["forge", "services", "create", "--runtime", "vm"]).is_err());
@@ -1493,16 +1593,19 @@ mod tests {
         ]) else {
             panic!("update")
         };
+
         assert_eq!(
             (app.as_str(), file, flags.image.as_deref(), flags.listen_port),
             ("web", None, Some("nginx:1.28"), Some(8080))
         );
         assert_eq!(unset_env, ["OLD"]);
+
         let ServicesCmd::Place { node, standby, .. } =
             parse(&["forge", "services", "place", "web", "--node", "lab-b:active", "--node", "lab-c:standby", "--yes"])
         else {
             panic!("place")
         };
+
         assert_eq!((node, standby), (vec!["lab-b:active".to_owned(), "lab-c:standby".to_owned()], false));
     }
 
@@ -1528,17 +1631,20 @@ mod tests {
         else {
             panic!("attach")
         };
+
         assert_eq!(app, "web");
         assert_eq!(
             attach_body(&store, &bucket, create_bucket, &access, &prefix),
             json!({ "store_id": "media", "bucket": "uploads", "create_bucket": true, "access": "read", "prefix": "MEDIA" })
         );
+
         // Defaults: read-write, the S3 prefix, an existing bucket.
         let ServicesCmd::Storage(AppStorageCmd::Attach { create_bucket, access, prefix, .. }) =
             parse(&["forge", "services", "storage", "attach", "web", "--store", "media", "--bucket", "uploads"])
         else {
             panic!("attach defaults")
         };
+
         assert_eq!((create_bucket, access.as_str(), prefix.as_str()), (false, "readwrite", "S3"));
         assert!(matches!(
             parse(&["forge", "services", "storage", "detach", "web", "AKIAEXAMPLE", "--yes"]),

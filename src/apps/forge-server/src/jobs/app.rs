@@ -46,6 +46,7 @@ pub fn env_aad(app: ServiceId, key: &str) -> String {
 pub fn build_spec(app: &Service, envelope: Option<&Envelope>) -> Result<AppSpec, String> {
     let mut v = app.spec.clone();
     let mut env = Vec::new();
+
     for e in &app.env {
         let value = if e.secret {
             match (envelope, &e.sealed) {
@@ -59,22 +60,27 @@ pub fn build_spec(app: &Service, envelope: Option<&Envelope>) -> Result<AppSpec,
         } else {
             e.value.clone().unwrap_or_default()
         };
+
         env.push(json!([e.key, value]));
     }
+
     v["name"] = json!(app.name);
     v["runtime"] = json!(app.runtime);
     v["env"] = Value::Array(env);
     let spec: AppSpec = serde_json::from_value(v).map_err(|e| format!("invalid service: {e}"))?;
     spec.validate()?;
+
     Ok(spec)
 }
 
 /// Replaces `${forge.settings.<key>}` in environment values with instance settings.
 pub fn expand_settings(spec: &mut AppSpec, settings: &[(String, String)]) -> Result<(), String> {
     const OPEN: &str = "${forge.settings.";
+
     for (k, v) in &mut spec.env {
         let mut out = String::new();
         let mut rest = v.as_str();
+
         while let Some(at) = rest.find(OPEN) {
             out.push_str(&rest[..at]);
             let tail = &rest[at + OPEN.len()..];
@@ -88,9 +94,11 @@ pub fn expand_settings(spec: &mut AppSpec, settings: &[(String, String)]) -> Res
             out.push_str(value);
             rest = &tail[end + 1..];
         }
+
         out.push_str(rest);
         *v = out;
     }
+
     Ok(())
 }
 
@@ -118,9 +126,11 @@ pub fn privileged_mounts(spec: &AppSpec, roots: &[String]) -> Vec<String> {
     if spec.runtime != Runtime::Container {
         return Vec::new();
     }
+
     let own = spec.home();
     let allowed: Vec<String> =
         std::iter::once(own).chain(roots.iter().cloned()).filter_map(|r| normalize_abs(&r)).collect();
+
     spec.volumes
         .iter()
         .filter(|v| {
@@ -189,6 +199,7 @@ impl AppJob {
         )
         .in_org(Some(app.workspace_id))
         .with_details(json!({ "service": app.name, "service_id": p.service_id, "user": user }));
+
         if let Err(e) = self.audit.record(ev).await {
             tracing::error!(error = %e, "audit write failed");
         }
@@ -199,6 +210,7 @@ impl AppJob {
     async fn sync_app_root(&self, ctx: &StepContext, p: &Payload, present: bool) -> Result<(), StepError> {
         let Some(app) = self.apps.get_service(p.service_id).await.map_err(retry)? else { return Ok(()) };
         let actor = ctx.job.principal.to_string();
+
         if present {
             let server = self.servers.get_server(p.server_id).await.map_err(retry)?;
             crate::app_roots::ensure(self.files.as_ref(), self.audit.as_ref(), &actor, self.clock.now(), &app, &server)
@@ -209,6 +221,7 @@ impl AppJob {
                 .await
                 .map_err(retry)?;
         }
+
         Ok(())
     }
 
@@ -223,6 +236,7 @@ impl AppJob {
         f(&mut i);
         i.last_job_id = Some(ctx.job.id);
         i.updated_at = self.clock.now();
+
         self.apps.put_instance(&i).await.map_err(retry)
     }
 
@@ -238,11 +252,14 @@ impl AppJob {
         if spec.dependencies.is_empty() && !container {
             return Ok(());
         }
+
         let deadline = tokio::time::Instant::now() + Duration::from_secs(45 * 60);
         let mut waited_for_engine = false;
+
         loop {
             let have = self.installations.list_installations(Some(server)).await.map_err(retry)?;
             let mut waiting = Vec::new();
+
             if container {
                 match engine_wait(&have, waited_for_engine) {
                     EngineWait::Ready => {}
@@ -253,8 +270,10 @@ impl AppJob {
                     EngineWait::Failed(why) => return Err(StepError::Fatal(why)),
                 }
             }
+
             for d in &spec.dependencies {
                 let name = forge_catalog::find(&d.package).map_or(d.package.as_str(), |p| p.name);
+
                 match have.iter().find(|x| x.package == d.package && x.version == d.version) {
                     Some(x) if x.status == "installed" => {}
                     Some(x) if x.status == "failed" => {
@@ -269,12 +288,15 @@ impl AppJob {
                     }
                 }
             }
+
             if waiting.is_empty() {
                 return Ok(());
             }
+
             if tokio::time::Instant::now() >= deadline {
                 return Err(StepError::Fatal(format!("timed out waiting for {}", waiting.join(", "))));
             }
+
             tokio::time::sleep(Duration::from_secs(5)).await;
         }
     }
@@ -286,6 +308,7 @@ impl AppJob {
         let mut spec = build_spec(app, Some(&self.envelope)).map_err(StepError::Fatal)?;
         let settings = self.settings.all_settings().await.map_err(retry)?;
         expand_settings(&mut spec, &settings).map_err(StepError::Fatal)?;
+
         // Attached buckets add their endpoint and key (D-106); a variable the
         // service defines itself wins.
         let attached = crate::app_storage::deploy_env(self.vault.as_ref(), self.stores.as_ref(), &self.envelope, app)
@@ -293,6 +316,7 @@ impl AppJob {
             .map_err(|e| StepError::Fatal(e.to_string()))?;
         crate::app_storage::merge_env(&mut spec.env, attached);
         spec.validate().map_err(StepError::Fatal)?;
+
         Ok(spec)
     }
 
@@ -307,6 +331,7 @@ impl AppJob {
             .max_by_key(|s| (s.weight, s.state == "ready", s.release_number))
             .map(|s| s.slot.clone());
         let Some(slot) = serving.as_deref().and_then(forge_catalog::deploy::Slot::parse) else { return Ok(()) };
+
         self.into_slot(spec, app, slot).await.map(|_| ())
     }
 
@@ -322,12 +347,14 @@ impl AppJob {
             Runtime::Container => spec.ports.len(),
             _ => usize::from(spec.listen_port.is_some()),
         };
+
         let range = forge_catalog::deploy::SLOT_PORTS;
         let ports = self
             .deploys
             .slot_ports(app, slot.as_str(), u32::try_from(count).unwrap_or(u32::MAX), (*range.start(), *range.end()))
             .await
             .map_err(retry)?;
+
         forge_catalog::deploy::into_slot(spec, slot, &ports).map_err(StepError::Fatal)
     }
 
@@ -345,6 +372,7 @@ impl AppJob {
         if node.status == AgentStatus::Revoked {
             return Err(StepError::Fatal("server is revoked".into()));
         }
+
         let spec_json = serde_json::to_string(spec).map_err(|e| StepError::Fatal(e.to_string()))?;
         let command =
             Command::AppAction(AppAction { action: action.to_owned(), spec_json, tail: 0, cursor: String::new() });
@@ -355,9 +383,11 @@ impl AppJob {
             .wait(&body.operation_id, wait)
             .await
             .ok_or_else(|| retry(format!("{} did not answer in time", node.hostname)))?;
+
         if !result.ok {
             return Err(StepError::Fatal(result.error));
         }
+
         Ok(serde_json::from_str(&result.output).unwrap_or(Value::Null))
     }
 
@@ -368,6 +398,7 @@ impl AppJob {
         crate::app_roots::ensure(self.files.as_ref(), self.audit.as_ref(), actor, self.clock.now(), app, &node)
             .await
             .map_err(retry)?;
+
         Ok(())
     }
 
@@ -389,11 +420,15 @@ impl AppJob {
         if server.status == AgentStatus::Revoked {
             return Err(StepError::Fatal("server is revoked".into()));
         }
+
         let mut spec = self.resolved_spec(&app).await?;
+
         if p.action == "deploy" {
             self.wait_for_runtimes(&spec, p.server_id).await?;
         }
+
         self.serving_slot(&mut spec, app.id, p.server_id).await?;
+
         if p.action == "deploy" {
             let roots = crate::stacks::bind_roots(self.files.as_ref(), p.server_id).await;
             if let Some(v) = privileged_mounts(&spec, &roots).into_iter().find(|v| !p.privileged_mounts.contains(v)) {
@@ -402,6 +437,7 @@ impl AppJob {
                 )));
             }
         }
+
         let spec_json = serde_json::to_string(&spec).map_err(|e| StepError::Fatal(e.to_string()))?;
         let command = Command::AppAction(AppAction {
             action: p.action.clone(),
@@ -419,10 +455,12 @@ impl AppJob {
         self.hub.enqueue(p.server_id, &body.operation_id, signed).map_err(StepError::Retryable)?;
         ctx.set_state("operation_id", json!(body.operation_id));
         let busy = busy_status(&p.action);
+
         self.update(&p, ctx, |i| {
             if let Some(b) = busy {
                 i.status = b.into();
             }
+
             i.last_error = None;
         })
         .await
@@ -430,6 +468,7 @@ impl AppJob {
 
     async fn await_result(&self, ctx: &mut StepContext) -> Result<(), StepError> {
         let p = payload(ctx)?;
+
         let op = match ctx.state_value("operation_id").and_then(Value::as_str).map(str::to_owned) {
             Some(op) if self.hub.is_tracked(&op) => op,
             _ => {
@@ -437,6 +476,7 @@ impl AppJob {
                 ctx.state_value("operation_id").and_then(Value::as_str).unwrap_or_default().to_owned()
             }
         };
+
         let wait =
             if matches!(p.action.as_str(), "deploy") { Duration::from_secs(35 * 60) } else { Duration::from_secs(90) };
         let result = self.hub.wait(&op, wait).await.ok_or_else(|| retry("the node did not report a result in time"))?;
@@ -449,24 +489,32 @@ impl AppJob {
                 } else if i.status.ends_with("ing") || i.status == "running-job" {
                     i.status = "deployed".into();
                 }
+
                 i.last_error = Some(message.clone());
             })
             .await?;
+
             return Err(StepError::Fatal(message));
         }
+
         let out: Value = serde_json::from_str(&result.output).unwrap_or(Value::Null);
         ctx.set_state("output", out.clone());
+
         if p.action == "remove" {
             self.sync_app_root(ctx, &p, false).await?;
             return self.apps.delete_instance(p.service_id, p.server_id).await.map_err(retry);
         }
+
         if matches!(p.action.as_str(), "deploy" | "prepare") {
             if let Some(user) = out.get("user").and_then(Value::as_str) {
                 self.audit_account(ctx, &p, user).await;
             }
+
             self.sync_app_root(ctx, &p, true).await?;
         }
+
         let state = out.get("state").and_then(Value::as_str).map(str::to_owned);
+
         self.update(&p, ctx, |i| settle(i, &p.action, state)).await
     }
 }
@@ -479,6 +527,7 @@ fn settle(i: &mut forge_core::model::ServiceInstance, action: &str, reported: Op
     if i.status != "pending" || action == "deploy" {
         i.status = "deployed".into();
     }
+
     if reported.is_some() {
         i.state = reported;
     }
@@ -500,6 +549,7 @@ enum EngineWait {
 /// a working engine) says nothing about whether Docker answers now.
 fn engine_wait(installations: &[forge_core::model::Installation], waited: bool) -> EngineWait {
     use crate::container_runtime::Recorded;
+
     match crate::container_runtime::recorded(installations) {
         Recorded::Busy => EngineWait::Installing,
         Recorded::Failed if waited => {
@@ -528,6 +578,7 @@ impl JobHandler for AppJob {
         if payload.get("privileged_mounts").and_then(Value::as_array).is_some_and(|m| !m.is_empty()) {
             return Action::StackPrivileged;
         }
+
         match payload.get("action").and_then(Value::as_str) {
             Some("status" | "logs" | "follow") => Action::View,
             _ => Action::Deploy,
@@ -585,9 +636,11 @@ mod tests {
         assert_eq!((i.status.as_str(), i.state.as_deref()), ("deployed", Some("active")));
         settle(&mut i, "follow", None);
         assert_eq!(i.state.as_deref(), Some("active"), "following logs changes nothing");
+
         // A reported state still replaces it.
         settle(&mut i, "stop", Some("exited".into()));
         assert_eq!(i.state.as_deref(), Some("exited"));
+
         // A placement that was never deployed stays pending for read-only actions.
         let mut p = instance("pending", None);
         settle(&mut p, "status", Some("not-deployed".into()));
@@ -616,6 +669,7 @@ mod tests {
         assert_eq!(engine_wait(&[], false), EngineWait::Ready, "installed outside Forge, or the node will say");
         assert_eq!(engine_wait(&[docker("installed", None)], false), EngineWait::Ready);
         assert_eq!(engine_wait(&[docker("installing", None)], false), EngineWait::Installing);
+
         // The install this deploy waited for failed: say so, with the reason.
         let failed = [docker("failed", Some("apt: no route to download.docker.com"))];
         match engine_wait(&failed, true) {
@@ -625,6 +679,7 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+
         // An old failure (say a failed update of a working engine) does not stop a deploy.
         assert_eq!(engine_wait(&failed, false), EngineWait::Ready);
     }
@@ -642,6 +697,7 @@ mod tests {
     #[test]
     fn mounts_outside_the_app_folder_and_approved_roots_are_privileged() {
         let roots = vec!["/srv/data".to_owned()];
+
         for v in [
             "/var/spool/cron:/c",                    // a root crontab
             "/var/lib/dpkg:/d",                      // package scripts run as root by apt
@@ -657,14 +713,18 @@ mod tests {
             let spec = container(&[v]);
             assert_eq!(privileged_mounts(&spec, &roots), vec![v.to_owned()], "{v}");
         }
+
         // The app's own folder and approved roots stay plain deploys.
         for v in ["/srv/forge/apps/uat/api/data:/data:ro", "/srv/forge/apps/uat/api:/app", "/srv/data/api:/d"] {
             assert!(privileged_mounts(&container(&[v]), &roots).is_empty(), "{v}");
         }
+
         // Without approved roots only the app folder is plain.
         assert_eq!(privileged_mounts(&container(&["/srv/data/api:/d"]), &[]).len(), 1);
+
         // A named volume is Docker storage, not a host folder: never privileged.
         assert!(privileged_mounts(&container(&["pgdata:/var/lib/postgresql/data"]), &[]).is_empty());
+
         // Native apps have no volumes.
         let native: AppSpec = serde_json::from_value(json!({
             "environment": "uat", "name": "api", "runtime": "systemd", "command": "x"
