@@ -232,7 +232,7 @@ impl NginxSettings {
         if !matches!(self.access_log.as_str(), "combined" | "json" | "off") {
             return Err("access log: combined, json or off".into());
         }
-        crate::sites::check_custom_block(&self.custom)
+        crate::sites::check_custom_block(&self.custom).map_err(|e| e.to_string())
     }
 
     /// `http {}` directives [`NginxSettings::render`] sets. Distributions set
