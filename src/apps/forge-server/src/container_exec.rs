@@ -33,8 +33,6 @@ use crate::state::AppState;
 pub const TOKEN_HEADER: &str = "x-forge-exec-token";
 /// Frames queued towards the node before the browser side pauses.
 const QUEUE: usize = 8;
-/// How long the node has to dial back and start the shell.
-pub const OPEN_WAIT: Duration = Duration::from_secs(15);
 /// A pending stream the node did not dial back within this long expires;
 /// also the `expires_at_ms` signed into the command.
 const PENDING_MS: i64 = 30_000;
@@ -278,7 +276,7 @@ pub struct OpenRequest {
 }
 
 /// Signs a `ContainerExecOpen` for the node and waits (at most
-/// [`OPEN_WAIT`]) until its agent dialled back and the helper started the
+/// `container_shell_open_secs`) until its agent dialled back and the helper started the
 /// shell, or reported why not.
 pub async fn open(state: &AppState, r: &OpenRequest) -> Result<NodeShell, OpenError> {
     let now = state.clock.now();
@@ -299,14 +297,15 @@ pub async fn open(state: &AppState, r: &OpenRequest) -> Result<NodeShell, OpenEr
         state.exec_streams.forget(&session);
         return Err(OpenError::Offline);
     }
-    let deadline = tokio::time::Instant::now() + OPEN_WAIT;
+    let open_wait = Duration::from_secs(u64::from(state.config.container_shell_open_secs));
+    let deadline = tokio::time::Instant::now() + open_wait;
     let mut node_rx = node_rx;
     // The node dials back (with `Ready` or the error), or reports why it
     // could not (a refused command, a stream it could not open). An agent
     // that does not know the command does neither.
     let node = tokio::select! {
         r = tokio::time::timeout_at(deadline, &mut node_rx) => r.ok().and_then(Result::ok),
-        res = state.hub.wait(&body.operation_id, OPEN_WAIT) => match res {
+        res = state.hub.wait(&body.operation_id, open_wait) => match res {
             Some(res) if !res.ok => {
                 state.exec_streams.forget(&session);
                 return Err(OpenError::Node(res.error));

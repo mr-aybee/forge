@@ -152,3 +152,12 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
+
+# Password hashing (Argon2id, 19 MiB) takes over a second per sign-in
+# without optimisation, and the integration tests sign in hundreds of times.
+# Optimising these small crates costs seconds of build time.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

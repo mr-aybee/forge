@@ -45,6 +45,8 @@ pub struct ServerConfig {
     pub heartbeat_hold_secs: u32,
     /// Agents not seen for this long are marked offline.
     pub offline_after_secs: u32,
+    /// Seconds a container shell waits for the node to start it.
+    pub container_shell_open_secs: u32,
     /// Path of `forge-plugin-runner`; defaults to the binary next to this one.
     pub plugin_runner: Option<PathBuf>,
     /// Trusted plugin publishers.
@@ -209,6 +211,10 @@ pub struct AlertSettings {
     pub delivery_retry_base_secs: u64,
     /// Longest wait between two attempts, in seconds.
     pub delivery_retry_max_secs: u64,
+    /// Milliseconds between two alert evaluation passes.
+    pub evaluate_interval_ms: u64,
+    /// Milliseconds between two notification plan-and-send passes.
+    pub deliver_interval_ms: u64,
 }
 
 impl Default for AlertSettings {
@@ -221,6 +227,8 @@ impl Default for AlertSettings {
             delivery_attempts: 6,
             delivery_retry_base_secs: 30,
             delivery_retry_max_secs: 900,
+            evaluate_interval_ms: 15_000,
+            deliver_interval_ms: 5_000,
         }
     }
 }
@@ -775,6 +783,7 @@ impl Default for ServerConfig {
             config_path: None,
             heartbeat_hold_secs: 25,
             offline_after_secs: 90,
+            container_shell_open_secs: 15,
             plugin_runner: None,
             trusted_publishers: vec![],
             oidc: None,
@@ -941,6 +950,12 @@ impl ServerConfig {
             anyhow::bail!(
                 "[alerts] delivery_retry_base_secs must be 1 to 3600, and delivery_retry_max_secs from it to 86400"
             );
+        }
+        if !(100..=3_600_000).contains(&a.evaluate_interval_ms) || !(100..=3_600_000).contains(&a.deliver_interval_ms) {
+            anyhow::bail!("[alerts] evaluate_interval_ms and deliver_interval_ms must be 100 to 3600000");
+        }
+        if !(1..=300).contains(&self.container_shell_open_secs) {
+            anyhow::bail!("container_shell_open_secs must be 1 to 300");
         }
         let k = &self.agent_tls;
         if k.rotate_days > 3650 || k.grace_days > 365 || (k.rotate_days > 0 && k.grace_days >= k.rotate_days) {

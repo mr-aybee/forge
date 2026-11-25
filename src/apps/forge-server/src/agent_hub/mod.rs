@@ -26,6 +26,16 @@ use tokio::sync::watch;
 
 pub use queue::CommandQueue;
 
+/// Whether `server`'s agent asked this process for commands recently enough
+/// (two long-poll holds and a margin) to pick up a new command now. The
+/// stored node status cannot say that: it outlives a restart and is set by
+/// hand in tests.
+#[must_use]
+pub fn linked(state: &AppState, server: forge_core::ServerId) -> bool {
+    let hold = std::time::Duration::from_secs(u64::from(state.config.heartbeat_hold_secs));
+    state.hub.polled_within(server, hold * 2 + std::time::Duration::from_secs(10))
+}
+
 use crate::state::AppState;
 
 /// The verified client certificate of the connection, if any.

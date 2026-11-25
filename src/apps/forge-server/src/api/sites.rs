@@ -19,7 +19,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use forge_catalog::SiteSpec;
 use forge_catalog::ingress::Target;
-use forge_core::model::{JobStatus, NewJob, Site};
+use forge_core::model::{AgentStatus, JobStatus, NewJob, Site};
 use forge_core::ports::{JobRepository, ServerRepository, SiteRepository};
 use forge_core::{Action, EntityKind, EntityRef, ServerId};
 use serde::Deserialize;
@@ -60,6 +60,10 @@ pub async fn run_as(
     submit_and_wait(state, principal, context, server, command, wait, None).await
 }
 
+/// How long [`submit_and_wait`] waits for a node whose agent is offline or
+/// holds no link to this server.
+const OFFLINE_GRACE: Duration = Duration::from_secs(1);
+
 /// Runs `command`; with `attach_certificate` (the site's id) the job adds the
 /// uploaded certificate's key to a site `apply` (only the endpoint flow sets
 /// it, after authorizing the certificate's use).
@@ -92,9 +96,17 @@ async fn submit_and_wait(
             max_attempts: 1,
         })
         .await?;
-    let deadline = tokio::time::Instant::now() + wait;
+    // A node whose agent holds no link here cannot answer within `wait`:
+    // answer after a short grace with the job still running (it runs when
+    // the node reconnects). The grace still reports a job that fails at
+    // once (e.g. a denied step), and a link that appears meanwhile restores
+    // the full wait.
+    let started = tokio::time::Instant::now();
+    let (deadline, grace) = (started + wait, started + wait.min(OFFLINE_GRACE));
     loop {
         let j = state.store.get_job(job.id).await?;
+        let linked = node.status == AgentStatus::Online && crate::agent_hub::linked(state, server);
+        let deadline = if linked { deadline } else { grace };
         match j.status {
             JobStatus::Succeeded => {
                 return Ok(json!({ "job_id": j.id, "status": "succeeded", "result": j.state.get("output") }));

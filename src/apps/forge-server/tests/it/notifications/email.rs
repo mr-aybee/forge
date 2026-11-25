@@ -136,7 +136,7 @@ async fn a_fired_alarm_sends_exactly_one_email_and_a_test_message_goes_out() {
     .await;
     assert_eq!((sent["attempt_count"].as_i64(), sent["last_http_status"].as_i64()), (Some(1), Some(250)), "{sent}");
     // Several more passes add nothing.
-    tokio::time::sleep(Duration::from_secs(6)).await;
+    tokio::time::sleep(quiet_period(&h)).await;
     let mails = smtp.mails();
     assert_eq!(mails.len(), 1, "exactly one email for one firing: {mails:?}");
     let m = &mails[0];
@@ -199,7 +199,7 @@ async fn an_smtp_4xx_is_retried_and_a_5xx_fails_at_once() {
         (Some(1), Some("smtp_reply"), Some(550)),
         "{failed}"
     );
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    tokio::time::sleep(quiet_period(&h)).await;
     assert_eq!(refusing.mails().len(), 1, "a permanent refusal is not tried again");
     h.app.stop().await;
 }

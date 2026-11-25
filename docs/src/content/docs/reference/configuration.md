@@ -26,6 +26,7 @@ rejected, so typos fail loudly.
 | `ui_dir` | none | Serve the built UI from this directory |
 | `heartbeat_hold_secs` | `25` | Long-poll hold for idle agents |
 | `offline_after_secs` | `90` | Agents unseen this long are marked offline |
+| `container_shell_open_secs` | `15` | How long opening a container shell waits for the node to start it, 1 to 300. An agent that does not answer in time gets an "update the agent" error |
 | `plugin_runner` | next to `forge-server` | Path of `forge-plugin-runner` |
 | `trusted_publishers` | `[]` | `[{ publisher, public_key }]` |
 | `oidc` | none | See [SSO](/docs/guides/sso-oidc/) |
@@ -401,6 +402,8 @@ the server restarts.
 | `alerts.delivery_attempts` | integer | `6` | Attempts per notification before it is recorded as `failed`, 1 to 20 |
 | `alerts.delivery_retry_base_secs` | integer, seconds | `30` | Ceiling of the wait before the first retry, 1 to 3600. The ceiling doubles after each attempt; the actual wait is between half the ceiling and the ceiling |
 | `alerts.delivery_retry_max_secs` | integer, seconds | `900` | Longest wait between two attempts, from `delivery_retry_base_secs` to 86400 |
+| `alerts.evaluate_interval_ms` | integer, milliseconds | `15000` | Time between two alert evaluation passes, 100 to 3600000. Lower values cost more database reads; the default suits production |
+| `alerts.deliver_interval_ms` | integer, milliseconds | `5000` | Time between two notification passes (plan and send what is due), 100 to 3600000 |
 
 ```toml
 [alerts]

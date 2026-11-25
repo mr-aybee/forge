@@ -354,7 +354,7 @@ async fn a_node_alarm_reaches_each_channel_once_signed_and_recovery_follows() {
     };
     assert_eq!(state.store.plan_transition(&again, &[], state.clock.now()).await.unwrap(), 0);
     assert_eq!(state.notifier.dispatch().await.unwrap().sent, 0);
-    tokio::time::sleep(Duration::from_secs(6)).await;
+    tokio::time::sleep(quiet_period(&h)).await;
     assert_eq!(deliveries(&admin, &format!("?alarm={aid}")).await.len(), 2);
     assert_eq!(rx.requests().len(), 2, "one message per channel for one firing");
 
@@ -413,7 +413,7 @@ async fn a_failing_receiver_is_retried_then_failed_and_the_alarm_is_untouched() 
     assert!(at(1) - at(0) >= 500 && at(2) - at(1) >= 1000, "{attempts:?}");
 
     // No further attempt after the limit, and the same delivery id on every try.
-    tokio::time::sleep(Duration::from_secs(8)).await;
+    tokio::time::sleep(quiet_period(&h)).await;
     let tries = rx.to("down");
     assert_eq!(tries.len(), 3);
     assert!(tries.iter().all(|t| t.headers["x-forge-delivery"] == failed["id"].as_str().unwrap()));
@@ -471,7 +471,7 @@ async fn redirects_are_not_followed_and_a_test_message_reports_its_result() {
     assert_eq!(moved["status"], "failed", "{moved}");
     assert_eq!((moved["last_error"].as_str(), moved["last_http_status"].as_i64()), (Some("http_status"), Some(302)));
     assert_eq!(moved["attempts"].as_array().unwrap().len(), 1);
-    tokio::time::sleep(Duration::from_secs(6)).await;
+    tokio::time::sleep(quiet_period(&h)).await;
     assert!(elsewhere.requests().is_empty(), "the redirect target is never called");
     assert_eq!((rx.to("hook").len(), rx.to("moved").len()), (1, 1));
 

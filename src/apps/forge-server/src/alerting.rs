@@ -1,4 +1,4 @@
-//! Runs alert evaluation (#11, D-087) every [`TICK`].
+//! Runs alert evaluation (#11, D-087) every `[alerts] evaluate_interval_ms`.
 //!
 //! Evidence comes from [`ControlPlaneSource`]. The control plane computes
 //! some subjects itself on every pass (D-118): each node's agent status
@@ -27,9 +27,6 @@ use tokio::sync::watch;
 
 use crate::state::AppState;
 
-/// One evaluation pass this often.
-pub const TICK: Duration = Duration::from_secs(15);
-
 const DAY_MS: f64 = 86_400_000.0;
 
 /// Evidence the control plane has without asking a node.
@@ -37,6 +34,8 @@ const DAY_MS: f64 = 86_400_000.0;
 pub struct ControlPlaneSource {
     pub store: Arc<forge_store::Store>,
     pub clock: Arc<dyn Clock>,
+    /// Time between two evaluation passes.
+    pub interval: Duration,
 }
 
 /// One pass's time and how long its evidence counts.
@@ -117,7 +116,8 @@ impl SeriesSource for ControlPlaneSource {
     async fn latest(&self, subject: &str) -> DomainResult<Vec<SeriesSample>> {
         // The values are current as of this pass; they count until two
         // passes later, so a slow pass never reads as missing evidence.
-        let p = Pass { now: self.clock.now().0, valid_ms: i64::try_from(TICK.as_millis()).unwrap_or(15_000) * 2 };
+        let p =
+            Pass { now: self.clock.now().0, valid_ms: i64::try_from(self.interval.as_millis()).unwrap_or(15_000) * 2 };
         match subject {
             NODE_AGENT_STATUS | NODE_CERT_EXPIRES => {
                 Ok(server_samples(&self.store.list_servers(None).await?, subject, p))
@@ -167,15 +167,24 @@ fn evaluator(state: &AppState) -> Evaluator {
     Evaluator {
         alerts: store.clone(),
         state: store.clone(),
-        source: Arc::new(ControlPlaneSource { store: store.clone(), clock: state.clock.clone() }),
+        source: Arc::new(ControlPlaneSource {
+            store: store.clone(),
+            clock: state.clock.clone(),
+            interval: interval(state),
+        }),
         resolver: store,
     }
+}
+
+/// Time between two evaluation passes.
+fn interval(state: &AppState) -> Duration {
+    Duration::from_millis(state.config.alerts.evaluate_interval_ms)
 }
 
 /// Background loop.
 pub(crate) async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
     let eval = evaluator(&state);
-    let mut tick = tokio::time::interval(TICK);
+    let mut tick = tokio::time::interval(interval(&state));
     loop {
         tokio::select! {
             _ = tick.tick() => {}

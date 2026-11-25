@@ -25,8 +25,6 @@ use tokio::sync::watch;
 use crate::config::AlertSettings;
 use crate::state::AppState;
 
-/// Plan and dispatch this often.
-pub const TICK: Duration = Duration::from_secs(5);
 /// Old deliveries are pruned this often.
 const PRUNE_EVERY: Duration = Duration::from_secs(3600);
 /// Time to connect to a receiver.
@@ -281,7 +279,7 @@ async fn pass(notifier: &Notifier) {
 
 /// Background loop.
 pub(crate) async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
-    let mut tick = tokio::time::interval(TICK);
+    let mut tick = tokio::time::interval(Duration::from_millis(state.config.alerts.deliver_interval_ms));
     let mut prune = tokio::time::interval(PRUNE_EVERY);
     loop {
         tokio::select! {

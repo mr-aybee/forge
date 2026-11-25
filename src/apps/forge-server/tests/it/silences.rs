@@ -187,10 +187,6 @@ async fn silence(c: &Client, body: Value) -> Value {
     v
 }
 
-/// The planner and dispatcher run every few seconds: a negative check has to
-/// let more than one pass go by.
-const PASSES: Duration = Duration::from_secs(12);
-
 #[tokio::test]
 async fn an_alarm_during_a_silence_is_suppressed_and_ending_it_sends_exactly_one_message() {
     let h = start_lab().await;
@@ -243,7 +239,7 @@ async fn an_alarm_during_a_silence_is_suppressed_and_ending_it_sends_exactly_one
     assert_eq!(body["alarm"]["id"], json!(alarm.id));
     assert_eq!(body["after_silence"], json!({"silence_id": sid}));
     assert_eq!(body["schema_version"], 1);
-    tokio::time::sleep(PASSES).await;
+    tokio::time::sleep(quiet_period(&h)).await;
     assert_eq!(rx.bodies().len(), 1, "exactly one message");
     let list = deliveries(&admin, alarm.id).await;
     let statuses: Vec<(&str, bool)> =
@@ -289,7 +285,7 @@ async fn an_alarm_that_fires_and_resolves_inside_a_silence_sends_nothing() {
     .await;
     let (st, _) = admin.post(&format!("/api/v1/silences/{}/end", s["id"].as_str().unwrap()), json!({})).await;
     assert_eq!(st, StatusCode::OK);
-    tokio::time::sleep(PASSES).await;
+    tokio::time::sleep(quiet_period(&h)).await;
     assert!(rx.bodies().is_empty(), "{:?}", rx.bodies());
     assert_eq!(deliveries(&admin, alarm.id).await.len(), 2, "nothing planned after the silence");
     h.app.stop().await;

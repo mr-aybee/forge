@@ -837,24 +837,35 @@ async fn a_bucket_attached_to_an_service_reaches_it_as_environment() {
         })
         .await
         .unwrap();
-    let (s, r) = admin
-        .post(&format!("/api/v1/services/{service_id}/instances/{srv}/actions"), json!({ "action": "status" }))
-        .await;
-    assert!(s.is_success(), "{r}");
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
-    let spec: serde_json::Value = loop {
-        let found = h.app.state.hub.take(srv, 8).into_iter().find_map(|c| {
-            match CommandBody::decode(c.body.as_slice()).ok()?.command? {
-                Command::AppAction(a) => serde_json::from_str(&a.spec_json).ok(),
-                _ => None,
+    // The test plays the agent while the action waits for its answer.
+    let action_url = format!("/api/v1/services/{service_id}/instances/{srv}/actions");
+    let action = admin.post(&action_url, json!({ "action": "status" }));
+    let agent = async {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let found = h.app.state.hub.take(srv, 8).into_iter().find_map(|c| {
+                let body = CommandBody::decode(c.body.as_slice()).ok()?;
+                match body.command? {
+                    Command::AppAction(a) => Some((body.operation_id, serde_json::from_str(&a.spec_json).ok()?)),
+                    _ => None,
+                }
+            });
+            if let Some((operation_id, spec)) = found {
+                let done = forge_proto::messages::CommandResult {
+                    operation_id,
+                    ok: true,
+                    output: json!({"output": "active"}).to_string(),
+                    ..Default::default()
+                };
+                assert!(h.app.state.hub.resolve(srv, done));
+                break spec;
             }
-        });
-        if let Some(spec) = found {
-            break spec;
+            assert!(tokio::time::Instant::now() < deadline, "no service command for the node");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
-        assert!(tokio::time::Instant::now() < deadline, "no service command for the node");
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     };
+    let ((s, r), spec): ((StatusCode, serde_json::Value), serde_json::Value) = tokio::join!(action, agent);
+    assert!(s.is_success(), "{r}");
     let env: std::collections::BTreeMap<String, String> = spec["env"]
         .as_array()
         .unwrap()
