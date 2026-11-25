@@ -151,6 +151,18 @@ pub trait WebhookRepository: Send + Sync + std::fmt::Debug {
     /// Records a delivery and keeps the newest [`DELIVERIES_KEPT`].
     async fn add_delivery(&self, d: &Delivery) -> DomainResult<()>;
     async fn list_deliveries(&self, id: WebhookId, limit: u32) -> DomainResult<Vec<Delivery>>;
+    /// Remembers a delivery's replay marker (D-168). `Ok(true)` when it is
+    /// new, `Ok(false)` when this webhook already saw it. Markers older than
+    /// `forget_before` are dropped in the same call, so the table stays
+    /// bounded; the check is atomic (a unique key), so two servers or two
+    /// concurrent deliveries cannot both claim one marker.
+    async fn claim_replay_marker(
+        &self,
+        id: WebhookId,
+        marker: &str,
+        at: Timestamp,
+        forget_before: Timestamp,
+    ) -> DomainResult<bool>;
 }
 
 /// Whether `tag` matches `pattern` (`*` matches any run of characters).

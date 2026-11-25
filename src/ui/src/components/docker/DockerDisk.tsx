@@ -78,7 +78,7 @@ export function DockerDisk({ server, runner, onOpen }: { server: string; runner:
           onOpenChange={(o) => !o && close()}
           title="Prune dangling images?"
           busy={runner.pending}
-          body="Docker deletes untagged image layers no container uses. Tagged images stay; to remove unused tagged images too, use Prune on the Images tab."
+          body="Docker deletes untagged image layers no container uses. Tagged images stay; to remove unused tagged images too, use Prune on the Images tab. This is host-wide: it covers every unused image on this node, including ones Forge did not create."
           confirmLabel="Prune dangling"
           onConfirm={() => void runner.run({ op: "image_prune", all: false }, "Image prune").then((ok) => ok && close())}
         />
@@ -89,7 +89,7 @@ export function DockerDisk({ server, runner, onOpen }: { server: string; runner:
           onOpenChange={(o) => !o && close()}
           title="Prune volumes?"
           busy={runner.pending}
-          body="Docker deletes every anonymous volume no container uses, with its data. Named and Forge volumes stay. The data cannot be recovered."
+          body="Docker deletes every anonymous volume no container uses, with its data. Named and Forge volumes stay. This is host-wide: it covers every unused anonymous volume on this node, including ones Forge did not create. The data cannot be recovered."
           confirmLabel="Prune volumes"
           onConfirm={() => void runner.run({ op: "volume_prune" }, "Volume prune").then((ok) => ok && close())}
         />

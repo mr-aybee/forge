@@ -58,6 +58,12 @@ For containers and stacks, see [Containers](/docs/guides/containers/).
    networks, **Attachable**. The row menu offers **Inspect**, **Connect
    container…**, **Disconnect container…** and **Remove…**. **Prune** removes
    custom networks with no containers attached.
+   :::caution[Prunes are host-wide]
+   Every prune acts on the whole node, not only on what Forge created: it
+   removes every unused resource of its kind on that host, including those of
+   containers and tools Forge does not manage. Forge's own networks are kept;
+   named volumes are never pruned. The confirmation dialog says so.
+   :::
 5. **Events.** Choose **5m**, **1h** or **24h**. Events are listed newest
    first and refresh every 15 seconds; **Refresh** reads them now.
 6. **Disk.** Four tiles show the count and size of images, container

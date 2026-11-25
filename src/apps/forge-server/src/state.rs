@@ -397,7 +397,6 @@ impl Services {
             limits: crate::webhooks::Limits::default(),
             per_hook: crate::webhooks::Windows::default(),
             per_ip: crate::webhooks::Windows::default(),
-            seen: crate::webhooks::Windows::default(),
         });
         let swarm = Arc::new(crate::swarm::SwarmService {
             swarms: Arc::new(store.clone()),

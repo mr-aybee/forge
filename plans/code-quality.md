@@ -1554,3 +1554,4 @@ Found by the branch's quality review. These are not bugs, just debt to pay down 
 - **Live-node cache:** give it single-flight, and cache `service_get` status for 5 seconds.
 - **Unbounded lists:** add clamped `limit` parameters to the registry and webhook lists.
 
+- **CODE-02, no compare-and-set on `put_service`:** `ServiceRepository::put_service` overwrites the whole row. Two writers (a webhook tag change and a console edit, or the webhook's compensating restore after a failed deploy) can lose each other's change. Add a version or `updated_at` precondition (`UPDATE … WHERE id = $1 AND updated_at = $2`) and return a conflict when it does not match.

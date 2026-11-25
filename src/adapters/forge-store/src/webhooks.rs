@@ -118,7 +118,11 @@ impl WebhookRepository for Store {
     async fn delete_webhook(&self, id: WebhookId) -> DomainResult<()> {
         // Deliveries go with the hook, in one transaction.
         let mut tx = self.pool().begin().await.map_err(db_err)?;
-        for sql in ["DELETE FROM webhook_deliveries WHERE webhook_id = $1", "DELETE FROM webhooks WHERE id = $1"] {
+        for sql in [
+            "DELETE FROM webhook_deliveries WHERE webhook_id = $1",
+            "DELETE FROM webhook_replay_markers WHERE webhook_id = $1",
+            "DELETE FROM webhooks WHERE id = $1",
+        ] {
             sqlx::query(sql).bind(id.to_string()).execute(&mut *tx).await.map_err(db_err)?;
         }
         tx.commit().await.map_err(db_err)
@@ -169,5 +173,34 @@ impl WebhookRepository for Store {
                 .await
                 .map_err(db_err)?;
         rows.iter().map(delivery_row).collect()
+    }
+
+    async fn claim_replay_marker(
+        &self,
+        id: WebhookId,
+        marker: &str,
+        at: Timestamp,
+        forget_before: Timestamp,
+    ) -> DomainResult<bool> {
+        // Prune and claim in one transaction; the primary key makes the claim
+        // atomic across concurrent deliveries and servers.
+        let mut tx = self.pool().begin().await.map_err(db_err)?;
+        sqlx::query("DELETE FROM webhook_replay_markers WHERE at < $1")
+            .bind(forget_before.0)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        let done = sqlx::query(
+            "INSERT INTO webhook_replay_markers (webhook_id, marker, at) VALUES ($1, $2, $3)
+             ON CONFLICT (webhook_id, marker) DO NOTHING",
+        )
+        .bind(id.to_string())
+        .bind(marker)
+        .bind(at.0)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        tx.commit().await.map_err(db_err)?;
+        Ok(done.rows_affected() == 1)
     }
 }
