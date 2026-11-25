@@ -392,6 +392,8 @@ pub trait ClusterRepository: Send + Sync + std::fmt::Debug {
     async fn get_cluster(&self, id: ClusterId) -> DomainResult<Cluster>;
     async fn list_clusters(&self, workspace: WorkspaceId) -> DomainResult<Vec<Cluster>>;
     async fn update_cluster(&self, cluster: &Cluster) -> DomainResult<()>;
+    /// Switches the cluster's mode (a checked conversion, D-171).
+    async fn set_cluster_mode(&self, id: ClusterId, mode: ClusterMode) -> DomainResult<()>;
     /// Deletes a cluster; its nodes become unassigned.
     async fn delete_cluster(&self, id: ClusterId) -> DomainResult<()>;
     async fn assign_server(

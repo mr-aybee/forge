@@ -498,6 +498,18 @@ async fn check_targets_ws(state: &AppState, ws: forge_core::WorkspaceId, input: 
                     return Err(ApiError::bad_request(format!("service {service_id} not found")));
                 }
             }
+            Target::Swarm { cluster_id, .. } => {
+                let id: forge_core::ClusterId =
+                    cluster_id.parse().map_err(|_| ApiError::bad_request("invalid cluster id"))?;
+                let found = forge_core::ports::ClusterRepository::get_cluster(&state.store, id)
+                    .await
+                    .ok()
+                    .is_some_and(|c| c.workspace_id == ws);
+
+                if !found {
+                    return Err(ApiError::bad_request(format!("cluster {cluster_id} not found")));
+                }
+            }
             Target::External { .. } => {}
         }
     }

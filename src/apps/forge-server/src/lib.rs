@@ -61,6 +61,7 @@ pub mod service_ports;
 pub mod stacks;
 pub mod state;
 pub mod swarm;
+pub mod swarm_stacks;
 mod tasks;
 mod throttle;
 pub mod tunnels;

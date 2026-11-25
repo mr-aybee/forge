@@ -188,6 +188,13 @@ async fn load(state: &AppState, ws: WorkspaceId, id: VaultItemId) -> ApiResult<V
     }
 }
 
+/// The password of item `id`, for another feature that already checked
+/// [`authorize_item_use`] (e.g. a Swarm secret made from it, D-171).
+pub(super) async fn open_item(state: &AppState, ws: WorkspaceId, id: VaultItemId) -> ApiResult<Vec<u8>> {
+    let item = load(state, ws, id).await?;
+    Ok(state.envelope.open(&item.sealed, &aad(id)).map_err(DomainError::internal)?)
+}
+
 fn seal(state: &AppState, id: VaultItemId, password: &str) -> ApiResult<String> {
     if password.is_empty() || password.len() > MAX_PASSWORD {
         return Err(bad("password: 1 to 4096 bytes"));
