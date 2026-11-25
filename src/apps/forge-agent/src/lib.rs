@@ -43,6 +43,7 @@ pub mod link;
 pub mod log_listener;
 pub mod metrics;
 pub mod node_analytics;
+pub mod pins;
 pub mod policy;
 pub mod probe;
 pub mod processes;

@@ -15,11 +15,8 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::OnceLock;
 
 use axum::Json;
-use axum::extract::State;
 use forge_core::Action;
 use serde_json::{Map, Value, json};
-
-use crate::state::AppState;
 
 /// One route from the build-time scan.
 #[derive(Debug, Clone, Copy)]
@@ -258,8 +255,8 @@ fn schemas_with_problem(defs: serde_json::Map<String, Value>) -> Value {
 }
 
 /// `GET /api/openapi.json` (public, like `/api/version`).
-pub async fn spec(State(state): State<AppState>) -> Json<Value> {
-    Json(document(&state.public_address.get()))
+pub async fn spec(origin: crate::request_origin::RequestOrigin) -> Json<Value> {
+    Json(document(&origin.origin()))
 }
 
 #[cfg(test)]

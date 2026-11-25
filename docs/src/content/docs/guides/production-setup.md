@@ -39,6 +39,10 @@ flow:
    cookie_secure = true
    ```
 
+   `public_url` pins the address that emails, alerts, SSO and AI connectors
+   use. Without it Forge still answers on any address, and those links use
+   the address an administrator last signed in on.
+
 2. Point the proxy at `127.0.0.1:3880`. With Caddy:
 
    ```text
@@ -49,9 +53,25 @@ flow:
 
 3. Restart Forge: `sudo systemctl restart forge-server`.
 
+4. Narrow the names the console answers on to the domain, plus the local
+   names you use on the server host:
+
+   ```sh
+   sudo runuser -u forge -- /opt/forge/forge-server --config /etc/forge/forge.toml allowed-hosts set forge.example.com localhost 127.0.0.1
+   sudo systemctl restart forge-server
+   ```
+
+   Any other name now gets `421`. See
+   [Allowed hosts](/docs/reference/configuration/#allowed-hosts).
+
+You can add the proxy at any time after the install: nodes already enrolled
+keep their address and pinned key, and nothing needs to be re-enrolled.
+
 `agent_listen` (`3843`) and the analytics upload port (`3832`) stay as they
-are: they use Forge's internal CA and need no public certificate. Add every
-name nodes use to reach the server to `agent_hostnames`. To publish Forge
+are: they use Forge's internal CA and need no public certificate. Agents
+check the server's pinned key, not its name, so any address of the server
+works for them. To restrict who may connect at all, see
+[Restrict access](/docs/reference/network-ports/#restrict-access). To publish Forge
 through a cluster ingress edge instead, see
 [Publish Forge on a domain](/docs/guides/publish-forge-on-a-domain/).
 

@@ -43,6 +43,34 @@ fn data(r: Result<serde_json::Value, String>) -> HelperResponse {
     }
 }
 
+/// Applies a control-plane key announcement (D-167) to the root-owned pin
+/// file, once Forge's signature checks out against the helper's own pin.
+/// A helper without a pin (a node set up before D-068) refuses: the agent
+/// then keeps checking the CA and host name.
+#[cfg(unix)]
+async fn server_pins(pin: Option<helper_trust::Pin>, keys: String) -> HelperResponse {
+    let Some(pin) = pin else {
+        return HelperResponse::failed("refused: this helper has no pin of Forge's command key to check the keys with");
+    };
+    let run = move || -> Result<serde_json::Value, String> {
+        let raw = forge_secrets::crypto::b64url_decode(&keys).ok_or("refused: the keys are not base64url")?;
+        let signed = <forge_proto::messages::SignedServerKeys as prost::Message>::decode(raw.as_slice())
+            .map_err(|_| "refused: malformed keys".to_owned())?;
+        let public = forge_secrets::crypto::b64url_decode(&pin.command_public_key).ok_or("bad pinned command key")?;
+        let path = std::path::Path::new(forge_agent::pins::SYSTEM_DIR).join(forge_agent::pins::FILE);
+        let changed = forge_agent::pins::apply_signed(&path, &signed, &public, &pin.server_id, SystemClock.now())
+            .map_err(|e| e.to_string())?;
+        if changed {
+            tracing::info!(path = %path.display(), "control-plane key pins updated from Forge's announcement");
+        }
+        Ok(serde_json::json!({ "changed": changed }))
+    };
+    match tokio::task::spawn_blocking(run).await {
+        Ok(r) => data(r),
+        Err(e) => HelperResponse::failed(e.to_string()),
+    }
+}
+
 /// The agent state directory (`serve --agent-dir`).
 fn agent_dir() -> std::path::PathBuf {
     AGENT_DIR.get().cloned().unwrap_or_else(|| std::path::PathBuf::from("/var/lib/forge-agent"))
@@ -175,6 +203,9 @@ async fn handle(
         HelperRequest::Signed { .. } => HelperResponse::failed("internal: signed request not admitted"),
         // One-shot runs never serve shells.
         HelperRequest::Capabilities {} => capabilities(false).await,
+        HelperRequest::ServerPins { .. } => {
+            HelperResponse::failed("key announcements are applied by the helper service")
+        }
         #[cfg(unix)]
         HelperRequest::ContainerTelemetry { telemetry } => match &ctx.containers {
             Some(c) => data(c.handle(telemetry).await.and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))),
@@ -374,6 +405,8 @@ async fn serve(agent_dir: &str) -> std::io::Result<()> {
                             }
                             // Shells only with a pin: `admit` refuses them otherwise.
                             Ok(HelperRequest::Capabilities {}) => capabilities(trust.pinned().is_some()).await,
+                            // Checked against Forge's key, never the agent's word.
+                            Ok(HelperRequest::ServerPins { keys }) => server_pins(trust.pinned().cloned(), keys).await,
                             Ok(req) => {
                                 // Forward live output lines while the request runs.
                                 let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();

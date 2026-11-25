@@ -163,6 +163,7 @@ pub async fn login(
     State(state): State<AppState>,
     crate::auth::SecureCookies(secure): crate::auth::SecureCookies,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    origin: crate::request_origin::RequestOrigin,
     headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<Response> {
@@ -199,9 +200,75 @@ pub async fn login(
     state.captchas.succeeded(&key);
     let tokens = state.identity.create_web_session(user.id, mfa).await?;
     audit_login(&state, &format!("user:{}", user.id), AuditOutcome::Success, "password").await;
+    record_admin_address(&state, user.id, &origin).await;
     let ttl = state.identity.config().web_session_ttl.as_secs();
     let body = Json(json!({ "user": user, "mfa": mfa, "csrf_token": tokens.csrf_token })).into_response();
     Ok(with_cookies(body, session_cookies(&tokens.session_token, &tokens.csrf_token, ttl, secure)))
+}
+
+/// Remembers the address a platform administrator signed in on, for links
+/// built without a request when no address is pinned (D-167). Never fails
+/// the sign-in: a store error is logged.
+pub(crate) async fn record_admin_address(
+    state: &AppState,
+    user: forge_core::UserId,
+    origin: &crate::request_origin::RequestOrigin,
+) {
+    let req = forge_core::AccessRequest::new(
+        forge_core::Principal::User(user),
+        forge_core::Action::SystemUpdate,
+        EntityRef::platform(),
+        forge_core::AuthzContext { mfa: true },
+    );
+    if !state.authz.is_allowed(&req).await {
+        return;
+    }
+    // Only a name this machine or its configuration vouches for: the Host
+    // header is the client's, and this address feeds emails and webhooks.
+    let local = match tokio::task::spawn_blocking(crate::public_address::LocalNames::read).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not read this machine's addresses");
+            return;
+        }
+    };
+    let runtime = state.public_address.runtime();
+    let configured: Vec<&str> = state
+        .config
+        .agent_hostnames
+        .iter()
+        .map(String::as_str)
+        .chain(state.config.public_url.as_deref())
+        .chain(state.config.node_public_url.as_deref())
+        .chain(runtime.as_deref())
+        .collect();
+    if !crate::public_address::host_trusted(origin.host(), &local, &configured, &state.allowed_hosts) {
+        tracing::debug!(host = origin.host(), "not recording an administrator address on an unconfigured name");
+        return;
+    }
+    match crate::public_address::record_last_admin(
+        &state.store,
+        &state.public_address,
+        &origin.origin(),
+        state.clock.now(),
+    )
+    .await
+    {
+        Ok(Some(change)) => {
+            let ev = AuditEvent::new(
+                format!("user:{user}"),
+                crate::public_address::AUDIT_LAST_ADMIN_UPDATE,
+                EntityRef::platform(),
+                AuditOutcome::Success,
+            )
+            .with_details(json!({ "from": change.from, "to": change.to }));
+            if let Err(e) = state.audit.append(ev).await {
+                tracing::error!(error = %e, "audit write failed");
+            }
+        }
+        Ok(None) => {}
+        Err(e) => tracing::warn!(error = %e, "could not record the administrator's console address"),
+    }
 }
 
 pub async fn logout(

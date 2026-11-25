@@ -164,9 +164,14 @@ sudo sh get-forge.sh --file ./forge-<version>-<arch>-linux.tar.gz   # a download
 Unattended: pass installer options after `--`. The installer asks nothing.
 
 ```sh
-sudo sh get-forge.sh --version <tag> -- --yes \
-  --public-url https://forge.example.com --environment production
+sudo sh get-forge.sh --version <tag> -- --yes --environment production
 ```
+
+The installer does not ask for an address. The console answers on every name
+and IP of this machine on port `3880`, and each node connects to the address it
+installed from. To pin one address for links in emails and alerts, add
+`--public-url https://forge.example.com`, or set it later in
+**Settings → Server**.
 
 From an unpacked package, after you verified it:
 
@@ -182,7 +187,7 @@ sudo ./install.sh
 In **PowerShell as Administrator**:
 
 ```powershell
-.\get-forge.ps1 -File .\forge-<version>-x86_64-windows.zip -PublicUrl http://forge.example.com:3880
+.\get-forge.ps1 -File .\forge-<version>-x86_64-windows.zip
 ```
 
 Parameters that `get-forge.ps1` does not know go to `install.ps1`. From an
@@ -191,7 +196,7 @@ unpacked package, after you verified it:
 ```powershell
 Expand-Archive forge-<version>-x86_64-windows.zip -DestinationPath .
 cd forge-<version>-x86_64-windows
-.\install.ps1 -PublicUrl http://forge.example.com:3880
+.\install.ps1
 ```
 
 </TabItem>
@@ -211,27 +216,35 @@ agent binaries.
 
 ### 3. Read the summary
 
-The installer ends with the console URL, where the administrator password
-is, and what to do next:
+The installer ends with the addresses the console answers on, where the
+administrator password is, and what to do next:
 
 ```text
-  Orbyn Forge 0.1.0 is installed and running.
+  Orbyn Forge <version> is installed and running.
 
   ACCESS
     Console       http://192.0.2.10:3880
-    Agents        https://192.0.2.10:3843  (nodes connect out to TCP 3843 and 3832)
+    Console       http://10.0.0.5:3880
+    Console       http://<hostname>:3880
+    · Any name or IP of this machine works; pin one later in Settings or with --public-url.
+    Agents        nodes connect to TCP 3843 and 3832 on the address they use
     Analytics     duckdb, uploads on port 3832
 
   ADMINISTRATOR
     Username      admin
     Password      <generated password>
     Saved to      /var/lib/forge/initial-admin-password (root only, deleted when you change it)
+
+  RESTRICT ACCESS
+    · Every interface listens. Narrow who may connect, for example:
+      ufw allow from <node subnet> to any port 3843 proto tcp
+      [security.access] allow = ["10.0.0.0/8"] in /etc/forge/forge.toml
   ...
-  NEXT STEPS
-    1. Open http://192.0.2.10:3880 and sign in as admin.
-    2. Allow TCP 3843 and 3832 from your nodes to this server.
-    3. Add nodes: Overview > Add node.
 ```
+
+Every **Console** line works: one per IPv4 address of the machine, plus its
+host name. Any other name that resolves to the machine works too. A
+`forge.toml` with `public_url` shows that one address, marked `(pinned)`.
 
 The generated password is shown once. Forge deletes the saved copy when the
 administrator changes the password.
@@ -258,7 +271,8 @@ characters) before you run the installer. Nothing is saved to disk then.
 
 ### 4. Sign in
 
-1. Open the console URL from the summary.
+1. Open any **Console** address from the summary that your computer can
+   reach.
 2. Sign in with the administrator name and password.
 3. Open **Settings → Password & security**, change the password and set up
    MFA.
@@ -267,7 +281,8 @@ characters) before you run the installer. Nothing is saved to disk then.
 
 Allow TCP `3843` and `3832` from your nodes to the server in every network
 firewall between them. The installer has already opened them in the host
-firewall.
+firewall, to every source. To narrow them, see
+[Restrict access](/docs/reference/network-ports/#restrict-access).
 
 ## Verify
 
@@ -293,7 +308,7 @@ Get-Process forge-server, forge-analytics-worker
 </TabItem>
 </Tabs>
 
-The console opens at the public URL, and **Administration → Forge updates**
+The console opens on any address of the server, and **Administration → Forge updates**
 shows the version you installed.
 
 ### Verify a download

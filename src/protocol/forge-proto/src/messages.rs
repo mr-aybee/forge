@@ -36,6 +36,62 @@ pub struct EnrollResponse {
     /// worker's agent listener. Empty when analytics is off.
     #[prost(string, tag = "6")]
     pub analytics_url: String,
+    /// The control-plane keys to pin (D-167); absent from older servers.
+    #[prost(message, optional, tag = "7")]
+    pub server_keys: Option<SignedServerKeys>,
+    /// The worker's agent listener port (D-167): new agents dial it on the
+    /// host of their own server URL. 0: use `analytics_url`.
+    #[prost(uint32, tag = "8")]
+    pub analytics_port: u32,
+}
+
+/// Control-plane listener keys an agent pins (D-167): the SHA-256 of each
+/// key's SubjectPublicKeyInfo. Sent signed ([`SignedServerKeys`]).
+#[derive(Clone, PartialEq, Eq, prost::Message)]
+pub struct ServerKeys {
+    /// The node they are for.
+    #[prost(string, tag = "1")]
+    pub server_id: String,
+    #[prost(int64, tag = "2")]
+    pub issued_at_ms: i64,
+    /// At most [`MAX_SERVER_KEYS`].
+    #[prost(message, repeated, tag = "3")]
+    pub keys: Vec<ServerKey>,
+    /// Bumped by the server on every change of the key set. A node refuses
+    /// an announcement older than the last it applied, or one with the same
+    /// sequence and other keys (replay). 0: an older server.
+    #[prost(uint64, tag = "4")]
+    pub sequence: u64,
+    /// Fingerprints withdrawn by an operator (`agent-key rotate --now
+    /// --revoke`): unpinned at once and never pinned again by an
+    /// announcement. At most [`MAX_REVOKED_KEYS`].
+    #[prost(string, repeated, tag = "5")]
+    pub revoked: Vec<String>,
+}
+
+/// Most keys in one [`ServerKeys`].
+pub const MAX_SERVER_KEYS: usize = 4;
+/// Most revoked fingerprints in one [`ServerKeys`].
+pub const MAX_REVOKED_KEYS: usize = 16;
+
+#[derive(Clone, PartialEq, Eq, prost::Message)]
+pub struct ServerKey {
+    /// 64 lower-case hex digits.
+    #[prost(string, tag = "1")]
+    pub sha256: String,
+    /// `current`, `next`, `analytics` or `analytics-next`.
+    #[prost(string, tag = "2")]
+    pub label: String,
+}
+
+/// [`ServerKeys`] signed with the command key, so the node's root helper
+/// can check that Forge sent them (`crate::signing::verify_server_keys`).
+#[derive(Clone, PartialEq, Eq, prost::Message)]
+pub struct SignedServerKeys {
+    #[prost(bytes = "vec", tag = "1")]
+    pub body: Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub signature: Vec<u8>,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -71,6 +127,10 @@ pub struct Heartbeat {
     /// this heartbeat; the server then forwards nothing to the worker.
     #[prost(message, optional, tag = "10")]
     pub spool: Option<SpoolStatus>,
+    /// The control-plane keys this agent has pinned (D-167): its
+    /// acknowledgement of an announced next key. Empty from older agents.
+    #[prost(string, repeated, tag = "11")]
+    pub pinned_server_keys: Vec<String>,
 }
 
 /// Most container lines in one heartbeat.
@@ -381,6 +441,9 @@ pub struct HeartbeatResponse {
     /// Absent from old servers and while analytics is off.
     #[prost(message, optional, tag = "6")]
     pub analytics: Option<AnalyticsAgentConfig>,
+    /// The control-plane keys to pin (D-167); absent from older servers.
+    #[prost(message, optional, tag = "7")]
+    pub server_keys: Option<SignedServerKeys>,
 }
 
 /// What a node needs to collect analytics data (D-142).
@@ -398,6 +461,10 @@ pub struct AnalyticsAgentConfig {
     pub keys: Vec<IngestKey>,
     #[prost(message, optional, tag = "4")]
     pub listener: Option<ListenerTuning>,
+    /// The listener port (D-167): new agents dial it on the host of their
+    /// own server URL, older ones use `url`. 0: use `url`.
+    #[prost(uint32, tag = "5")]
+    pub port: u32,
 }
 
 /// Most ingest keys sent to one node.

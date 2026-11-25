@@ -12,7 +12,7 @@ pub mod messages;
 mod signing;
 
 pub use messages::command_body::Command;
-pub use signing::{CommandSigner, CommandVerifier, VerifyError};
+pub use signing::{CommandSigner, CommandVerifier, SERVER_KEYS_MAX_AGE, VerifyError, verify_server_keys};
 
 /// Media type for protobuf bodies.
 pub const CONTENT_TYPE: &str = "application/x-protobuf";

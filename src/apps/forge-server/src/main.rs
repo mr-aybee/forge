@@ -71,6 +71,20 @@ enum Cmd {
         #[command(subcommand)]
         action: AddressAction,
     },
+    /// The hosts the console answers on (D-167): `get`, `set <pattern>...`
+    /// or `clear` (back to `*`, any host). Patterns: `*`, a host name or
+    /// IP, or `*.example.com`. Other hosts get 421. Audited as
+    /// system:forge. Restart a running server to apply it there.
+    AllowedHosts {
+        #[command(subcommand)]
+        action: HostsAction,
+    },
+    /// The control-plane key agents pin (D-167): `show` the current and
+    /// next fingerprints, `list` the keys and which agents have them, or
+    /// `rotate` (once agents have the next key; `--now` at once). Audited
+    /// as system:forge. A running server applies a rotation within a minute.
+    #[command(subcommand)]
+    AgentKey(AgentKeyCmd),
     /// Exits non-zero when the database has applied migrations this binary
     /// does not know (it is older than the database). Used by the
     /// self-update dry run; never changes the database.
@@ -150,6 +164,42 @@ enum AddressAction {
     Set { url: String },
     /// Removes the setting; links use `public_url` from forge.toml.
     Clear,
+}
+
+#[derive(Subcommand)]
+enum HostsAction {
+    /// Prints the allowed host patterns.
+    Get,
+    /// Replaces the list, for example `forge.example.com 192.0.2.1`.
+    Set {
+        #[arg(required = true)]
+        hosts: Vec<String>,
+    },
+    /// Allows any host again (`*`).
+    Clear,
+}
+
+#[derive(Subcommand)]
+enum AgentKeyCmd {
+    /// Prints the current and next key fingerprints and the rotation status.
+    Show,
+    /// Lists the keys and, per agent, which of them it has pinned.
+    List,
+    /// Switches to the next key once the grace period has passed and every
+    /// online agent has it; with `--now`, at once (agents without the next
+    /// key then need `forge-agent pins add`). With `--now --revoke`, the
+    /// old keys are revoked: agents unpin them at once and never pin them
+    /// again (use it when a key may have leaked).
+    Rotate {
+        #[arg(long)]
+        now: bool,
+        #[arg(long, requires = "now")]
+        revoke: bool,
+        /// With --revoke: brand-new keys, never announced, to pin on every
+        /// node by hand (after a compromise of the key store or database).
+        #[arg(long, requires = "revoke")]
+        fresh: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -388,6 +438,8 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Cmd::PublicAddress { action } => public_address(config, action).await?,
+        Cmd::AllowedHosts { action } => allowed_hosts(config, action).await?,
+        Cmd::AgentKey(cmd) => agent_key(config, cmd).await?,
         Cmd::Db(cmd) => db_command(&config, cmd).await?,
         Cmd::Analytics(AnalyticsCmd::Install { binary, sha256 }) => {
             let paths = forge_server::analytics_install::paths(&config);
@@ -435,6 +487,115 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `forge-server allowed-hosts get|set|clear`.
+async fn allowed_hosts(config: ServerConfig, action: HostsAction) -> anyhow::Result<()> {
+    use forge_server::api::server_settings::{AUDIT_ALLOWED_HOSTS_CLEAR, AUDIT_ALLOWED_HOSTS_UPDATE};
+    let state = Services::build(config).await?;
+    let hosts = &state.allowed_hosts;
+    let (audit, value) = match action {
+        HostsAction::Get => {
+            println!("{}", hosts.list().join(" "));
+            return Ok(());
+        }
+        HostsAction::Set { hosts: list } => {
+            forge_core::allowed_hosts::parse_list(&list).map_err(|e| anyhow::anyhow!("{e}"))?;
+            (AUDIT_ALLOWED_HOSTS_UPDATE, Some(list))
+        }
+        HostsAction::Clear => (AUDIT_ALLOWED_HOSTS_CLEAR, None),
+    };
+    let from = hosts.list();
+    forge_server::allowed_hosts::save(&state.store, hosts, value.as_deref(), state.clock.now())
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let to = hosts.list();
+    state.audit_system(audit, serde_json::json!({ "from": from, "to": to, "via": "forge-server allowed-hosts" })).await;
+    println!(
+        "Allowed hosts: {}. Restart forge-server to apply it to a running server: systemctl restart forge-server",
+        to.join(" ")
+    );
+    Ok(())
+}
+
+/// `forge-server agent-key show|list|rotate [--now]` (D-167).
+async fn agent_key(config: ServerConfig, cmd: AgentKeyCmd) -> anyhow::Result<()> {
+    use forge_server::agent_keys::{
+        AUDIT_KEY_REVOKE, AUDIT_KEY_ROTATE, AUDIT_KEY_ROTATE_REQUEST, LABEL_CURRENT, LABEL_NEXT, RotateMode,
+    };
+    let state = Services::build(config).await?;
+    let keys = &state.agent_keys;
+    let now = state.clock.now();
+    let fp = |s: &str| format!("{}{s}", forge_pki::server_key::FINGERPRINT_PREFIX);
+    match cmd {
+        AgentKeyCmd::Show => {
+            for k in keys.keys().iter().filter(|k| k.label == LABEL_CURRENT || k.label == LABEL_NEXT) {
+                println!("{:<8} {}", k.label, fp(&k.sha256));
+            }
+            println!("rotation {}", serde_json::to_string(&keys.rotation_status(now))?);
+        }
+        AgentKeyCmd::List => {
+            let list = keys.keys();
+            for k in &list {
+                println!("{:<8} {}  created {}", k.label, fp(&k.sha256), k.created_at.0);
+            }
+            println!();
+            for (server, ack) in keys.acknowledgements() {
+                let has: Vec<&str> = list.iter().filter(|k| ack.keys.contains(&k.sha256)).map(|k| k.label).collect();
+                println!(
+                    "{server}  pins {}  since {}",
+                    if has.is_empty() { "none of these".to_owned() } else { has.join(", ") },
+                    ack.since_ms
+                );
+            }
+        }
+        AgentKeyCmd::Rotate { now: at_once, revoke, fresh } => {
+            let mode = match (at_once, revoke, fresh) {
+                (true, true, true) => RotateMode::NowFresh,
+                (true, true, false) => RotateMode::NowRevoke,
+                (true, false, _) => RotateMode::Now,
+                (false, ..) => RotateMode::WhenReady,
+            };
+            let next = keys.keys().into_iter().find(|k| k.label == LABEL_NEXT).map(|k| k.sha256).unwrap_or_default();
+            let (online, acknowledged) = keys.ack_counts(&next, now);
+            match keys.rotate(now, mode).await? {
+                Some(r) => {
+                    let action = if r.revoked.is_empty() { AUDIT_KEY_ROTATE } else { AUDIT_KEY_REVOKE };
+                    state.audit_system(action, serde_json::json!(r)).await;
+                    for k in &r.revoked {
+                        println!("Revoked {}: agents unpin it at their next heartbeat.", fp(k));
+                    }
+                    if r.fresh {
+                        println!(
+                            "New keys, never announced: no agent has them. On every node run, as root:\n  forge-agent pins add {}\n  forge-agent pins add {} --label analytics\nor 'forge-agent pins fetch' and compare the key with {}.",
+                            r.to,
+                            r.worker,
+                            fp(&r.to)
+                        );
+                        return Ok(());
+                    }
+                    println!(
+                        "Switched to {} ({acknowledged} of {online} agents that pin had it). A running server serves it within a minute. Agents without it: run 'forge-agent pins add {}' on them.",
+                        fp(&r.to),
+                        r.to
+                    );
+                }
+                None => {
+                    state
+                        .audit_system(
+                            AUDIT_KEY_ROTATE_REQUEST,
+                            serde_json::json!({ "next": next, "online": online, "acknowledged": acknowledged }),
+                        )
+                        .await;
+                    println!(
+                        "Rotation requested: Forge switches to {} once the grace period has passed and every online agent has it ({acknowledged} of {online} now).",
+                        fp(&next)
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `forge-server public-address get|set|clear`.
 async fn public_address(config: ServerConfig, action: AddressAction) -> anyhow::Result<()> {
     use forge_server::api::server_settings::{AUDIT_PUBLIC_ADDRESS_CLEAR, AUDIT_PUBLIC_ADDRESS_UPDATE};
@@ -442,9 +603,12 @@ async fn public_address(config: ServerConfig, action: AddressAction) -> anyhow::
     let addr = &state.public_address;
     let (audit, value) = match action {
         AddressAction::Get => {
-            match addr.runtime() {
-                Some(v) => println!("{v} (setting; public_url in forge.toml: {})", addr.configured()),
-                None => println!("{} (public_url in forge.toml; no setting)", addr.configured()),
+            let configured = Some(addr.configured()).filter(|c| !c.is_empty()).unwrap_or("not set");
+            match (addr.runtime(), addr.last_admin()) {
+                (Some(v), _) => println!("{v} (setting; public_url in forge.toml: {configured})"),
+                (None, _) if configured != "not set" => println!("{configured} (public_url in forge.toml; no setting)"),
+                (None, Some(last)) => println!("{last} (not pinned: the address an administrator last signed in on)"),
+                (None, None) => println!("not pinned, and no administrator has signed in yet"),
             }
             return Ok(());
         }

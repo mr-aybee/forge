@@ -34,7 +34,7 @@ async fn start_with_sftp_cfg(change: impl FnOnce(&mut forge_server::ServerConfig
     change(&mut config);
     let api = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let agent = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    config.public_url = format!("http://{}", api.local_addr().unwrap());
+    config.public_url = Some(format!("http://{}", api.local_addr().unwrap()));
     config.sftp.enabled = true;
     config.sftp.listen = "127.0.0.1:0".parse().unwrap();
     let state = Services::build(config).await.unwrap();

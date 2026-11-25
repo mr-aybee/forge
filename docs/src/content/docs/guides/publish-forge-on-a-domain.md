@@ -59,9 +59,10 @@ edge.
    sudo systemctl restart forge-server
    ```
 
-   Forge then takes the client address from `X-Forwarded-For` and, when the
-   edge reports `X-Forwarded-Proto: https`, marks session cookies `Secure`.
-   From any other address Forge ignores both headers.
+   Forge then takes the client address from `X-Forwarded-For` and the
+   browser's scheme and host from `X-Forwarded-Proto` and `X-Forwarded-Host`.
+   With `https`, it marks session cookies `Secure`. From any other address
+   Forge ignores these headers.
 
 2. **Add the endpoint.** Open the cluster, select **Ingress**, then
    **Endpoints** → **New endpoint**.
@@ -96,7 +97,9 @@ edge.
    forge sites apply forge-console
    ```
 
-3. **Set the public address.** Open **Administration → Settings**. Under
+3. **Pin the public address.** The console already works on the domain
+   without this step. Pinning makes emails, alerts, SSO and AI connector
+   links use the domain. Open **Settings → Server**. Under
    **Public address**, enter `https://forge.example.com` and select **Save**.
    The line under the field shows **Links use HTTPS.** From the CLI:
 
@@ -114,7 +117,17 @@ edge.
    On a new install, pass `--public-address https://forge.example.com
    --trusted-proxies <edge-ip>` to `install.sh` instead of steps 1 and 3.
 
-4. **If you use single sign-on,** register
+4. **Narrow the allowed hosts.** In **Settings → Server**, under
+   **Allowed hosts**, replace `*` with `forge.example.com` plus any direct
+   address you still use, for example `192.0.2.10` and `localhost`. Other
+   names then get `421`. From the server host:
+
+   ```sh
+   sudo runuser -u forge -- /opt/forge/forge-server --config /etc/forge/forge.toml allowed-hosts set forge.example.com 192.0.2.10 localhost 127.0.0.1
+   sudo systemctl restart forge-server
+   ```
+
+5. **If you use single sign-on,** register
    `https://forge.example.com/api/v1/auth/oidc/callback` as a redirect URI
    at your identity provider and restart `forge-server`. Forge reads the
    OIDC redirect URL at start.
@@ -125,7 +138,8 @@ edge.
   certificate.
 - Open a node's terminal or watch a job. Live updates work, so the WebSocket
   origin check accepts the domain.
-- Open `http://<forge-ip>:3880`. The direct address still works.
+- Open `http://<forge-ip>:3880`. The direct address still works when it is
+  in the allowed hosts; otherwise it returns `421`.
 - When the next alarm fires, the **Open the alarm** link in the email, and
   `links.alarm` in a webhook payload, start with `https://forge.example.com`.
   A **Send test** message carries no alarm link.
@@ -136,19 +150,19 @@ edge.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `502 Bad Gateway` on the domain | The edge cannot reach `<forge-ip>:3880` | Check `api_listen` is not `127.0.0.1`, and that a firewall allows the edge |
-| Terminal or live updates fail on the domain with `origin not allowed` | The public address is not set, or it differs from the URL in the browser (scheme, host or port) | Set the public address to exactly the origin you open, for example `https://forge.example.com` |
+| Terminal or live updates fail on the domain with `origin not allowed` | The edge is not in `trusted_proxies`, so Forge sees `http` while the browser uses `https` | Add the edge to `trusted_proxies` and restart, or pin the public address to exactly the origin you open |
+| `421 Misdirected Request` | The domain or address is not in **Allowed hosts** | Add it in **Settings → Server**, or run `forge-server allowed-hosts clear` on the server host and restart |
 | `value: use the origin only…` when you save | The address has a path, query or user name | Enter only `https://` and the host, with a port only when it is not 443 |
 | Sign-in on the domain works but you are signed out on the next page | `cookie_secure = true` is fine; with `false`, the edge is not in `trusted_proxies`, so cookies lack `Secure` and the browser may drop them | Add the edge's address to `[security] trusted_proxies` and restart |
 | Sign-in limits hit everyone at once | Forge sees every request as coming from the edge | Add the edge to `trusted_proxies` so Forge uses `X-Forwarded-For` |
-| A passkey does not work on the domain | Passkeys are bound to the host of `public_url` | Sign in with password and code on the domain, or set `public_url` to the domain and register passkeys there |
-| SSO returns `redirect_uri mismatch` | The IdP does not know the domain's callback, or the server was not restarted | Register the callback URL from step 4 and restart `forge-server` |
+| A passkey does not work on the domain | A passkey belongs to the name it was registered on | Sign in with password and code on the domain and register a passkey there |
+| SSO returns `redirect_uri mismatch` | The IdP does not know the domain's callback, or the server was not restarted | Register the callback URL from step 5 and restart `forge-server` |
 | `forge-server public-address set` changed nothing in the running console | The server reads the setting at start | Restart `forge-server`, or set it in the console or with `forge settings` |
 
 :::caution
 Only list your own edge nodes in `trusted_proxies`. A trusted address can set
-the client address Forge records and make cookies `Secure`. Forge never
-trusts the `Host` header: browser origins are only `public_url` and the
-public address.
+the client address, host and scheme Forge sees. Emails, alerts and SSO never
+use a request's host: they use the pinned public address.
 :::
 
 ## Next steps

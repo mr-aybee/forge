@@ -99,6 +99,7 @@ pub struct CreateToken {
 pub async fn create_enrollment_token(
     State(state): State<AppState>,
     caller: Caller,
+    origin: crate::request_origin::RequestOrigin,
     Ws(org): Ws,
     Json(req): Json<CreateToken>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
@@ -113,7 +114,8 @@ pub async fn create_enrollment_token(
     };
     caller.authorize(Action::ServerEnroll, scope.clone()).await?;
     let ttl = req.ttl_minutes.unwrap_or(60).clamp(1, 1440);
-    let generated = forge_pki::enrollment::generate(state.ca.fingerprint());
+    let generated =
+        forge_pki::enrollment::generate(state.ca.fingerprint(), Some(&state.agent_keys.current_fingerprint()));
     let token = EnrollmentToken {
         id: forge_secrets::crypto::random_token::<9>(),
         workspace_id: org,
@@ -143,8 +145,9 @@ pub async fn create_enrollment_token(
             json!({ "token_id": token.id, "ttl_minutes": ttl, "cluster_id": req.cluster_id }),
         )
         .await;
-    let server = &state.config.agent_public_url;
-    let forge_url = state.config.node_forge_url().trim_end_matches('/');
+    // From the address this person is on (D-167).
+    let urls = crate::request_origin::NodeUrls::from_state(&state, &origin);
+    let (server, forge_url) = (&urls.agent_url, &urls.forge_url);
     Ok((
         StatusCode::CREATED,
         Json(json!({

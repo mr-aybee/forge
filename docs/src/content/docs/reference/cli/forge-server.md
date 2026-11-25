@@ -32,6 +32,8 @@ Commands:
   mfa               Whether MFA is required on this server: `status`, `on` or `off`. Edits `[security] require_mfa` in forge.toml; restart to apply
   elevated-tokens   Whether API keys and service-account tokens marked elevated may run MFA-guarded actions: `status`, `on` or `off`. Edits `[security] allow_elevated_tokens` in forge.toml; restart to apply
   public-address    The public address people use in links (alert emails, webhooks, approvals): `get`, `set <url>` or `clear`. Stored in the database, like the console's Settings page; `clear` falls back to `public_url`. Audited as system:forge. Restart a running server to apply it there
+  allowed-hosts     The hosts the console answers on: `get`, `set <pattern>...` or `clear` (back to `*`, any host). Patterns: `*`, a host name or IP, or `*.example.com`. Other hosts get 421. Audited as system:forge. Restart a running server to apply it there
+  agent-key         The control-plane key agents pin: `show` the current and next fingerprints, `list` the keys and which agents have them, or `rotate` (once agents have the next key; `--now` at once). Audited as system:forge. A running server applies a rotation within a minute
   check-migrations  Exits non-zero when the database has applied migrations this binary does not know (it is older than the database). Used by the self-update dry run; never changes the database
   analytics         The embedded analytics engine: install its binary
   db                The operational database: test it, create it, show the configuration
@@ -363,8 +365,14 @@ The last command exits with `1` and changes nothing.
 
 ### forge-server public-address get
 
-Prints the address links use and where it comes from: the setting, or
-`public_url` from `forge.toml`. Takes no arguments.
+Prints the address background links use and where it comes from: the
+setting, `public_url` from `forge.toml`, or, when neither is set, the
+address an administrator last signed in on. Takes no arguments.
+
+```text
+$ forge-server --config /etc/forge/forge.toml public-address get
+http://192.0.2.10:3880 (not pinned: the address an administrator last signed in on)
+```
 
 ### forge-server public-address set
 
@@ -373,7 +381,179 @@ URL is refused.
 
 ### forge-server public-address clear
 
-Removes the setting; links use `public_url`. Takes no arguments.
+Removes the setting; links use `public_url`, or the last administrator address when
+`public_url` is not set. Takes no arguments.
+
+## forge-server allowed-hosts
+
+Shows, sets or clears the [allowed hosts](/docs/reference/configuration/#allowed-hosts):
+the host names and IPs the console and API answer on. A request for any
+other host gets `421 Misdirected Request` with no body. `/api/health` answers
+on every host. The command writes the database directly, so it works without
+a signed-in session. Run it on the server host as the service user. A running
+server reads the setting at start: restart it after a change. The console
+(**Settings → Server**) applies a change at once. Forge audits a change as
+`server.allowed_hosts.update` or `server.allowed_hosts.clear`, actor
+`system:forge`.
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `get` | subcommand | | One of the three | Prints the patterns, separated by spaces | `get` |
+| `set <HOSTS>...` | subcommand, one or more strings | | One of the three | Replaces the list. Each pattern is `*`, a host name, an IP, or `*.<domain>` | `set forge.example.com 192.0.2.10` |
+| `clear` | subcommand | | One of the three | Removes the setting: any host is allowed (`*`) | `clear` |
+| `--config` | path | built-in defaults | No | The `forge.toml` whose database to change (or `FORGE_CONFIG`) | `--config /etc/forge/forge.toml` |
+
+`*.example.com` matches one or more labels under `example.com`
+(`forge.example.com`, `a.b.example.com`), not `example.com` itself and not
+`example.com.evil.test`. The list holds at most 64 patterns.
+
+:::caution
+Include every name and IP people and tools use, including `localhost` if
+you run commands on the server host against `http://localhost:3880`. A
+name left out gets `421` until you run `allowed-hosts clear` or `set` again.
+:::
+
+**Examples**
+
+```sh
+sudo runuser -u forge -- /opt/forge/forge-server --config /etc/forge/forge.toml allowed-hosts set forge.example.com localhost 127.0.0.1
+sudo systemctl restart forge-server
+```
+
+**Sample output**
+
+```text
+$ forge-server --config /etc/forge/forge.toml allowed-hosts get
+*
+
+$ forge-server --config /etc/forge/forge.toml allowed-hosts set forge.example.com localhost 127.0.0.1
+Allowed hosts: forge.example.com localhost 127.0.0.1. Restart forge-server to apply it to a running server: systemctl restart forge-server
+```
+
+A pattern that is not a host name, IP or `*.<domain>` is refused: the command
+exits with `1` and changes nothing.
+
+### forge-server allowed-hosts get
+
+Prints the allowed host patterns. Takes no arguments.
+
+### forge-server allowed-hosts set
+
+Replaces the list with `<HOSTS>`, one or more patterns. Duplicates are
+dropped. Exits with `1` when a pattern is refused.
+
+### forge-server allowed-hosts clear
+
+Removes the setting, so any host is allowed (`*`). Takes no arguments.
+
+## forge-server agent-key
+
+Shows and rotates the control-plane key that agents pin. The agent listener
+(port 3843) and the analytics upload listener (port 3832) present
+certificates for this key, and each agent accepts the control plane only if
+its key fingerprint is in the agent's pin set. See
+[Pinned server key](/docs/concepts/security-model/#pinned-server-key).
+
+The command reads and writes the database directly. Run it on the server host
+as the service user. A running server picks up a rotation within a minute,
+without a restart. Forge audits a switch as `agent_key.rotate` and a rotation
+request as `agent_key.rotate_request`, actor `system:forge`, with the
+counts of online and acknowledging agents. Only fingerprints are printed,
+never key material.
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `show` | subcommand | | One of the three | Prints the current and next fingerprints and the rotation status | `show` |
+| `list` | subcommand | | One of the three | Prints every kept key, then each agent and which of the keys it pins | `list` |
+| `rotate` | subcommand | | One of the three | Asks for a switch to the next key | `rotate` |
+| `rotate --now` | flag | off | No | Switches at once, without waiting for the grace period or acknowledgements | `rotate --now` |
+| `rotate --now --revoke` | flag | off | No | Switches at once and revokes every key that does not survive the switch (the old current, analytics and previous keys): they are not kept as `previous`, agents unpin them at their next heartbeat and never pin them again from an announcement. Audited as `agent_key.revoke`. Requires `--now` | `rotate --now --revoke` |
+| `rotate --now --revoke --fresh` | flag | off | No | Makes brand-new current, next and analytics keys that were never announced, revokes every old key and prints the new fingerprints. No agent has them: pin them on every node by hand. For a compromise of the key store or database. Requires `--revoke` | `rotate --now --revoke --fresh` |
+| `--config` | path | built-in defaults | No | The `forge.toml` whose database to use (or `FORGE_CONFIG`) | `--config /etc/forge/forge.toml` |
+
+### forge-server agent-key show
+
+Prints the `current` key (the one the listeners serve) and the `next` key
+(announced to agents ahead of the switch), then the rotation status as JSON.
+`waiting_for` is one of:
+
+| Value | Meaning |
+| --- | --- |
+| `manual` | `[agent_tls] rotate_days` is `0` and nobody asked for a rotation |
+| `scheduled` | Not due before `at` (epoch ms) |
+| `grace` | Due, but the next key has been announced for less than `grace_days`; switches after `until` |
+| `acknowledgements` | Due, waiting until every online agent that pins keys has the next key (`acknowledged` of `online`) |
+| `ready` | Every condition holds; the next tick (within a minute) switches |
+
+```text
+$ forge-server --config /etc/forge/forge.toml agent-key show
+current  sha256:<current-fingerprint>
+next     sha256:<next-fingerprint>
+rotation {"waiting_for":"scheduled","at":<epoch-ms>}
+```
+
+Give the `current` fingerprint to `forge-agent pins add` on a node that
+reports a key mismatch.
+
+### forge-server agent-key list
+
+Prints each key with its label (`current`, `next`, `analytics` and
+`analytics-next` for the analytics worker's upload listener, or `previous` for
+the key kept for one more rotation so you can roll back) and creation time, then one
+line per agent with the keys it pins.
+
+```text
+$ forge-server --config /etc/forge/forge.toml agent-key list
+current  sha256:<current-fingerprint>  created <epoch-ms>
+next     sha256:<next-fingerprint>  created <epoch-ms>
+analytics sha256:<analytics-fingerprint>  created <epoch-ms>
+analytics-next sha256:<analytics-next-fingerprint>  created <epoch-ms>
+
+<server-id>  pins current, next  since <epoch-ms>
+```
+
+### forge-server agent-key rotate
+
+Without `--now`, records a rotation request: Forge switches to the next key
+once the next key has been announced for `grace_days` and every online agent
+has acknowledged it. With `--now`, it switches at once. Agents that did not
+have the next key then fail to connect until you run
+`forge-agent pins add <fingerprint>` on them. Add `--revoke` when a key may
+have leaked: every old key that does not survive the switch (old current,
+analytics and previous keys) is dropped instead of kept, and agents remove
+them from their pins at once. The `next` key, already announced, becomes
+current.
+
+`--revoke` protects against **one leaked key**. It does not help after a
+compromise of the key store or the database: the `next` key is stored right
+beside the current one, so an attacker who read one has both. Then run
+`rotate --now --revoke --fresh`: Forge makes brand-new keys that were never
+announced, revokes every old one, and prints the new fingerprints. Agents
+cannot reach the server until you pin the new keys on each node by hand,
+with `forge-agent pins add <fingerprint>` (and `--label analytics` for the
+analytics key) or `forge-agent pins fetch`, comparing the key it shows with
+the printed one.
+
+```text
+$ forge-server --config /etc/forge/forge.toml agent-key rotate
+Rotation requested: Forge switches to sha256:<next-fingerprint> once the grace period has passed and every online agent has it (3 of 4 now).
+
+$ forge-server --config /etc/forge/forge.toml agent-key rotate --now
+Switched to sha256:<next-fingerprint> (3 of 4 agents that pin had it). A running server serves it within a minute. Agents without it: run 'forge-agent pins add <next-fingerprint>' on them.
+
+$ forge-server --config /etc/forge/forge.toml agent-key rotate --now --revoke --fresh
+Revoked sha256:<old-fingerprint>: agents unpin it at their next heartbeat.
+New keys, never announced: no agent has them. On every node run, as root:
+  forge-agent pins add <new-fingerprint>
+  forge-agent pins add <new-analytics-fingerprint> --label analytics
+or 'forge-agent pins fetch' and compare the key with sha256:<new-fingerprint>.
+```
+
+**After restoring a backup** of the database, run
+`forge-server agent-key rotate` (or any other key change). The restored key
+state carries an older sequence than the one agents last applied, and they
+refuse older announcements. Every change sets the sequence to at least the
+current time in milliseconds, so the next announcement moves past it again.
 
 ## forge-server check-migrations
 

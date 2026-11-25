@@ -27,7 +27,7 @@ For how agents connect and why they dial out, see [Agents](/docs/concepts/agents
   `node.onboard`, which needs an MFA-verified session when the server requires
   MFA ([Multi-factor authentication](/docs/guides/mfa/)). Manual onboarding uses
   `server.enroll`, which does not.
-- The machine reaches the control plane's public URL (to download the
+- The machine reaches the control plane on some address (to download the
   installer and agent), its agent port, TCP `3843` by default, and, when
   analytics is on, the analytics worker's upload port, TCP `3832` by
   default. See [Network ports](/docs/reference/network-ports/).
@@ -41,6 +41,24 @@ For how agents connect and why they dial out, see [Agents](/docs/concepts/agents
   build (see [Add a Windows node](#add-a-windows-node-with-the-installer)).
   Until they exist, **Add a node**
   warns and onboarding fails with a clear error.
+
+### Which address nodes use
+
+The command on **Add node** uses the address your browser is on. The node
+downloads the installer from that address and connects its agent to the same
+host on port `3843`. Open the console on an address the node can reach
+before you copy the command.
+
+For example, with a control plane on two networks:
+
+| Control plane address | Open the console on | Nodes on that network enroll against |
+| --- | --- | --- |
+| `192.0.2.10` (office LAN) | `http://192.0.2.10:3880` | `https://192.0.2.10:3843` |
+| `10.0.0.5` (datacenter LAN) | `http://10.0.0.5:3880` | `https://10.0.0.5:3843` |
+
+You can also edit the host in the copied command. To send every node to one
+address regardless of where you are, set `node_public_url` in
+[`forge.toml`](/docs/reference/configuration/).
 
 ## Add a node with its SSH login (assisted)
 
@@ -456,7 +474,8 @@ The control node cannot be removed.
 | **MFA required** on the **Assisted (SSH login)** tab | Your session is not MFA-verified | Enrol MFA, sign out and sign in with your code, or use the manual installer |
 | `forge-install: terminal account <name> not created; the install continues` | The name is a system user or an existing group on the machine, `sudo` is missing while **Allow sudo** is on, or the helper build is missing | Read the `forge-agent-helper terminal-account:` line above it. After the install, create the account as in [Create a terminal account on a node](/docs/guides/terminal/#create-a-terminal-account-on-a-node) |
 | `400` `terminal account <name> is not allowed` | The name breaks the naming rules or is a system name | Use 1–32 of `a-z`, `0-9`, `_`, `-`, starting with a letter or `_` |
-| Node installs but never comes **online** | TCP `3843` is blocked between node and control plane | Open the agent port; add the name nodes use to `agent_hostnames` |
+| Node installs but never comes **online** | TCP `3843` is blocked between node and control plane, or the node cannot reach the address you copied the command from | Open the agent port; copy the command again from an address the node reaches (see [Which address nodes use](#which-address-nodes-use)) |
+| Node goes offline with `server key … is not pinned` in its log | The control plane's key changed while the node missed the announcement | Run `forge-server agent-key show` on the server and `forge-agent pins add <fingerprint>` on the node. See [The key mismatch error](/docs/reference/cli/forge-agent/#the-key-mismatch-error) |
 | Windows: `forge-install: error: run PowerShell as Administrator` | PowerShell is not elevated | Start PowerShell with **Run as administrator** and run the command again |
 | Windows: `this installer needs 64-bit Windows on x86_64` | 32-bit Windows, ARM64 Windows, or the 32-bit **Windows PowerShell (x86)** | Use the 64-bit PowerShell on 64-bit x86_64 Windows. ARM64 is not supported |
 | Windows: `Windows 10 1809 or Windows Server 2019 or later is needed (this is build <n>)` | The Windows build is older than 17763 | Upgrade Windows; older versions are not supported |

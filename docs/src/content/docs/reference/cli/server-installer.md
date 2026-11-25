@@ -67,7 +67,6 @@ press Enter to take it.
 
 | # | Question | Default | Asked when | Same as |
 | --- | --- | --- | --- | --- |
-| 1 | Public URL users open | `http://<first IP of hostname -I>:3880` | No `forge.toml` yet | `--public-url` |
 | 2 | Environment | `development` | Always | `--environment` |
 | 3 | Administrator user name | `admin` | No database yet | `--admin-username` |
 | 4 | Administrator password (hidden, typed twice; Enter generates one) | generate | No database yet | `FORGE_ADMIN_PASSWORD` |
@@ -95,36 +94,34 @@ An example session on a new host:
 
   Answer each question, or press Enter for the default in brackets.
 
-  1. Public URL users open [http://<server-ip>:3880]
-  2. Environment (production, staging, development, test) [development]
-  3. Administrator user name [admin]
-  4. Administrator password (hidden; Enter generates one) [generate]
+  1. Environment (production, staging, development, test) [development]
+  2. Administrator user name [admin]
+  3. Administrator password (hidden; Enter generates one) [generate]
      Password:
-  5. Also run workloads on this server (install the Forge agent here)? [y/N] y
-  6. Cluster for this server (created if missing) [default] lab
-  7. Terminal account on this server [forge-ops]
+  4. Also run workloads on this server (install the Forge agent here)? [y/N] y
+  5. Cluster for this server (created if missing) [default] lab
+  6. Terminal account on this server [forge-ops]
 
   REVIEW
-    Public URL    http://<server-ip>:3880
     Environment   development
     Admin         admin
     Password      generated, shown once at the end
     MFA           each user's choice (sign-in only)
     Agent         yes: cluster lab, terminal account forge-ops
 
-  8. Install with these settings? [Y/n]
+  7. Install with these settings? [Y/n]
 ```
 
 ### Options
 
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
-| `--public-url` | URL | `http://<fqdn>:3880`, where `<fqdn>` is `hostname -f` (or `hostname`) | No | URL users open. Written to `public_url`. An `https://` URL also sets `cookie_secure = true`. First install only: an existing `forge.toml` is kept | `--public-url https://<forge-host>` |
+| `--public-url` | URL | none: not pinned | No | Pins the console address. Written to `public_url`, with `agent_public_url = "https://<agent-host>:3843"`. Without it the console answers on any name or IP of the machine and each node uses the address it installed from. Refused when it is not an `http(s)://<name or IP>[:port]` URL, or names `0.0.0.0`. An `https://` URL also sets `cookie_secure = true`. First install only: an existing `forge.toml` is kept | `--public-url https://<forge-host>` |
 | `--admin-username` | string | `admin` | No | Sign-in name of the first platform administrator. First install only | `--admin-username <admin-name>` |
 | `--admin-email` | string | none | No | Email of the first administrator. You can add it later in the console. First install only | `--admin-email <admin-email>` |
 | `--public-address` | URL (origin) | none | No | Address people use when Forge is published on a domain through an ingress, for example `https://forge.example.com`. Stored as the runtime [public address](/docs/reference/configuration/#public-address) with `forge-server public-address set`, on a first install and on an upgrade; links in alerts use it, and `--public-url` stays the direct address. Refused (the installer stops) when it has a path, query or user name | `--public-address https://forge.example.com` |
 | `--trusted-proxies` | comma-separated IPs or CIDRs | none (`[]`) | No | Reverse proxies, such as the ingress edge nodes, whose `X-Forwarded-For` and `X-Forwarded-Proto` Forge trusts. Written to `[security] trusted_proxies`. First install only: edit `forge.toml` on an existing install | `--trusted-proxies 192.0.2.20,192.0.2.21` |
-| `--agent-host` | host name or IP | the host part of `--public-url` | No | Name or IP that nodes use to reach this server. Sets `agent_public_url = "https://<agent-host>:3843"` and is the first entry of `agent_hostnames`. First install only | `--agent-host <forge-ip>` |
+| `--agent-host` | host name or IP | the host part of `--public-url` | No | Name or IP in install commands requested on the pinned address. Sets `agent_public_url = "https://<agent-host>:3843"` and is the first entry of `agent_hostnames`. Ignored without `--public-url`. First install only | `--agent-host <forge-ip>` |
 | `--prefix` | directory | `/opt/forge` | No | Where the binaries and agent binaries go. Also where the installer looks for an existing version. Use the same value on every run | `--prefix /srv/forge` |
 | `--environment` | `production`, `staging`, `development` or `test` | not written, so the server uses `production` | No | Sets the top-level `environment` key in `forge.toml`. Applied on every run where you pass it, including upgrades | `--environment staging` |
 | `--mfa` | `required` or `off` (`on` is accepted as `required`) | `off` on a new install (MFA is each user's choice for their own sign-in); an upgrade keeps the current setting | No | `required` also makes guarded actions need MFA. Sets `[security] require_mfa` with the same editor as `forge-server mfa on\|off`. Applied on every run where you pass it | `--mfa off` |
@@ -315,8 +312,20 @@ WantedBy=multi-user.target
 
 ### The forge.toml it writes
 
-On a first install, with `--public-url https://<forge-host>` on a host whose
-FQDN is `<fqdn>`:
+On a first install without `--public-url`, on a host whose FQDN is `<fqdn>`,
+the file pins no address:
+
+```toml
+data_dir = "/var/lib/forge"
+api_listen = "0.0.0.0:3880"
+cookie_secure = false
+agent_listen = "0.0.0.0:3843"
+agent_hostnames = ["<fqdn>", "localhost", "127.0.0.1"]
+agent_dist_dir = "/opt/forge/dist"
+```
+
+With `--public-url https://<forge-host>`, it adds `public_url` and
+`agent_public_url`:
 
 ```toml
 # Orbyn Forge control plane (written by install.sh; see forge.toml.example).
@@ -387,8 +396,9 @@ exists. It reads both versions with `forge-server --version`.
 | Unit file | Written | Rewritten, then the service restarts |
 | Summary | `is installed and running`, with an **ADMINISTRATOR** section | `upgraded to <new> and running`, no **ADMINISTRATOR** section |
 
-The summary always reports `public_url` and `agent_public_url` as they are
-in `forge.toml`, not the options you passed.
+The summary reports `public_url` and `agent_public_url` as they are in
+`forge.toml`, not the options you passed. Without `public_url` it lists one
+**Console** line per IPv4 address of the machine and one for its host name.
 
 ### What install.sh prints
 
@@ -608,7 +618,7 @@ Get-Help .\install.ps1
 
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
-| `-PublicUrl` | string (URL) | `http://<fqdn>:3880`, where `<fqdn>` is the DNS host name of `%COMPUTERNAME%` | No | URL users open. An `https://` URL also sets `cookie_secure = true`. First install only | `-PublicUrl https://<forge-host>` |
+| `-PublicUrl` | string (URL) | none: not pinned | No | Pins the console address (`public_url`). Without it the console answers on any name or IP of the machine. Refused for `0.0.0.0` and non-URLs. An `https://` URL also sets `cookie_secure = true`. First install only | `-PublicUrl https://<forge-host>` |
 | `-AdminUsername` | string | `admin` | No | Sign-in name of the first platform administrator. First install only | `-AdminUsername <admin-name>` |
 | `-AdminEmail` | string | none | No | Email of the first administrator. First install only | `-AdminEmail <admin-email>` |
 | `-DbUrl` | string | none (SQLite) | No | PostgreSQL server without database name and password. Password in `FORGE_DATABASE_PASSWORD`, stored in `db-password` next to `forge.toml` (SYSTEM and Administrators only). First install only | `-DbUrl postgres://forge@db1:5432` |
@@ -617,7 +627,7 @@ Get-Help .\install.ps1
 | `-Analytics` | `off`, `clickhouse` or `duckdb` | `off` | No | Analytics database. The embedded engine is Linux only; `duckdb` is accepted but not yet verified on Windows | `-Analytics clickhouse` |
 | `-AnalyticsUrl` | string | none | With `-Analytics clickhouse` | ClickHouse address without password; password in `FORGE_ANALYTICS_PASSWORD` | `-AnalyticsUrl https://default@ch1:8443` |
 | `-AnalyticsName` | string | `<DbName>_analytics` | No | Analytics database name | `-AnalyticsName forge_op_analytics` |
-| `-AgentHost` | string | the host of `-PublicUrl` | No | Name or IP nodes use to reach this server. Sets `agent_public_url` and the first entry of `agent_hostnames`. First install only | `-AgentHost <forge-ip>` |
+| `-AgentHost` | string | the host of `-PublicUrl` | No | Name or IP in install commands requested on the pinned address. Sets `agent_public_url` and the first entry of `agent_hostnames`. First install only | `-AgentHost <forge-ip>` |
 | `-InstallDir` | directory | `C:\Program Files\Orbyn Forge` | No | Binaries and agent binaries (`dist\`). Use the same value on every run | `-InstallDir "D:\Orbyn Forge"` |
 | `-DataRoot` | directory | `C:\ProgramData\Orbyn Forge` | No | Holds `forge.toml` and `data\`. Use the same value on every run | `-DataRoot "D:\Forge Data"` |
 | `-Uninstall` | switch | off | No | Stops and removes the **Orbyn Forge** task, the processes, `-InstallDir` and the **Orbyn Forge &lt;port&gt;** firewall rules; keeps `-DataRoot` | `-Uninstall` |
@@ -694,17 +704,15 @@ Install to another drive:
 | Scheduled task **Orbyn Forge** | | Runs `forge-server.exe --config "<DataRoot>\forge.toml" serve` in `<InstallDir>` as `SYSTEM` with highest privileges, at startup. No time limit; restarts every minute after a failure, up to 999 times; starts when available; runs on battery |
 | Firewall rules **Orbyn Forge 3880**, **Orbyn Forge 3843** | | Inbound TCP allow, all profiles |
 
-The `forge.toml` it writes on a first install:
+The `forge.toml` it writes on a first install without `-PublicUrl`:
 
 ```toml
 # Orbyn Forge control plane (written by install.ps1; see forge.toml.example).
 data_dir = "C:/ProgramData/Orbyn Forge/data"
 api_listen = "0.0.0.0:3880"
-public_url = "http://<fqdn>:3880"
 cookie_secure = false
 agent_listen = "0.0.0.0:3843"
-agent_public_url = "https://<fqdn>:3843"
-agent_hostnames = ["<fqdn>", "<fqdn>", "localhost", "127.0.0.1"]
+agent_hostnames = ["<fqdn>", "localhost", "127.0.0.1"]
 agent_dist_dir = "C:/Program Files/Orbyn Forge/dist"
 
 [update]

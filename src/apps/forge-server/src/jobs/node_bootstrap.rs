@@ -53,6 +53,24 @@ pub struct BootstrapPayload {
     pub terminal_account: Option<String>,
     #[serde(default)]
     pub terminal_account_sudo: bool,
+    /// Where the node downloads from and links to: the address of the
+    /// request that started the job (D-167). `None` in jobs from before it,
+    /// which use the configured addresses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub urls: Option<BootstrapUrls>,
+}
+
+/// The console and agent URLs given to the node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BootstrapUrls {
+    pub forge_url: String,
+    pub agent_url: String,
+}
+
+impl From<crate::request_origin::NodeUrls> for BootstrapUrls {
+    fn from(u: crate::request_origin::NodeUrls) -> Self {
+        Self { forge_url: u.forge_url, agent_url: u.agent_url }
+    }
 }
 
 #[derive(Debug)]
@@ -69,6 +87,8 @@ pub struct NodeBootstrapJob {
     pub envelope: Envelope,
     pub dist: Arc<AgentDist>,
     pub ca_fingerprint: String,
+    /// The control-plane key new nodes pin (D-167).
+    pub agent_keys: Arc<crate::agent_keys::AgentKeys>,
     /// OpenSSH public key of the SSH user CA (installed into sshd).
     pub ssh_user_ca: String,
     pub node_forge_url: String,
@@ -338,7 +358,8 @@ impl NodeBootstrapJob {
         let cred = self.credential(&p).await?;
 
         // A fresh single-use token for this attempt; only its id is kept.
-        let generated = forge_pki::enrollment::generate(&self.ca_fingerprint);
+        let key = self.agent_keys.current_fingerprint();
+        let generated = forge_pki::enrollment::generate(&self.ca_fingerprint, Some(&key));
         let token_id = forge_secrets::crypto::random_token::<9>();
         self.enrollment
             .create_token(&EnrollmentToken {
@@ -358,8 +379,8 @@ impl NodeBootstrapJob {
         let script = render_script(
             &self.dist,
             &InstallParams {
-                forge_url: &self.node_forge_url,
-                agent_url: &self.node_agent_url,
+                forge_url: p.urls.as_ref().map_or(&self.node_forge_url, |u| &u.forge_url),
+                agent_url: p.urls.as_ref().map_or(&self.node_agent_url, |u| &u.agent_url),
                 token: Some(&generated.display),
                 hostname: p.hostname.as_deref(),
                 terminal_account: p.terminal_account.as_deref(),

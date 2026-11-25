@@ -120,6 +120,13 @@ pub enum HelperRequest {
     /// is true only when the helper verifies commands with a pin (D-114).
     /// Read-only, so the agent may ask without a signed command.
     Capabilities {},
+    /// Pin the control-plane keys Forge announced (D-167): base64url of a
+    /// `SignedServerKeys`. The helper checks Forge's signature with its own
+    /// pin before it writes the root-owned pin file, so the agent cannot
+    /// pin a key of its choosing.
+    ServerPins {
+        keys: String,
+    },
     /// Create or keep a terminal account (D-078).
     TerminalAccount {
         name: String,
@@ -567,6 +574,7 @@ impl HelperRequest {
         matches!(
             self,
             Self::ConfirmUpdate {}
+                | Self::ServerPins { .. }
                 | Self::LoginAccounts {}
                 | Self::Capabilities {}
                 | Self::ContainerState { .. }

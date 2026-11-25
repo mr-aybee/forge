@@ -4,6 +4,7 @@
 //! request is answered at a time per connection, and a request whose
 //! connection closes is dropped (so an abandoned log batch is not written).
 
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;

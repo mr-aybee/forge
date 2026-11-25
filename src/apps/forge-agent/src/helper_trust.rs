@@ -411,19 +411,19 @@ mod tests {
         let forge = CommandSigner::generate().unwrap();
         let agent = enrolled(&forge);
         let state = tempfile::tempdir().unwrap();
-        // `write_nofollow` writes `seen.json.tmp` first: a folder there makes it fail.
-        std::fs::create_dir(state.path().join("seen.json.tmp")).unwrap();
+        // A non-empty folder at `seen.json`: the rename over it fails.
+        std::fs::create_dir_all(state.path().join(SEEN).join("x")).unwrap();
         let trust = Trust::open(state.path(), agent.path(), true, NOW);
         let cmds: Vec<HelperRequest> = (0..COMPACT_EVERY + 5).map(|_| signed(&forge, "srv-1", list_root())).collect();
         for c in &cmds {
             assert!(trust.admit(c.clone(), NOW).is_ok());
         }
-        assert!(!state.path().join(SEEN).exists(), "compaction failed");
+        assert!(!state.path().join(SEEN).is_file(), "compaction failed");
         let restarted = Trust::open(state.path(), agent.path(), true, NOW);
         for c in [&cmds[0], &cmds[COMPACT_EVERY + 4]] {
             assert!(restarted.admit(c.clone(), NOW).unwrap_err().contains("replay"), "kept in the log");
         }
-        std::fs::remove_dir(state.path().join("seen.json.tmp")).unwrap();
+        std::fs::remove_dir_all(state.path().join(SEEN)).unwrap();
         // A torn last line: compacted at start, so new appends start clean.
         std::fs::write(state.path().join(SEEN_LOG), format!("[{},\"x\"]\n[{},\"y", NOW.0 + 60_000, NOW.0)).unwrap();
         let repaired = Trust::open(state.path(), agent.path(), true, NOW);

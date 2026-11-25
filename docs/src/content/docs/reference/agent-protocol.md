@@ -112,6 +112,7 @@ the settings. See [Analytics: node spools](/docs/concepts/analytics/#node-spools
 | Message | Field | Meaning |
 | --- | --- | --- |
 | `EnrollResponse` | `analytics_url` (6) | The worker's upload URL (`https://host:3832`); empty while analytics is off. The agent stores it in `agent.toml` |
+| `EnrollResponse` | `analytics_port` (8) | The worker's upload port. A new agent dials it on the host of its own `server_url`; `0` means use `analytics_url` (analytics off, or `[analytics] worker_agent_url` is set) |
 | `Heartbeat` | `spool` (10) | `SpoolStatus`, present from agents that spool. Its presence tells the server not to expect `container_logs`, `NodeMetrics.containers` or `top_processes` |
 | `HeartbeatResponse` | `analytics` (6) | `AnalyticsAgentConfig`; absent while analytics is off, and the agent then writes nothing to the spool |
 
@@ -121,6 +122,7 @@ the settings. See [Analytics: node spools](/docs/concepts/analytics/#node-spools
 | | `spool` (2) | `SpoolTuning` | Spool limits |
 | | `keys` (3) | repeated `IngestKey` | Ingest keys of the services placed on this node, at most 4,096 |
 | | `listener` (4) | `ListenerTuning` | Local listener limits |
+| | `port` (5) | uint32 | The upload port on the host of the agent's own `server_url`; `0`: use `url`. Older agents use `url` |
 | `IngestKey` | `hash` (1) | bytes | SHA-256 of the key |
 | | `service_id` (2) | string | The key's service |
 | `SpoolTuning` | `max_bytes` (1) | uint64, bytes | Spool cap |
@@ -225,6 +227,31 @@ control plane never sets it today. Older helpers ignore the field.
 | `unsupported` | The node cannot self-update: not Linux, no systemd, no `curl`, or `update` is not in `allowed_commands` | A rollout skips the node; a single update fails |
 | `busy` | Another update holds the node's update lock | The update job retries with backoff |
 | `downgrade` | The command would install an older version | A rollout skips the node; a single update fails |
+
+## Server key pinning
+
+Agents accept the control plane by the key in its certificate, not by host
+name. See [Pinned server key](/docs/concepts/security-model/#pinned-server-key).
+
+| Message | Field | Type | Meaning |
+| --- | --- | --- | --- |
+| `EnrollResponse` | `server_keys` (7) | `SignedServerKeys` | The keys to pin at enrollment; absent from older servers |
+| `Heartbeat` | `pinned_server_keys` (11) | repeated string | Fingerprints the agent pins: its acknowledgement of an announced next key. Empty from agents without pins |
+| `HeartbeatResponse` | `server_keys` (7) | `SignedServerKeys` | The current and next keys, in every reply |
+| `SignedServerKeys` | `body` (1) | bytes | An encoded `ServerKeys` |
+| | `signature` (2) | bytes | Ed25519 over `body` by the command key |
+| `ServerKeys` | `server_id` (1) | string | The node the announcement is for |
+| | `issued_at_ms` (2) | int64 | When it was signed |
+| | `keys` (3) | repeated `ServerKey` | At most 4 |
+| `ServerKey` | `sha256` (1) | string | SHA-256 of the SubjectPublicKeyInfo, 64 lower-case hex digits |
+| | `label` (2) | string | `current` or `next` |
+
+The agent's verifier accepts a server certificate when the SHA-256 of its
+SubjectPublicKeyInfo is in the pin set, the certificate is within its validity
+period and it allows server authentication. On Linux the root helper checks the
+command-key signature and that the announcement names this node before it
+writes the pin file. An agent with no pins (enrolled before pinning, against an
+older server) keeps checking the Forge CA and the host name.
 
 ## Long-poll
 

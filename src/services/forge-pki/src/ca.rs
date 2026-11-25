@@ -175,13 +175,34 @@ impl CertificateAuthority {
     }
 
     /// Issues the control plane's TLS server certificate for `hostnames`
-    /// (DNS names or IP addresses).
+    /// (DNS names or IP addresses), with a fresh key.
     pub fn issue_server_certificate(
         &self,
         hostnames: &[String],
         now: Timestamp,
     ) -> Result<ServerCertificate, PkiError> {
         let key = KeyPair::generate().map_err(gen_err)?;
+        self.server_certificate(&key, hostnames, now)
+    }
+
+    /// Issues a listener certificate for the control plane's long-lived key
+    /// (D-167): renewing it keeps the key, so agents that pinned the key
+    /// never notice. Valid for [`SERVER_CERT_VALIDITY`].
+    pub fn issue_server_certificate_for_key(
+        &self,
+        key: &crate::ControlPlaneKey,
+        hostnames: &[String],
+        now: Timestamp,
+    ) -> Result<ServerCertificate, PkiError> {
+        self.server_certificate(key.key_pair(), hostnames, now)
+    }
+
+    fn server_certificate(
+        &self,
+        key: &KeyPair,
+        hostnames: &[String],
+        now: Timestamp,
+    ) -> Result<ServerCertificate, PkiError> {
         let mut params = CertificateParams::new(hostnames.to_vec()).map_err(gen_err)?;
         let mut dn = DistinguishedName::new();
         dn.push(DnType::CommonName, hostnames.first().map_or("forge", String::as_str));
@@ -193,7 +214,7 @@ impl CertificateAuthority {
         params.not_before = odt(not_before);
         params.not_after = odt(not_after);
         params.serial_number = Some(serial().0);
-        let cert = params.signed_by(&key, &self.issuer, &self.key).map_err(gen_err)?;
+        let cert = params.signed_by(key, &self.issuer, &self.key).map_err(gen_err)?;
         Ok(ServerCertificate { cert_pem: cert.pem(), key_pem: key.serialize_pem(), not_before, not_after })
     }
 }

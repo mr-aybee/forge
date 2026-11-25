@@ -533,12 +533,17 @@ impl Spool {
         let Some(at) = inner.ready.iter().position(|f| f.stem == stem) else { return Ok(()) };
         let f = inner.ready.remove(at).ok_or_else(|| io::Error::other("spool index"))?;
         inner.ready_bytes = inner.ready_bytes.saturating_sub(f.bytes);
+        // Counted while the lock is held, so a status read never sees the
+        // file gone from the queue without it counted as uploaded: the
+        // worker has stored it, deleting the local copy below is cleanup.
+        if acked {
+            self.counters.uploaded_files.fetch_add(1, Ordering::Relaxed);
+        }
         drop(inner);
         if acked {
             let done = self.dir.join(file_name(stem, ACKED));
             fs::rename(&f.path, &done)?;
             fs::remove_file(&done)?;
-            self.counters.uploaded_files.fetch_add(1, Ordering::Relaxed);
         } else {
             fs::remove_file(&f.path)?;
             self.count_drop(f.bytes);

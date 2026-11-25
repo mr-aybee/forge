@@ -105,6 +105,188 @@ pub fn health_probe(verify: bool) -> anyhow::Result<Arc<ClientConfig>> {
     Ok(Arc::new(cfg))
 }
 
+/// Server-authenticated TLS without a client certificate, accepting the
+/// control plane by its pinned key (enrollment, `pins fetch` checks).
+pub fn anonymous_pinned(pins: &[String], endpoint: &str) -> anyhow::Result<Arc<ClientConfig>> {
+    let p = provider();
+    let verifier = Arc::new(PinnedKeyVerifier::new(pins, endpoint, p.signature_verification_algorithms));
+    let mut cfg = ClientConfig::builder_with_provider(p)
+        .with_safe_default_protocol_versions()?
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth();
+    cfg.alpn_protocols = vec![b"h2".to_vec()];
+    Ok(Arc::new(cfg))
+}
+
+/// Mutual TLS with the agent's certificate, accepting the control plane by
+/// its pinned key (D-167): any address of the control plane works.
+pub fn mutual_pinned(
+    pins: &[String],
+    endpoint: &str,
+    cert_pem: &str,
+    key_pem: &str,
+) -> anyhow::Result<Arc<ClientConfig>> {
+    let chain = CertificateDer::pem_slice_iter(cert_pem.as_bytes()).collect::<Result<Vec<_>, _>>()?;
+    let key = PrivateKeyDer::from_pem_slice(key_pem.as_bytes())?;
+    let p = provider();
+    let verifier = Arc::new(PinnedKeyVerifier::new(pins, endpoint, p.signature_verification_algorithms));
+    let mut cfg = ClientConfig::builder_with_provider(p)
+        .with_safe_default_protocol_versions()?
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_client_auth_cert(chain, key)?;
+    cfg.alpn_protocols = vec![b"h2".to_vec()];
+    Ok(Arc::new(cfg))
+}
+
+/// The agent's TLS to the control plane: by pinned key when the node has
+/// pins (D-167), else the Forge CA and the host name, as enrolled before.
+pub fn for_agent(
+    pins: &[String],
+    endpoint: &str,
+    ca_pem: &str,
+    cert_pem: &str,
+    key_pem: &str,
+) -> anyhow::Result<Arc<ClientConfig>> {
+    if pins.is_empty() { mutual(ca_pem, cert_pem, key_pem) } else { mutual_pinned(pins, endpoint, cert_pem, key_pem) }
+}
+
+/// Accepts the control plane only when its certificate's key is pinned
+/// (D-167): the SHA-256 of the leaf's SubjectPublicKeyInfo is in the set,
+/// the certificate is valid now and meant for TLS servers. The name and
+/// the issuer are not checked, so a node reaches Forge by any address; a
+/// certificate from the Forge CA for another key (a node's Docker daemon)
+/// is refused like any other. Handshake signatures are verified, proving
+/// the peer holds the pinned key.
+#[derive(Debug)]
+pub struct PinnedKeyVerifier {
+    pins: Vec<String>,
+    /// `host:port`, for the mismatch message.
+    endpoint: String,
+    algorithms: WebPkiSupportedAlgorithms,
+}
+
+impl PinnedKeyVerifier {
+    #[must_use]
+    pub fn new(pins: &[String], endpoint: &str, algorithms: WebPkiSupportedAlgorithms) -> Self {
+        Self { pins: pins.to_vec(), endpoint: endpoint.to_owned(), algorithms }
+    }
+}
+
+fn unix_ms(now: UnixTime) -> forge_core::Timestamp {
+    forge_core::Timestamp(i64::try_from(now.as_secs()).unwrap_or(i64::MAX).saturating_mul(1000))
+}
+
+impl ServerCertVerifier for PinnedKeyVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp: &[u8],
+        now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        let leaf = forge_pki::inspect_server_leaf(end_entity.as_ref(), unix_ms(now))
+            .map_err(|e| rustls::Error::General(format!("control plane certificate refused: {e}")))?;
+        let pinned = self
+            .pins
+            .iter()
+            .any(|p| forge_secrets::crypto::constant_time_eq(p.as_bytes(), leaf.key_fingerprint.as_bytes()));
+        if !pinned {
+            return Err(rustls::Error::General(crate::pins::mismatch_message(
+                &leaf.key_fingerprint,
+                &self.pins,
+                &self.endpoint,
+            )));
+        }
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.algorithms)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.algorithms.supported_schemes()
+    }
+}
+
+/// The key fingerprint the server at `host:port` presents, without
+/// trusting it (`forge-agent pins fetch`; the operator confirms it). The
+/// handshake signature is still checked, so the peer holds that key.
+pub async fn presented_key(host: &str, port: u16) -> anyhow::Result<String> {
+    #[derive(Debug)]
+    struct Capture(WebPkiSupportedAlgorithms, std::sync::Mutex<Option<String>>);
+    impl ServerCertVerifier for Capture {
+        fn verify_server_cert(
+            &self,
+            end_entity: &CertificateDer<'_>,
+            _i: &[CertificateDer<'_>],
+            _n: &ServerName<'_>,
+            _o: &[u8],
+            now: UnixTime,
+        ) -> Result<ServerCertVerified, rustls::Error> {
+            let leaf = forge_pki::inspect_server_leaf(end_entity.as_ref(), unix_ms(now))
+                .map_err(|e| rustls::Error::General(format!("control plane certificate refused: {e}")))?;
+            *self.1.lock().map_err(|_| rustls::Error::General("lock".into()))? = Some(leaf.key_fingerprint);
+            Ok(ServerCertVerified::assertion())
+        }
+        fn verify_tls12_signature(
+            &self,
+            m: &[u8],
+            c: &CertificateDer<'_>,
+            d: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, rustls::Error> {
+            rustls::crypto::verify_tls12_signature(m, c, d, &self.0)
+        }
+        fn verify_tls13_signature(
+            &self,
+            m: &[u8],
+            c: &CertificateDer<'_>,
+            d: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, rustls::Error> {
+            rustls::crypto::verify_tls13_signature(m, c, d, &self.0)
+        }
+        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+            self.0.supported_schemes()
+        }
+    }
+    let p = provider();
+    let capture = Arc::new(Capture(p.signature_verification_algorithms, std::sync::Mutex::new(None)));
+    let cfg = ClientConfig::builder_with_provider(p)
+        .with_safe_default_protocol_versions()?
+        .dangerous()
+        .with_custom_certificate_verifier(capture.clone())
+        .with_no_client_auth();
+    let tcp = tokio::time::timeout(std::time::Duration::from_secs(15), tokio::net::TcpStream::connect((host, port)))
+        .await
+        .map_err(|_| anyhow::anyhow!("connecting to {host}:{port} timed out"))??;
+    let name = ServerName::try_from(host.to_owned())?;
+    let _tls = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        tokio_rustls::TlsConnector::from(Arc::new(cfg)).connect(name, tcp),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("the TLS handshake with {host}:{port} timed out"))??;
+    let fp = capture.1.lock().map_err(|_| anyhow::anyhow!("lock"))?.clone();
+    fp.ok_or_else(|| anyhow::anyhow!("{host}:{port} presented no certificate"))
+}
+
 #[derive(Debug)]
 struct PinnedLater {
     algorithms: WebPkiSupportedAlgorithms,
@@ -182,5 +364,91 @@ mod tests {
         let evil = CertificateAuthority::generate("attacker", NOW).unwrap();
         assert!(pinned_ca_pem(evil.cert_pem(), ca.fingerprint()).is_err());
         assert!(pinned_ca_pem("", ca.fingerprint()).is_err());
+    }
+
+    /// Completes a TLS handshake against a server presenting `cert_pem`
+    /// (signed by `ca_pem`) with `key_pem`, as an agent pinning `pins`.
+    async fn handshake(cert_pem: &str, key_pem: &str, ca_pem: &str, pins: &[String]) -> Result<(), String> {
+        let mut chain = CertificateDer::pem_slice_iter(cert_pem.as_bytes()).collect::<Result<Vec<_>, _>>().unwrap();
+        chain.extend(CertificateDer::pem_slice_iter(ca_pem.as_bytes()).map(Result::unwrap));
+        let key = PrivateKeyDer::from_pem_slice(key_pem.as_bytes()).unwrap();
+        let server = rustls::ServerConfig::builder_with_provider(provider())
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(chain, key)
+            .unwrap();
+        let (a, b) = tokio::io::duplex(64 * 1024);
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server));
+        let srv = tokio::spawn(async move { acceptor.accept(b).await.map(|_| ()) });
+        // An address the certificate does not name: no name is checked.
+        let name = ServerName::try_from("198.51.100.7").unwrap();
+        let r = tokio_rustls::TlsConnector::from(anonymous_pinned(pins, "198.51.100.7:3843").unwrap())
+            .connect(name, a)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string());
+        let _ = srv.await;
+        r
+    }
+
+    fn real_now() -> Timestamp {
+        let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+        Timestamp(i64::try_from(ms).unwrap())
+    }
+
+    #[tokio::test]
+    async fn the_pinned_key_is_accepted_under_any_name_and_renewed_certificate() {
+        let now = real_now();
+        let ca = CertificateAuthority::generate("forge", now).unwrap();
+        let key = forge_pki::ControlPlaneKey::generate().unwrap();
+        let pins = vec![key.fingerprint().to_owned()];
+        let first = ca.issue_server_certificate_for_key(&key, &["forge.example".into()], now).unwrap();
+        handshake(&first.cert_pem, &first.key_pem, ca.cert_pem(), &pins).await.unwrap();
+        // Renewed a day later with the same key: still accepted.
+        let renewed =
+            ca.issue_server_certificate_for_key(&key, &[], now.minus(std::time::Duration::from_secs(86400))).unwrap();
+        assert_ne!(renewed.cert_pem, first.cert_pem);
+        handshake(&renewed.cert_pem, &renewed.key_pem, ca.cert_pem(), &pins).await.unwrap();
+        // An announced next key works once the server switches to it.
+        let next = forge_pki::ControlPlaneKey::generate().unwrap();
+        let switched = ca.issue_server_certificate_for_key(&next, &["forge.example".into()], now).unwrap();
+        assert!(handshake(&switched.cert_pem, &switched.key_pem, ca.cert_pem(), &pins).await.is_err());
+        let both = vec![key.fingerprint().to_owned(), next.fingerprint().to_owned()];
+        handshake(&switched.cert_pem, &switched.key_pem, ca.cert_pem(), &both).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn other_keys_expired_and_non_server_certificates_are_refused() {
+        let now = real_now();
+        let ca = CertificateAuthority::generate("forge", now).unwrap();
+        let key = forge_pki::ControlPlaneKey::generate().unwrap();
+        let pins = vec![key.fingerprint().to_owned()];
+        // A node's Docker daemon certificate from the same Forge CA: a valid
+        // ServerAuth certificate for another key.
+        let csr = forge_pki::AgentCsr::generate("n").unwrap();
+        let ip: std::net::IpAddr = "198.51.100.7".parse().unwrap();
+        let docker = ca
+            .issue_docker_daemon_certificate(&csr.csr_pem, "srv-1", &[ip], now, std::time::Duration::from_secs(86400))
+            .unwrap();
+        let e = handshake(&docker.cert_pem, &csr.key_pem, ca.cert_pem(), &pins).await.unwrap_err();
+        assert!(e.contains("is not pinned") && e.contains("198.51.100.7:3843"), "{e}");
+        // Another CA altogether.
+        let foreign = CertificateAuthority::generate("evil", now).unwrap();
+        let f = foreign.issue_server_certificate(&["198.51.100.7".into()], now).unwrap();
+        assert!(
+            handshake(&f.cert_pem, &f.key_pem, foreign.cert_pem(), &pins).await.unwrap_err().contains("is not pinned")
+        );
+        // The pinned key, but an expired certificate.
+        let old = ca
+            .issue_server_certificate_for_key(&key, &[], now.minus(std::time::Duration::from_secs(200 * 86400)))
+            .unwrap();
+        let e = handshake(&old.cert_pem, &old.key_pem, ca.cert_pem(), &pins).await.unwrap_err();
+        assert!(e.contains("not valid at this time"), "{e}");
+        // A client certificate for a pinned key is not a server certificate.
+        let client = ca.issue_client_certificate("forge-server", now, std::time::Duration::from_secs(3600)).unwrap();
+        let client_pins = vec![forge_pki::server_key::cert_key_fingerprint(&client.cert_pem).unwrap()];
+        let e = handshake(&client.cert_pem, &client.key_pem, ca.cert_pem(), &client_pins).await.unwrap_err();
+        assert!(e.contains("ServerAuth"), "{e}");
     }
 }
