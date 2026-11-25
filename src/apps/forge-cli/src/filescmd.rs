@@ -500,18 +500,22 @@ fn enc(s: &str) -> String {
 /// `?root=…&path=…` (+ extra pairs).
 fn query(root: Option<&str>, path: &str, extra: &[(&str, String)]) -> String {
     let mut q = vec![format!("path={}", enc(path))];
+
     if let Some(r) = root {
         q.push(format!("root={}", enc(r)));
     }
+
     for (k, v) in extra {
         q.push(format!("{k}={}", enc(v)));
     }
+
     format!("?{}", q.join("&"))
 }
 
 fn mode_str(mode: Option<u64>) -> String {
     let Some(m) = mode else { return "-".into() };
     let bits = ['r', 'w', 'x'];
+
     (0..9).map(|i| if m & (1 << (8 - i)) != 0 { bits[i % 3] } else { '-' }).collect()
 }
 
@@ -548,11 +552,13 @@ fn parse_owner(spec: &str) -> Result<(Option<String>, Option<String>)> {
         Some((o, g)) => (o, Some(g)),
         None => (spec, None),
     };
+
     let some = |s: &str| (!s.is_empty()).then(|| s.to_owned());
     let (o, g) = (some(o), g.and_then(some));
     if o.is_none() && g.is_none() {
         return Err(CliError::usage("give OWNER, OWNER:GROUP or :GROUP"));
     }
+
     Ok((o, g))
 }
 
@@ -561,7 +567,9 @@ fn sibling(path: &str, new_name: &str) -> Result<String> {
     if new_name.is_empty() || new_name.contains(['/', '\\']) || new_name == "." || new_name == ".." {
         return Err(CliError::usage("the new name must be a plain name, not a path"));
     }
+
     let trimmed = path.trim_end_matches(['/', '\\']);
+
     Ok(match trimmed.rfind(['/', '\\']) {
         Some(i) => format!("{}{new_name}", &trimmed[..=i]),
         None => new_name.to_owned(),
@@ -578,16 +586,20 @@ async fn save_to(resp: &mut reqwest::Response, local: &std::path::Path) -> Resul
             f.write_all(&chunk)?;
             n += chunk.len() as u64;
         }
+
         f.sync_all()?;
         Ok(())
     }
     .await;
     drop(f);
+
     if let Err(e) = res {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
+
     std::fs::rename(&tmp, local)?;
+
     Ok(n)
 }
 
@@ -595,6 +607,7 @@ fn refuse_existing(local: &std::path::Path, force: bool) -> Result<()> {
     if local.exists() && !force {
         return Err(CliError::new(Exit::Conflict, format!("{} exists; use --force to replace it", local.display())));
     }
+
     Ok(())
 }
 
@@ -630,16 +643,21 @@ fn name_missing_folder(e: CliError, path: &str, node: &str, hint_parents: bool) 
         || e.message.contains("was not found")
         || e.message.contains("does not exist")
         || e.message.contains("no such file");
+
     if !missing {
         return e;
     }
+
     let parent = parent_of(path);
+
     let hint = if hint_parents {
         "; use --parents to create it"
     } else {
         "; create it first with `forge nodes files mkdir --parents`"
     };
+
     let message = format!("parent folder {parent} of {path} does not exist on {node}{hint} (server: {})", e.message);
+
     CliError { message, ..e }
 }
 
@@ -651,10 +669,12 @@ pub async fn run(g: &Global, cmd: FilesCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
     let base = |id: &str| format!("/api/v1/servers/{id}/files");
+
     match cmd {
         FilesCmd::Roots { node: Some(node), op: None } => {
             let id = node_id(&mut api, &node).await?;
             let v = api.get(&format!("{}/roots", base(&id))).await?;
+
             if g.output.is_machine() {
                 out::result(g.output, &v, None);
             } else {
@@ -712,10 +732,12 @@ pub async fn run(g: &Global, cmd: FilesCmd) -> Result<()> {
                 ],
             );
             let mut v = api.get(&format!("{}/list{q}", base(&id))).await?;
+
             if g.output == Format::Table {
                 let mut entries = v["entries"].take();
                 decorate(&mut entries);
                 out::result(g.output, &entries, Some(ENTRY_COLS));
+
                 if let Some(total) = v["total"].as_u64().filter(|n| *n > u64::from(offset) + u64::from(limit)) {
                     eprintln!(
                         "showing {}–{} of {total} · next: --offset {}",
@@ -743,12 +765,15 @@ pub async fn run(g: &Global, cmd: FilesCmd) -> Result<()> {
             let mut offset = 0u64;
             let mut version: Option<String> = None;
             let mut stdout = std::io::stdout().lock();
+
             loop {
                 let mut extra = vec![("offset", offset.to_string())];
+
                 if let Some(v) = &version {
                     // Pin the version: a file changing mid-read fails instead of mixing.
                     extra.push(("version", v.clone()));
                 }
+
                 let v = api.get(&format!("{}/read{}", base(&id), query(root.as_deref(), &path, &extra))).await?;
                 let data = STANDARD
                     .decode(v["content_b64"].as_str().unwrap_or_default())
@@ -757,9 +782,11 @@ pub async fn run(g: &Global, cmd: FilesCmd) -> Result<()> {
                 stdout.write_all(&data[..data.len().min(room)])?;
                 offset += data.len() as u64;
                 version = v["version"].as_str().map(str::to_owned);
+
                 if v["eof"] == true || data.is_empty() {
                     break;
                 }
+
                 if offset >= max_bytes {
                     eprintln!("forge: stopped at {max_bytes} bytes (use --max-bytes or `files download`)");
                     break;
@@ -772,6 +799,7 @@ pub async fn run(g: &Global, cmd: FilesCmd) -> Result<()> {
             let mut resp = api
                 .send(Method::GET, &format!("{}/download{}", base(&id), query(root.as_deref(), &remote, &[])), None)
                 .await?;
+
             // Write to a temp file next to the target, then rename: no half files.
             let n = save_to(&mut resp, &local).await?;
             out::result(g.output, &json!({ "file": local, "bytes": n }), None);
@@ -780,11 +808,13 @@ pub async fn run(g: &Global, cmd: FilesCmd) -> Result<()> {
             let id = node_id(&mut api, &node).await?;
             let size =
                 std::fs::metadata(&local).map_err(|e| CliError::usage(format!("{}: {e}", local.display())))?.len();
+
             let ow = match (overwrite, if_version) {
                 (_, Some(v)) => json!({ "version": v }),
                 (true, None) => json!("always"),
                 (false, None) => json!("never"),
             };
+
             let up = api
                 .post(
                     &format!("{}/uploads", base(&id)),
@@ -813,6 +843,7 @@ pub async fn run(g: &Global, cmd: FilesCmd) -> Result<()> {
                     if n == 0 {
                         break;
                     }
+
                     ctx.update(&buf[..n]);
                     api.send_bytes(
                         Method::PUT,
@@ -821,20 +852,25 @@ pub async fn run(g: &Global, cmd: FilesCmd) -> Result<()> {
                     )
                     .await?;
                     offset += n as u64;
+
                     if size > 0 && g.output == Format::Table {
                         eprint!("\r{:>3}%  {offset}/{size} bytes", offset * 100 / size);
                     }
                 }
+
                 Ok(())
             }
             .await;
+
             if g.output == Format::Table {
                 eprintln!();
             }
+
             if let Err(e) = result {
                 let _ = api.send(Method::DELETE, &format!("{}/uploads/{up_id}", base(&id)), None).await;
                 return Err(e);
             }
+
             let sha = hex::encode(ctx.finish());
             let v = api.post(&format!("{}/uploads/{up_id}/commit", base(&id)), &json!({ "sha256": sha })).await?;
             out::result(g.output, &v, None);
@@ -878,6 +914,7 @@ pub async fn run(g: &Global, cmd: FilesCmd) -> Result<()> {
         }
         FilesCmd::Save { node, path, root, from, if_version } => {
             let id = node_id(&mut api, &node).await?;
+
             let content = match from {
                 Some(p) => std::fs::read(&p).map_err(|e| CliError::usage(format!("{}: {e}", p.display())))?,
                 None => {
@@ -886,6 +923,7 @@ pub async fn run(g: &Global, cmd: FilesCmd) -> Result<()> {
                     b
                 }
             };
+
             let v = api
                 .post(
                     &format!("{}/save", base(&id)),
@@ -896,9 +934,11 @@ pub async fn run(g: &Global, cmd: FilesCmd) -> Result<()> {
         }
         FilesCmd::Search { node, path, root, name, content, regex, case_sensitive } => {
             let id = node_id(&mut api, &node).await?;
+
             if name.is_none() && content.is_none() {
                 return Err(CliError::usage("give --name and/or --content"));
             }
+
             let spec = json!({
                 "name": name.unwrap_or_default(),
                 "content": content.unwrap_or_default(),
@@ -945,6 +985,7 @@ pub async fn run(g: &Global, cmd: FilesCmd) -> Result<()> {
         }
         FilesCmd::Touch { node, path, root } => {
             let id = node_id(&mut api, &node).await?;
+
             // No version: the node creates the file and refuses an existing one.
             let v = api
                 .post(&format!("{}/save", base(&id)), &json!({ "root": root, "path": path, "content_b64": "" }))
@@ -1023,22 +1064,27 @@ pub async fn run(g: &Global, cmd: FilesCmd) -> Result<()> {
             if matches!(action, BulkAction::Copy | BulkAction::Move) != to.is_some() {
                 return Err(CliError::usage("copy and move need --to; trash and delete take no --to"));
             }
+
             let id = node_id(&mut api, &node).await?;
+
             if matches!(action, BulkAction::Trash | BulkAction::Delete) {
                 let what = if action == BulkAction::Delete { "Permanently delete" } else { "Move to trash" };
                 confirm(g, yes, &format!("{what} {} entries on {node}?", paths.len()))?;
             }
+
             let v = api
                 .post(
                     &format!("{}/bulk", base(&id)),
                     &json!({ "root": root, "action": action.as_str(), "paths": paths, "to": to, "overwrite": overwrite }),
                 )
                 .await?;
+
             if g.output == Format::Table {
                 out::result(g.output, &v["results"], Some(&[("OK", "/ok"), ("PATH", "/path"), ("ERROR", "/error")]));
             } else {
                 out::result(g.output, &v, None);
             }
+
             let failed = v["failed"].as_u64().unwrap_or(0);
             if failed > 0 {
                 return Err(CliError::new(Exit::General, format!("{failed} of {} entries failed", paths.len())));
@@ -1048,6 +1094,7 @@ pub async fn run(g: &Global, cmd: FilesCmd) -> Result<()> {
             if format != "zip" && format != "tar_gz" {
                 return Err(CliError::usage("--format is zip or tar_gz"));
             }
+
             refuse_existing(&local, force)?;
             let id = node_id(&mut api, &node).await?;
             let made = api
@@ -1066,16 +1113,20 @@ pub async fn run(g: &Global, cmd: FilesCmd) -> Result<()> {
         }
         FilesCmd::Sftp(SftpCmd::List { node, status, search }) => {
             let mut q = Vec::new();
+
             if let Some(s) = &status {
                 q.push(format!("status={}", enc(s)));
             }
+
             if let Some(s) = &search {
                 q.push(format!("q={}", enc(s)));
             }
+
             if let Some(node) = node {
                 let id = node_id(&mut api, &node).await?;
                 q.insert(0, format!("server={}", enc(&id)));
             }
+
             let q = if q.is_empty() { String::new() } else { format!("?{}", q.join("&")) };
             let v = api.get(&format!("/api/v1/files/grants{q}")).await?;
             out::result(
@@ -1116,45 +1167,56 @@ pub async fn run(g: &Global, cmd: FilesCmd) -> Result<()> {
             no_transfer_limit,
         }) => {
             let mut body = serde_json::Map::new();
+
             if let Some(v) = name {
                 body.insert("name".into(), json!(v));
             }
+
             if !roots.is_empty() {
                 body.insert("roots".into(), json!(roots));
             }
+
             if let Some(v) = write {
                 body.insert("write".into(), json!(v));
             }
+
             if let Some(v) = delete {
                 body.insert("delete".into(), json!(v));
             }
+
             if never {
                 body.insert("never_expires".into(), json!(true));
             } else if let Some(m) = minutes {
                 body.insert("expires_in_minutes".into(), json!(m));
                 body.insert("never_expires".into(), json!(false));
             }
+
             if any_ip {
                 body.insert("allowed_ips".into(), json!([]));
             } else if !allowed_ips.is_empty() {
                 body.insert("allowed_ips".into(), json!(allowed_ips));
             }
+
             if let Some(v) = max_sessions {
                 body.insert("max_sessions".into(), json!(v));
             }
+
             if no_bandwidth_limit {
                 body.insert("bandwidth_kbps".into(), Value::Null);
             } else if let Some(v) = bandwidth_kbps {
                 body.insert("bandwidth_kbps".into(), json!(v));
             }
+
             if no_transfer_limit {
                 body.insert("transfer_limit".into(), Value::Null);
             } else if let Some(v) = transfer_limit {
                 body.insert("transfer_limit".into(), json!(v));
             }
+
             if body.is_empty() {
                 return Err(CliError::usage("nothing to change; pass at least one option"));
             }
+
             let id = node_id(&mut api, &node).await?;
             let v = api
                 .call(Method::PATCH, &format!("{}/grants/{}", base(&id), enc(&grant)), Some(&Value::Object(body)))
@@ -1199,6 +1261,7 @@ pub async fn run(g: &Global, cmd: FilesCmd) -> Result<()> {
             out::result(g.output, &v, None);
         }
     }
+
     Ok(())
 }
 

@@ -251,6 +251,7 @@ pub struct Target {
 /// Resolves flags → environment → current context (snapshotted once).
 pub fn target(g: &Global) -> Result<Target> {
     let cfg = ctx::Config::load()?;
+
     // An explicit --server / FORGE_SERVER stands on its own, unless it is the
     // current context's server: then that context still applies (its CA, its
     // remembered tunnel ports), so a shell with FORGE_SERVER set behaves like
@@ -264,6 +265,7 @@ pub fn target(g: &Global) -> Result<Target> {
     let name = g.context.clone().or_else(|| if g.server.is_some() { same_as_current() } else { cfg.current.clone() });
     if let Some(name) = name {
         let c = cfg.get(&name)?.clone();
+
         if let Some(s) = &g.server
             && ctx::normalise_server(s)? != c.server
         {
@@ -272,6 +274,7 @@ pub fn target(g: &Global) -> Result<Target> {
                 c.server
             )));
         }
+
         return Ok(Target {
             context: Some(name),
             server: c.server,
@@ -280,6 +283,7 @@ pub fn target(g: &Global) -> Result<Target> {
             default_cluster: c.default_cluster,
         });
     }
+
     let server = match (&g.server, std::env::var("FORGE_URL").ok().filter(|s| !s.is_empty())) {
         (Some(s), _) => s.clone(),
         (None, Some(legacy)) => {
@@ -290,6 +294,7 @@ pub fn target(g: &Global) -> Result<Target> {
             return Err(CliError::usage("no context selected: run `forge contexts add <name> --server <url>` first"));
         }
     };
+
     Ok(Target {
         context: None,
         server: ctx::normalise_server(&server)?,
@@ -312,7 +317,9 @@ pub async fn connect(g: &Global, t: &Target) -> Result<Api> {
             "no credentials: sign in with a context, or set FORGE_TOKEN together with FORGE_SERVER",
         ));
     };
+
     api.set_interactive(!g.non_interactive && std::io::IsTerminal::is_terminal(&std::io::stdin()));
+
     if let Some(expected) = &g.expected_instance_id {
         let ws = api.get("/api/v1/workspace").await?;
         let actual = ws.get("id").and_then(serde_json::Value::as_str).unwrap_or_default();
@@ -334,6 +341,7 @@ pub async fn connect(g: &Global, t: &Target) -> Result<Api> {
             .with_code("instance_mismatch"));
         }
     }
+
     Ok(api)
 }
 
@@ -355,6 +363,7 @@ fn command_tree(c: &clap::Command) -> serde_json::Value {
         })
         .collect();
     let subs: Vec<serde_json::Value> = c.get_subcommands().filter(|s| !s.is_hide_set()).map(command_tree).collect();
+
     serde_json::json!({
         "name": c.get_name(),
         "about": c.get_about().map(ToString::to_string),
@@ -365,6 +374,7 @@ fn command_tree(c: &clap::Command) -> serde_json::Value {
 
 async fn run(cli: Cli) -> Result<()> {
     let g = &cli.global;
+
     match cli.cmd {
         Cmd::Contexts(c) => cmds::contexts(g, c).await,
         Cmd::Auth(c) => cmds::auth(g, c).await,
@@ -408,6 +418,7 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Completion { shell } => {
             let mut buf = Vec::new();
             clap_complete::generate(shell, &mut Cli::command(), "forge", &mut buf);
+
             // A closed pipe (`| head`) is not an error.
             let _ = std::io::Write::write_all(&mut std::io::stdout().lock(), &buf);
             Ok(())
@@ -456,6 +467,7 @@ fn cli_main() {
     let cli = Cli::parse();
     let fmt = cli.global.output;
     out::init(fmt, cli.global.color, cli.global.no_pager);
+
     let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
         Ok(rt) => rt,
         Err(e) => {
@@ -463,6 +475,7 @@ fn cli_main() {
             std::process::exit(Exit::General as i32);
         }
     };
+
     if let Err(e) = rt.block_on(run(cli)) {
         out::error(fmt, &e);
         std::process::exit(e.exit as i32);
@@ -483,9 +496,11 @@ mod tests {
         let t = command_tree(&Cli::command());
         let names: Vec<&str> =
             t["subcommands"].as_array().into_iter().flatten().filter_map(|s| s["name"].as_str()).collect();
+
         for g in ["contexts", "auth", "nodes", "jobs", "audit", "plugins", "api", "completion", "commands"] {
             assert!(names.contains(&g), "missing {g}");
         }
+
         assert!(!names.contains(&"servers"), "deprecated aliases stay hidden");
     }
 }

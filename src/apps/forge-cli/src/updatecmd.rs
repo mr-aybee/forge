@@ -53,6 +53,7 @@ fn allowed_url(u: &str) -> Result<url::Url> {
         Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
         None => false,
     };
+
     match url.scheme() {
         "https" => Ok(url),
         "http" if loopback => Ok(url),
@@ -83,20 +84,26 @@ fn client() -> Result<reqwest::Client> {
 async fn fetch(c: &reqwest::Client, url: &str, accept: Option<&str>) -> Result<Vec<u8>> {
     allowed_url(url)?;
     let mut req = c.get(url);
+
     if let Some(a) = accept {
         req = req.header(reqwest::header::ACCEPT, a);
     }
+
     let mut resp = req.send().await.map_err(|e| CliError::new(Exit::Transport, format!("{url}: {e}")))?;
     if !resp.status().is_success() {
         return Err(CliError::new(Exit::Transport, format!("{url}: HTTP {}", resp.status())));
     }
+
     let mut body = Vec::new();
+
     while let Some(chunk) = resp.chunk().await.map_err(|e| CliError::new(Exit::Transport, format!("{url}: {e}")))? {
         if body.len() + chunk.len() > MAX_DOWNLOAD {
             return Err(CliError::new(Exit::Transport, format!("{url}: larger than {MAX_DOWNLOAD} bytes")));
         }
+
         body.extend_from_slice(&chunk);
     }
+
     Ok(body)
 }
 
@@ -106,6 +113,7 @@ fn parse_release(doc: &Value) -> Option<(String, String, std::collections::BTree
     if !forge_catalog::versions::valid_build(&version) {
         return None;
     }
+
     let assets = doc
         .get("assets")?
         .as_array()?
@@ -114,11 +122,13 @@ fn parse_release(doc: &Value) -> Option<(String, String, std::collections::BTree
             Some((a.get("name")?.as_str()?.to_owned(), a.get("browser_download_url")?.as_str()?.to_owned()))
         })
         .collect();
+
     Some((version, doc.get("html_url").and_then(Value::as_str).unwrap_or_default().to_owned(), assets))
 }
 
 fn exe_path() -> Result<PathBuf> {
     let p = std::env::current_exe().map_err(|e| CliError::new(Exit::General, format!("where is this binary? {e}")))?;
+
     // A symlink (Homebrew, /usr/local/bin) is replaced at its target.
     Ok(std::fs::canonicalize(&p).unwrap_or(p))
 }
@@ -134,6 +144,7 @@ fn denied(path: &Path, e: &std::io::Error) -> CliError {
     } else {
         ""
     };
+
     CliError::new(Exit::General, format!("{}: {e}{hint}", path.display())).with_code("install_failed")
 }
 
@@ -158,20 +169,25 @@ fn install(exe: &Path, bytes: &[u8], version: &str) -> Result<PathBuf> {
         )
         .with_code("install_failed"));
     }
+
     // The previous update's leftover (Windows cannot delete a running binary).
     if prev.exists() {
         let _ = std::fs::remove_file(&prev);
     }
+
     std::fs::rename(exe, &prev).map_err(|e| {
         let _ = std::fs::remove_file(&staged);
         denied(exe, &e)
     })?;
+
     if let Err(e) = std::fs::rename(&staged, exe) {
         // Put the old binary back.
         let _ = std::fs::rename(&prev, exe);
         let _ = std::fs::remove_file(&staged);
+
         return Err(denied(exe, &e));
     }
+
     Ok(prev)
 }
 
@@ -192,6 +208,7 @@ pub async fn run(g: &Global, check: bool, yes: bool, allow_downgrade: bool) -> R
         parse_release(&doc).ok_or_else(|| CliError::new(Exit::Transport, format!("{feed}: no usable release")))?;
     let order = forge_sdk::release::compare_release(&latest, current);
     let available = order == std::cmp::Ordering::Greater;
+
     if check {
         out::result(
             g.output,
@@ -200,13 +217,17 @@ pub async fn run(g: &Global, check: bool, yes: bool, allow_downgrade: bool) -> R
         );
         return Ok(());
     }
+
     if order == std::cmp::Ordering::Equal {
         out::result(g.output, &json!({ "current": current, "latest": latest, "updated": false }), None);
+
         if g.output == out::Format::Table {
             eprintln!("forge {current} is the latest release.");
         }
+
         return Ok(());
     }
+
     if order == std::cmp::Ordering::Less && !allow_downgrade {
         return Err(CliError::new(
             Exit::Conflict,
@@ -214,7 +235,9 @@ pub async fn run(g: &Global, check: bool, yes: bool, allow_downgrade: bool) -> R
         )
         .with_code("downgrade"));
     }
+
     let name = asset_name().ok_or_else(|| CliError::usage("no forge release is built for this platform"))?;
+
     let (Some(sums_url), Some(sig_url), Some(bin_url)) =
         (assets.get("SHA256SUMS"), assets.get("SHA256SUMS.sig"), assets.get(name))
     else {
@@ -222,6 +245,7 @@ pub async fn run(g: &Global, check: bool, yes: bool, allow_downgrade: bool) -> R
             CliError::new(Exit::NotFound, format!("release {latest} has no signed {name}")).with_code("no_asset")
         );
     };
+
     let exe = exe_path()?;
     confirm(g, yes, &format!("Update forge {current} → {latest} ({})?", exe.display()))?;
 
@@ -241,15 +265,18 @@ pub async fn run(g: &Global, check: bool, yes: bool, allow_downgrade: bool) -> R
         )
         .with_code("bad_checksum"));
     }
+
     let prev = install(&exe, &bytes, &latest)?;
     out::result(
         g.output,
         &json!({ "previous": current, "current": latest, "updated": true, "path": exe, "backup": prev }),
         None,
     );
+
     if g.output == out::Format::Table {
         eprintln!("Updated forge {current} → {latest}. The old binary is kept as {}.", prev.display());
     }
+
     Ok(())
 }
 

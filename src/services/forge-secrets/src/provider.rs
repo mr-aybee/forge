@@ -10,7 +10,9 @@ use crate::crypto::{random_bytes, sha256_hex};
 pub trait KeyProvider: Send + Sync + std::fmt::Debug {
     /// Id of the key currently used for wrapping.
     fn active_key_id(&self) -> &str;
+    /// Wraps a data key; returns the key id and the wrapped key.
     fn wrap(&self, dek: &[u8; 32]) -> Result<(String, Vec<u8>), SecretError>;
+    /// Unwraps a data key wrapped under `key_id`.
     fn unwrap(&self, key_id: &str, wrapped: &[u8]) -> Result<[u8; 32], SecretError>;
 }
 
@@ -28,9 +30,11 @@ impl std::fmt::Debug for LocalKeyProvider {
 }
 
 impl LocalKeyProvider {
+    /// Creates a provider from a 32-byte key.
     pub fn from_bytes(key: &[u8; 32]) -> Result<Self, SecretError> {
         let unbound = UnboundKey::new(&AES_256_GCM, key).map_err(|_| SecretError::Crypto)?;
         let key_id = format!("local-{}", &sha256_hex(key)[..12]);
+
         Ok(Self { key_id, kek: LessSafeKey::new(unbound) })
     }
 
@@ -40,8 +44,10 @@ impl LocalKeyProvider {
             let key = random_bytes::<32>();
             write_private(path, &key).map_err(|e| SecretError::KeyFile(e.to_string()))?;
         }
+
         let bytes = std::fs::read(path).map_err(|e| SecretError::KeyFile(e.to_string()))?;
         let key: [u8; 32] = bytes.as_slice().try_into().map_err(|_| SecretError::KeyFile("must be 32 bytes".into()))?;
+
         Self::from_bytes(&key)
     }
 }
@@ -59,6 +65,7 @@ impl KeyProvider for LocalKeyProvider {
             .map_err(|_| SecretError::Crypto)?;
         let mut out = nonce.to_vec();
         out.extend_from_slice(&buf);
+
         Ok((self.key_id.clone(), out))
     }
 
@@ -66,9 +73,11 @@ impl KeyProvider for LocalKeyProvider {
         if key_id != self.key_id {
             return Err(SecretError::UnknownKey(key_id.to_owned()));
         }
+
         if wrapped.len() < 12 {
             return Err(SecretError::Malformed);
         }
+
         let (nonce, ct) = wrapped.split_at(12);
         let nonce = Nonce::try_assume_unique_for_key(nonce).map_err(|_| SecretError::Malformed)?;
         let mut buf = ct.to_vec();
@@ -76,6 +85,7 @@ impl KeyProvider for LocalKeyProvider {
             .kek
             .open_in_place(nonce, Aad::from(self.key_id.as_bytes()), &mut buf)
             .map_err(|_| SecretError::Decrypt)?;
+
         plain.try_into().map_err(|_| SecretError::Malformed)
     }
 }

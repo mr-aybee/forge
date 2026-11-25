@@ -26,8 +26,9 @@ impl LocalPolicy {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use forge_proto::messages::{Ping, ServiceStatus};
+
+    use super::*;
 
     #[test]
     fn only_listed_commands_pass() {

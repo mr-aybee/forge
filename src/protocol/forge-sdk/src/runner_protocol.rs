@@ -34,6 +34,7 @@ impl RunRequest {
         if self.artifact_sha256.is_empty() || hex != self.artifact_sha256 {
             return Err("the artifact does not match its installed digest".into());
         }
+
         Ok(())
     }
 }

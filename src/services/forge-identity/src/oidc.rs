@@ -64,6 +64,7 @@ pub struct OpenIdConnectProvider {
 }
 
 impl OpenIdConnectProvider {
+    /// Discovers the provider's endpoints from its issuer.
     pub async fn discover(config: OidcConfig) -> Result<Self, IdentityError> {
         let http = reqwest::Client::builder()
             // Following redirects here would enable SSRF against internal hosts.
@@ -74,6 +75,7 @@ impl OpenIdConnectProvider {
         let metadata = CoreProviderMetadata::discover_async(issuer, &http)
             .await
             .map_err(|e| IdentityError::Provider(e.to_string()))?;
+
         Ok(Self { metadata, config, http })
     }
 
@@ -90,17 +92,22 @@ impl OidcProvider for OpenIdConnectProvider {
             ClientId::new(self.config.client_id.clone()),
             Some(ClientSecret::new(self.config.client_secret.clone())),
         );
+
         let client = match self.redirect() {
             Ok(r) => client.set_redirect_uri(r),
             Err(_) => client,
         };
+
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
         let mut req =
             client.authorize_url(CoreAuthenticationFlow::AuthorizationCode, CsrfToken::new_random, Nonce::new_random);
+
         for s in &self.config.scopes {
             req = req.add_scope(Scope::new(s.clone()));
         }
+
         let (url, state, nonce) = req.set_pkce_challenge(challenge).url();
+
         (
             url.to_string(),
             state.secret().clone(),
@@ -125,6 +132,7 @@ impl OidcProvider for OpenIdConnectProvider {
             .map_err(|e| perr(&e))?;
         let id_token = token.id_token().ok_or_else(|| IdentityError::Provider("no id_token returned".into()))?;
         let claims = id_token.claims(&client.id_token_verifier(), &Nonce::new(pending.nonce)).map_err(|e| perr(&e))?;
+
         Ok(OidcClaims {
             issuer: claims.issuer().as_str().to_owned(),
             subject: claims.subject().as_str().to_owned(),
@@ -145,13 +153,17 @@ const PENDING_TTL: Duration = Duration::from_secs(600);
 const PENDING_MAX: usize = 10_000;
 
 impl PendingLogins {
+    /// Stores a pending login under its `state`.
     pub fn insert(&self, state: String, pending: PendingLogin) -> Result<(), IdentityError> {
         let mut map = self.inner.lock().map_err(|_| IdentityError::Provider("lock poisoned".into()))?;
         map.retain(|_, (t, _)| t.elapsed() < PENDING_TTL);
+
         if map.len() >= PENDING_MAX {
             return Err(IdentityError::Provider("too many pending logins".into()));
         }
+
         map.insert(state, (Instant::now(), pending));
+
         Ok(())
     }
 

@@ -1,13 +1,15 @@
 //! Pins: add, list, order, remove, the cap, visibility and isolation.
 #![allow(clippy::unwrap_used)] // test code
 
-use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
+
+use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 
 async fn cluster(admin: &Client, name: &str) -> String {
     let (s, c) = admin.post("/api/v1/clusters", json!({ "name": name, "description": "" })).await;
     assert_eq!(s, StatusCode::CREATED, "{c}");
+
     c["id"].as_str().unwrap().to_owned()
 }
 
@@ -18,6 +20,7 @@ async fn pin(c: &Client, kind: &str, id: &str) -> (StatusCode, Value) {
 async fn pinned(c: &Client) -> Vec<String> {
     let (s, b) = c.get("/api/v1/me/pins").await;
     assert_eq!(s, StatusCode::OK, "{b}");
+
     b["items"].as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap().to_owned()).collect()
 }
 
@@ -32,6 +35,7 @@ async fn pins_add_list_order_remove_and_stay_private() {
     for id in [&a, &b, &c] {
         assert_eq!(pin(&admin, "cluster", id).await.0, StatusCode::NO_CONTENT);
     }
+
     // Idempotent: pinning again changes nothing.
     assert_eq!(pin(&admin, "cluster", &a).await.0, StatusCode::NO_CONTENT);
     assert_eq!(pinned(&admin).await, vec![a.clone(), b.clone(), c.clone()]);
@@ -59,6 +63,7 @@ async fn pins_add_list_order_remove_and_stay_private() {
         let (s, _) = admin.call(Method::DELETE, &format!("/api/v1/me/pins/cluster/{a}"), None).await;
         assert_eq!(s, StatusCode::NO_CONTENT);
     }
+
     assert_eq!(pinned(&admin).await, vec![c.clone(), b.clone()]);
 
     // Errors: unknown kind, bad id, missing entity.
@@ -76,9 +81,11 @@ async fn pins_add_list_order_remove_and_stay_private() {
     // Audited.
     let (_, audit) = admin.get("/api/v1/audit?limit=100").await;
     let text = serde_json::to_string(&audit).unwrap();
+
     for action in ["user.pin.add", "user.pin.remove", "user.pin.reorder"] {
         assert!(text.contains(action), "missing {action}");
     }
+
     h.app.stop().await;
 }
 
@@ -87,15 +94,19 @@ async fn pins_are_capped_at_fifty() {
     let h = start().await;
     let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
     let mut ids = Vec::new();
+
     for i in 0..51 {
         ids.push(cluster(&admin, &format!("c{i}")).await);
     }
+
     for id in &ids[..50] {
         assert_eq!(pin(&admin, "cluster", id).await.0, StatusCode::NO_CONTENT);
     }
+
     let (s, e) = pin(&admin, "cluster", &ids[50]).await;
     assert_eq!(s, StatusCode::CONFLICT, "{e}");
     assert_eq!(e["title"], "pin_limit", "{e}");
+
     // A pin that exists is still accepted at the cap.
     assert_eq!(pin(&admin, "cluster", &ids[0]).await.0, StatusCode::NO_CONTENT);
     assert_eq!(pinned(&admin).await.len(), 50);
@@ -132,6 +143,7 @@ async fn pins_hide_deleted_entities_and_lost_access() {
             json!({ "user_id": me["user"]["id"], "role": "operator", "scope": format!("cluster:{keep}") }),
         )
         .await;
+
     if s == StatusCode::CREATED {
         assert_eq!(pinned(&op).await, vec![keep.clone()]);
     }

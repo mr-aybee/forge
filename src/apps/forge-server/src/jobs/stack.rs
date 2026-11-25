@@ -113,6 +113,7 @@ impl StackJob {
             .map_err(retry)?
             .ok_or_else(|| fatal("the stack no longer exists"))?;
         let ns = self.tenancy.get_environment(stack.environment_id).await.map_err(retry)?;
+
         Ok((stack, ns_slug(&ns.name)))
     }
 
@@ -140,12 +141,15 @@ impl StackJob {
             last_error: None,
             updated_at: now,
         });
+
         if let Some(s) = status {
             s.clone_into(&mut n.status);
         }
+
         n.last_error = error;
         n.last_job_id = Some(ctx.job.id);
         n.updated_at = now;
+
         self.stacks.put_node(&n).await.map_err(retry)
     }
 
@@ -159,15 +163,18 @@ impl StackJob {
             ctx.state_value("services").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
         let Some(mut n) = self.node(p).await? else { return Ok(()) };
         let mut changed = false;
+
         for s in planned {
             if !n.services.contains(&s) {
                 n.services.push(s);
                 changed = true;
             }
         }
+
         if changed {
             self.stacks.put_node(&n).await.map_err(retry)?;
         }
+
         Ok(())
     }
 
@@ -175,6 +182,7 @@ impl StackJob {
         let (stack, ns) = self.load(p).await?;
         let project = project_name(&ns, &stack.name);
         let dir = stack_dir(stack.dir.as_deref(), &ns, &stack.name);
+
         let op = match p.op.as_str() {
             "deploy" => {
                 let rev = self
@@ -201,8 +209,10 @@ impl StackJob {
                 let node = pl
                     .node(p.server_id)
                     .ok_or_else(|| fatal(format!("revision {} has no services on this node", p.revision)))?;
+
                 // Ticked services on this node plus everything they depend on.
                 let wanted: Vec<String> = p.services.iter().filter(|s| node.services.contains(*s)).cloned().collect();
+
                 let selected: Vec<String> = if p.services.is_empty() {
                     Vec::new()
                 } else {
@@ -211,12 +221,15 @@ impl StackJob {
                         .filter(|s| node.services.contains(s))
                         .collect()
                 };
+
                 if !p.services.is_empty() && selected.is_empty() {
                     return Err(fatal("none of the chosen services runs on this node"));
                 }
+
                 let part =
                     node_part(&pl, node, &ns, &stack.name, stack.dir.as_deref(), &env, p.privileged).map_err(fatal)?;
                 let all: Vec<String> = node.services.iter().cloned().collect();
+
                 return Ok((StackOp::Deploy { part: Box::new(part), services: selected, pull: p.pull }, all));
             }
             "service" => StackOp::Service { project, dir, action: p.action.clone(), services: p.services.clone() },
@@ -225,6 +238,7 @@ impl StackJob {
             "logs" => StackOp::Logs { project, dir, service: p.service.clone(), tail: p.tail },
             other => return Err(fatal(format!("unknown stack operation `{other}`"))),
         };
+
         Ok((op, Vec::new()))
     }
 
@@ -234,6 +248,7 @@ impl StackJob {
         if server.status == AgentStatus::Revoked {
             return Err(fatal("server is revoked"));
         }
+
         let (op, services) = match self.build_op(&p).await {
             Ok(x) => x,
             Err(e) => {
@@ -241,11 +256,14 @@ impl StackJob {
                     let msg = match &e {
                         StepError::Fatal(m) | StepError::Retryable(m) => m.clone(),
                     };
+
                     self.set_status(&p, ctx, Some("failed"), Some(msg)).await?;
                 }
+
                 return Err(e);
             }
         };
+
         op.validate().map_err(fatal)?;
         ctx.set_state("services", json!(services));
         let op_json = serde_json::to_string(&op).map_err(fatal)?;
@@ -258,14 +276,17 @@ impl StackJob {
         );
         self.hub.enqueue(p.server_id, &body.operation_id, signed).map_err(StepError::Retryable)?;
         ctx.set_state("operation_id", json!(body.operation_id));
+
         if let Some(b) = busy(&p) {
             self.set_status(&p, ctx, Some(b), None).await?;
         }
+
         Ok(())
     }
 
     async fn await_result(&self, ctx: &mut StepContext) -> Result<(), StepError> {
         let p = payload(ctx)?;
+
         let op = match ctx.state_value("operation_id").and_then(Value::as_str).map(str::to_owned) {
             Some(op) if self.hub.is_tracked(&op) => op,
             _ => {
@@ -273,11 +294,13 @@ impl StackJob {
                 ctx.state_value("operation_id").and_then(Value::as_str).unwrap_or_default().to_owned()
             }
         };
+
         let wait = match p.op.as_str() {
             "deploy" | "down" => Duration::from_secs(35 * 60),
             "service" if p.action == "pull" => Duration::from_secs(35 * 60),
             _ => Duration::from_secs(150),
         };
+
         let result = self.hub.wait(&op, wait).await.ok_or_else(|| retry("the node did not report a result in time"))?;
         if !result.ok {
             if p.op == "deploy" {
@@ -285,10 +308,13 @@ impl StackJob {
             } else if busy(&p).is_some() {
                 self.set_status(&p, ctx, Some("deployed"), Some(result.error.clone())).await?;
             }
+
             return Err(StepError::Fatal(result.error));
         }
+
         let out: Value = serde_json::from_str(&result.output).unwrap_or(Value::Null);
         ctx.set_state("output", out);
+
         Ok(())
     }
 
@@ -296,6 +322,7 @@ impl StackJob {
         let p = payload(ctx)?;
         let out = ctx.state_value("output").cloned().unwrap_or(Value::Null);
         let now = self.clock.now();
+
         match p.op.as_str() {
             "logs" => Ok(()),
             "down" => {
@@ -321,6 +348,7 @@ impl StackJob {
                     updated_at: now,
                 };
                 self.stacks.put_node(&node).await.map_err(retry)?;
+
                 if let Some(mut s) = self.stacks.get_stack(p.stack_id).await.map_err(retry)? {
                     if s.deployed_revision != p.revision {
                         // Only this column: rewriting the whole row could undo an
@@ -329,26 +357,33 @@ impl StackJob {
                         self.stacks.set_deployed_revision(p.stack_id, p.revision).await.map_err(retry)?;
                         s.deployed_revision = p.revision;
                     }
+
                     self.register(&s, &p, &services, &state, ctx).await?;
                 }
+
                 Ok(())
             }
             _ => {
                 // `service` and `ps`: refresh the reported state.
                 let Some(mut n) = self.node(&p).await? else { return Ok(()) };
+
                 if let Some(s) = out.get("services") {
                     n.state = s.clone();
                 }
+
                 if busy(&p).is_some() {
                     "deployed".clone_into(&mut n.status);
                 }
+
                 n.last_error = None;
                 n.last_job_id = Some(ctx.job.id);
                 n.updated_at = now;
                 self.stacks.put_node(&n).await.map_err(retry)?;
+
                 if let Some(s) = self.stacks.get_stack(p.stack_id).await.map_err(retry)? {
                     self.sync_states(&s, &p, &n.state).await?;
                 }
+
                 Ok(())
             }
         }
@@ -378,6 +413,7 @@ impl StackJob {
     ) -> Result<(), StepError> {
         let now = self.clock.now();
         let existing = self.registered(stack).await?;
+
         for svc in services {
             let reported = service_state(state, svc);
             let spec = json!({
@@ -387,6 +423,7 @@ impl StackJob {
                 "image": reported.as_ref().and_then(|r| r["image"].as_str()),
                 "ports": reported.as_ref().map(|r| r["ports"].clone()).unwrap_or(json!([])),
             });
+
             let app = match existing.iter().find(|a| a.spec["service"] == json!(svc)) {
                 Some(a) => {
                     let mut a = a.clone();
@@ -407,6 +444,7 @@ impl StackJob {
                     updated_at: now,
                 },
             };
+
             self.apps.put_service(&app).await.map_err(retry)?;
             self.apps
                 .put_instance(&ServiceInstance {
@@ -422,45 +460,55 @@ impl StackJob {
                 .await
                 .map_err(retry)?;
         }
+
         // Services no longer in this node's part leave it.
         let keep: BTreeSet<&String> = services.iter().collect();
+
         for a in existing {
             let svc = a.spec["service"].as_str().unwrap_or_default().to_owned();
             if !keep.contains(&svc) {
                 self.remove_instance(&a, p.server_id).await?;
             }
         }
+
         Ok(())
     }
 
     async fn sync_states(&self, stack: &Stack, p: &Payload, state: &Value) -> Result<(), StepError> {
         for a in self.registered(stack).await? {
             let svc = a.spec["service"].as_str().unwrap_or_default();
+
             let Some(mut i) =
                 self.apps.list_instances(a.id).await.map_err(retry)?.into_iter().find(|i| i.server_id == p.server_id)
             else {
                 continue;
             };
+
             i.state = service_state(state, svc).and_then(|r| r["state"].as_str().map(str::to_owned));
             i.updated_at = self.clock.now();
             self.apps.put_instance(&i).await.map_err(retry)?;
         }
+
         Ok(())
     }
 
     async fn remove_instance(&self, a: &Service, server: ServerId) -> Result<(), StepError> {
         self.apps.delete_instance(a.id, server).await.map_err(retry)?;
+
         if self.apps.list_instances(a.id).await.map_err(retry)?.is_empty() {
             self.apps.delete_service(a.id).await.map_err(retry)?;
         }
+
         Ok(())
     }
 
     async fn deregister(&self, p: &Payload) -> Result<(), StepError> {
         let Some(stack) = self.stacks.get_stack(p.stack_id).await.map_err(retry)? else { return Ok(()) };
+
         for a in self.registered(&stack).await? {
             self.remove_instance(&a, p.server_id).await?;
         }
+
         Ok(())
     }
 }
@@ -484,6 +532,7 @@ impl JobHandler for StackJob {
         if payload.get("privileged").and_then(Value::as_bool) == Some(true) {
             return Action::StackPrivileged;
         }
+
         match payload.get("op").and_then(Value::as_str) {
             Some("ps" | "logs") => Action::View,
             _ => Action::StackManage,

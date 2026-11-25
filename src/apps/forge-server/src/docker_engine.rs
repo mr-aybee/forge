@@ -83,6 +83,7 @@ impl DockerEngines {
     pub fn node_ca(&self, ep: &DockerEndpoint) -> DomainResult<CertificateAuthority> {
         let key = self.envelope.open(&ep.ca_key_sealed, &ca_aad(ep.server_id)).map_err(DomainError::internal)?;
         let key = String::from_utf8(key).map_err(DomainError::internal)?;
+
         CertificateAuthority::from_pem(&ep.ca_cert_pem, &key).map_err(DomainError::internal)
     }
 
@@ -91,6 +92,7 @@ impl DockerEngines {
         let ca = CertificateAuthority::generate(&format!("Orbyn Forge Docker CA {server}"), self.clock.now())
             .map_err(DomainError::internal)?;
         let sealed = self.envelope.seal(ca.key_pem().as_bytes(), &ca_aad(server)).map_err(DomainError::internal)?;
+
         Ok((ca, sealed))
     }
 
@@ -103,6 +105,7 @@ impl DockerEngines {
             .get_docker_endpoint(server)
             .await?
             .ok_or_else(|| DomainError::Conflict("this node's Docker API endpoint is not enabled".into()))?;
+
         if ep.state != DockerEndpointState::Enabled && !any_state {
             return Err(DomainError::Conflict(format!(
                 "this node's Docker API endpoint is {}{}",
@@ -110,8 +113,10 @@ impl DockerEngines {
                 ep.last_error.as_deref().map(|e| format!(": {e}")).unwrap_or_default()
             )));
         }
+
         let address = format!("{}:{}", bracket(&ep.host), ep.port);
         let now = self.clock.now();
+
         if let Ok(cache) = self.cache.lock()
             && let Some(c) = cache.get(&server)
             && c.renew_at > now
@@ -120,6 +125,7 @@ impl DockerEngines {
         {
             return Ok((ep, c.target.clone()));
         }
+
         let ca = self.node_ca(&ep)?;
         let client =
             ca.issue_client_certificate(CLIENT_NAME, now, CLIENT_CERT_VALIDITY).map_err(DomainError::internal)?;
@@ -132,9 +138,11 @@ impl DockerEngines {
         )
         .map_err(DomainError::internal)?;
         let renew_at = now.plus(CLIENT_CERT_VALIDITY * 2 / 3);
+
         if let Ok(mut cache) = self.cache.lock() {
             cache.insert(server, Cached { target: target.clone(), renew_at, ca_pem: ep.ca_cert_pem.clone(), address });
         }
+
         Ok((ep, target))
     }
 
@@ -151,6 +159,7 @@ impl DockerEngines {
         // Any state: checking a failed endpoint again is how it recovers.
         let (mut ep, target) = self.target(server, true).await?;
         let now = self.clock.now();
+
         match target.get_json("/version", Duration::from_secs(15)).await {
             Ok((200, v)) => {
                 ep.state = DockerEndpointState::Enabled;
@@ -165,8 +174,10 @@ impl DockerEngines {
                 ep.last_error = Some(e.to_string());
             }
         }
+
         ep.updated_at = now;
         self.repo.put_docker_endpoint(&ep).await?;
+
         Ok(ep)
     }
 

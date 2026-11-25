@@ -65,6 +65,7 @@ pub struct DeviceRequests(Mutex<HashMap<String, Entry>>);
 fn user_code() -> String {
     let bytes = forge_secrets::crypto::random_bytes::<8>();
     let s: String = bytes.iter().map(|b| char::from(ALPHABET[usize::from(*b) % ALPHABET.len()])).collect();
+
     format!("{}-{}", &s[..4], &s[4..])
 }
 
@@ -78,6 +79,7 @@ fn oauth_error(error: &str, description: &str) -> Response {
     let mut r =
         (StatusCode::BAD_REQUEST, Json(json!({ "error": error, "error_description": description }))).into_response();
     r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+
     r
 }
 
@@ -116,21 +118,28 @@ pub async fn authorize(
     if !state.identity.is_first_party(&client_id) {
         return oauth_error("invalid_client", "device sign-in is for Forge's own apps");
     }
+
     let from = crate::throttle::client_ip(&headers, peer, &state.config.trusted_proxies());
     let device_code = forge_secrets::crypto::random_token::<32>();
+
     let Ok(mut m) = state.device_requests.0.lock() else {
         return oauth_error("server_error", "try again");
     };
+
     m.retain(|_, e| e.at.elapsed() < TTL);
+
     // One address cannot fill the table for everyone.
     let mine = m.values().filter(|e| e.requested_from == from).count();
     if !may_add(m.len(), mine, from) {
         return oauth_error("slow_down", "too many sign-in requests; try again later");
     }
+
     let mut code = user_code();
+
     while m.contains_key(&code) {
         code = user_code();
     }
+
     m.insert(
         code.clone(),
         Entry {
@@ -144,6 +153,7 @@ pub async fn authorize(
         },
     );
     drop(m);
+
     // The address the client used (D-167): the person opens it on the same
     // network.
     let base = origin.origin();
@@ -157,6 +167,7 @@ pub async fn authorize(
     }))
     .into_response();
     r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+
     r
 }
 
@@ -170,32 +181,42 @@ pub async fn token(State(state): State<AppState>, body: Bytes) -> Response {
             .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
             .body(Body::from(body))
             .unwrap_or_default();
+
         return match axum::Form::<super::session::TokenRequest>::from_request(req, &state).await {
             Ok(form) => super::session::oauth_token(State(state), form).await.into_response(),
             Err(e) => e.into_response(),
         };
     }
+
     let (Some(device_code), Some(client_id)) = (f.get("device_code"), f.get("client_id")) else {
         return oauth_error("invalid_request", "device_code and client_id are required");
     };
+
     let hash = forge_identity::device_code_hash(device_code);
+
     let decided = {
         let Ok(mut m) = state.device_requests.0.lock() else { return oauth_error("server_error", "try again") };
+
         let Some((code, e)) = m.iter_mut().find(|(_, e)| e.device_hash == hash) else {
             return oauth_error("expired_token", "the device code expired or is unknown; start again");
         };
+
         let code = code.clone();
+
         if e.at.elapsed() >= TTL {
             m.remove(&code);
             return oauth_error("expired_token", "the device code expired; start again");
         }
+
         if e.client_id != *client_id {
             return oauth_error("invalid_grant", "client mismatch");
         }
+
         match e.decision.clone() {
             Decision::Pending => {
                 let too_fast = e.last_poll.is_some_and(|p| p.elapsed() < INTERVAL);
                 e.last_poll = Some(Instant::now());
+
                 return if too_fast {
                     oauth_error("slow_down", "poll less often")
                 } else {
@@ -209,6 +230,7 @@ pub async fn token(State(state): State<AppState>, body: Bytes) -> Response {
             }
         }
     };
+
     match decided {
         Decision::Approved { user } => match state.identity.issue_device_tokens(user).await {
             Ok(t) => {
@@ -219,9 +241,11 @@ pub async fn token(State(state): State<AppState>, body: Bytes) -> Response {
                     forge_core::model::AuditOutcome::Success,
                 )
                 .with_details(json!({ "client_id": client_id }));
+
                 if let Err(e) = state.audit.append(ev).await {
                     tracing::error!(error = %e, "audit write failed");
                 }
+
                 let mut r = Json(t).into_response();
                 r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
                 r
@@ -237,6 +261,7 @@ fn console_caller(caller: &Caller) -> ApiResult<()> {
     if caller.session.session.kind != SessionKind::Web || caller.via_api_key() {
         return Err(ApiError::forbidden("approve device sign-ins in the Forge console"));
     }
+
     Ok(())
 }
 
@@ -247,12 +272,14 @@ async fn find(state: &AppState, caller: &Caller, code: &str) -> ApiResult<String
         caller.audit_denied("oauth.device.lookup", &EntityRef::platform(), None, "too many wrong codes").await;
         return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "throttled", "too many wrong codes; wait a while"));
     }
+
     let found =
         normalise(code).filter(|c| {
             state.device_requests.0.lock().is_ok_and(|m| {
                 m.get(c).is_some_and(|e| e.at.elapsed() < TTL && matches!(e.decision, Decision::Pending))
             })
         });
+
     match found {
         Some(c) => Ok(c),
         None => {
@@ -277,6 +304,7 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Path(code): Path
                 .map(|e| (e.client_id.clone(), e.at.elapsed(), e.requested_from.to_string(), e.user_agent.clone()))
         })
         .unwrap_or_default();
+
     Ok(Json(json!({
         "user_code": code,
         "client_id": client_id,
@@ -306,12 +334,14 @@ pub async fn decide(
 ) -> ApiResult<Json<Value>> {
     console_caller(&caller)?;
     let code = find(&state, &caller, &code).await?;
+
     let (client_id, from, agent) = {
         let mut m = state
             .device_requests
             .0
             .lock()
             .map_err(|_| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "busy", "try again"))?;
+
         // Decided once, under the same lock as the check: two answers racing
         // cannot overwrite each other.
         let e = m
@@ -321,7 +351,9 @@ pub async fn decide(
         e.decision = if d.approve { Decision::Approved { user: caller.session.user.id } } else { Decision::Denied };
         (e.client_id.clone(), e.requested_from.to_string(), e.user_agent.clone())
     };
+
     let resource = EntityRef::platform();
+
     if d.approve {
         caller
             .audit(
@@ -334,6 +366,7 @@ pub async fn decide(
     } else {
         caller.audit_denied("oauth.device.approve", &resource, None, "the person denied the device sign-in").await;
     }
+
     Ok(Json(json!({ "approved": d.approve })))
 }
 
@@ -359,6 +392,7 @@ mod tests {
             assert_eq!(c.len(), 9);
             assert_eq!(normalise(&c).as_deref(), Some(c.as_str()));
         }
+
         assert_eq!(normalise("bcdf ghjk").as_deref(), Some("BCDF-GHJK"));
         assert_eq!(normalise("BCDF-GHJ"), None, "too short");
         assert_eq!(normalise("ABCD-EFGH"), None, "vowels are never issued");

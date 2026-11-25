@@ -2,13 +2,14 @@
 //! authorization and input validation.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use forge_agent::enroll::{HostFacts, enroll};
 use forge_agent::{AgentConfig, StatePaths};
 use forge_core::observation::*;
 use forge_core::{EntityKind, EntityRef, ServerId, Timestamp};
 use reqwest::StatusCode;
 use serde_json::json;
+
+use crate::common::*;
 
 /// Creating users needs an MFA-verified session (#13 inventory).
 async fn step_up(c: &mut Client) {
@@ -40,6 +41,7 @@ async fn enroll_node(h: &Harness, admin: &Client) -> (ServerId, tempfile::TempDi
     )
     .await
     .unwrap();
+
     (id.server_id.parse().unwrap(), dir)
 }
 
@@ -123,6 +125,7 @@ async fn observations_are_listed_with_history_and_need_health_view() {
     assert_eq!(s, StatusCode::CREATED, "{b}");
     let nobody = Client::login(&h.base, "nobody@example.com", PASSWORD).await;
     assert_eq!(nobody.get(&format!("/api/v1/observations?resource=server:{node}")).await.0, StatusCode::FORBIDDEN);
+
     // An auditor (read-only role) can.
     let auditor = user_with_role(&h, &admin, "aud@example.com", "auditor", "platform:root").await;
     assert_eq!(auditor.get(&format!("/api/v1/observations?resource=server:{node}")).await.0, StatusCode::OK);

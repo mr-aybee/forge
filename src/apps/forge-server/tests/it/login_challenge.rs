@@ -2,13 +2,15 @@
 //! single-use proof of work; failures make the next challenge harder.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 async fn challenge(h: &Harness, login: &str) -> Value {
     let (s, c) = Client::anonymous(&h.base).get(&format!("/api/v1/auth/challenge?login={login}")).await;
     assert_eq!(s, StatusCode::OK, "{c}");
+
     c
 }
 
@@ -57,19 +59,24 @@ async fn failures_make_the_next_challenge_harder() {
     let h = start().await;
     let anon = Client::anonymous(&h.base);
     let base_bits = challenge(&h, ADMIN_EMAIL).await["difficulty"].as_u64().unwrap();
+
     // An easy challenge fetched before the failures …
     let early = challenge(&h, ADMIN_EMAIL).await;
+
     for _ in 0..2 {
         let (s, _) = anon.post("/api/v1/auth/login", login_body(&h.base, ADMIN_EMAIL, "wrong password!!").await).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
     }
+
     let c = challenge(&h, ADMIN_EMAIL).await;
     assert_eq!(c["difficulty"].as_u64().unwrap(), base_bits + 2);
+
     // … no longer counts for this name.
     let body =
         json!({ "login": ADMIN_EMAIL, "password": PASSWORD, "challenge_id": early["id"], "nonce": solve(&early) });
     let (s, e) = anon.post("/api/v1/auth/login", body).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "{e}");
+
     // Another name is not affected; success resets it.
     assert_eq!(challenge(&h, "someone-else").await["difficulty"].as_u64().unwrap(), base_bits);
     Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;

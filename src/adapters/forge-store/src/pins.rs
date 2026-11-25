@@ -60,9 +60,11 @@ impl PinRepository for Store {
         .execute(self.pool())
         .await
         .map_err(db_err)?;
+
         if done.rows_affected() > 0 {
             return Ok(PinAdded::Added);
         }
+
         let exists = sqlx::query("SELECT 1 AS one FROM user_pins WHERE user_id = $1 AND kind = $2 AND entity_id = $3")
             .bind(user.to_string())
             .bind(kind.as_str())
@@ -70,6 +72,7 @@ impl PinRepository for Store {
             .fetch_optional(self.pool())
             .await
             .map_err(db_err)?;
+
         Ok(if exists.is_some() { PinAdded::Exists } else { PinAdded::Full })
     }
 
@@ -87,6 +90,7 @@ impl PinRepository for Store {
     async fn set_pin_order(&self, user: UserId, order: &[(PinKind, String)]) -> DomainResult<()> {
         // Atomic: every position changes in one transaction or none does.
         let mut tx = self.pool().begin().await.map_err(db_err)?;
+
         for (position, (kind, id)) in (0_i64..).zip(order) {
             sqlx::query("UPDATE user_pins SET position = $1 WHERE user_id = $2 AND kind = $3 AND entity_id = $4")
                 .bind(position)
@@ -97,7 +101,9 @@ impl PinRepository for Store {
                 .await
                 .map_err(db_err)?;
         }
+
         tx.commit().await.map_err(db_err)?;
+
         Ok(())
     }
 }

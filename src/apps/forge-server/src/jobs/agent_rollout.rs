@@ -81,8 +81,10 @@ fn payload(ctx: &StepContext, offered: &str) -> Result<(Vec<ServerId>, usize, St
     let ids: Vec<ServerId> = serde_json::from_value(ctx.job.payload["server_ids"].clone())
         .map_err(|_| StepError::Fatal("payload needs server_ids".into()))?;
     let batch = ctx.job.payload["batch"].as_u64().and_then(|b| usize::try_from(b).ok()).unwrap_or(1);
+
     // A rollout queued by an older server has no target: the agents on offer.
     let target = ctx.job.payload["target"].as_str().unwrap_or(offered).to_owned();
+
     Ok((ids, batch, target))
 }
 
@@ -116,6 +118,7 @@ impl JobHandler for AgentRolloutJob {
         ctx.set_state("batches", json!(plan.len()));
         let mut results: Vec<Value> = Vec::new();
         let mut skipped = 0usize;
+
         for (n, batch) in plan.iter().enumerate() {
             let at = format!("batch {} of {}", n + 1, plan.len());
             let states = self.run_batch(&engine, ctx, batch, &target, &at).await;
@@ -124,15 +127,18 @@ impl JobHandler for AgentRolloutJob {
                 Err((s, e)) => {
                     results.extend(s);
                     ctx.set_state("nodes", json!(results));
+
                     return Err(e);
                 }
             };
+
             skipped += states.iter().filter(|s| s["outcome"] == "skipped").count();
             results.extend(states);
             ctx.set_state("nodes", json!(results));
             ctx.set_state("skipped", json!(skipped));
             ctx.set_state("done_batches", json!(n + 1));
         }
+
         Ok(())
     }
 }
@@ -160,6 +166,7 @@ impl AgentRolloutJob {
         // rollout may retry a node whose update failed.
         let key = format!("agent.update:{id}:{target}:{}", ctx.job.id);
         let _guard = SUBMIT_LOCK.lock().await;
+
         if let Some(other) = active_update(self.jobs.as_ref(), id).await?
             && other.idempotency_key.as_deref() != Some(key.as_str())
         {
@@ -168,6 +175,7 @@ impl AgentRolloutJob {
                 other.id
             )));
         }
+
         engine
             .submit(NewJob {
                 kind: "agent.update".into(),
@@ -201,11 +209,13 @@ impl AgentRolloutJob {
             start_ms.saturating_add(i64::try_from(self.batch_deadline.as_millis()).unwrap_or(i64::MAX));
         let deadline = tokio::time::Instant::now() + self.batch_deadline + BATCH_GRACE;
         let mut slots: Vec<(ServerId, Slot)> = batch.iter().map(|id| (*id, Slot::Waiting)).collect();
+
         loop {
             let mut states = Vec::new();
             let mut pending = false;
             let mut failed = None;
             let past_node_deadline = self.clock.now().millis() >= node_deadline_ms;
+
             for (id, slot) in &mut slots {
                 if let Slot::Waiting = slot {
                     let node = self.servers.get_server(*id).await.map_err(|e| (Vec::new(), retry(e)))?;
@@ -226,6 +236,7 @@ impl AgentRolloutJob {
                         *slot = Slot::Skipped;
                     }
                 }
+
                 match slot {
                     Slot::Waiting => {
                         pending = true;
@@ -248,16 +259,20 @@ impl AgentRolloutJob {
                             "pending" => pending = true,
                             _ => {}
                         }
+
                         let mut entry =
                             json!({ "server_id": id, "job_id": job, "status": j.status, "outcome": outcome });
+
                         if outcome == "skipped" {
                             entry["skip_reason"] = j.state["skip_reason"].clone();
                             entry["reason"] = j.state["skipped"].clone();
                         }
+
                         states.push(entry);
                     }
                 }
             }
+
             if let Some((id, why)) = failed {
                 return Err((
                     states,
@@ -266,9 +281,11 @@ impl AgentRolloutJob {
                     )),
                 ));
             }
+
             if !pending {
                 return Ok(states);
             }
+
             if tokio::time::Instant::now() >= deadline {
                 return Err((
                     states,
@@ -278,6 +295,7 @@ impl AgentRolloutJob {
                     )),
                 ));
             }
+
             tokio::time::sleep(self.poll).await;
         }
     }

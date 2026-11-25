@@ -156,9 +156,11 @@ impl Captchas {
         if threshold == 0 {
             return false;
         }
+
         let Ok(mut m) = self.inner.lock() else { return true };
         let by_ip = m.count(&ip_key(ip));
         let by_name = login.filter(|l| !l.trim().is_empty()).map_or(0, |l| m.count(&name_key(l)));
+
         by_ip.max(by_name) >= threshold
     }
 
@@ -170,21 +172,26 @@ impl Captchas {
         let id = forge_secrets::crypto::random_token::<18>();
         let answer = self.tag(&id, &text);
         let ip = bucket(ip);
+
         {
             let mut m = self.inner.lock().ok()?;
             m.pending.retain(|_, p| p.at.elapsed() < TTL);
             m.issued.retain(|_, (_, at)| at.elapsed() < FAILURE_WINDOW);
+
             if !m.issued.contains_key(&ip) {
                 make_room(&mut m.issued, MAX_COUNTERS, |(_, at)| *at);
             }
+
             let e = m.issued.entry(ip).or_insert((0, Instant::now()));
             if e.0 >= MAX_ISSUED_PER_IP {
                 return None;
             }
+
             e.0 += 1;
             make_room(&mut m.pending, MAX_PENDING, |p| p.at);
             m.pending.insert(id.clone(), Pending { answer, ip, at: Instant::now() });
         }
+
         Some(Issued { id, png: render_png(&text), expires_in: TTL })
     }
 
@@ -195,9 +202,11 @@ impl Captchas {
     pub fn issue_known(&self, ip: IpAddr, text: &str) -> String {
         let id = forge_secrets::crypto::random_token::<18>();
         let answer = self.tag(&id, text);
+
         if let Ok(mut m) = self.inner.lock() {
             m.pending.insert(id.clone(), Pending { answer, ip: bucket(ip), at: Instant::now() });
         }
+
         id
     }
 
@@ -217,14 +226,17 @@ impl Captchas {
     pub fn failed(&self, login: &str, ip: IpAddr) {
         if let Ok(mut m) = self.inner.lock() {
             m.prune();
+
             for k in [name_key(login), ip_key(ip)] {
                 if !m.failures.contains_key(&k) {
                     make_room(&mut m.failures, MAX_COUNTERS, |(_, at)| *at);
                 }
+
                 let e = m.failures.entry(k).or_insert((0, Instant::now()));
                 if e.1.elapsed() >= FAILURE_WINDOW {
                     e.0 = 0;
                 }
+
                 e.0 = e.0.saturating_add(1);
                 e.1 = Instant::now();
             }
@@ -246,6 +258,7 @@ fn random_text() -> String {
     let n = u8::try_from(ALPHABET.len()).unwrap_or(u8::MAX);
     let limit = u8::MAX - (u8::MAX % n);
     let mut out = String::with_capacity(LEN);
+
     while out.len() < LEN {
         for b in forge_secrets::crypto::random_bytes::<16>() {
             if b < limit && out.len() < LEN {
@@ -253,6 +266,7 @@ fn random_text() -> String {
             }
         }
     }
+
     out
 }
 
@@ -358,6 +372,7 @@ impl Rng {
         self.0 ^= self.0 >> 12;
         self.0 ^= self.0 << 25;
         self.0 ^= self.0 >> 27;
+
         self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
     /// Uniform in `[lo, hi)`.
@@ -388,6 +403,7 @@ impl Canvas {
         let y1 = ((a.1.max(b.1) + r).ceil() as usize).min(HEIGHT - 1);
         let (dx, dy) = (b.0 - a.0, b.1 - a.1);
         let len2 = (dx * dx + dy * dy).max(1e-6);
+
         for y in y0..=y1 {
             for x in x0..=x1 {
                 let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
@@ -408,6 +424,7 @@ impl Canvas {
         for w in pts.windows(2) {
             let (a, b) = (w[0], w[1]);
             let len = ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let steps = ((len / 2.0).ceil() as usize).max(1);
             #[allow(clippy::cast_precision_loss)]
@@ -427,17 +444,20 @@ impl Canvas {
 fn draw(text: &str) -> Canvas {
     let mut rng = Rng::new();
     let mut c = Canvas::new();
+
     // Light speckle in the background.
     for _ in 0..500 {
         let (x, y) = (rng.range(0.0, WIDTH as f32), rng.range(0.0, HEIGHT as f32));
         let ink = rng.range(150.0, 225.0);
         c.line((x, y), (x + rng.range(-1.5, 1.5), y + rng.range(-1.5, 1.5)), rng.range(0.6, 1.4), ink);
     }
+
     // One gentle wave over the whole picture.
     let (ax, fx, phx) = (rng.range(2.0, 4.0), rng.range(0.025, 0.045), rng.range(0.0, 6.3));
     let (ay, fy, phy) = (rng.range(1.5, 3.0), rng.range(0.04, 0.07), rng.range(0.0, 6.3));
     let warp = move |(x, y): (f32, f32)| (x + ay * (y * fy + phy).sin(), y + ax * (x * fx + phx).sin());
     let step = (WIDTH as f32 - 24.0) / LEN as f32;
+
     for (i, ch) in text.bytes().enumerate() {
         let scale = rng.range(3.7, 4.4);
         let angle = rng.range(-0.28, 0.28);
@@ -452,11 +472,13 @@ fn draw(text: &str) -> Canvas {
         };
         let width = rng.range(2.6, 3.4);
         let ink = rng.range(20.0, 70.0);
+
         for s in glyph(ch) {
             let pts: Vec<(f32, f32)> = s.iter().copied().map(place).collect();
             c.stroke(&pts, &warp, width, ink);
         }
     }
+
     // Noise curves across the text, thinner than the characters.
     for _ in 0..3 {
         let (y0, amp, f, ph) =
@@ -465,6 +487,7 @@ fn draw(text: &str) -> Canvas {
             (0..=22).map(|i| (i as f32 * 10.0, y0 + amp * (i as f32 * 10.0 * f + ph).sin())).collect();
         c.stroke(&pts, &|p| p, rng.range(1.2, 1.8), rng.range(60.0, 110.0));
     }
+
     c
 }
 
@@ -480,6 +503,7 @@ pub fn render_png(text: &str) -> Vec<u8> {
 /// A minimal PNG encoder: one IHDR, one zlib IDAT (filter 0), IEND.
 fn encode_gray_png(w: usize, h: usize, gray: &[u8]) -> Vec<u8> {
     use std::io::Write as _;
+
     fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
         out.extend_from_slice(&u32::try_from(data.len()).unwrap_or(0).to_be_bytes());
         let mut crc = flate2::Crc::new();
@@ -489,11 +513,14 @@ fn encode_gray_png(w: usize, h: usize, gray: &[u8]) -> Vec<u8> {
         out.extend_from_slice(data);
         out.extend_from_slice(&crc.sum().to_be_bytes());
     }
+
     let mut raw = Vec::with_capacity((w + 1) * h);
+
     for row in gray.chunks(w) {
         raw.push(0);
         raw.extend_from_slice(row);
     }
+
     let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
     let _ = z.write_all(&raw);
     let idat = z.finish().unwrap_or_default();
@@ -505,6 +532,7 @@ fn encode_gray_png(w: usize, h: usize, gray: &[u8]) -> Vec<u8> {
     chunk(&mut out, b"IHDR", &ihdr);
     chunk(&mut out, b"IDAT", &idat);
     chunk(&mut out, b"IEND", &[]);
+
     out
 }
 
@@ -522,6 +550,7 @@ mod tests {
         let id = forge_secrets::crypto::random_token::<18>();
         let answer = c.tag(&id, text);
         c.inner.lock().unwrap().pending.insert(id.clone(), Pending { answer, ip, at: Instant::now() });
+
         id
     }
 
@@ -567,9 +596,11 @@ mod tests {
     #[test]
     fn issuing_is_limited_per_address() {
         let c = Captchas::default();
+
         for _ in 0..MAX_ISSUED_PER_IP {
             assert!(c.issue(IP).is_some());
         }
+
         assert!(c.issue(IP).is_none());
         assert!(c.issue(OTHER).is_some());
     }
@@ -578,13 +609,16 @@ mod tests {
     #[test]
     fn a_full_store_still_issues_to_a_new_client() {
         let c = Captchas::default();
+
         {
             let mut m = c.inner.lock().unwrap();
+
             for i in 0..MAX_PENDING {
                 let tag = c.tag(&i.to_string(), "AAAAAA");
                 m.pending.insert(i.to_string(), Pending { answer: tag, ip: OTHER, at: Instant::now() });
             }
         }
+
         assert!(c.issue(IP).is_some(), "the oldest picture makes room");
         assert_eq!(c.inner.lock().unwrap().pending.len(), MAX_PENDING);
     }
@@ -595,12 +629,15 @@ mod tests {
         let b: IpAddr = "2001:db8:1:2:bbbb::9".parse().unwrap();
         let other: IpAddr = "2001:db8:1:3::1".parse().unwrap();
         let c = Captchas::default();
+
         for _ in 0..MAX_ISSUED_PER_IP / 2 {
             assert!(c.issue(a).is_some());
             assert!(c.issue(b).is_some());
         }
+
         assert!(c.issue(a).is_none(), "one /64 shares the limit");
         assert!(c.issue(other).is_some(), "another /64 does not");
+
         // A picture from one address of the /64 is answered from another.
         let id = issue_with(&c, "AC3D4E", bucket(a));
         assert_eq!(c.verify(&id, "AC3D4E", b), Ok(()));
@@ -615,9 +652,11 @@ mod tests {
     #[test]
     fn counters_are_capped() {
         let c = Captchas::default();
+
         for i in 0..(MAX_COUNTERS + 10) {
             c.failed(&format!("user-{i}"), IP);
         }
+
         assert!(c.inner.lock().unwrap().failures.len() <= MAX_COUNTERS);
         assert!(c.required(Some("anyone"), IP, 2), "the address's own count is the newest, so it stays");
     }
@@ -629,9 +668,11 @@ mod tests {
             assert_eq!(t.len(), LEN);
             assert!(t.bytes().all(|b| ALPHABET.contains(&b)), "{t}");
         }
+
         for b in ALPHABET {
             assert!(!glyph(*b).is_empty(), "{}", char::from(*b));
         }
+
         for bad in b"0O1IL2Z5S8B" {
             assert!(!ALPHABET.contains(bad), "{}", char::from(*bad));
         }
@@ -643,6 +684,7 @@ mod tests {
     #[ignore = "writes sample pictures for a human to look at"]
     fn write_samples() {
         let dir = std::path::PathBuf::from(std::env::var("CAPTCHA_SAMPLES").unwrap());
+
         for i in 0..6 {
             let t = random_text();
             std::fs::write(dir.join(format!("{i}-{t}.png")), render_png(&t)).unwrap();
@@ -655,6 +697,7 @@ mod tests {
         assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
         assert_eq!(&png[12..16], b"IHDR");
         assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), u32::try_from(WIDTH).unwrap());
+
         // Decode the IDAT back and check there is dark ink.
         let len = usize::try_from(u32::from_be_bytes(png[33..37].try_into().unwrap())).unwrap();
         assert_eq!(&png[37..41], b"IDAT");

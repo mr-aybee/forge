@@ -55,12 +55,15 @@ impl DockerTlsOp {
                 if !pem_ok(ca_pem, "CERTIFICATE") || !pem_ok(cert_pem, "CERTIFICATE") {
                     return Err("certificates must be PEM".into());
                 }
+
                 if *port < 1024 {
                     return Err("the port must be 1024 or higher".into());
                 }
+
                 if listen.is_loopback() || listen.is_multicast() {
                     return Err("dockerd must listen on an address the control plane can reach".into());
                 }
+
                 Ok(())
             }
             Self::Prepare {} | Self::Remove {} | Self::Status {} => Ok(()),

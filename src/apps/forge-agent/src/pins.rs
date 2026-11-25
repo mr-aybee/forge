@@ -119,6 +119,7 @@ fn announcement_digest(keys: &ServerKeys) -> String {
     k.sort();
     let mut r: Vec<String> = keys.revoked.iter().map(|f| f.to_ascii_lowercase()).collect();
     r.sort();
+
     forge_secrets::crypto::sha256_hex(format!("{}|{}", k.join(","), r.join(",")).as_bytes())
 }
 
@@ -162,8 +163,10 @@ impl PinSet {
             if !force {
                 return Err(PinError::Revoked(forge_pki::short_fingerprint(&c)));
             }
+
             self.revoked.retain(|r| *r != c);
         }
+
         self.add(&c, label, now_ms)
     }
 
@@ -172,32 +175,40 @@ impl PinSet {
     /// [`Self::apply_announcement`]. Returns whether the set changed.
     pub fn apply_verified(&mut self, keys: &ServerKeys, now_ms: i64) -> Result<bool, PinError> {
         let digest = announcement_digest(keys);
+
         if keys.sequence < self.sequence {
             return Err(PinError::Stale { got: keys.sequence, applied: self.sequence });
         }
+
         if keys.sequence == self.sequence && keys.sequence > 0 {
             if self.announcement_digest.as_deref().is_some_and(|d| d != digest) {
                 return Err(PinError::Replayed(keys.sequence));
             }
+
             if self.announcement_digest.is_some() {
                 return Ok(false);
             }
         }
+
         let mut changed = false;
+
         for r in &keys.revoked {
             let r = canonical(r)?;
             let before = self.server_keys.len();
             self.server_keys.retain(|p| p.sha256 != r);
             changed |= self.server_keys.len() != before;
+
             if !self.revoked.contains(&r) {
                 self.revoked.push(r);
                 changed = true;
             }
         }
+
         if self.revoked.len() > MAX_REVOKED {
             let extra = self.revoked.len() - MAX_REVOKED;
             self.revoked.drain(..extra);
         }
+
         let allowed: Vec<ServerKey> = keys
             .keys
             .iter()
@@ -205,12 +216,14 @@ impl PinSet {
             .cloned()
             .collect();
         changed |= self.apply_announcement(&allowed, now_ms)?;
+
         if keys.sequence > 0 && (self.sequence != keys.sequence || self.announcement_digest.as_deref() != Some(&digest))
         {
             self.sequence = keys.sequence;
             self.announcement_digest = Some(digest);
             changed = true;
         }
+
         Ok(changed)
     }
 
@@ -219,14 +232,18 @@ impl PinSet {
     pub fn add(&mut self, fp: &str, label: &str, now_ms: i64) -> Result<bool, PinError> {
         let fp = canonical(fp)?;
         let label = clean_label(label);
+
         if let Some(p) = self.server_keys.iter_mut().find(|p| p.sha256 == fp) {
             let changed = p.label != label || p.retired_ms.is_some();
             p.label = label;
             p.retired_ms = None;
+
             return Ok(changed);
         }
+
         self.make_room()?;
         self.server_keys.push(Pin { sha256: fp, label, added_ms: now_ms, retired_ms: None });
+
         Ok(true)
     }
 
@@ -235,6 +252,7 @@ impl PinSet {
         let fp = canonical(fp)?;
         let before = self.server_keys.len();
         self.server_keys.retain(|p| p.sha256 != fp);
+
         Ok(self.server_keys.len() != before)
     }
 
@@ -243,6 +261,7 @@ impl PinSet {
         if self.server_keys.len() < MAX_PINS {
             return Ok(());
         }
+
         let oldest = self
             .server_keys
             .iter()
@@ -252,6 +271,7 @@ impl PinSet {
             .map(|(_, i)| i)
             .ok_or(PinError::Full)?;
         self.server_keys.remove(oldest);
+
         Ok(())
     }
 
@@ -264,10 +284,13 @@ impl PinSet {
             .iter()
             .map(|k| canonical(&k.sha256).map(|fp| (fp, clean_label(&k.label))))
             .collect::<Result<_, _>>()?;
+
         if announced.is_empty() {
             return Ok(false);
         }
+
         let mut changed = false;
+
         for (fp, label) in &announced {
             match self.server_keys.iter_mut().find(|p| &p.sha256 == fp) {
                 Some(p) => {
@@ -276,6 +299,7 @@ impl PinSet {
                         if relabel {
                             p.label.clone_from(label);
                         }
+
                         p.retired_ms = None;
                         changed = true;
                     }
@@ -292,15 +316,19 @@ impl PinSet {
                 }
             }
         }
+
         let kept = i64::try_from(RETIRED_KEPT.as_millis()).unwrap_or(i64::MAX);
+
         for p in &mut self.server_keys {
             if p.retired_ms.is_none() && p.label != LABEL_MANUAL && !announced.iter().any(|(fp, _)| *fp == p.sha256) {
                 p.retired_ms = Some(now_ms);
                 changed = true;
             }
         }
+
         let before = self.server_keys.len();
         self.server_keys.retain(|p| p.retired_ms.is_none_or(|r| now_ms - r < kept));
+
         Ok(changed || self.server_keys.len() != before)
     }
 
@@ -309,11 +337,13 @@ impl PinSet {
         if set.server_keys.len() > MAX_PINS {
             return Err(PinError::Parse(origin.into(), format!("more than {MAX_PINS} keys")));
         }
+
         for p in &set.server_keys {
             if forge_pki::parse_fingerprint(&p.sha256).as_deref() != Some(p.sha256.as_str()) {
                 return Err(PinError::Parse(origin.into(), format!("bad fingerprint {}", p.sha256)));
             }
         }
+
         Ok(set)
     }
 
@@ -370,12 +400,15 @@ pub enum Adoption {
 /// and reported. Blocking.
 pub fn adopt_staged(staged: &Path, system: &Path) -> Result<Adoption, PinError> {
     let shown = staged.display().to_string();
+
     match std::fs::symlink_metadata(staged) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Adoption::NothingStaged),
         Err(e) => return Err(PinError::Io(shown, e.to_string())),
         Ok(_) => {}
     }
+
     let _lock = lock(system)?;
+
     let outcome = match std::fs::symlink_metadata(system) {
         Ok(_) => Adoption::KeptExisting,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -383,11 +416,14 @@ pub fn adopt_staged(staged: &Path, system: &Path) -> Result<Adoption, PinError> 
             if !set.is_empty() {
                 save(system, &set)?;
             }
+
             Adoption::Adopted(set.server_keys.len())
         }
         Err(e) => return Err(PinError::Io(system.display().to_string(), e.to_string())),
     };
+
     std::fs::remove_file(staged).map_err(|e| PinError::Io(shown, e.to_string()))?;
+
     Ok(outcome)
 }
 
@@ -407,12 +443,14 @@ fn check_adopted_at(system: &Path, staged: &Path, root_owned: bool) -> Result<()
             system.display()
         ));
     }
+
     Ok(())
 }
 
 /// Reads the pin set; a missing file is an empty set. Blocking.
 pub fn load(path: &Path) -> Result<PinSet, PinError> {
     let shown = path.display().to_string();
+
     match std::fs::symlink_metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(PinSet::default()),
         Err(e) => return Err(PinError::Io(shown, e.to_string())),
@@ -420,8 +458,10 @@ pub fn load(path: &Path) -> Result<PinSet, PinError> {
         Ok(m) if m.len() > MAX_FILE => return Err(PinError::Io(shown, format!("larger than {MAX_FILE} bytes"))),
         Ok(_) => {}
     }
+
     let raw = crate::self_update::read_nofollow(path, MAX_FILE)
         .ok_or_else(|| PinError::Io(shown.clone(), "not readable".into()))?;
+
     PinSet::parse(&String::from_utf8_lossy(&raw), &shown)
 }
 
@@ -429,6 +469,7 @@ pub fn load(path: &Path) -> Result<PinSet, PinError> {
 /// creating its folder. Blocking.
 pub fn save(path: &Path, set: &PinSet) -> Result<(), PinError> {
     let shown = path.display().to_string();
+
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| PinError::Io(dir.display().to_string(), e.to_string()))?;
         #[cfg(unix)]
@@ -438,10 +479,12 @@ pub fn save(path: &Path, set: &PinSet) -> Result<(), PinError> {
             if !meta.is_dir() {
                 return Err(PinError::Io(SYSTEM_DIR.into(), "not a directory".into()));
             }
+
             std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755))
                 .map_err(|e| PinError::Io(SYSTEM_DIR.into(), e.to_string()))?;
         }
     }
+
     crate::self_update::write_nofollow(path, set.to_toml()?.as_bytes()).map_err(|e| PinError::Io(shown, e))
 }
 
@@ -463,9 +506,11 @@ pub struct PinLock {
 pub fn lock(path: &Path) -> Result<PinLock, PinError> {
     let lp = lock_path(path);
     let shown = lp.display().to_string();
+
     if let Some(dir) = lp.parent() {
         std::fs::create_dir_all(dir).map_err(|e| PinError::Io(dir.display().to_string(), e.to_string()))?;
     }
+
     let mut opts = std::fs::OpenOptions::new();
     opts.read(true).write(true).create(true).truncate(false);
     #[cfg(unix)]
@@ -475,6 +520,7 @@ pub fn lock(path: &Path) -> Result<PinLock, PinError> {
     }
     let f = opts.open(&lp).map_err(|e| PinError::Io(shown.clone(), e.to_string()))?;
     f.lock().map_err(|e| PinError::Io(shown, e.to_string()))?;
+
     Ok(PinLock { _file: f })
 }
 
@@ -490,6 +536,7 @@ pub fn update<T>(
     if changed {
         save(path, &set)?;
     }
+
     Ok((changed, out))
 }
 
@@ -499,17 +546,21 @@ pub fn update<T>(
 /// reset). Blocking.
 pub fn reset(path: &Path, now_ms: i64) -> Result<Option<PathBuf>, PinError> {
     let _lock = lock(path)?;
+
     match std::fs::symlink_metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(PinError::Io(path.display().to_string(), e.to_string())),
         Ok(_) => {}
     }
+
     if load(path).is_ok() {
         return Ok(None);
     }
+
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| FILE.to_owned());
     let backup = path.with_file_name(format!("{name}.bad-{now_ms}"));
     std::fs::rename(path, &backup).map_err(|e| PinError::Io(path.display().to_string(), e.to_string()))?;
+
     Ok(Some(backup))
 }
 
@@ -556,8 +607,9 @@ pub fn mismatch_message(presented: &str, pinned: &[String], endpoint: &str) -> S
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // reason: tests
 mod tests {
-    use super::*;
     use forge_core::Timestamp;
+
+    use super::*;
 
     const DAY: i64 = 24 * 3_600_000;
 
@@ -574,16 +626,19 @@ mod tests {
         set.add(&fp(n), LABEL_ENROLLMENT, 1).unwrap();
         let p = staged_path(dir);
         save(&p, &set).unwrap();
+
         p
     }
 
     #[test]
     fn enrollment_as_the_agent_user_stages_the_root_owned_set() {
         let default = crate::config::StatePaths::default_dir();
+
         if cfg!(unix) {
             assert_eq!(enrollment_target(&default, false), staged_path(&default));
             assert_eq!(enrollment_target(&default, true), Path::new(SYSTEM_DIR).join(FILE));
         }
+
         let other = Path::new("/srv/agent-state");
         assert_eq!(enrollment_target(other, false), other.join(FILE));
         assert_eq!(enrollment_target(other, true), other.join(FILE));
@@ -696,12 +751,15 @@ mod tests {
         let mut set = PinSet::default();
         assert!(set.apply_announcement(&[key(1, "current"), key(2, "next")], 0).unwrap());
         assert!(!set.apply_announcement(&[key(1, "current"), key(2, "next")], 10).unwrap(), "no change");
+
         // The server switched: 2 is current, 3 is next, 1 is retired but kept.
         assert!(set.apply_announcement(&[key(2, "current"), key(3, "next")], DAY).unwrap());
         assert_eq!(set.fingerprints(), [fp(1), fp(2), fp(3)]);
         assert_eq!(set.server_keys[0].retired_ms, Some(DAY));
+
         // A key added by hand is never retired by an announcement.
         set.add(&fp(9), "", DAY).unwrap();
+
         // 30 days after retiring, 1 is dropped.
         set.apply_announcement(&[key(2, "current"), key(3, "next")], DAY + 31 * DAY).unwrap();
         assert_eq!(set.fingerprints(), [fp(2), fp(3), fp(9)]);
@@ -711,25 +769,33 @@ mod tests {
     #[test]
     fn the_set_holds_at_most_eight_keys() {
         let mut set = PinSet::default();
+
         for n in 1..=8 {
             set.add(&fp(n), "manual", 0).unwrap();
         }
+
         assert!(matches!(set.add(&fp(9), "x", 0), Err(PinError::Full)));
         assert!(matches!(set.apply_announcement(&[key(9, "next")], 0), Err(PinError::Full)));
+
         // A retired key makes room.
         let mut set = PinSet::default();
         set.apply_announcement(&[key(1, "current")], 0).unwrap();
+
         for n in 2..=8 {
             set.add(&fp(n), "manual", 0).unwrap();
         }
+
         set.apply_announcement(&[key(2, "current")], 1).unwrap();
         assert!(set.add(&fp(9), "x", 2).unwrap());
         assert!(!set.contains(&fp(1)) && set.contains(&fp(9)));
+
         // A file with more than eight is refused.
         let mut big = PinSet::default();
+
         for n in 1..=9 {
             big.server_keys.push(Pin { sha256: fp(n), label: "x".into(), added_ms: 0, retired_ms: None });
         }
+
         assert!(PinSet::parse(&big.to_toml().unwrap(), "t").is_err());
     }
 
@@ -789,13 +855,16 @@ mod tests {
         let mut set = PinSet::default();
         assert!(set.apply_verified(&announced(2, vec![key(1, "current"), key(2, "next")], &[]), 0).unwrap());
         assert_eq!(set.sequence, 2);
+
         // The same announcement again (a later heartbeat): nothing to do.
         assert!(!set.apply_verified(&announced(2, vec![key(2, "next"), key(1, "current")], &[]), 5).unwrap());
+
         // Same sequence, other keys: a forged or replayed set.
         assert!(matches!(
             set.apply_verified(&announced(2, vec![key(7, "current")], &[]), 6),
             Err(PinError::Replayed(2))
         ));
+
         // Older: refused, also an old server's unsequenced one.
         assert!(matches!(
             set.apply_verified(&announced(1, vec![key(7, "current")], &[]), 7),
@@ -803,8 +872,10 @@ mod tests {
         ));
         assert!(set.apply_verified(&announced(0, vec![key(7, "current")], &[]), 7).is_err());
         assert_eq!(set.fingerprints(), [fp(1), fp(2)]);
+
         // Newer: applied.
         assert!(set.apply_verified(&announced(3, vec![key(2, "current"), key(3, "next")], &[]), 8).unwrap());
+
         // The file round-trips with its sequence.
         let again = PinSet::parse(&set.to_toml().unwrap(), "t").unwrap();
         assert_eq!(again, set);
@@ -815,13 +886,16 @@ mod tests {
         let mut set = PinSet::default();
         set.apply_verified(&announced(1, vec![key(1, "current"), key(2, "next")], &[]), 0).unwrap();
         set.add(&fp(1), "manual", 0).unwrap();
+
         // Revoking 1: gone now, not retired; even a hand-added pin.
         assert!(set.apply_verified(&announced(2, vec![key(2, "current"), key(3, "next")], &[1]), 1).unwrap());
         assert_eq!(set.fingerprints(), [fp(2), fp(3)]);
         assert!(set.is_revoked(&fp(1)));
+
         // A later announcement naming it again does not pin it.
         set.apply_verified(&announced(3, vec![key(1, "current"), key(3, "next")], &[]), 2).unwrap();
         assert!(!set.contains(&fp(1)));
+
         // By hand only with force.
         assert!(matches!(set.add_checked(&fp(1), "x", 3, false), Err(PinError::Revoked(_))));
         assert!(set.add_checked(&fp(1), "x", 3, true).unwrap());

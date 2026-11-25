@@ -48,6 +48,7 @@ fn make_app(name: &str) -> (u32, u32) {
         "useradd --system --user-group --home-dir {home} --shell {nologin} --comment 'Orbyn Forge app {NS}/{name}' {user}; \
          mkdir -p {home}/.forge && chmod 0750 {home} && chown {user}:{user} {home} && chown root:root {home}/.forge"
     ));
+
     (sh(&format!("id -u {user}")).parse().unwrap(), sh(&format!("id -g {user}")).parse().unwrap())
 }
 
@@ -56,6 +57,7 @@ fn cleanup() {
         sh(&format!("pkill -KILL -u {NS}-{name} 2>/dev/null; true"));
         sh(&format!("userdel {NS}-{name} 2>/dev/null; groupdel {NS}-{name} 2>/dev/null; true"));
     }
+
     // The parents only if this test made them and nothing else is in them.
     sh(&format!("rm -rf /srv/forge/apps/{NS} /tmp/{NS}-probe; rmdir /srv/forge/apps /srv/forge 2>/dev/null; true"));
     sh(&format!("rmdir /sys/fs/cgroup/forge-health/{NS}--* /sys/fs/cgroup/forge-health 2>/dev/null; true"));
@@ -70,6 +72,7 @@ fn shell(name: &str, script: &str) -> serde_json::Value {
 
 fn policy() -> serde_json::Value {
     let home = format!("/srv/forge/apps/{NS}/alpha");
+
     // At most ten checks per purpose: `LIVENESS` and `STARTUP` name the rest.
     json!({ "startup": [
         { "name": "bomb", "period_secs": 30, "timeout_secs": 2,
@@ -130,6 +133,7 @@ fn check(app: &str, name: &str) -> CheckRef {
     } else {
         Purpose::Readiness
     };
+
     CheckRef { environment: NS.into(), app: app.into(), purpose, check: name.into(), revision: REVISION }
 }
 
@@ -162,11 +166,13 @@ fn processes() -> String {
 /// Waits until nothing runs as the app's account any more.
 async fn nothing_left(what: &str) {
     let deadline = Instant::now() + Duration::from_secs(5);
+
     loop {
         let left = processes();
         if left.is_empty() {
             return;
         }
+
         assert!(Instant::now() < deadline, "{what}: processes survived the run: {left}");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -179,7 +185,9 @@ async fn command_checks_run_as_the_app_confined_or_not_at_all() {
         eprintln!("skipped: needs root and FORGE_ROOT_TESTS=1");
         return;
     }
+
     cleanup();
+
     // The app accounts must be able to run the helper: a copy outside the
     // build user's (private) home.
     let helper = format!("/tmp/forge-agent-helper-hc-test-{}", std::process::id());
@@ -209,18 +217,22 @@ async fn command_checks_run_as_the_app_confined_or_not_at_all() {
             ExecResult::Refused { why } => why,
             other => panic!("expected a refusal, got {other:?}"),
         };
+
         assert_eq!(refused(strict.run(&check("alpha", "nope")).await), Refusal::NoSuchCheck);
         assert_eq!(refused(strict.run(&check("nobody", "pass")).await), Refusal::NoPolicy);
         let stale = CheckRef { revision: REVISION + 1, ..check("alpha", "pass") };
         assert_eq!(refused(strict.run(&stale).await), Refusal::StalePolicy);
         assert_eq!(refused(strict.run(&check("ghost", "pass")).await), Refusal::NoAccount);
+
         // No Docker in this environment: a container app's check is refused, not run on the host.
         if !std::path::Path::new("/var/run/docker.sock").exists() {
             assert_eq!(refused(strict.run(&check("ctr", "pass")).await), Refusal::NoDocker);
         }
+
         // The signed checks are in a folder only root can read.
         let mode = std::os::unix::fs::MetadataExt::mode(&std::fs::metadata(&dir).unwrap()) & 0o777;
         assert_eq!(mode, 0o700);
+
         // A policy the helper has not heard of for too long is not run.
         let old = now_ms() - 31 * 60 * 1000;
         let aged = state.path().join("aged");
@@ -240,13 +252,16 @@ async fn command_checks_run_as_the_app_confined_or_not_at_all() {
             "this test needs cgroup v2 with pids and memory"
         );
         let runner = if landlock { strict } else { Runner::with_options(dir.clone(), options(&worker, true)) };
+
         if !landlock && cfg!(not(feature = "test-unconfined")) {
             eprintln!("NOT TESTED on this kernel (no Landlock ABI 3): everything past the refusal");
             return;
         }
+
         if landlock {
             assert_eq!(first, ExecResult::Exited { code: 0, passed: true, output: String::new() });
         }
+
         let runner = std::sync::Arc::new(runner);
         let run = |name: &'static str| {
             let runner = runner.clone();
@@ -256,6 +271,7 @@ async fn command_checks_run_as_the_app_confined_or_not_at_all() {
 
         // Exit codes decide; a pass returns no output.
         assert_eq!(run("again").await, passed(0));
+
         // Asked again at once: the helper keeps the starts of one check apart.
         assert_eq!(run("again").await, ExecResult::Refused { why: Refusal::Throttled });
         assert_eq!(run("codes").await, passed(3));
@@ -263,34 +279,44 @@ async fn command_checks_run_as_the_app_confined_or_not_at_all() {
         assert_eq!(run("bash").await, passed(0));
         assert!(matches!(run("missing").await, ExecResult::StartFailed { .. }));
         assert_eq!(run("signal").await, ExecResult::Signaled { signal: 9 });
+
         // A failed run reports its exit code only, unless the check asks for more.
         assert_eq!(run("quiet").await, ExecResult::Exited { code: 3, passed: false, output: String::new() });
 
         // The app's uid and gid, and no other group.
         assert_eq!(output(&run("ids").await), format!("{uid}:{gid}:{gid}"));
+
         // A minimal environment: nothing of the helper's, nothing of the app's.
         let env = run("env").await;
         let keys: Vec<&str> = output(&env).split(' ').collect();
+
         for k in &keys {
             assert!(
                 ["HOME", "LANG", "LOGNAME", "PATH", "PWD", "USER", "OLDPWD", "SHLVL", "_"].contains(k),
                 "{k} in {keys:?}"
             );
         }
+
         for k in ["HOME", "PATH", "USER", "LOGNAME"] {
             assert!(keys.contains(&k), "{k} missing in {keys:?}");
         }
+
         assert_eq!(output(&run("where").await), format!("{home} {home} {NS}-alpha"));
+
         // Arguments reach the program as they are: no shell of ours reads them.
         assert_eq!(output(&run("argv").await), "a b|$(id)|; rm -rf /");
+
         // A shell probe's script is its interpreter's stdin, not an argument.
         assert_eq!(output(&run("cmdline").await), "sh");
+
         // No new privileges through setuid programs.
         let privs = run("privs").await;
         assert!(output(&privs).ends_with('1'), "no_new_privs is not set: {privs:?}");
+
         // Another app's files stay out of reach (its account, its mode).
         let other = run("other").await;
         assert!(!output(&other).contains("beta-secret"), "{other:?}");
+
         // Output is read to the end; only a short clean tail is kept.
         let big = run("big").await;
         assert!(
@@ -302,6 +328,7 @@ async fn command_checks_run_as_the_app_confined_or_not_at_all() {
         // remove one, not even the app's own. What Landlock does not cover
         // is the mode of a file the account owns, and `/dev/null` is open.
         let writes = run("writes").await;
+
         if landlock {
             assert_eq!(output(&writes), "CHMOD NULL", "what a confined check could change");
             assert!(!std::path::Path::new(&format!("{home}/made")).exists());
@@ -317,6 +344,7 @@ async fn command_checks_run_as_the_app_confined_or_not_at_all() {
         // in sessions of their own: they die with the run's cgroup.
         assert_eq!(run("daemon").await, passed(0));
         nothing_left("after a passing run that started daemons").await;
+
         // The same when the timeout ends it: no process group to escape from.
         let started = Instant::now();
         assert_eq!(run("runaway").await, ExecResult::TimedOut);
@@ -327,10 +355,12 @@ async fn command_checks_run_as_the_app_confined_or_not_at_all() {
         let sampler = async {
             let mut most = 0usize;
             let end = Instant::now() + Duration::from_millis(1800);
+
             while Instant::now() < end {
                 most = most.max(sh(&format!("pgrep -u {NS}-alpha -c")).parse().unwrap_or(0));
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
+
             most
         };
         let (bomb, most) = tokio::join!(run("bomb"), sampler);
@@ -349,17 +379,20 @@ async fn command_checks_run_as_the_app_confined_or_not_at_all() {
         assert_eq!(second, ExecResult::Refused { why: Refusal::Busy });
         assert!(started.elapsed() < Duration::from_secs(4), "{:?}", started.elapsed());
         nothing_left("after a timeout").await;
+
         // And it can run again afterwards.
         assert_eq!(run("slow").await, ExecResult::TimedOut);
         nothing_left("after the second timeout").await;
 
         // The cgroups of the runs are gone with them.
         let deadline = Instant::now() + Duration::from_secs(5);
+
         loop {
             let left = sh(&format!("ls -d /sys/fs/cgroup/forge-health/{NS}--* 2>/dev/null | tr '\\n' ' '"));
             if left.is_empty() {
                 break;
             }
+
             assert!(Instant::now() < deadline, "cgroups of finished runs remain: {left}");
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -381,6 +414,7 @@ async fn command_checks_run_as_the_app_confined_or_not_at_all() {
         assert!(mixed.contains("\"kind\":\"refused\"") && mixed.contains("does not run as the app"), "{mixed}");
         let as_root = direct(["0".into(), "0".into(), home.clone(), "5".into()], 0, 0);
         assert!(as_root.contains("\"kind\":\"refused\"") && as_root.contains("never runs as root"), "{as_root}");
+
         // A release build's worker knows no way to run unconfined.
         if cfg!(not(feature = "test-unconfined")) {
             let out = Command::new(&worker)
@@ -398,6 +432,7 @@ async fn command_checks_run_as_the_app_confined_or_not_at_all() {
     let outcome = tokio::spawn(result.0).await.map_err(|e| e.into_panic());
     cleanup();
     let _ = std::fs::remove_file(&helper);
+
     if let Err(e) = outcome {
         std::panic::resume_unwind(e);
     }

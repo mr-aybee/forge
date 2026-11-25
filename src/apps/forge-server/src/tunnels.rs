@@ -205,7 +205,9 @@ impl Tunnels {
         if last.is_some_and(|t| now.0 - t < 60_000) {
             return false;
         }
+
         m.facts_refresh.insert(server, now.0);
+
         true
     }
 
@@ -217,6 +219,7 @@ impl Tunnels {
         if mine >= limits.per_user {
             return Err(Refusal::PerUser(limits.per_user));
         }
+
         let (revoke, _) = watch::channel(None);
         let now = n.now;
         let t = Tunnel {
@@ -240,6 +243,7 @@ impl Tunnels {
             revoke,
         };
         m.tunnels.insert(t.id.clone(), t.clone());
+
         Ok(t)
     }
 
@@ -252,6 +256,7 @@ impl Tunnels {
     pub fn list(&self) -> Vec<Tunnel> {
         let mut v: Vec<Tunnel> = self.inner.lock().map(|m| m.tunnels.values().cloned().collect()).unwrap_or_default();
         v.sort_by_key(|t| std::cmp::Reverse(t.started_at.0));
+
         v
     }
 
@@ -263,7 +268,9 @@ impl Tunnels {
         if t.claimed {
             return None;
         }
+
         t.claimed = true;
+
         Some(t.revoke.subscribe())
     }
 
@@ -282,6 +289,7 @@ impl Tunnels {
     pub fn close_with(&self, id: &str, reason: &'static str) -> Option<Tunnel> {
         let t = self.inner.lock().ok()?.tunnels.remove(id)?;
         let _ = t.revoke.send(Some(reason));
+
         Some(t)
     }
 
@@ -293,13 +301,16 @@ impl Tunnels {
         if total >= limits.global {
             return Err(Refusal::Global(limits.global));
         }
+
         let on_node: usize = m.tunnels.values().filter(|t| t.server_id == server).map(|t| t.connections).sum();
         if on_node >= limits.per_node {
             return Err(Refusal::PerNode(limits.per_node));
         }
+
         if let Some(t) = m.tunnels.get_mut(id) {
             t.connections += 1;
         }
+
         Ok(ConnectionSlot { tunnels: self.clone(), tunnel_id: id.to_owned() })
     }
 
@@ -316,6 +327,7 @@ impl Tunnels {
         let conn = hex::encode(forge_secrets::crypto::random_bytes::<16>());
         let token = hex::encode(forge_secrets::crypto::random_bytes::<32>());
         let (tx, rx) = oneshot::channel();
+
         if let Ok(mut m) = self.inner.lock() {
             Self::sweep(&mut m, now.0);
             m.pending.insert(
@@ -329,6 +341,7 @@ impl Tunnels {
                 },
             );
         }
+
         (conn, token, rx)
     }
 
@@ -341,6 +354,7 @@ impl Tunnels {
         let ok = from == Some(p.server_id)
             && forge_secrets::crypto::constant_time_eq(hash.as_bytes(), p.token_hash.as_bytes())
             && m.tunnels.get(&p.tunnel_id).is_some_and(|t| t.claimed);
+
         ok.then_some((p.tx, p.tunnel_id))
     }
 }
@@ -361,15 +375,20 @@ pub(crate) async fn hub_stream(
         Ok(s) => Some(s.id),
         Err(r) => return *r,
     };
+
     let token = headers.get(TOKEN_HEADER).and_then(|v| v.to_str().ok()).unwrap_or_default();
+
     let Some((tx, _tunnel)) = state.tunnels.accept(&conn, from, token) else {
         return StatusCode::FORBIDDEN.into_response();
     };
+
     let (to_node, mut rx) = mpsc::channel::<Bytes>(QUEUE);
     if tx.send(NodeStream { from_node: body, to_node }).is_err() {
         return StatusCode::GONE.into_response();
     }
+
     let stream = futures::stream::poll_fn(move |cx| rx.poll_recv(cx).map(|o| o.map(Ok::<Bytes, Infallible>)));
+
     Response::new(Body::from_stream(stream))
 }
 
@@ -425,6 +444,7 @@ mod tests {
         assert_eq!(t.connect(&b.id, LIMITS).unwrap_err(), Refusal::PerNode(2));
         drop(c1);
         let _cb = t.connect(&b.id, LIMITS).expect("a closed connection frees its place");
+
         // Global (3): another user on another node gets one more, then no more.
         let other = open(&t, UserId::new(), ServerId::new()).unwrap();
         let _ro = t.claim(&other.id).unwrap();
@@ -443,6 +463,7 @@ mod tests {
         assert_eq!(*conn_rx.borrow(), Some("access_withdrawn"));
         assert!(t.get(&x.id).is_none());
         let y = open(&t, UserId::new(), ServerId::new()).unwrap();
+
         // 31 s later another open sweeps the unclaimed one.
         let _ = t.open(new(UserId::new(), ServerId::new(), 32_000), LIMITS);
         assert!(t.get(&y.id).is_none());

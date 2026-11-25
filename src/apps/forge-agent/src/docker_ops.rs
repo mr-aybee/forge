@@ -43,7 +43,9 @@ async fn call(
     if !(200..300).contains(&status) && status != 304 {
         return Err(docker_error(status, &bytes));
     }
+
     let text = String::from_utf8_lossy(&bytes);
+
     // Pulls and pushes stream JSON lines: an error can arrive mid-stream.
     if let Some(err) = text
         .lines()
@@ -52,6 +54,7 @@ async fn call(
     {
         return Err(format!("Docker: {err}"));
     }
+
     // Some answers are empty or JSON lines; the summary below reads JSON only.
     Ok(serde_json::from_slice(&bytes).unwrap_or(Value::Null))
 }
@@ -68,6 +71,7 @@ async fn unprotected_network(id: &str) -> Result<Value, String> {
     if network_protected(name) || n["Labels"]["forge.managed"] == "true" {
         return Err(format!("network `{name}` belongs to Docker or Forge"));
     }
+
     Ok(n)
 }
 
@@ -86,6 +90,7 @@ async fn foreign_container(name: &str) -> Result<(), String> {
     if forge_container(&c) {
         return Err(format!("container `{name}` is managed by Forge; change its networks through its service"));
     }
+
     Ok(())
 }
 
@@ -95,6 +100,7 @@ async fn foreign_volume(name: &str) -> Result<(), String> {
     if v["Labels"]["forge.managed"] == "true" || name.starts_with("forge") {
         return Err(format!("volume `{name}` belongs to Forge"));
     }
+
     Ok(())
 }
 
@@ -106,6 +112,7 @@ async fn image_unused_by_forge(id: &str) -> Result<(), String> {
     if users.as_array().is_some_and(|a| a.iter().any(forge_container)) {
         return Err(format!("image `{id}` is used by containers Forge manages"));
     }
+
     Ok(())
 }
 
@@ -118,6 +125,7 @@ async fn transfer(method: &str, path: &str, auth: Option<&str>) -> Result<(), St
         }
     })
     .await?;
+
     match last_error {
         Some(e) => Err(format!("Docker: {e}")),
         None => Ok(()),
@@ -173,6 +181,7 @@ async fn subnet_free(cidr: &str) -> Result<(), String> {
     if let Some((ip, len)) = parse(&text).into_iter().find(|r| overlaps(*r, net)) {
         return Err(format!("{cidr} overlaps the node's route {ip}/{len}"));
     }
+
     Ok(())
 }
 
@@ -191,6 +200,7 @@ pub async fn run(op: &DockerOp) -> Result<Value, String> {
             if *force {
                 image_unused_by_forge(id).await?;
             }
+
             call("DELETE", &format!("/images/{}?force={force}", enc(id)), None, None, QUICK).await
         }
         DockerOp::ImagePrune { all } => {
@@ -238,14 +248,18 @@ pub async fn run(op: &DockerOp) -> Result<Value, String> {
                 "Name": name, "Driver": driver.as_str(), "Internal": internal, "Attachable": attachable,
                 "CheckDuplicate": true, "Labels": labels,
             });
+
             if let Some(subnet) = subnet {
                 subnet_free(subnet).await?;
                 let mut cfg = json!({ "Subnet": subnet });
+
                 if let Some(g) = gateway {
                     cfg["Gateway"] = json!(g);
                 }
+
                 body["IPAM"] = json!({ "Driver": "default", "Config": [cfg] });
             }
+
             call("POST", "/networks/create", Some(&body), None, QUICK).await
         }
         DockerOp::NetworkRemove { id } => {
@@ -295,15 +309,18 @@ async fn events(since_secs: u32) -> Result<Value, String> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_secs();
     let since = now.saturating_sub(u64::from(since_secs));
     let path = format!("/events?since={since}&until={now}");
+
     // Streamed, keeping only the newest MAX_EVENTS lines.
     let mut newest: std::collections::VecDeque<String> = std::collections::VecDeque::new();
     crate::docker::call_lines("GET", &path, None, QUICK, |line| {
         if newest.len() == MAX_EVENTS {
             newest.pop_front();
         }
+
         newest.push_back(line.to_owned());
     })
     .await?;
+
     Ok(json!(event_lines(&newest.into_iter().collect::<Vec<_>>().join("\n"))))
 }
 
@@ -322,6 +339,7 @@ pub(crate) fn event_lines(text: &str) -> Vec<Value> {
         .collect();
     out.reverse();
     out.truncate(MAX_EVENTS);
+
     out
 }
 
@@ -356,6 +374,7 @@ pub(crate) fn image_detail(i: &Value) -> Value {
             json!({ "key": k, "value": v })
         })
         .collect();
+
     json!({
         "id": short(i["Id"].as_str().unwrap_or_default()),
         "full_id": i["Id"], "tags": i["RepoTags"], "digests": i["RepoDigests"],

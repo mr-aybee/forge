@@ -9,6 +9,7 @@ use serde_json::json;
 async fn store() -> (Store, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let s = Store::open_sqlite(&dir.path().join("forge.db")).await.unwrap();
+
     (s, dir)
 }
 
@@ -67,9 +68,11 @@ async fn releases_are_numbered_per_service_and_keep_sealed_secrets() {
     let list = s.list_releases(app, 10).await.unwrap();
     assert_eq!(list.iter().map(|r| r.number).collect::<Vec<_>>(), [2, 1]);
     assert!(list[0].source.is_none(), "lists leave the document out");
+
     for _ in 0..3 {
         s.create_release(&release(app)).await.unwrap();
     }
+
     // Keep the newest two and release 1 (it serves).
     assert_eq!(s.prune_releases(app, 2, &[1]).await.unwrap(), 2);
     let left: Vec<i64> = s.list_releases(app, 10).await.unwrap().iter().map(|r| r.number).collect();
@@ -89,15 +92,18 @@ async fn one_active_deployment_per_service() {
         Err(DomainError::Conflict(m)) => assert!(m.contains("already has a deployment"), "{m}"),
         other => panic!("{other:?}"),
     }
+
     assert!(s.get_deployment(second.id).await.unwrap().is_none(), "nothing half-written");
     assert_eq!(s.active_deployment(app).await.unwrap().unwrap().id, first.id);
     s.request_deployment(first.id, DeploymentRequest::Pause, Timestamp(3)).await.unwrap();
     assert_eq!(s.get_deployment(first.id).await.unwrap().unwrap().request, Some(DeploymentRequest::Pause));
+
     // Saving the job's view never drops a request made meanwhile.
     s.put_deployment(&first).await.unwrap();
     assert_eq!(s.get_deployment(first.id).await.unwrap().unwrap().request, Some(DeploymentRequest::Pause));
     s.clear_request(first.id).await.unwrap();
     assert_eq!(s.get_deployment(first.id).await.unwrap().unwrap().request, None);
+
     // Finishing frees the service.
     first.state = DeploymentState::Succeeded;
     first.finished_at = Some(Timestamp(4));
@@ -112,6 +118,7 @@ async fn one_active_deployment_per_service() {
 async fn events_append_in_order() {
     let (s, _d) = store().await;
     let id = DeploymentId::new();
+
     for m in ["one", "two", "three"] {
         let e = DeploymentEvent {
             deployment_id: id,
@@ -123,6 +130,7 @@ async fn events_append_in_order() {
         };
         s.add_event(&e).await.unwrap();
     }
+
     let all = s.list_events(id, 0, 10).await.unwrap();
     assert_eq!(
         all.iter().map(|e| (e.seq, e.message.as_str())).collect::<Vec<_>>(),
@@ -141,6 +149,7 @@ async fn slot_ports_are_stable_and_unique_across_services() {
     let pb = s.slot_ports(b, "a", 1, (20_000, 20_010)).await.unwrap();
     assert_eq!(pb, [20_002]);
     assert_eq!(s.slot_ports(a, "b", 1, (20_000, 20_010)).await.unwrap(), [20_003]);
+
     // More ports later (a port mapping was added) keep the old ones.
     assert_eq!(s.slot_ports(a, "a", 3, (20_000, 20_010)).await.unwrap(), [20_000, 20_001, 20_004]);
     assert!(s.slot_ports(b, "b", 10, (20_000, 20_010)).await.is_err(), "the pool runs out");

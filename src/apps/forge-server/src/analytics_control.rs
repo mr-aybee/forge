@@ -243,6 +243,7 @@ impl AnalyticsControl {
     /// Engine, readiness, buffered rows and the worker process.
     pub async fn status(&self) -> AnalyticsStatus {
         let worker = self.supervisor.state();
+
         match self.report().await {
             Ok(r) => AnalyticsStatus {
                 engine: self.engine,
@@ -287,6 +288,7 @@ impl AnalyticsControl {
         let report = self.report().await;
         let (restart_at, last_apply) = self.live(|l| (l.restart_at, l.last_apply.clone()));
         let worker = self.supervisor.state();
+
         match report {
             Ok(r) => SettingsView {
                 engine: self.engine,
@@ -332,17 +334,21 @@ impl AnalyticsControl {
         if touched.is_empty() {
             return Err(UpdateError::Empty);
         }
+
         let mut guard = self.overrides.lock().await;
         let mut next = *guard;
         next.apply(patch);
         tuning::validate(&next)?;
+
         // Setting a value Forge would not apply is refused; removing a
         // stale override is not.
         let foreign: Vec<Setting> =
             touched.iter().filter(|(s, v)| v.is_some() && !self.applies(s.group())).map(|(s, _)| *s).collect();
+
         if !foreign.is_empty() {
             return Err(UpdateError::NotManaged(foreign));
         }
+
         let old = self.defaults.with(&guard);
         let new = self.defaults.with(&next);
         Self::confirmations(&old, &new, confirm)?;
@@ -353,6 +359,7 @@ impl AnalyticsControl {
             let json = serde_json::to_string(&next).map_err(|e| DomainError::Internal(e.to_string()))?;
             self.settings.put_setting(tuning::OVERRIDES_KEY, &json, self.clock.now()).await?;
         }
+
         *guard = next;
         self.tx.send_replace(new);
 
@@ -365,6 +372,7 @@ impl AnalyticsControl {
         drop(guard);
         let report = ApplyReport { at: self.clock.now().0, results };
         self.live(|l| l.last_apply = Some(report.clone()));
+
         Ok((changes, report))
     }
 
@@ -381,6 +389,7 @@ impl AnalyticsControl {
                 ),
             });
         }
+
         if need.is_empty() { Ok(()) } else { Err(UpdateError::Confirm(need)) }
     }
 
@@ -406,6 +415,7 @@ impl AnalyticsControl {
                 })
                 .collect();
         }
+
         match self.worker.apply(settings.clone(), t).await {
             Ok(results) => results,
             Err(e) => settings
@@ -427,11 +437,13 @@ impl AnalyticsControl {
         if !self.managed() {
             return Err(RestartError::NotManaged);
         }
+
         let now = self.clock.now().0;
         let at = at.unwrap_or(now).max(now);
         if at - now > 7 * 24 * 3_600_000 {
             return Err(RestartError::TooFar);
         }
+
         let me = self.clone();
         let wait = Duration::from_millis(u64::try_from(at - now).unwrap_or(0));
         let task = tokio::spawn(async move {
@@ -440,6 +452,7 @@ impl AnalyticsControl {
                 l.restart_at = None;
                 l.restart_task = None;
             });
+
             if let Err(e) = me.worker.restart_engine().await {
                 tracing::warn!(error = %e, "restarting the analytics engine failed");
             }
@@ -448,8 +461,10 @@ impl AnalyticsControl {
             if let Some(old) = l.restart_task.replace(task) {
                 old.abort();
             }
+
             l.restart_at = Some(at);
         });
+
         Ok(at)
     }
 

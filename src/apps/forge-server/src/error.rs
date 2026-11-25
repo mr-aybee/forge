@@ -62,6 +62,7 @@ impl From<forge_core::analytics::AnalyticsError> for ApiError {
     fn from(e: forge_core::analytics::AnalyticsError) -> Self {
         use forge_core::analytics::AnalyticsError as A;
         let busy = |code, message: String| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, code, message);
+
         match e {
             A::Off => {
                 busy(ERR_ANALYTICS_OFF, "analytics is off on this server; set [analytics] engine in forge.toml".into())
@@ -141,6 +142,7 @@ impl IntoResponse for ApiError {
         let mut resp = (self.status, Json(body)).into_response();
         resp.headers_mut()
             .insert(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("application/problem+json"));
+
         if self.code == "step_up_required" {
             // RFC 9470: the client may raise the authentication level and retry
             // (POST /api/v1/auth/step-up with a one-time code).
@@ -152,6 +154,7 @@ impl IntoResponse for ApiError {
                 ),
             );
         }
+
         resp
     }
 }

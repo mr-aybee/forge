@@ -43,6 +43,7 @@ All source code lives under `src/`. New crates go in the matching
 ```sh
 # Gate: run all of these before you push
 cargo fmt --all
+python3 scripts/dev/style_check.py --check            # blank-line rules below (--fix inserts them)
 cargo clippy --workspace --all-targets -- -D warnings   # alias: cargo lint
 cargo test --workspace                                  # includes kill-and-resume tests
 cargo deny check && cargo audit
@@ -152,6 +153,62 @@ unless asked.
   - No `#[allow(clippy::too_many_arguments)]`.
   - Avoid two or more `bool` parameters.
 - **Every `#[allow(..)]` has a reason comment.**
+
+### Formatting and blank lines
+
+- `cargo fmt --all` and `cargo clippy ... -D warnings` are clean.
+- Group imports: `std`, then external crates, then `crate::`/`super::`, with
+  a blank line between groups.
+- Public items carry a short, accurate `///` doc comment.
+- Inside every fn, method and closure body:
+  1. A blank line before a comment that starts a new step, unless it is the
+     first line in the block.
+  2. A blank line before and after `if`, `if let`, `match`, `for`, `while`,
+     `loop` and `let … else` blocks (and `let x = match …`), unless first or
+     last in the block.
+  3. A blank line before `return`, `break` or `continue` when statements
+     precede them.
+  4. One blank line between logical groups such as setup, work and result.
+  5. Never a blank line right after `{` or right before `}`.
+  6. Never more than one consecutive blank line.
+  7. Tightly coupled lines, such as a `let` immediately checked by the next
+     `if`, may stay adjacent.
+
+`python3 scripts/dev/style_check.py --check` checks rules 1 to 4; `--fix`
+inserts the missing lines (run `cargo fmt` first). Reference:
+
+```rust
+pub fn process_orders(orders: &[Order], limit: usize) -> Result<Summary, Error> {
+    let mut total = 0;
+    let mut skipped = Vec::new();
+
+    // Bail out early on empty input
+    if orders.is_empty() {
+        return Err(Error::NoOrders);
+    }
+
+    for order in orders.iter().take(limit) {
+        // Skip cancelled orders but keep track of them
+        if order.is_cancelled() {
+            skipped.push(order.id);
+            continue;
+        }
+
+        let amount = order.amount()?;
+        total += amount;
+
+        match order.priority {
+            Priority::High => notify(order)?,
+            Priority::Normal => {}
+        }
+    }
+
+    // Build the final summary
+    let summary = Summary::new(total, skipped);
+
+    Ok(summary)
+}
+```
 
 ## Dependencies
 

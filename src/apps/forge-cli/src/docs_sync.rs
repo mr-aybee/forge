@@ -62,6 +62,7 @@ fn leaves() -> Vec<(Vec<String>, Vec<String>)> {
     fn walk(c: &clap::Command, path: &mut Vec<String>, out: &mut Vec<(Vec<String>, Vec<String>)>) {
         let subs: Vec<&clap::Command> =
             c.get_subcommands().filter(|s| !s.is_hide_set() && s.get_name() != "help").collect();
+
         if subs.is_empty() && !path.is_empty() {
             let args = c
                 .get_arguments()
@@ -74,14 +75,17 @@ fn leaves() -> Vec<(Vec<String>, Vec<String>)> {
                 .collect();
             out.push((path.clone(), args));
         }
+
         for s in subs {
             path.push(s.get_name().to_owned());
             walk(s, path, out);
             path.pop();
         }
     }
+
     let mut out = Vec::new();
     walk(&crate::Cli::command(), &mut Vec::new(), &mut out);
+
     out
 }
 
@@ -95,6 +99,7 @@ fn section<'a>(page: &'a str, path: &str) -> Option<&'a str> {
     let start = page.find(&head)? + head.len();
     let rest = &page[start..];
     let end = rest.find("\n### ").or_else(|| rest.find("\n## ")).unwrap_or(rest.len());
+
     Some(&rest[..end])
 }
 
@@ -107,6 +112,7 @@ mod tests {
         let dir = docs_dir();
         let mut pages: BTreeMap<String, String> = BTreeMap::new();
         let mut problems = Vec::new();
+
         for (path, args) in leaves() {
             let refs: Vec<&str> = path.iter().map(String::as_str).collect();
             let page = page_of(&refs);
@@ -127,6 +133,7 @@ mod tests {
                 }
             }
         }
+
         assert!(problems.is_empty(), "{} gaps:\n{}", problems.len(), problems.join("\n"));
     }
 

@@ -64,17 +64,21 @@ impl CommandQueue {
     /// Queues a signed command and registers interest in its result.
     pub fn enqueue(&self, server: ServerId, operation_id: &str, cmd: SignedCommand) -> Result<(), String> {
         let (tx, rx) = oneshot::channel();
+
         {
             let mut slots = self.slots.lock().map_err(|_| "lock poisoned")?;
             let slot = slots.entry(server).or_default();
             if slot.pending.len() >= MAX_PENDING_PER_SERVER {
                 return Err("too many pending commands for this server".into());
             }
+
             slot.pending.push_back((operation_id.to_owned(), cmd));
             slot.notify.notify_one();
         }
+
         self.waiters.lock().map_err(|_| "lock poisoned")?.insert(operation_id.to_owned(), (server, tx));
         self.receivers.lock().map_err(|_| "lock poisoned")?.insert(operation_id.to_owned(), rx);
+
         Ok(())
     }
 
@@ -88,12 +92,15 @@ impl CommandQueue {
     pub async fn wait(&self, operation_id: &str, timeout: Duration) -> Option<CommandResult> {
         let rx = self.receivers.lock().ok()?.remove(operation_id)?;
         let out = tokio::time::timeout(timeout, rx).await.ok().and_then(Result::ok);
+
         if let Ok(mut w) = self.waiters.lock() {
             w.remove(operation_id);
         }
+
         if let Ok(mut d) = self.delivered.lock() {
             d.remove(operation_id);
         }
+
         out
     }
 
@@ -109,14 +116,18 @@ impl CommandQueue {
         if !tracked {
             return;
         }
+
         if let Ok(mut live) = self.live.lock() {
             let buf = live.entry(operation_id.to_owned()).or_default();
             buf.push_str(text);
+
             if buf.len() > MAX_LIVE {
                 let mut cut = buf.len() - MAX_LIVE;
+
                 while !buf.is_char_boundary(cut) {
                     cut += 1;
                 }
+
                 buf.drain(..cut);
             }
         }
@@ -139,13 +150,17 @@ impl CommandQueue {
             }
         });
         let Some(tx) = tx else { return false };
+
         if let Ok(mut d) = self.delivered.lock() {
             d.remove(&result.operation_id);
         }
+
         if let Ok(mut live) = self.live.lock() {
             live.remove(&result.operation_id);
         }
+
         let _ = tx.send(result);
+
         true
     }
 
@@ -162,27 +177,35 @@ impl CommandQueue {
         if let Ok(mut polled) = self.polled.lock() {
             polled.insert(server, Instant::now());
         }
+
         let Ok(mut slots) = self.slots.lock() else { return vec![] };
         let Some(slot) = slots.get_mut(&server) else { return vec![] };
+
         // At most `max` commands and `MAX_TAKE_BYTES` (agents read answers of
         // up to 4 MiB; file chunks are about 350 KB each), always at least one.
         let (mut n, mut bytes) = (0, 0);
+
         for (_, c) in slot.pending.iter().take(max) {
             let size = c.body.len() + c.signature.len() + 64;
             if n > 0 && bytes + size > MAX_TAKE_BYTES {
                 break;
             }
+
             n += 1;
             bytes += size;
         }
+
         let taken: Vec<(String, SignedCommand)> = slot.pending.drain(..n).collect();
         drop(slots);
+
         if let Ok(mut d) = self.delivered.lock() {
             let now = Instant::now();
+
             for (op, _) in &taken {
                 d.insert(op.clone(), (server, now));
             }
         }
+
         taken.into_iter().map(|(_, c)| c).collect()
     }
 
@@ -202,19 +225,23 @@ impl CommandQueue {
                     .filter(|(_, (s, at))| *s == server && now.saturating_duration_since(*at) > uptime + RESTART_SLACK)
                     .map(|(op, _)| op.clone())
                     .collect();
+
                 for op in &lost {
                     d.remove(op);
                 }
+
                 lost
             }
             Err(_) => return Vec::new(),
         };
+
         if let Ok(mut w) = self.waiters.lock() {
             for op in &lost {
                 // Dropping the sender ends `wait` with no result.
                 w.remove(op);
             }
         }
+
         lost
     }
 
@@ -259,15 +286,18 @@ mod tests {
     fn a_heartbeat_answer_stays_within_the_agents_read_limit() {
         let q = CommandQueue::new();
         let s = ServerId::new();
+
         // Ten upload chunks of about 350 KB each (base64 of 256 KiB).
         for i in 0..10 {
             let cmd = SignedCommand { body: vec![0; 350 * 1024], ..SignedCommand::default() };
             q.enqueue(s, &format!("op{i}"), cmd).unwrap();
         }
+
         let first = q.take(s, 16);
         let bytes: usize = first.iter().map(|c| c.body.len()).sum();
         assert!(!first.is_empty() && bytes <= MAX_TAKE_BYTES, "{} commands, {bytes} bytes", first.len());
         assert_eq!(first.len() + q.take(s, 16).len() + q.take(s, 16).len(), 10, "nothing lost, in order");
+
         // One command bigger than the budget still goes out on its own.
         q.enqueue(s, "big", SignedCommand { body: vec![0; MAX_TAKE_BYTES + 1], ..SignedCommand::default() }).unwrap();
         assert_eq!(q.take(s, 16).len(), 1);
@@ -308,14 +338,17 @@ mod tests {
         q.enqueue(s, "deploy", SignedCommand::default()).unwrap();
         q.enqueue(s, "later", SignedCommand::default()).unwrap();
         assert_eq!(q.take(s, 1).len(), 1, "the agent took `deploy`");
+
         // Seconds later the agent reports 1 s of uptime: it restarted.
         let lost = q.forget_before_restart(s, Duration::from_secs(1), Instant::now() + Duration::from_secs(10));
         assert_eq!(lost, ["deploy"]);
         let t = Instant::now();
         assert!(q.wait("deploy", Duration::from_secs(35 * 60)).await.is_none());
         assert!(t.elapsed() < Duration::from_secs(1), "no 35-minute wait");
+
         // A command still queued is delivered after the restart as usual.
         assert_eq!(q.take(s, 10).len(), 1);
+
         // An agent that kept running is left alone; another node is not affected.
         q.enqueue(s, "ok", SignedCommand::default()).unwrap();
         q.take(s, 1);
@@ -337,6 +370,7 @@ mod tests {
     #[test]
     fn live_output_is_bounded_ignored_when_untracked_and_cleared_by_the_result() {
         let q = CommandQueue::new();
+
         // An operation nobody waits for (stale, or forged by an agent) is dropped.
         q.append_progress(ServerId::new(), "unknown", "x");
         assert!(q.live_output("unknown").is_none());
@@ -373,12 +407,14 @@ line 2
         let q = CommandQueue::new();
         let (target, other) = (ServerId::new(), ServerId::new());
         q.enqueue(target, "op1", SignedCommand::default()).unwrap();
+
         // Another enrolled node that learned the operation id.
         q.append_progress(other, "op1", "forged output");
         assert!(q.live_output("op1").is_none());
         let forged =
             CommandResult { operation_id: "op1".into(), ok: true, output: "forged".into(), ..Default::default() };
         assert!(!q.resolve(other, forged));
+
         // The real node still delivers.
         q.append_progress(target, "op1", "real output");
         assert_eq!(q.live_output("op1").as_deref(), Some("real output"));

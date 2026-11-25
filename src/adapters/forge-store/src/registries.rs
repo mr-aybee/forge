@@ -90,6 +90,7 @@ impl RegistryRepository for Store {
         .execute(self.pool())
         .await
         .map_err(db_err)?;
+
         // A row deleted meanwhile is not silently "updated".
         if done.rows_affected() == 1 { Ok(()) } else { Err(DomainError::NotFound("registry not found".into())) }
     }

@@ -61,14 +61,18 @@ pub async fn instances(
     };
     let rows = obs.latest(&filter, 1_000).await?;
     let mut out = Vec::new();
+
     for inst in apps.list_instances(app.id).await? {
         let (mut startup, mut readiness, mut liveness, mut checks) = (vec![], vec![], vec![], vec![]);
+
         // Configured checks the node hasn't reported yet.
         let mut waiting: Vec<(Purpose, &str)> = policy.checks().map(|(p, c)| (p, c.name.as_str())).collect();
+
         for l in rows.iter().filter(|l| l.key.server == Some(inst.server_id)) {
             let mut parts = l.key.subject.as_str().splitn(3, '.').skip(1);
             let (Some(purpose), Some(name)) = (parts.next(), parts.next()) else { continue };
             let default = name == "default";
+
             // Results of checks the policy no longer has are not part of
             // the status (the node stops reporting them; the rows age out).
             let current = if default {
@@ -78,18 +82,22 @@ pub async fn instances(
                 waiting.retain(|(p, n)| !(p.as_str() == purpose && *n == name));
                 waiting.len() != before
             };
+
             if !current {
                 continue;
             }
+
             let effective = l.effective(now);
             let required = default || policy.readiness.iter().find(|c| c.name == name).is_none_or(|c| c.required);
             let v = forge_health::CheckValue { value: effective, required: purpose != "readiness" || required };
+
             match purpose {
                 "startup" => startup.push(v),
                 "readiness" => readiness.push(v),
                 "liveness" => liveness.push(v),
                 _ => continue,
             }
+
             checks.push(InstanceCheck {
                 purpose: purpose.to_owned(),
                 name: name.to_owned(),
@@ -101,6 +109,7 @@ pub async fn instances(
                 received_at: Some(l.received_at),
             });
         }
+
         for (purpose, name) in waiting {
             use forge_core::observation::{HealthState, ObservedValue, StartupState};
             let enabled = policy.checks().any(|(p, c)| p == purpose && c.name == name && c.enabled);
@@ -109,8 +118,10 @@ pub async fn instances(
                 (true, Purpose::Startup) => (ObservedValue::Startup(StartupState::Unknown), "unknown"),
                 (true, _) => (ObservedValue::Health(HealthState::Unknown), "unknown"),
             };
+
             let required = policy.readiness.iter().find(|c| c.name == name).is_none_or(|c| c.required);
             let v = forge_health::CheckValue { value, required: purpose != Purpose::Readiness || required };
+
             match purpose {
                 // A disabled startup check gates nothing.
                 Purpose::Startup if !enabled => {}
@@ -118,6 +129,7 @@ pub async fn instances(
                 Purpose::Readiness => readiness.push(v),
                 Purpose::Liveness => liveness.push(v),
             }
+
             checks.push(InstanceCheck {
                 purpose: purpose.as_str().to_owned(),
                 name: name.to_owned(),
@@ -129,11 +141,13 @@ pub async fn instances(
                 received_at: None,
             });
         }
+
         out.push(InstanceHealth {
             server_id: inst.server_id,
             status: forge_health::instance_status(&startup, &readiness, &liveness),
             checks,
         });
     }
+
     Ok(out)
 }

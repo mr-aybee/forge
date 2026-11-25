@@ -44,6 +44,7 @@ pub fn apply_spec(app: &Service) -> Option<ApplySpec> {
     let policy: HealthPolicy =
         app.spec.get("health").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     let revision = forge_catalog::health::revision(listen_port, &policy);
+
     Some(ApplySpec {
         environment,
         name: app.name.clone(),
@@ -68,8 +69,10 @@ pub fn node_apply_spec(app: &Service, serving: Option<&forge_core::deploy::SlotR
     if let Some(p) = spec.listen_port.and_then(|p| map.get(&p)) {
         spec.listen_port = Some(*p);
     }
+
     forge_catalog::deploy::retarget(&mut spec.policy, &map);
     spec.slot.clone_from(&slot.slot);
+
     Some(spec)
 }
 
@@ -101,6 +104,7 @@ pub fn push(state: &AppState, app: &Service, server: ServerId, force: bool) {
                 return;
             }
         };
+
         let Some(spec) = node_apply_spec(&app, crate::deploy::serving(&slots, server)) else { return };
         push_spec(&state, &app, server, spec, force);
     });
@@ -108,19 +112,23 @@ pub fn push(state: &AppState, app: &Service, server: ServerId, force: bool) {
 
 fn push_spec(state: &AppState, app: &Service, server: ServerId, mut spec: ApplySpec, force: bool) {
     let now = state.clock.now().0;
+
     {
         let Ok(mut p) = pushes().lock() else { return };
         if !force && !push_due(p.get(&(server, app.id)).copied(), spec.revision, now) {
             return;
         }
+
         p.insert((server, app.id), (spec.revision, now));
     }
+
     // Only a check that probes another host needs to know the fleet; every
     // other policy is queued at once.
     if spec.policy.checks().all(|(_, c)| c.probe.remote_host().is_none()) {
         send(state, server, &app.name, &spec);
         return;
     }
+
     let (state, service_id, workspace, app) = (state.clone(), app.id, app.workspace_id, app.name.clone());
     tokio::spawn(async move {
         match fleet_addresses(&state, server, workspace).await {
@@ -133,6 +141,7 @@ fn push_spec(state: &AppState, app: &Service, server: ServerId, mut spec: ApplyS
             // done, so the node's next report tries again.
             Err(e) => {
                 tracing::warn!(%server, %app, error = %e, "the fleet list for a health policy could not be built");
+
                 if let Ok(mut p) = pushes().lock() {
                     p.remove(&(server, service_id));
                 }
@@ -152,10 +161,12 @@ fn send(state: &AppState, server: ServerId, app: &str, spec: &ApplySpec) {
     });
     let (body, signed) =
         state.signer.issue(&server.to_string(), SYSTEM_PRINCIPAL, command, state.clock.now(), Duration::from_secs(120));
+
     if let Err(e) = state.hub.enqueue(server, &body.operation_id, signed) {
         tracing::debug!(%server, %app, error = %e, "queueing the health policy failed");
         return;
     }
+
     let (state, app) = (state.clone(), app.to_owned());
     tokio::spawn(async move {
         match state.hub.wait(&body.operation_id, Duration::from_secs(90)).await {
@@ -208,6 +219,7 @@ pub async fn fleet_addresses(
             "the fleet list of a health policy was cut: the node will not refuse the addresses left out"
         );
     }
+
     Ok(fleet)
 }
 
@@ -232,28 +244,35 @@ fn fleet_of(
     use std::net::IpAddr;
     let canonical = |s: &str| s.parse::<IpAddr>().ok().map(forge_catalog::health::canonical);
     let (mut own, mut others) = (BTreeSet::new(), BTreeSet::new());
+
     for n in nodes {
         let set = if n.node == target { &mut own } else { &mut others };
         set.extend(n.live.as_deref().and_then(canonical));
+
         if let Some(f) = &n.facts {
             set.extend(f["address"].as_str().and_then(canonical));
+
             for i in f["interfaces"].as_array().into_iter().flatten() {
                 set.extend(i["address"].as_str().and_then(canonical));
             }
         }
     }
+
     for l in leases.iter().filter(|l| l.kind == forge_catalog::fabric::LeaseKind::Node) {
         let ip = IpAddr::V4(l.cidr.first());
+
         if l.owner == target {
             own.insert(ip)
         } else {
             others.insert(ip)
         };
     }
+
     let mut all: Vec<IpAddr> =
         others.into_iter().filter(|ip| !own.contains(ip) && !ip.is_loopback() && !ip.is_unspecified()).collect();
     let cut = all.len().saturating_sub(forge_catalog::health::MAX_FLEET_ADDRESSES);
     all.truncate(forge_catalog::health::MAX_FLEET_ADDRESSES);
+
     (all, cut)
 }
 
@@ -285,6 +304,7 @@ fn value(purpose: &str, state: &str) -> Option<ObservedValue> {
             _ => return None,
         }));
     }
+
     Some(ObservedValue::Health(match state {
         "passing" => HealthState::Passing,
         "failing" => HealthState::Failing,
@@ -302,7 +322,9 @@ pub fn observation(server: ServerId, service_id: &str, r: &HealthReport) -> Opti
     if !matches!(r.purpose.as_str(), "startup" | "readiness" | "liveness") {
         return None;
     }
+
     let subject = Subject::new(format!("health.{}.{}", r.purpose, r.check)).ok()?;
+
     Some(Observation {
         key: ObservationKey {
             resource: EntityRef::new(EntityKind::Service, service_id),
@@ -325,17 +347,20 @@ pub fn ingest(state: &AppState, server: ServerId, reports: Vec<HealthReport>) {
     if reports.is_empty() {
         return;
     }
+
     let state = state.clone();
     tokio::spawn(async move {
         // Apps placed on this node, by their slugs.
         let mut by_slug: HashMap<(String, String), Service> = HashMap::new();
         let instances = state.store.list_all_instances(None).await.unwrap_or_default();
+
         for i in instances.iter().filter(|i| i.server_id == server) {
             if let Ok(Some(app)) = state.store.get_service(i.service_id).await {
                 let ns = app.spec.get("environment").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
                 by_slug.insert((ns, app.name.clone()), app);
             }
         }
+
         let obs: Vec<Observation> = reports
             .iter()
             .take(MAX_HEALTH_REPORTS)
@@ -344,6 +369,7 @@ pub fn ingest(state: &AppState, server: ServerId, reports: Vec<HealthReport>) {
                 observation(server, &app.id.to_string(), r)
             })
             .collect();
+
         // A node that checks under another policy revision gets the stored
         // one. A policy with command checks or a remote target is sent
         // again every [`PUSH_RETRY`] while the node reports: the helper
@@ -357,14 +383,17 @@ pub fn ingest(state: &AppState, server: ServerId, reports: Vec<HealthReport>) {
                 push(&state, app, server, false);
             }
         }
+
         // Reports for apps not placed here, malformed ones, or beyond the cap.
         let dropped = reports.len().saturating_sub(obs.len());
         if dropped > 0 {
             tracing::warn!(%server, dropped, "dropped health reports (unknown app, not placed on this node, or malformed)");
         }
+
         if obs.is_empty() {
             return;
         }
+
         if let Err(e) = state.health.record_from_agent(server, obs).await {
             tracing::warn!(%server, error = %e, "recording health check results failed");
         }
@@ -456,6 +485,7 @@ mod tests {
             "not its own address (shared with c), not its own lease, no instance blocks"
         );
         assert_eq!(ips(fleet_of("d", &nodes, &leases)).len(), 7, "a node Forge knows no address of gets all others");
+
         // Bounded.
         let many: Vec<NodeAddresses> = (0..3000u32)
             .map(|i| node(&format!("n{i}"), Some(&format!("10.{}.{}.1", i >> 8, i & 255)), serde_json::Value::Null))

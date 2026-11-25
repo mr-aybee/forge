@@ -54,6 +54,7 @@ impl JobHandler for DockerOpJob {
         let p: Payload = serde_json::from_value(ctx.job.payload.clone())
             .map_err(|e| StepError::Fatal(format!("bad payload: {e}")))?;
         let mut op = p.op.clone();
+
         // A push only ever goes to a registry that (still) allows pushes.
         if let (DockerOp::ImagePush { image, .. }, Some(ws)) = (&op, ctx.job.workspace_id)
             && !self
@@ -65,6 +66,7 @@ impl JobHandler for DockerOpJob {
         {
             return Err(StepError::Fatal("the registry no longer allows pushes".into()));
         }
+
         if let (DockerOp::ImagePull { image, registry_auth } | DockerOp::ImagePush { image, registry_auth }, Some(ws)) =
             (&mut op, ctx.job.workspace_id)
         {
@@ -75,9 +77,11 @@ impl JobHandler for DockerOpJob {
                 .map_err(|e| StepError::Retryable(e.to_string()))?
                 .map(|a| a.0);
         }
+
         let command = crate::docker_resources::command(&op).map_err(|e| StepError::Fatal(e.to_string()))?;
         let out = self.ops.run(ctx, p.server_id, "docker_op", command, WAIT).await?;
         ctx.set_state("result", out);
+
         Ok(())
     }
 }

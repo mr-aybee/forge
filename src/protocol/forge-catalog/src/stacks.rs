@@ -116,6 +116,7 @@ impl Report {
         if b.is_empty() {
             return Ok(());
         }
+
         Err(b.iter().map(|f| describe(f)).collect::<Vec<_>>().join("\n"))
     }
 
@@ -123,6 +124,7 @@ impl Report {
         if severity == Severity::Privileged {
             self.privileged = true;
         }
+
         self.findings.push(Finding { service: service.to_owned(), severity, message: message.into() });
     }
 }
@@ -133,6 +135,7 @@ fn describe(f: &Finding) -> String {
         Severity::Privileged => "needs stack.privileged",
         Severity::Info => "note",
     };
+
     if f.service.is_empty() {
         format!("{what}: {}", f.message)
     } else {
@@ -188,7 +191,9 @@ pub fn normalize_abs(p: &str) -> Option<String> {
     if !p.starts_with('/') || p.contains('\0') {
         return None;
     }
+
     let mut out = Vec::new();
+
     for c in p.split('/') {
         match c {
             "" | "." => {}
@@ -196,6 +201,7 @@ pub fn normalize_abs(p: &str) -> Option<String> {
             c => out.push(c),
         }
     }
+
     Some(format!("/{}", out.join("/")))
 }
 
@@ -236,10 +242,12 @@ fn resolve_source(src: &str, stack_dir: &str) -> Option<String> {
     if src.starts_with('/') {
         return normalize_abs(src);
     }
+
     let rel = src.strip_prefix("./").unwrap_or(src);
     if rel == "." {
         return normalize_abs(stack_dir);
     }
+
     normalize_abs(&format!("{stack_dir}/{rel}"))
 }
 
@@ -254,24 +262,29 @@ fn check_host_path(r: &mut Report, svc: &str, what: &str, src: &str, p: &Policy)
         r.push(svc, Severity::Blocked, format!("{what} `{src}`: home-relative paths are not allowed"));
         return;
     }
+
     let Some(path) = resolve_source(src, &p.stack_dir) else {
         r.push(svc, Severity::Blocked, format!("{what} `{src}`: the path must not contain `..`"));
         return;
     };
+
     if DOCKER_SOCKETS.iter().any(|s| within(&path, s)) {
         r.push(svc, Severity::Privileged, format!("{what} `{path}` gives control of Docker on the node"));
         return;
     }
+
     // System paths first: a stack folder inside an approved root such as
     // `/var` must not make `./` reach `/var/lib/docker`.
     if is_system_path(&path) {
         r.push(svc, Severity::Privileged, format!("{what} `{path}` is a system path"));
         return;
     }
+
     let stack_dir = normalize_abs(&p.stack_dir).unwrap_or_default();
     if !stack_dir.is_empty() && within(&path, &stack_dir) {
         return;
     }
+
     let roots: Vec<String> = p.bind_roots.iter().filter_map(|b| normalize_abs(b)).collect();
     if !roots.iter().any(|b| within(&path, b)) {
         r.push(
@@ -298,6 +311,7 @@ pub struct Bind {
 #[must_use]
 pub fn binds(tree: &Value, stack_dir: &str) -> Vec<Bind> {
     let mut out = Vec::new();
+
     for (name, svc) in tree.get("services").and_then(Value::as_object).into_iter().flatten() {
         for v in svc.get("volumes").and_then(Value::as_array).into_iter().flatten() {
             let (src, writable) = match v {
@@ -312,20 +326,24 @@ pub fn binds(tree: &Value, stack_dir: &str) -> Vec<Bind> {
                 }
                 _ => (None, false),
             };
+
             if let Some(path) = src.and_then(|s| resolve_source(s, stack_dir)) {
                 out.push(Bind { service: name.clone(), path, writable });
             }
         }
     }
+
     for (_, v) in tree.get("volumes").and_then(Value::as_object).into_iter().flatten() {
         let Some(path) =
             v.pointer("/driver_opts/device").and_then(Value::as_str).and_then(|d| resolve_source(d, stack_dir))
         else {
             continue;
         };
+
         let o = v.pointer("/driver_opts/o").and_then(Value::as_str).unwrap_or_default();
         out.push(Bind { service: String::new(), path, writable: !o.split(',').any(|x| x == "ro") });
     }
+
     out
 }
 
@@ -334,16 +352,19 @@ pub fn binds(tree: &Value, stack_dir: &str) -> Vec<Bind> {
 #[must_use]
 pub fn host_files(tree: &Value, stack_dir: &str) -> Vec<String> {
     let mut out = Vec::new();
+
     for svc in tree.get("services").and_then(Value::as_object).into_iter().flatten().map(|(_, s)| s) {
         for key in ["env_file", "label_file"] {
             out.extend(env_files(svc.get(key)).iter().filter_map(|f| resolve_source(f, stack_dir)));
         }
     }
+
     for section in ["configs", "secrets"] {
         for (_, v) in tree.get(section).and_then(Value::as_object).into_iter().flatten() {
             out.extend(v.get("file").and_then(Value::as_str).and_then(|f| resolve_source(f, stack_dir)));
         }
     }
+
     out
 }
 
@@ -353,6 +374,7 @@ pub fn host_files(tree: &Value, stack_dir: &str) -> Vec<String> {
 pub fn host_paths(tree: &Value, stack_dir: &str) -> Vec<String> {
     let mut out: Vec<String> = binds(tree, stack_dir).into_iter().map(|b| b.path).collect();
     out.extend(host_files(tree, stack_dir));
+
     out
 }
 
@@ -367,14 +389,17 @@ pub fn redact(text: &str, env: &BTreeMap<String, String>) -> String {
     };
     let mut vals: Vec<(&String, &String)> =
         env.iter().filter(|(k, v)| !v.is_empty() && (v.chars().count() >= 3 || secretish(k))).collect();
+
     // Longest first, so a value inside another is not replaced first.
     vals.sort_by_key(|(_, v)| std::cmp::Reverse(v.len()));
     let mut out = text.to_owned();
+
     for (k, v) in vals {
         if out.contains(v.as_str()) {
             out = out.replace(v.as_str(), &format!("${{{k}}}"));
         }
     }
+
     out
 }
 
@@ -394,6 +419,7 @@ pub fn redact_value(v: &Value, env: &BTreeMap<String, String>) -> Value {
 pub fn check_path(path: &str, p: &Policy) -> Report {
     let mut r = Report::default();
     check_host_path(&mut r, "", "host path", path, p);
+
     r
 }
 
@@ -406,12 +432,15 @@ pub fn parse_env(text: &str) -> Result<BTreeMap<String, String>, String> {
     if text.len() > MAX_ENV_BYTES {
         return Err(format!("the .env file is larger than {} KiB", MAX_ENV_BYTES / 1024));
     }
+
     let mut out = BTreeMap::new();
+
     for (n, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
+
         let line = line.strip_prefix("export ").unwrap_or(line);
         let (k, v) = line.split_once('=').ok_or_else(|| format!(".env line {}: expected KEY=value", n + 1))?;
         let k = k.trim();
@@ -421,10 +450,12 @@ pub fn parse_env(text: &str) -> Result<BTreeMap<String, String>, String> {
         {
             return Err(format!(".env line {}: `{k}` is not a valid variable name", n + 1));
         }
+
         let upper = k.to_ascii_uppercase();
         if upper.starts_with("COMPOSE_") || upper.starts_with("DOCKER_") {
             return Err(format!(".env line {}: `{k}` changes how Compose runs and is not allowed", n + 1));
         }
+
         let v = v.trim();
         let v = if v.len() >= 2
             && ((v.starts_with('"') && v.ends_with('"')) || (v.starts_with('\'') && v.ends_with('\'')))
@@ -434,8 +465,10 @@ pub fn parse_env(text: &str) -> Result<BTreeMap<String, String>, String> {
             // Unquoted: an inline ` #` starts a comment.
             v.split(" #").next().unwrap_or(v).trim_end()
         };
+
         out.insert(k.to_owned(), v.to_owned());
     }
+
     Ok(out)
 }
 
@@ -454,9 +487,11 @@ pub fn interpolate(tree: &Value, env: &BTreeMap<String, String>) -> Result<Value
         Value::Array(a) => Value::Array(a.iter().map(|v| interpolate(v, env)).collect::<Result<_, _>>()?),
         Value::Object(m) => {
             let mut out = Map::new();
+
             for (k, v) in m {
                 out.insert(interpolate_str(k, env)?, interpolate(v, env)?);
             }
+
             Value::Object(out)
         }
         v => v.clone(),
@@ -467,16 +502,20 @@ fn interpolate_str(s: &str, env: &BTreeMap<String, String>) -> Result<String, St
     if !s.contains('$') {
         return Ok(s.to_owned());
     }
+
     let b = s.as_bytes();
     let mut out = String::with_capacity(s.len());
     let mut i = 0;
+
     while i < b.len() {
         if b[i] != b'$' {
             let ch = s[i..].chars().next().unwrap_or_default();
             out.push(ch);
             i += ch.len_utf8();
+
             continue;
         }
+
         match b.get(i + 1) {
             Some(b'$') => {
                 out.push('$');
@@ -486,11 +525,13 @@ fn interpolate_str(s: &str, env: &BTreeMap<String, String>) -> Result<String, St
                 // Find the matching `}` (nesting allowed in defaults).
                 let mut depth = 0usize;
                 let mut end = None;
+
                 for (j, &c) in b.iter().enumerate().skip(i + 1) {
                     match c {
                         b'{' => depth += 1,
                         b'}' => {
                             depth -= 1;
+
                             if depth == 0 {
                                 end = Some(j);
                                 break;
@@ -499,6 +540,7 @@ fn interpolate_str(s: &str, env: &BTreeMap<String, String>) -> Result<String, St
                         _ => {}
                     }
                 }
+
                 let end = end.ok_or_else(|| format!("unclosed `${{` in `{s}`"))?;
                 out.push_str(&expand(&s[i + 2..end], env)?);
                 i = end + 1;
@@ -506,9 +548,11 @@ fn interpolate_str(s: &str, env: &BTreeMap<String, String>) -> Result<String, St
             Some(c) if c.is_ascii_alphabetic() || *c == b'_' => {
                 let start = i + 1;
                 let mut j = start;
+
                 while j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == b'_') {
                     j += 1;
                 }
+
                 out.push_str(env.get(&s[start..j]).map_or("", String::as_str));
                 i = j;
             }
@@ -518,6 +562,7 @@ fn interpolate_str(s: &str, env: &BTreeMap<String, String>) -> Result<String, St
             }
         }
     }
+
     Ok(out)
 }
 
@@ -527,10 +572,12 @@ fn expand(inner: &str, env: &BTreeMap<String, String>) -> Result<String, String>
     if name.is_empty() {
         return Err(format!("invalid variable `${{{inner}}}`"));
     }
+
     let val = env.get(name);
     let set = val.is_some();
     let nonempty = val.is_some_and(|v| !v.is_empty());
     let v = val.cloned().unwrap_or_default();
+
     let (op, arg) = if let Some(a) = rest.strip_prefix(":-") {
         (":-", a)
     } else if let Some(a) = rest.strip_prefix(":?") {
@@ -548,7 +595,9 @@ fn expand(inner: &str, env: &BTreeMap<String, String>) -> Result<String, String>
     } else {
         return Err(format!("invalid variable `${{{inner}}}`"));
     };
+
     let arg = || interpolate_str(arg, env);
+
     Ok(match op {
         ":-" => {
             if nonempty {
@@ -692,10 +741,12 @@ const TOP_KEYS: &[&str] = &["version", "name", "services", "networks", "volumes"
 #[must_use]
 pub fn check(tree: &Value, p: &Policy) -> Report {
     let mut r = Report::default();
+
     let Some(top) = tree.as_object() else {
         r.push("", Severity::Blocked, "the compose file must be a mapping");
         return r;
     };
+
     for k in top.keys() {
         if k == "include" {
             r.push("", Severity::Blocked, "`include` reads other files and is not supported");
@@ -703,6 +754,7 @@ pub fn check(tree: &Value, p: &Policy) -> Report {
             r.push("", Severity::Blocked, format!("unknown top-level key `{k}`"));
         }
     }
+
     let services = top.get("services").and_then(Value::as_object);
     match services {
         None => r.push("", Severity::Blocked, "the compose file has no services"),
@@ -712,15 +764,18 @@ pub fn check(tree: &Value, p: &Policy) -> Report {
         }
         Some(s) => {
             let names: BTreeSet<&str> = s.keys().map(String::as_str).collect();
+
             for (name, svc) in s {
                 check_service(&mut r, name, svc, p, &names);
             }
         }
     }
+
     for (name, v) in top.get("volumes").and_then(Value::as_object).into_iter().flatten() {
         let opts = v.get("driver_opts");
         let device = opts.and_then(|o| o.get("device")).and_then(Value::as_str);
         let bind = opts.and_then(|o| o.get("o")).and_then(Value::as_str).is_some_and(|o| o.contains("bind"));
+
         match device {
             Some(d) if bind || d.starts_with('/') => {
                 check_host_path(&mut r, "", &format!("volume `{name}` device"), d, p)
@@ -729,11 +784,13 @@ pub fn check(tree: &Value, p: &Policy) -> Report {
             None => {}
         }
     }
+
     for (name, v) in top.get("networks").and_then(Value::as_object).into_iter().flatten() {
         if v.get("driver").and_then(Value::as_str) == Some("host") || docker_network_name(name, v) == Some("host") {
             r.push("", Severity::Privileged, format!("network `{name}` uses the host network"));
         }
     }
+
     for section in ["configs", "secrets"] {
         for (name, v) in top.get(section).and_then(Value::as_object).into_iter().flatten() {
             if let Some(f) = v.get("file").and_then(Value::as_str) {
@@ -741,12 +798,15 @@ pub fn check(tree: &Value, p: &Policy) -> Report {
             }
         }
     }
+
     if let Some(dir) = normalize_abs(&p.stack_dir)
         && is_system_path(&dir)
     {
         r.push("", Severity::Blocked, format!("the stack folder `{dir}` is a system folder"));
     }
+
     check_nesting(&mut r, tree, p);
+
     r
 }
 
@@ -756,6 +816,7 @@ fn docker_network_name<'a>(key: &'a str, v: &'a Value) -> Option<&'a str> {
     if let Some(n) = v.get("name").and_then(Value::as_str) {
         return Some(n);
     }
+
     match v.get("external") {
         Some(Value::Object(m)) => Some(m.get("name").and_then(Value::as_str).unwrap_or(key)),
         e if truthy(e) => Some(key),
@@ -770,10 +831,12 @@ fn docker_network_name<'a>(key: &'a str, v: &'a Value) -> Option<&'a str> {
 /// writable bind may contain the stack folder (`compose.yaml`, `.env`).
 fn check_nesting(r: &mut Report, tree: &Value, p: &Policy) {
     let all = binds(tree, &p.stack_dir);
+
     // A writable bind of a system path already needs `stack.privileged` and
     // hands over the host; nesting under it adds nothing.
     let writable: Vec<&Bind> = all.iter().filter(|b| b.writable && !is_system_path(&b.path)).collect();
     let mut seen = BTreeSet::new();
+
     for b in &all {
         if let Some(w) = writable.iter().find(|w| w.path != b.path && within(&b.path, &w.path))
             && seen.insert(b.path.clone())
@@ -788,6 +851,7 @@ fn check_nesting(r: &mut Report, tree: &Value, p: &Policy) {
             );
         }
     }
+
     for f in host_files(tree, &p.stack_dir) {
         if let Some(w) = writable.iter().find(|w| within(&f, &w.path)) {
             r.push(
@@ -797,6 +861,7 @@ fn check_nesting(r: &mut Report, tree: &Value, p: &Policy) {
             );
         }
     }
+
     if let Some(dir) = normalize_abs(&p.stack_dir) {
         for w in writable.iter().filter(|w| within(&dir, &w.path)) {
             r.push(
@@ -832,44 +897,55 @@ fn check_service(r: &mut Report, name: &str, svc: &Value, p: &Policy, stack_serv
     if !valid_service_name(name) {
         r.push(name, Severity::Blocked, "service names use letters, digits, `.`, `_` and `-`");
     }
+
     let Some(s) = svc.as_object() else {
         r.push(name, Severity::Blocked, "a service must be a mapping");
         return;
     };
+
     for (k, why) in BLOCKED_KEYS {
         if s.contains_key(*k) {
             r.push(name, Severity::Blocked, *why);
         }
     }
+
     if s.contains_key("provider") {
         r.push(name, Severity::Blocked, "`provider` runs a program on the node and is not supported");
     }
+
     for k in s.keys() {
         if !SERVICE_KEYS.contains(&k.as_str()) && !k.starts_with("x-") && k != "provider" {
             r.push(name, Severity::Blocked, format!("unknown service key `{k}`"));
         }
     }
+
     if s.get("image").and_then(Value::as_str).is_none_or(str::is_empty) {
         r.push(name, Severity::Blocked, "every service needs an `image`");
     }
+
     if truthy(s.get("privileged")) {
         r.push(name, Severity::Privileged, "`privileged: true` gives the container full control of the node");
     }
+
     for hook in ["post_start", "pre_stop"] {
         let hooks = match s.get(hook) {
             Some(Value::Array(a)) => a.iter().collect(),
             Some(v @ Value::Object(_)) => vec![v],
             _ => Vec::new(),
         };
+
         if hooks.iter().any(|h| truthy(h.get("privileged"))) {
             r.push(name, Severity::Privileged, format!("`{hook}` runs a command with `privileged: true`"));
         }
     }
+
     if truthy(s.get("use_api_socket")) {
         r.push(name, Severity::Privileged, "`use_api_socket` gives the container control of Docker on the node");
     }
+
     // `service:<name>` must name a service of this stack (on this node).
     let outside = |m: &str| m.strip_prefix("service:").is_some_and(|x| !stack_services.contains(x));
+
     for key in ["pid", "ipc", "uts", "userns_mode", "cgroup", "network_mode"] {
         match s.get(key).and_then(Value::as_str) {
             Some("host") if key == "network_mode" => {
@@ -884,6 +960,7 @@ fn check_service(r: &mut Report, name: &str, svc: &Value, p: &Policy, stack_serv
             _ => {}
         }
     }
+
     for (key, why) in [
         ("cap_add", "adds kernel capabilities"),
         ("devices", "passes host devices into the container"),
@@ -900,25 +977,30 @@ fn check_service(r: &mut Report, name: &str, svc: &Value, p: &Policy, stack_serv
             Some(Value::String(v)) => !v.is_empty(),
             Some(_) => true,
         };
+
         if present {
             r.push(name, Severity::Privileged, format!("`{key}` {why}"));
         }
     }
+
     let reservations = svc.pointer("/deploy/resources/reservations/devices");
     if reservations.and_then(Value::as_array).is_some_and(|a| !a.is_empty()) {
         r.push(name, Severity::Privileged, "`deploy.resources.reservations.devices` passes host devices");
     }
+
     for opt in strings(s.get("security_opt")) {
         let o = opt.replace(':', "=").to_ascii_lowercase();
         if o.contains("unconfined") || o.starts_with("label=disable") || o.contains("no-new-privileges=false") {
             r.push(name, Severity::Privileged, format!("`security_opt: {opt}` turns off a protection"));
         }
     }
+
     for v in strings(s.get("volumes_from")) {
         if v.starts_with("container:") {
             r.push(name, Severity::Privileged, format!("`volumes_from: {v}` reads a container outside the stack"));
         }
     }
+
     for key in ["env_file", "label_file"] {
         for f in env_files(s.get(key)) {
             if f.starts_with('/') || f.starts_with('~') || f.split('/').any(|c| c == "..") {
@@ -926,6 +1008,7 @@ fn check_service(r: &mut Report, name: &str, svc: &Value, p: &Policy, stack_serv
             }
         }
     }
+
     for v in s.get("volumes").and_then(Value::as_array).into_iter().flatten() {
         check_volume(r, name, v, p);
     }
@@ -946,6 +1029,7 @@ fn check_volume(r: &mut Report, svc: &str, v: &Value, p: &Policy) {
     match v {
         Value::String(spec) => {
             let src = spec.split(':').next().unwrap_or_default();
+
             // A single field is an anonymous volume (container path only).
             if spec.contains(':') && is_path_source(src) {
                 check_host_path(r, svc, "bind mount", src, p);
@@ -954,6 +1038,7 @@ fn check_volume(r: &mut Report, svc: &str, v: &Value, p: &Policy) {
         Value::Object(m) => {
             let kind = m.get("type").and_then(Value::as_str).unwrap_or("volume");
             let src = m.get("source").and_then(Value::as_str).unwrap_or_default();
+
             match kind {
                 "bind" => check_host_path(r, svc, "bind mount", src, p),
                 "volume" | "tmpfs" | "image" => {}
@@ -1008,9 +1093,11 @@ pub struct PublishedPort {
 pub fn bind_ports(tree: &mut Value, internal_ip: &str, r: &mut Report) -> Vec<PublishedPort> {
     let mut out = Vec::new();
     let Some(services) = tree.get_mut("services").and_then(Value::as_object_mut) else { return out };
+
     for (name, svc) in services.iter_mut() {
         let public = public_ports(svc);
         let Some(ports) = svc.get_mut("ports").and_then(Value::as_array_mut) else { continue };
+
         for port in ports.iter_mut() {
             let parsed = match port {
                 Value::String(s) => parse_short_port(s),
@@ -1023,10 +1110,12 @@ pub fn bind_ports(tree: &mut Value, internal_ip: &str, r: &mut Report) -> Vec<Pu
                 )),
                 _ => None,
             };
+
             let Some((ip, published, target, protocol)) = parsed else {
                 r.push(name, Severity::Blocked, format!("cannot read port `{port}`"));
                 continue;
             };
+
             let key = if published.is_empty() { &target } else { &published };
             let is_public = public.contains("*") || public.contains(key);
             let host_ip = if is_public {
@@ -1039,18 +1128,22 @@ pub fn bind_ports(tree: &mut Value, internal_ip: &str, r: &mut Report) -> Vec<Pu
                         format!("port {key} binds to {internal_ip}; list it in `x-forge.public` to publish it on all addresses"),
                     );
                 }
+
                 internal_ip.to_owned()
             } else {
                 ip.clone()
             };
+
             if let Value::Object(m) = port {
                 m.insert("host_ip".into(), json!(host_ip));
             } else {
                 *port = json!(format!("{}:{published}:{target}/{protocol}", bracket(&host_ip)));
             }
+
             out.push(PublishedPort { service: name.clone(), host_ip, published, target, protocol, public: is_public });
         }
     }
+
     out
 }
 
@@ -1069,6 +1162,7 @@ fn parse_short_port(s: &str) -> Option<(String, String, String, String)> {
         Some(_) => return None,
         None => (s, "tcp".to_owned()),
     };
+
     // A bracketed IPv6 address first.
     let (ip, rest) = if let Some(r) = rest.strip_prefix('[') {
         let (ip, r) = r.split_once("]:")?;
@@ -1081,14 +1175,17 @@ fn parse_short_port(s: &str) -> Option<(String, String, String, String)> {
             _ => return None,
         }
     };
+
     let (published, target) = match rest.split_once(':') {
         Some((p, t)) => (p.to_owned(), t.to_owned()),
         None => (String::new(), rest.to_owned()),
     };
+
     let ok = |x: &str| x.bytes().all(|b| b.is_ascii_digit() || b == b'-');
     if target.is_empty() || !ok(&target) || !ok(&published) {
         return None;
     }
+
     Some((ip, published, target, proto))
 }
 
@@ -1110,10 +1207,12 @@ pub enum Placement {
 /// or `deploy.placement.constraints: ["node.hostname == x"]`.
 pub fn placements(tree: &Value) -> Result<BTreeMap<String, Placement>, String> {
     let mut out = BTreeMap::new();
+
     for (name, svc) in tree.get("services").and_then(Value::as_object).into_iter().flatten() {
         let node = svc.pointer("/x-forge/node").and_then(Value::as_str);
         let cluster = svc.pointer("/x-forge/cluster").and_then(Value::as_str);
         let mut hostnames = Vec::new();
+
         for c in strings(svc.pointer("/deploy/placement/constraints")) {
             let c = c.replace(' ', "");
             if let Some(h) = c.strip_prefix("node.hostname==") {
@@ -1124,6 +1223,7 @@ pub fn placements(tree: &Value) -> Result<BTreeMap<String, Placement>, String> {
                 ));
             }
         }
+
         let p = match (node, cluster, hostnames.as_slice()) {
             (Some(_), Some(_), _) => return Err(format!("{name}: set either x-forge.node or x-forge.cluster")),
             (Some(n), None, []) => Placement::Node(n.to_owned()),
@@ -1133,8 +1233,10 @@ pub fn placements(tree: &Value) -> Result<BTreeMap<String, Placement>, String> {
             (None, None, [h]) => Placement::Node(h.clone()),
             _ => return Err(format!("{name}: the placement names more than one node")),
         };
+
         out.insert(name.clone(), p);
     }
+
     Ok(out)
 }
 
@@ -1154,6 +1256,7 @@ pub fn with_dependencies(tree: &Value, selected: &[String]) -> BTreeSet<String> 
     let services = tree.get("services").and_then(Value::as_object);
     let mut out = BTreeSet::new();
     let mut todo: Vec<String> = selected.to_vec();
+
     while let Some(s) = todo.pop() {
         if out.insert(s.clone())
             && let Some(svc) = services.and_then(|m| m.get(&s))
@@ -1161,11 +1264,13 @@ pub fn with_dependencies(tree: &Value, selected: &[String]) -> BTreeSet<String> 
             todo.extend(dependencies(svc));
         }
     }
+
     out
 }
 
 fn named_volumes(svc: &Value) -> Vec<String> {
     let mut out = Vec::new();
+
     for v in svc.get("volumes").and_then(Value::as_array).into_iter().flatten() {
         match v {
             Value::String(s) => {
@@ -1182,6 +1287,7 @@ fn named_volumes(svc: &Value) -> Vec<String> {
             _ => {}
         }
     }
+
     out
 }
 
@@ -1204,17 +1310,21 @@ pub fn part_for(tree: &Value, services: &BTreeSet<String>, stack_label: &str) ->
     let all = tree.get("services").and_then(Value::as_object).cloned().unwrap_or_default();
     let mut svcs = Map::new();
     let (mut nets, mut vols, mut cfgs, mut secs) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+
     for name in services {
         let mut svc = all.get(name).cloned().ok_or_else(|| format!("unknown service `{name}`"))?;
+
         for d in dependencies(&svc) {
             if !services.contains(&d) {
                 return Err(format!("{name} depends on {d}, which runs on another node"));
             }
         }
+
         nets.extend(named_refs(&svc, "networks"));
         vols.extend(named_volumes(&svc));
         cfgs.extend(named_refs(&svc, "configs"));
         secs.extend(named_refs(&svc, "secrets"));
+
         if let Some(m) = svc.as_object_mut() {
             // Placement keys are spent here, but `public` must survive: the
             // server and the agent both run `bind_ports` on this part, and
@@ -1222,15 +1332,19 @@ pub fn part_for(tree: &Value, services: &BTreeSet<String>, stack_label: &str) ->
             // Compose accepts `x-*` extension fields on a service.
             let public = m.get("x-forge").and_then(|x| x.get("public")).cloned();
             m.remove("x-forge");
+
             if let Some(p) = public {
                 m.insert("x-forge".into(), json!({ "public": p }));
             }
+
             if let Some(dep) = m.get_mut("deploy").and_then(Value::as_object_mut) {
                 dep.remove("placement");
+
                 if dep.is_empty() {
                     m.remove("deploy");
                 }
             }
+
             match m.entry("labels").or_insert_with(|| json!({})) {
                 Value::Object(l) => {
                     l.insert(STACK_LABEL.into(), json!(stack_label));
@@ -1242,13 +1356,18 @@ pub fn part_for(tree: &Value, services: &BTreeSet<String>, stack_label: &str) ->
                 other => *other = json!({ STACK_LABEL: stack_label }),
             }
         }
+
         svcs.insert(name.clone(), svc);
     }
+
     let mut out = Map::new();
+
     if let Some(n) = tree.get("name") {
         out.insert("name".into(), n.clone());
     }
+
     out.insert("services".into(), Value::Object(svcs));
+
     for (key, used) in [("networks", nets), ("volumes", vols), ("configs", cfgs), ("secrets", secs)] {
         let Some(defs) = tree.get(key).and_then(Value::as_object) else { continue };
         let picked: Map<String, Value> = defs
@@ -1256,10 +1375,12 @@ pub fn part_for(tree: &Value, services: &BTreeSet<String>, stack_label: &str) ->
             .filter(|(k, _)| used.contains(*k) || (key == "networks" && *k == "default"))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
+
         if !picked.is_empty() {
             out.insert(key.into(), Value::Object(picked));
         }
     }
+
     // Extension fields (`x-…`) at the top level are only anchors' homes.
     Ok(Value::Object(out))
 }
@@ -1271,6 +1392,7 @@ pub fn part_for(tree: &Value, services: &BTreeSet<String>, stack_label: &str) ->
 #[must_use]
 pub fn to_yaml(v: &Value) -> String {
     let mut out = String::new();
+
     match v {
         Value::Object(m) if !m.is_empty() => write_map(&mut out, m, 0),
         Value::Array(a) if !a.is_empty() => write_seq(&mut out, a, 0),
@@ -1279,6 +1401,7 @@ pub fn to_yaml(v: &Value) -> String {
             out.push('\n');
         }
     }
+
     out
 }
 
@@ -1317,6 +1440,7 @@ fn write_map(out: &mut String, m: &Map<String, Value>, indent: usize) {
         out.push_str(&" ".repeat(indent));
         out.push_str(&yaml_key(k));
         out.push(':');
+
         match v {
             Value::Object(c) if !c.is_empty() => {
                 out.push('\n');
@@ -1339,6 +1463,7 @@ fn write_seq(out: &mut String, a: &[Value], indent: usize) {
     for v in a {
         out.push_str(&" ".repeat(indent));
         out.push('-');
+
         if is_block(v) {
             match v {
                 Value::Object(m) => {
@@ -1393,24 +1518,30 @@ impl StackPart {
         if !valid_stack_name(&self.environment) || !valid_stack_name(&self.stack) {
             return Err("invalid environment or stack name".into());
         }
+
         let dir = normalize_abs(&self.dir).ok_or("the stack folder must be an absolute path without `..`")?;
         if dir != self.policy.stack_dir {
             return Err("the stack folder does not match the policy".into());
         }
+
         let default = default_dir(&self.environment, &self.stack);
         if dir != default && !self.policy.bind_roots.iter().filter_map(|b| normalize_abs(b)).any(|b| within(&dir, &b)) {
             return Err("the stack folder must be inside an approved file root".into());
         }
+
         if is_system_path(&dir) {
             return Err("the stack folder cannot be a system folder".into());
         }
+
         if self.env.keys().any(|k| {
             let u = k.to_ascii_uppercase();
             u.starts_with("COMPOSE_") || u.starts_with("DOCKER_")
         }) {
             return Err("COMPOSE_* and DOCKER_* variables are not allowed in .env".into());
         }
+
         let ip: std::net::IpAddr = self.internal_ip.parse().map_err(|_| "invalid internal address")?;
+
         // The written file is the interpolated, checked tree with `$`
         // escaped, so Compose runs exactly what was checked. Errors go back
         // to the control plane (job errors), so `.env` values are redacted.
@@ -1421,6 +1552,7 @@ impl StackPart {
         let ports = bind_ports(&mut tree, &ip.to_string(), &mut report);
         report.ensure(self.policy.allow_privileged).map_err(hide)?;
         add_log_url(&mut tree);
+
         Ok((escape_dollars(&tree), ports))
     }
 }
@@ -1435,6 +1567,7 @@ impl StackPart {
 pub fn add_log_url(tree: &mut Value) {
     use crate::apps::{LOG_HOST_ENTRY, LOG_URL_CONTAINER, LOG_URL_ENV, LOG_URL_HOST};
     let Some(services) = tree.get_mut("services").and_then(Value::as_object_mut) else { return };
+
     for svc in services.values_mut().filter_map(Value::as_object_mut) {
         let mode = svc.get("network_mode").and_then(Value::as_str).unwrap_or_default().to_owned();
         let (url, hosts) = match mode.as_str() {
@@ -1443,6 +1576,7 @@ pub fn add_log_url(tree: &mut Value) {
             m if m.starts_with("service:") || m.starts_with("container:") => (LOG_URL_CONTAINER, false),
             _ => (LOG_URL_CONTAINER, true),
         };
+
         match svc.entry("environment").or_insert_with(|| Value::Object(Map::new())) {
             Value::Object(env) => {
                 env.entry(LOG_URL_ENV).or_insert_with(|| Value::String(url.to_owned()));
@@ -1455,10 +1589,13 @@ pub fn add_log_url(tree: &mut Value) {
             }
             _ => {}
         }
+
         if !hosts {
             continue;
         }
+
         let (name, target) = LOG_HOST_ENTRY.split_once(':').unwrap_or((LOG_HOST_ENTRY, ""));
+
         match svc.entry("extra_hosts").or_insert_with(|| Value::Array(Vec::new())) {
             Value::Array(h) => {
                 let set = h.iter().filter_map(Value::as_str).any(|e| e.split([':', '=']).next() == Some(name));
@@ -1536,8 +1673,10 @@ impl StackOp {
             if s.len() > MAX_SERVICES || !s.iter().all(|x| valid_service_name(x)) {
                 return Err("invalid service names".into());
             }
+
             Ok(())
         };
+
         match self {
             Self::Deploy { part, services, .. } => {
                 check_services(services)?;
@@ -1548,15 +1687,18 @@ impl StackOp {
                 if !valid_project(project) {
                     return Err("invalid project name".into());
                 }
+
                 check_dir(dir)
             }
             Self::Service { project, dir, action, services } => {
                 if !valid_project(project) {
                     return Err("invalid project name".into());
                 }
+
                 if !matches!(action.as_str(), "start" | "stop" | "restart" | "pull") {
                     return Err(format!("unknown stack action `{action}`"));
                 }
+
                 check_services(services)?;
                 check_dir(dir)
             }
@@ -1564,6 +1706,7 @@ impl StackOp {
                 if !valid_project(project) || !valid_service_name(service) {
                     return Err("invalid project or service name".into());
                 }
+
                 check_dir(dir)
             }
         }

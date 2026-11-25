@@ -6,11 +6,12 @@
 
 use std::time::Duration;
 
-use crate::common::*;
 use forge_agent::enroll::{HostFacts, enroll};
 use forge_agent::{Agent, AgentConfig, StatePaths};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 struct Enrolled {
     server_id: String,
@@ -30,14 +31,17 @@ async fn enroll_and_run(h: &Harness, admin: &Client, os: &str) -> Enrolled {
     let (stop, rx) = tokio::sync::watch::channel(false);
     tokio::spawn(agent.run(rx));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+
     loop {
         let (_, s) = admin.get(&format!("/api/v1/servers/{}", id.server_id)).await;
         if s["status"] == "online" {
             break;
         }
+
         assert!(tokio::time::Instant::now() < deadline, "agent never came online");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+
     Enrolled { server_id: id.server_id, stop, _dir: dir }
 }
 
@@ -100,16 +104,20 @@ async fn file_api_enforces_roles_roots_paths_and_protection() {
     let (s, r) = operator.get(&format!("{base}/roots")).await;
     assert_eq!(s, StatusCode::OK, "{r}");
     assert_eq!(r["roots"].as_array().map(Vec::len), Some(0), "{r}");
+
     for ep in ["list?path=/etc", "stat?path=/etc", "read?path=/etc/hosts", "download?path=/etc/hosts"] {
         let (s, _) = operator.get(&format!("{base}/{ep}")).await;
         assert_eq!(s, StatusCode::FORBIDDEN, "{ep}");
     }
+
     // Permission changes need file.admin: operators are refused before the node.
     let (s, _) = operator.post(&format!("{base}/chmod"), json!({"path": "/tmp", "mode": "0755"})).await;
     assert_eq!(s, StatusCode::FORBIDDEN);
+
     // Archive names must match a supported format.
     let (s, _) = admin.post(&format!("{base}/compress"), json!({"sources": ["/tmp/a"], "dest": "/tmp/a.rar"})).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
+
     // Approving a root needs file.admin with MFA.
     let (s, e) =
         admin.post(&format!("{base}/roots"), json!({"kind": "service", "label": "web", "path": "/srv/web"})).await;
@@ -121,6 +129,7 @@ async fn file_api_enforces_roles_roots_paths_and_protection() {
         let (s, body) = admin.get(&format!("{base}/list?path={bad}")).await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}: {body}");
     }
+
     let (s, _) = admin.get(&format!("{base}/list?root=fr_unknown&path=/")).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     let (s, _) = admin.get(&format!("{base}/read?path=/etc/hosts&length=99999999")).await;
@@ -140,6 +149,7 @@ async fn file_api_enforces_roles_roots_paths_and_protection() {
         let (s, body) = admin.get(&format!("{base}/read?path={}", q(p))).await;
         assert_eq!(s, StatusCode::FORBIDDEN, "{p}: {body}");
     }
+
     let denied =
         audit(&admin).await.into_iter().filter(|e| e["action"] == "file.read" && e["outcome"] == "denied").count();
     assert!(denied >= 4, "expected audited denials, got {denied}");
@@ -152,6 +162,7 @@ async fn file_api_enforces_roles_roots_paths_and_protection() {
 #[tokio::test]
 async fn windows_agent_full_read_write_flow() {
     use base64::Engine as _;
+
     // Trash and revisions go to a temporary store, not C:\ProgramData.
     forge_agent::files::store_override(agent_store());
     let h = start().await;
@@ -178,6 +189,7 @@ async fn windows_agent_full_read_write_flow() {
         .await;
     assert_eq!(s, StatusCode::OK, "{saved}");
     let v1 = saved["version"].as_str().unwrap().to_owned();
+
     // Saving over it needs the version it was opened at; a stale one is a conflict.
     let (s, r) = admin
         .post(
@@ -194,6 +206,7 @@ async fn windows_agent_full_read_write_flow() {
         .await;
     assert_eq!(s, StatusCode::CONFLICT, "{r}");
     assert_eq!(std::fs::read(tmp.path().join("conf/app.env")).unwrap(), b"A=2\n");
+
     // The replaced content is a revision.
     let (_, revs) = admin.get(&format!("{base}/revisions?path={}", at("/conf/app.env"))).await;
     let rev = revs["revisions"][0]["id"].as_str().unwrap().to_owned();
@@ -227,15 +240,18 @@ async fn windows_agent_full_read_write_flow() {
     };
     let r = put(0, data[..chunk].to_vec()).await;
     assert_eq!(r.status(), StatusCode::OK);
+
     // Resume: the status says where to continue.
     let (_, st) = admin.get(&format!("{base}/uploads/{uid}")).await;
     assert_eq!(st["received"], chunk);
     let mut off = chunk;
+
     while off < data.len() {
         let end = (off + chunk).min(data.len());
         assert_eq!(put(off, data[off..end].to_vec()).await.status(), StatusCode::OK);
         off = end;
     }
+
     let sha: String =
         ring::digest::digest(&ring::digest::SHA256, &data).as_ref().iter().map(|b| format!("{b:02x}")).collect();
     let (s, r) = admin.post(&format!("{base}/uploads/{uid}/commit"), json!({"sha256": "0".repeat(64)})).await;
@@ -243,6 +259,7 @@ async fn windows_agent_full_read_write_flow() {
     let (s, r) = admin.post(&format!("{base}/uploads/{uid}/commit"), json!({"sha256": sha})).await;
     assert_eq!(s, StatusCode::OK, "{r}");
     assert_eq!(std::fs::read(tmp.path().join("big.bin")).unwrap(), data);
+
     // Chunks sent together, even in reverse order, reach the node in order
     // (the server keeps them in line, #15).
     assert_eq!(up["parallel"], 3);
@@ -260,12 +277,15 @@ async fn windows_agent_full_read_write_flow() {
     };
     let starts: Vec<usize> = (0..data.len()).step_by(chunk).collect();
     let sends: Vec<_> = starts.iter().rev().map(|&o| put2(o, data[o..(o + chunk).min(data.len())].to_vec())).collect();
+
     for status in futures::future::join_all(sends).await {
         assert_eq!(status, StatusCode::OK);
     }
+
     let (s, r) = admin.post(&format!("{base}/uploads/{uid2}/commit"), json!({"sha256": sha.clone()})).await;
     assert_eq!(s, StatusCode::OK, "{r}");
     assert_eq!(std::fs::read(tmp.path().join("big2.bin")).unwrap(), data);
+
     // A read of 1 MiB (up to 2 MiB allowed), served from several node reads (#15).
     let (s, r) = admin.get(&format!("{base}/read?path={dir}/big.bin&offset=100&length=1048576")).await;
     assert_eq!(s, StatusCode::OK, "{r}");
@@ -331,6 +351,7 @@ async fn windows_agent_full_read_write_flow() {
         assert!(resp.headers().get("content-encoding").is_none(), "downloads are not compressed");
         assert_eq!(resp.bytes().await.unwrap().as_ref(), data.as_slice());
     }
+
     let (s, _) = admin.get(&format!("{base}/stat?path={}", at("/big.bin"))).await;
     assert_eq!(s, StatusCode::OK, "the server still answers after the downloads");
 
@@ -350,6 +371,7 @@ async fn windows_agent_full_read_write_flow() {
     let (s, l) = operator.get(&format!("{base}/list?root={rid}&path=/")).await;
     assert_eq!(s, StatusCode::OK, "{l}");
     assert_eq!(l["entries"][0]["name"], "app.env");
+
     // The root confines: the parent is out of reach.
     let (s, _) = operator.get(&format!("{base}/read?root={rid}&path=/../big.bin")).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
@@ -393,6 +415,7 @@ async fn windows_agent_full_read_write_flow() {
     assert!(resp.bytes().await.unwrap().starts_with(b"PK"));
 
     let log = audit(&admin).await;
+
     for action in [
         "file.compress",
         "file.extract",
@@ -407,5 +430,6 @@ async fn windows_agent_full_read_write_flow() {
     ] {
         assert!(log.iter().any(|e| e["action"] == action && e["outcome"] == "success"), "{action} not audited");
     }
+
     let _ = a.stop.send(true);
 }

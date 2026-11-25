@@ -2,9 +2,10 @@
 //! the environments of a project (D-102).
 #![allow(clippy::unwrap_used)]
 
-use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 use reqwest::{Method, StatusCode};
 use serde_json::json;
+
+use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 
 fn id(v: &serde_json::Value) -> &str {
     v["id"].as_str().unwrap()
@@ -88,6 +89,7 @@ async fn projects_group_environments() {
         let (s, _) = admin.post("/api/v1/projects", json!({"name": bad})).await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{bad:?}");
     }
+
     let (s, shop) = admin.post("/api/v1/projects", json!({"name": "shop", "description": "Web shop"})).await;
     assert_eq!(s, StatusCode::CREATED, "{shop}");
     assert_eq!(shop["description"], "Web shop");
@@ -182,6 +184,7 @@ async fn projects_group_environments() {
 
     let (_, audit) = admin.get("/api/v1/audit?limit=300").await;
     let text = audit.to_string();
+
     for a in [
         "project.create",
         "project.update",

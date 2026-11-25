@@ -60,6 +60,7 @@ fn release_row(r: &AnyRow, with_source: bool) -> DomainResult<Release> {
 fn deployment_row(r: &AnyRow) -> DomainResult<Deployment> {
     let state = text(r, "state")?;
     let kind = text(r, "kind")?;
+
     Ok(Deployment {
         id: parsed(r, "id")?,
         service_id: parsed(r, "service_id")?,
@@ -181,6 +182,7 @@ impl ReleaseRepository for Store {
             .map(|r| int(r, "number"))
             .collect::<DomainResult<_>>()?;
         let mut deleted = 0;
+
         for n in numbers.into_iter().skip(keep as usize).filter(|n| !except.contains(n)) {
             let r = sqlx::query("DELETE FROM releases WHERE service_id = $1 AND number = $2")
                 .bind(app.to_string())
@@ -190,6 +192,7 @@ impl ReleaseRepository for Store {
                 .map_err(db_err)?;
             deleted += r.rows_affected();
         }
+
         Ok(deleted)
     }
 }
@@ -238,6 +241,7 @@ impl DeploymentRepository for Store {
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
+
         tx.commit().await.map_err(db_err)
     }
 
@@ -260,6 +264,7 @@ impl DeploymentRepository for Store {
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
+
         if !d.state.active() {
             sqlx::query("DELETE FROM deployment_locks WHERE service_id = $1 AND deployment_id = $2")
                 .bind(d.service_id.to_string())
@@ -268,6 +273,7 @@ impl DeploymentRepository for Store {
                 .await
                 .map_err(db_err)?;
         }
+
         tx.commit().await.map_err(db_err)
     }
 
@@ -396,6 +402,7 @@ impl DeploymentRepository for Store {
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
+
         for s in rows.iter().filter(|s| s.service_id == app) {
             sqlx::query(
                 "INSERT INTO deploy_slots (service_id, server_id, slot, release_number, weight, state, ports, updated_at)
@@ -413,6 +420,7 @@ impl DeploymentRepository for Store {
             .await
             .map_err(db_err)?;
         }
+
         tx.commit().await.map_err(db_err)
     }
 
@@ -438,6 +446,7 @@ impl DeploymentRepository for Store {
 
     async fn list_slots_of(&self, apps: &[ServiceId]) -> DomainResult<Vec<SlotRecord>> {
         let mut out = Vec::new();
+
         for chunk in apps.chunks(200) {
             let marks: Vec<String> = (1..=chunk.len()).map(|i| format!("${i}")).collect();
             let sql = format!(
@@ -445,13 +454,16 @@ impl DeploymentRepository for Store {
                 marks.join(", ")
             );
             let mut q = sqlx::query(&sql);
+
             for a in chunk {
                 q = q.bind(a.to_string());
             }
+
             for r in q.fetch_all(self.pool()).await.map_err(db_err)? {
                 out.push(slot_row(&r)?);
             }
         }
+
         Ok(out)
     }
 
@@ -469,19 +481,23 @@ impl DeploymentRepository for Store {
         )?;
         let mut ports = current;
         let mut idx = ports.len() as i64;
+
         // Lowest free port first; a port taken concurrently fails on UNIQUE
         // and the next one is tried.
         let mut candidate = i64::from(range.0);
+
         while (ports.len() as u32) < count {
             if candidate > i64::from(range.1) {
                 return Err(DomainError::Conflict("no free slot ports left".into()));
             }
+
             let taken = sqlx::query("SELECT 1 AS one FROM deploy_ports WHERE port = $1")
                 .bind(candidate)
                 .fetch_optional(self.pool())
                 .await
                 .map_err(db_err)?
                 .is_some();
+
             if !taken {
                 let r = sqlx::query("INSERT INTO deploy_ports (service_id, slot, idx, port) VALUES ($1, $2, $3, $4)")
                     .bind(app.to_string())
@@ -490,6 +506,7 @@ impl DeploymentRepository for Store {
                     .bind(candidate)
                     .execute(self.pool())
                     .await;
+
                 match r {
                     Ok(_) => {
                         ports.push(u16::try_from(candidate).unwrap_or(0));
@@ -501,9 +518,12 @@ impl DeploymentRepository for Store {
                     },
                 }
             }
+
             candidate += 1;
         }
+
         ports.truncate(count as usize);
+
         Ok(ports)
     }
 

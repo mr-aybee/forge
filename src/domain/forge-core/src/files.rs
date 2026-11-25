@@ -55,26 +55,34 @@ impl FilePath {
         if s.len() > MAX_PATH_BYTES {
             return Err("path is too long".into());
         }
+
         if s.contains('\0') {
             return Err("path contains a NUL byte".into());
         }
+
         let s = if s.is_empty() { "/" } else { s };
         if !s.starts_with('/') {
             return Err("path must start with `/`".into());
         }
+
         let mut components = Vec::new();
+
         for c in s.split('/').filter(|c| !c.is_empty()) {
             if c == "." || c == ".." {
                 return Err("path must not contain `.` or `..`".into());
             }
+
             if c.len() > MAX_COMPONENT_BYTES {
                 return Err("a path component is too long".into());
             }
+
             components.push(c.to_owned());
         }
+
         if components.len() > MAX_DEPTH {
             return Err("path is too deep".into());
         }
+
         Ok(Self { components })
     }
 
@@ -99,6 +107,7 @@ impl FilePath {
         if name.is_empty() || name.contains('/') {
             return Err("invalid file name".into());
         }
+
         Self::parse(&format!("{self}/{name}"))
     }
 
@@ -114,6 +123,7 @@ impl FilePath {
     pub fn append(&self, rel: &FilePath) -> FilePath {
         let mut components = self.components.clone();
         components.extend(rel.components.iter().cloned());
+
         FilePath { components }
     }
 
@@ -122,6 +132,7 @@ impl FilePath {
     pub fn parent(&self) -> FilePath {
         let mut components = self.components.clone();
         components.pop();
+
         FilePath { components }
     }
 
@@ -137,9 +148,11 @@ impl fmt::Display for FilePath {
         if self.components.is_empty() {
             return f.write_str("/");
         }
+
         for c in &self.components {
             write!(f, "/{c}")?;
         }
+
         Ok(())
     }
 }
@@ -259,6 +272,7 @@ impl RootSpec {
         let mut c: Vec<String> = APP_HOMES.iter().map(|s| (*s).to_owned()).collect();
         c.push(environment.to_owned());
         c.push(app.to_owned());
+
         FilePath { components: c }
     }
 
@@ -290,9 +304,11 @@ impl RootSpec {
                 "/srv/forge/apps"
             ));
         }
+
         if in_homes && c.len() == n + 2 && app_slug(&c[n]) && app_slug(&c[n + 1]) {
             return Ok(Self::App { environment: c[n].clone(), app: c[n + 1].clone() });
         }
+
         if in_homes {
             return Err(format!(
                 "`{base}` is inside a native app's folder; approve the app's folder itself ({}/{}/{})",
@@ -301,6 +317,7 @@ impl RootSpec {
                 c.get(n + 1).map_or("<app>", String::as_str)
             ));
         }
+
         Ok(self)
     }
 }
@@ -592,6 +609,7 @@ fn valid_token(s: &str, what: &str) -> Result<(), String> {
     if s.is_empty() || s.len() > 64 || !s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
         return Err(format!("invalid {what}"));
     }
+
     Ok(())
 }
 
@@ -700,6 +718,7 @@ impl FileOp {
     /// Bounds, names and root checks, run by the API and again by the node.
     pub fn validate(&self) -> Result<(), String> {
         self.root().validate()?;
+
         match self {
             Self::List { limit, .. } if *limit == 0 || *limit > MAX_LIST_LIMIT => {
                 return Err(format!("limit must be between 1 and {MAX_LIST_LIMIT}"));
@@ -708,18 +727,21 @@ impl FileOp {
                 if *length == 0 || *length > MAX_READ_BYTES {
                     return Err(format!("length must be between 1 and {MAX_READ_BYTES}"));
                 }
+
                 if version.as_ref().is_some_and(|v| v.len() > 128 || !v.bytes().all(|b| b.is_ascii_graphic())) {
                     return Err("invalid version".into());
                 }
             }
             Self::RevisionRead { length, revision, .. } => {
                 valid_token(revision, "revision")?;
+
                 if *length == 0 || *length > MAX_READ_BYTES {
                     return Err(format!("length must be between 1 and {MAX_READ_BYTES}"));
                 }
             }
             Self::UploadChunk { upload, data_b64, .. } => {
                 valid_token(upload, "upload id")?;
+
                 if data_b64.len() > MAX_CHUNK_BYTES.div_ceil(3) * 4 {
                     return Err("chunk is too large".into());
                 }
@@ -727,9 +749,11 @@ impl FileOp {
             Self::UploadStatus { upload, .. } | Self::UploadAbort { upload, .. } => valid_token(upload, "upload id")?,
             Self::UploadCommit { upload, sha256, overwrite, .. } => {
                 valid_token(upload, "upload id")?;
+
                 if sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
                     return Err("sha256 must be 64 hex digits".into());
                 }
+
                 if let Overwrite::IfVersion { version } = overwrite
                     && (version.is_empty() || version.len() > 128)
                 {
@@ -739,6 +763,7 @@ impl FileOp {
             Self::TrashRestore { id, .. } | Self::TrashPurge { id: Some(id), .. } => valid_token(id, "trash id")?,
             Self::TempRead { id, length, .. } => {
                 valid_token(id, "archive id")?;
+
                 if *length == 0 || *length > MAX_READ_BYTES {
                     return Err(format!("length must be between 1 and {MAX_READ_BYTES}"));
                 }
@@ -751,11 +776,13 @@ impl FileOp {
                 if owner.is_none() && group.is_none() {
                     return Err("give an owner, a group or both".into());
                 }
+
                 let valid = |n: &String| {
                     !n.is_empty()
                         && n.len() <= 64
                         && n.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'$'))
                 };
+
                 if owner.iter().chain(group.iter()).any(|n| !valid(n)) {
                     return Err("invalid user or group name".into());
                 }
@@ -764,9 +791,11 @@ impl FileOp {
                 if sources.is_empty() || sources.len() > BULK_MAX_ITEMS {
                     return Err(format!("choose between 1 and {BULK_MAX_ITEMS} items"));
                 }
+
                 if *format == ArchiveFormat::Tar {
                     return Err("Forge writes .zip or .tar.gz archives".into());
                 }
+
                 if let Some(d) = dest
                     && ArchiveFormat::from_name(d.name().unwrap_or_default()) != Some(*format)
                 {
@@ -777,6 +806,7 @@ impl FileOp {
                 if ArchiveFormat::from_name(archive.name().unwrap_or_default()).is_none() {
                     return Err("Forge extracts .zip, .tar, .tar.gz and .tgz archives".into());
                 }
+
                 if dest.is_root() {
                     return Err("extract into a new folder".into());
                 }
@@ -785,38 +815,47 @@ impl FileOp {
                 if spec.name.is_empty() && spec.content.is_empty() {
                     return Err("give a file name pattern, a content pattern or both".into());
                 }
+
                 if spec.name.len() > 256 || spec.content.len() > 1024 || spec.context > 5 {
                     return Err("search pattern or context too large".into());
                 }
+
                 if spec.include.len() > 32 || spec.exclude.len() > 32 {
                     return Err("too many include or exclude globs".into());
                 }
+
                 if spec.max_file_size == 0 || spec.max_file_size > SEARCH_MAX_FILE_BYTES {
                     return Err(format!("max_file_size must be between 1 and {SEARCH_MAX_FILE_BYTES} bytes"));
                 }
+
                 if spec.max_depth > 64 {
                     return Err("max_depth must be at most 64".into());
                 }
             }
             _ => {}
         }
+
         let changes_entry = matches!(
             self,
             Self::Rename { .. } | Self::Copy { .. } | Self::Delete { .. } | Self::Mkdir { .. } | Self::Extract { .. }
         );
+
         for p in self.paths() {
             if p.is_root() && changes_entry {
                 return Err("cannot change the root itself".into());
             }
+
             if p.name().is_some_and(is_forge_internal) {
                 return Err(format!("names starting with `{UPLOAD_PREFIX}` are reserved"));
             }
         }
+
         if let Self::Rename { from, to, .. } | Self::Copy { from, to, .. } = self
             && to.starts_with(&from.components().iter().map(String::as_str).collect::<Vec<_>>())
         {
             return Err("cannot move or copy a directory into itself".into());
         }
+
         Ok(())
     }
 }
@@ -900,6 +939,7 @@ pub fn is_short_name(name: &str) -> bool {
     if stem.len() > 8 || ext.len() > 3 {
         return false;
     }
+
     stem.rfind('~').is_some_and(|i| i > 0 && i + 1 < stem.len() && stem[i + 1..].bytes().all(|b| b.is_ascii_digit()))
 }
 
@@ -912,6 +952,7 @@ pub fn protected_within(os: NodeOs, path: &FilePath) -> Option<&'static str> {
     if let Some(why) = protected_reason(os, path) {
         return Some(why);
     }
+
     match os {
         NodeOs::Linux => linux_within(path),
         NodeOs::Windows => windows_within(path),
@@ -928,17 +969,21 @@ fn linux_within(path: &FilePath) -> Option<&'static str> {
     if let Some((_, why)) = LINUX_PROTECTED_TREES.iter().find(|(p, _)| is_above(path, p)) {
         return Some(why);
     }
+
     if LINUX_PROTECTED_FILES.iter().any(|p| is_above(path, p)) {
         return Some("password hashes");
     }
+
     // /home and /home/<user> may hold /home/<user>/.ssh.
     let c = path.components();
     if c.len() <= 2 && c.first().is_none_or(|h| h == "home") {
         return Some("SSH credentials");
     }
+
     if is_above(path, &["etc", "ssh", "ssh_host_key"]) {
         return Some("SSH host key");
     }
+
     None
 }
 
@@ -979,18 +1024,23 @@ fn linux_protected(path: &FilePath) -> Option<&'static str> {
     if let Some((_, why)) = LINUX_PROTECTED_TREES.iter().find(|(p, _)| path.starts_with(p)) {
         return Some(why);
     }
+
     if LINUX_PROTECTED_FILES.iter().any(|p| path.components().len() == p.len() && path.starts_with(p)) {
         return Some("password hashes");
     }
+
     let c = path.components();
+
     // /home/<user>/.ssh/...
     if c.len() >= 3 && c[0] == "home" && c[2] == ".ssh" {
         return Some("SSH credentials");
     }
+
     // SSH host private keys (the `.pub` halves stay readable).
     if c.len() == 3 && c[0] == "etc" && c[1] == "ssh" && c[2].starts_with("ssh_host_") && c[2].ends_with("_key") {
         return Some("SSH host key");
     }
+
     None
 }
 
@@ -998,19 +1048,24 @@ fn windows_protected(path: &FilePath) -> Option<&'static str> {
     let c: Vec<String> = path.components().iter().map(|s| s.to_ascii_lowercase()).collect();
     let rest: Vec<&str> = c.iter().skip(1).map(String::as_str).collect();
     let under = |p: &[&str]| rest.len() >= p.len() && rest.iter().zip(p).all(|(a, b)| a == b);
+
     // `OrbynForge\agent` is the agent's state (agent.key, identity, ca.crt).
     if under(&["programdata", "forge"]) || under(&["programdata", "orbynforge"]) {
         return Some("Forge configuration and agent identity");
     }
+
     if under(&["windows", "system32", "config"]) {
         return Some("registry hives and credentials");
     }
+
     if rest.len() == 1 && matches!(rest[0], "pagefile.sys" | "hiberfil.sys" | "swapfile.sys") {
         return Some("system memory file");
     }
+
     if rest.len() >= 3 && rest[0] == "users" && rest[2] == ".ssh" {
         return Some("SSH credentials");
     }
+
     None
 }
 
@@ -1086,9 +1141,11 @@ pub trait FileTransport: Send + Sync + std::fmt::Debug {
         ops: &[FileOp],
     ) -> Vec<Result<serde_json::Value, String>> {
         let mut out = Vec::with_capacity(ops.len());
+
         for op in ops {
             out.push(self.call(server, principal, op).await);
         }
+
         out
     }
 }
@@ -1125,6 +1182,7 @@ impl FileOp {
             | Self::TempRead { root, .. }
             | Self::TempDelete { root, .. } => *root = spec,
         }
+
         self
     }
 }
@@ -1245,9 +1303,11 @@ mod tests {
         assert_eq!(p("").to_string(), "/");
         assert_eq!(p("/etc//nginx/").to_string(), "/etc/nginx");
         assert_eq!(p("/C:/Users").components(), ["C:", "Users"]);
+
         for bad in ["etc", "/etc/../root", "/./x", "/a\0b", &format!("/{}", "a".repeat(256))] {
             assert!(FilePath::parse(bad).is_err(), "{bad:?} accepted");
         }
+
         assert!(FilePath::parse(&"/a".repeat(MAX_DEPTH + 1)).is_err());
         assert_eq!(p("/etc").join("hosts").map(|x| x.to_string()), Ok("/etc/hosts".into()));
         assert!(p("/etc").join("../x").is_err());
@@ -1263,6 +1323,7 @@ mod tests {
         assert!(parse(r#"{"op":"exec","root":{"kind":"node"},"path":"/x"}"#).is_err());
         assert!(parse(r#"{"op":"stat","root":"node","path":"/"}"#).is_err());
         assert!(ok(r#"{"op":"read","root":{"kind":"node"},"path":"/x","length":2000000}"#).is_err());
+
         // Roots.
         assert!(ok(r#"{"op":"stat","root":{"kind":"dir","base":"/srv/app"},"path":"/"}"#).is_ok());
         assert!(ok(r#"{"op":"stat","root":{"kind":"dir","base":"/"},"path":"/"}"#).is_err());
@@ -1274,6 +1335,7 @@ mod tests {
             ))
             .is_ok()
         );
+
         // Mutations.
         assert!(ok(r#"{"op":"delete","root":{"kind":"node"},"path":"/"}"#).is_err());
         assert!(ok(r#"{"op":"mkdir","root":{"kind":"node"},"path":"/tmp/.forge-upload-x"}"#).is_err());
@@ -1288,6 +1350,7 @@ mod tests {
         assert!(ok(&commit.replace("SHA", &"0".repeat(64))).is_ok());
         assert!(ok(r#"{"op":"search","root":{"kind":"node"},"path":"/","spec":{}}"#).is_err());
         assert!(ok(r#"{"op":"search","root":{"kind":"node"},"path":"/","spec":{"name":"*.conf"}}"#).is_ok());
+
         // Search reads are bounded: no unbounded max_file_size or depth.
         let big = r#"{"op":"search","root":{"kind":"node"},"path":"/","spec":{"content":"x","max_file_size":18446744073709551615}}"#;
         assert!(ok(big).is_err());
@@ -1299,6 +1362,7 @@ mod tests {
             ok(r#"{"op":"search","root":{"kind":"node"},"path":"/","spec":{"content":"x","max_depth":1000}}"#).is_err()
         );
         assert!(ok(r#"{"op":"trash_restore","root":{"kind":"node"},"id":"a/b"}"#).is_err());
+
         // Step 6.
         assert!(ok(r#"{"op":"set_permissions","root":{"kind":"node"},"path":"/x","mode":493}"#).is_ok());
         assert!(ok(r#"{"op":"set_permissions","root":{"kind":"node"},"path":"/x","mode":99999}"#).is_err());
@@ -1323,11 +1387,13 @@ mod tests {
         // D-083: app folders become app roots; directories around or inside them are refused.
         let app = RootSpec::Dir { base: p("/srv/forge/apps/staging/api") }.for_linux_apps();
         assert_eq!(app, Ok(RootSpec::App { environment: "staging".into(), app: "api".into() }));
+
         for around in
             ["/srv", "/srv/forge", "/srv/forge/apps", "/srv/forge/apps/staging", "/srv/forge/apps/staging/api/public"]
         {
             assert!(RootSpec::Dir { base: p(around) }.for_linux_apps().is_err(), "{around}");
         }
+
         let other = RootSpec::Dir { base: p("/srv/www") };
         assert_eq!(other.clone().for_linux_apps(), Ok(other));
         let app = RootSpec::App { environment: "staging".into(), app: "api".into() };
@@ -1349,6 +1415,7 @@ mod tests {
     #[test]
     fn protected_paths() {
         let lin = |s: &str| protected_reason(NodeOs::Linux, &p(s)).is_some();
+
         for s in [
             "/proc",
             "/proc/1/environ",
@@ -1363,6 +1430,7 @@ mod tests {
         ] {
             assert!(lin(s), "{s} not protected");
         }
+
         for s in [
             "/",
             "/etc",
@@ -1375,9 +1443,11 @@ mod tests {
         ] {
             assert!(!lin(s), "{s} protected");
         }
+
         let win = |s: &str| protected_reason(NodeOs::Windows, &p(s)).is_some();
         assert!(win("/C:/ProgramData/Forge/agent.toml"));
         assert!(win("/c:/programdata/FORGE"));
+
         // The agent's state directory (forge-agent config.rs default).
         assert!(win("/C:/ProgramData/OrbynForge/agent/agent.key"));
         assert!(win("/c:/PROGRAMDATA/orbynforge/AGENT/identity.json"));
@@ -1392,14 +1462,17 @@ mod tests {
     #[test]
     fn windows_short_names_are_refused() {
         let win = |s: &str| protected_reason(NodeOs::Windows, &p(s)).is_some();
+
         // 8.3 aliases of protected paths, and short names anywhere.
         assert!(win("/C:/PROGRA~3/Forge/agent.toml"));
         assert!(win("/C:/ProgramData/FORGE~1/agent.toml"));
         assert!(win("/C:/Users/bob/DOCUME~1"));
         assert!(win("/C:/x/AGENT~1.TOM"));
+
         for ok in ["/C:/Users/bob/Documents", "/C:/x/~1", "/C:/x/a~b", "/C:/x/notes~1.backup", "/C:/x/very-long~1"] {
             assert!(!win(ok), "{ok} refused");
         }
+
         // Linux names may contain `~1`.
         assert!(protected_reason(NodeOs::Linux, &p("/srv/PROGRA~3")).is_none());
     }
@@ -1407,6 +1480,7 @@ mod tests {
     #[test]
     fn subtrees_holding_protected_paths_are_protected() {
         let lin = |s: &str| protected_within(NodeOs::Linux, &p(s)).is_some();
+
         for s in [
             "/home",
             "/home/alice",
@@ -1421,16 +1495,21 @@ mod tests {
         ] {
             assert!(lin(s), "{s} not protected as a subtree");
         }
+
         for s in ["/home/alice/projects", "/srv/app", "/var/log", "/var/lib/docker", "/etc/nginx", "/opt"] {
             assert!(!lin(s), "{s} protected as a subtree");
         }
+
         let win = |s: &str| protected_within(NodeOs::Windows, &p(s)).is_some();
+
         for s in ["/C:", "/C:/ProgramData", "/c:/windows", "/C:/Windows/System32", "/C:/Users", "/C:/Users/bob"] {
             assert!(win(s), "{s} not protected as a subtree");
         }
+
         for s in ["/C:/Users/bob/Documents", "/C:/Windows/Temp", "/D:/sites"] {
             assert!(!win(s), "{s} protected as a subtree");
         }
+
         // Every protected Windows sample lies below a guarded folder.
         for s in [
             "/C:/ProgramData/Forge/agent.toml",
@@ -1439,11 +1518,13 @@ mod tests {
             "/C:/Users/bob/.ssh/x",
         ] {
             let mut path = p(s);
+
             while !path.is_root() {
                 path = path.parent();
                 assert!(win(&path.to_string()), "{path} (above {s}) not guarded");
             }
         }
+
         let mv = FileOp::Rename { root: RootSpec::Node, from: p("/a"), to: p("/b"), overwrite: false };
         assert_eq!(mv.subtrees().len(), 2);
         assert!(FileOp::Mkdir { root: RootSpec::Node, path: p("/a"), parents: false }.subtrees().is_empty());

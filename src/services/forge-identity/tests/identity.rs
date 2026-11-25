@@ -23,6 +23,7 @@ async fn fx(auto_provision: bool) -> Fx {
     let envelope = Envelope::new(Arc::new(LocalKeyProvider::from_bytes(&[1; 32]).unwrap()));
     let config = IdentityConfig { oidc_auto_provision: auto_provision, ..IdentityConfig::default() };
     let svc = IdentityService::new(store.clone(), store, envelope, clock.clone(), config);
+
     Fx { svc, clock, _dir: dir }
 }
 
@@ -48,6 +49,7 @@ async fn password_login_and_web_session_with_csrf() {
     assert!(IdentityService::verify_csrf(&s, Some(&tokens.csrf_token)));
     assert!(!IdentityService::verify_csrf(&s, Some("forged")));
     assert!(!IdentityService::verify_csrf(&s, None));
+
     // A web cookie cannot be used as a bearer token.
     assert!(f.svc.authenticate(&tokens.session_token, SessionKind::Bearer).await.unwrap().is_none());
 
@@ -98,6 +100,7 @@ fn verifier() -> String {
 async fn web_session(f: &Fx) -> AuthenticatedSession {
     let u = f.svc.create_local_user("e@example.com", "E", PW).await.unwrap();
     let t = f.svc.create_web_session(u.id, true).await.unwrap();
+
     f.svc.authenticate(&t.session_token, SessionKind::Web).await.unwrap().unwrap()
 }
 
@@ -162,6 +165,7 @@ async fn oidc_links_existing_user_by_verified_email() {
     assert!(f.svc.login_oidc(&claims("sso@example.com", false)).await.is_err(), "unverified email refused");
     let linked = f.svc.login_oidc(&claims("sso@example.com", true)).await.unwrap();
     assert_eq!(linked.id, u.id);
+
     // Subsequent logins match by subject even if the email changes.
     let again = f.svc.login_oidc(&claims("changed@example.com", true)).await.unwrap();
     assert_eq!(again.id, u.id);
@@ -189,9 +193,11 @@ async fn username_only_account_signs_in_and_can_add_an_email_later() {
 
     let u = f.svc.update_profile(&u, Some("admin"), Some("Ops@Example.com"), "Operations").await.unwrap();
     assert_eq!(u.email.as_deref(), Some("ops@example.com"));
+
     // Either sign-in name works now.
     assert!(f.svc.login_password("ops@example.com", PW, None).await.is_ok());
     assert!(f.svc.login_password("admin", PW, None).await.is_ok());
+
     // One sign-in name must remain.
     assert!(f.svc.update_profile(&u, Some(""), None, "Operations").await.is_err());
 }
@@ -200,9 +206,11 @@ async fn username_only_account_signs_in_and_can_add_an_email_later() {
 async fn sign_in_names_are_validated_and_unique() {
     let f = fx(false).await;
     assert!(f.svc.create_account(None, None, "x", PW).await.is_err());
+
     for bad in ["ab", "-admin", "ad min", "ad@min", "Ädmin"] {
         assert!(f.svc.create_account(Some(bad), None, "x", PW).await.is_err(), "{bad}");
     }
+
     assert!(f.svc.create_account(None, Some("not-an-email"), "x", PW).await.is_err());
     f.svc.create_account(Some("admin"), Some("a@example.com"), "x", PW).await.unwrap();
     let taken = f.svc.create_account(Some("admin"), None, "x", PW).await;
@@ -261,6 +269,7 @@ async fn refresh_tokens_expire_counted_from_the_sign_in() {
     let redirect = "http://127.0.0.1:49152/callback";
     let code = f.svc.authorize_code(&s, "forge-app", redirect, &challenge, "S256").await.unwrap();
     let mut tokens = f.svc.exchange_code(&code, &verifier(), "forge-app", redirect).await.unwrap();
+
     // Refresh every 20 days: the first one works, but 40 days after the
     // sign-in the 30-day lifetime is over, however recently it was renewed.
     f.clock.advance(Duration::from_secs(20 * 24 * 3600));

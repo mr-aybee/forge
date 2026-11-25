@@ -30,6 +30,7 @@ pub const HEADER_SIGNATURE: &str = "x-forge-signature";
 /// Longest interpolated name or value in a text message, in characters.
 const MAX_TEXT_FIELD: usize = 200;
 
+/// The JSON body sent to a notification channel.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Payload {
     pub schema_version: u32,
@@ -61,6 +62,7 @@ pub struct AfterSilence {
     pub silence_id: SilenceId,
 }
 
+/// An alert event as shown in a notification payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EventView {
     #[serde(rename = "type")]
@@ -74,6 +76,7 @@ pub struct EventView {
     pub at: Timestamp,
 }
 
+/// An alarm as shown in a notification payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AlarmView {
     pub id: AlarmId,
@@ -90,12 +93,14 @@ pub struct AlarmView {
     pub acknowledged_at: Option<Timestamp>,
 }
 
+/// A rule as shown in a notification payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RuleView {
     pub id: AlertRuleId,
     pub revision: i64,
 }
 
+/// A resource as shown in a notification payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResourceView {
     pub kind: String,
@@ -107,6 +112,7 @@ pub struct ResourceView {
     pub server_id: Option<ServerId>,
 }
 
+/// An observation as shown in a notification payload.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ObservationView {
     pub subject: String,
@@ -114,6 +120,7 @@ pub struct ObservationView {
     pub value: serde_json::Value,
 }
 
+/// Console links included in a notification payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Links {
     /// The alarm in the console.
@@ -136,6 +143,7 @@ pub struct Context<'a> {
 pub fn build(cx: Context<'_>) -> Payload {
     let d = cx.delivery;
     let a = cx.alarm;
+
     Payload {
         schema_version: SCHEMA_VERSION,
         delivery_id: d.id,
@@ -206,6 +214,7 @@ pub(crate) fn invisible(c: char) -> bool {
 #[must_use]
 pub fn plain(value: &str) -> String {
     let mut out = String::new();
+
     for c in value.chars().filter(|c| !invisible(*c)).take(MAX_TEXT_FIELD) {
         match c {
             '&' => out.push_str("&amp;"),
@@ -216,6 +225,7 @@ pub fn plain(value: &str) -> String {
             _ => out.push(c),
         }
     }
+
     // The only link in a message is the console's, added by `text`.
     out.replace("://", ":\u{200b}//")
 }
@@ -234,6 +244,7 @@ pub fn text(p: &Payload) -> String {
     let Some(alarm) = &p.alarm else {
         return p.message.clone().unwrap_or_default();
     };
+
     let head = match p.event.kind {
         DeliveryEvent::Fired => "ALERT",
         DeliveryEvent::Reminder => "STILL FIRING",
@@ -241,17 +252,21 @@ pub fn text(p: &Payload) -> String {
         DeliveryEvent::Ended => "ENDED",
         DeliveryEvent::Test => "TEST",
     };
+
     let mut lines = vec![format!("{head} [{}] {}", alarm.severity.as_str(), plain(&alarm.title))];
+
     if let Some(r) = &p.resource {
         let name = r.name.as_deref().unwrap_or(&r.id);
         lines.push(format!("Resource: {} {}", plain(&r.kind), plain(name)));
     }
+
     if let Some(o) = &p.observation {
         match observed(&o.value) {
             Some(v) => lines.push(format!("Observed: {} = {v}", plain(&o.subject))),
             None => lines.push(format!("Observed: {}", plain(&o.subject))),
         }
     }
+
     match p.event.kind {
         DeliveryEvent::Ended => {
             let why = alarm.end_reason.as_deref().unwrap_or("tracking stopped");
@@ -260,12 +275,15 @@ pub fn text(p: &Payload) -> String {
         DeliveryEvent::Reminder if !alarm.acknowledged => lines.push("Nobody has acknowledged this alarm.".to_owned()),
         _ => {}
     }
+
     if p.after_silence.is_some() {
         lines.push("Sent now because a silence that held this back has ended.".to_owned());
     }
+
     if let Some(l) = &p.links {
         lines.push(l.alarm.clone());
     }
+
     lines.join("\n")
 }
 
@@ -286,6 +304,7 @@ pub fn sign(secret: &[u8], timestamp_secs: i64, body: &[u8]) -> String {
     cx.update(timestamp_secs.to_string().as_bytes());
     cx.update(b".");
     cx.update(body);
+
     format!("v1={}", hex::encode(cx.sign().as_ref()))
 }
 
@@ -298,6 +317,7 @@ pub fn verify(secret: &[u8], timestamp_secs: i64, body: &[u8], signature: &str) 
     let mut msg = timestamp_secs.to_string().into_bytes();
     msg.push(b'.');
     msg.extend_from_slice(body);
+
     hmac::verify(&key, &msg, &tag).is_ok()
 }
 
@@ -433,11 +453,13 @@ mod tests {
         assert_eq!(plain("@everyone"), "@\u{200b}everyone");
         assert_eq!(plain("one\ntwo\r\tthree\u{0}"), "onetwothree");
         assert_eq!(plain(&"x".repeat(500)).chars().count(), 200);
+
         // Direction overrides, isolates, zero-width and separator characters go.
         assert_eq!(plain("ok\u{202e}gnp.exe\u{202c}"), "okgnp.exe");
         assert_eq!(plain("a\u{2066}b\u{2069}c\u{200f}d\u{061c}e"), "abcde");
         assert_eq!(plain("one\u{2028}two\u{2029}three"), "onetwothree");
         assert_eq!(plain("ze\u{200b}ro\u{feff}\u{2060}\u{00ad}"), "zero");
+
         // No value becomes a link.
         assert_eq!(plain("see https://evil.example/x"), "see https:\u{200b}//evil.example/x");
         assert_eq!(plain("slack://open"), "slack:\u{200b}//open");
@@ -452,6 +474,7 @@ mod tests {
         let t = text(&p);
         assert!(!t.contains("<!") && !t.contains("<@") && !t.contains("@everyone") && !t.contains("@here"), "{t}");
         assert_eq!(t.lines().count(), 4, "a name cannot add a line: {t}");
+
         // The JSON body keeps everything inside one string.
         let body = serde_json::to_string(&SlackBody { text: t.clone() }).unwrap();
         assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap()["text"], t);
@@ -461,6 +484,7 @@ mod tests {
     fn signatures_bind_the_secret_the_time_and_the_body() {
         let sig = sign(b"s3cret", 1_700_000_000, b"{\"a\":1}");
         assert!(sig.starts_with("v1=") && sig.len() == 3 + 64);
+
         // RFC 4231-style check against an independently computed value.
         assert_eq!(sig, sign(b"s3cret", 1_700_000_000, b"{\"a\":1}"), "deterministic");
         assert!(verify(b"s3cret", 1_700_000_000, b"{\"a\":1}", &sig));
@@ -469,6 +493,7 @@ mod tests {
         assert!(!verify(b"s3cret", 1_700_000_000, b"{\"a\":2}", &sig));
         assert!(!verify(b"s3cret", 1_700_000_000, b"{\"a\":1}", "v1=zz"));
         assert!(!verify(b"s3cret", 1_700_000_000, b"{\"a\":1}", &sig[3..]));
+
         // Known answer: HMAC-SHA256("key", "1.The quick brown fox jumps over the lazy dog").
         let known = sign(b"key", 1, b"The quick brown fox jumps over the lazy dog");
         let key = hmac::Key::new(hmac::HMAC_SHA256, b"key");

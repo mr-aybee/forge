@@ -60,8 +60,10 @@ pub fn entry_hash(e: &AuditEntry) -> String {
         details: canonical::sort_keys(&e.details),
         prev_hash: &e.prev_hash,
     };
+
     // Serializing a struct of strings/ints/Values cannot fail.
     let bytes = serde_json::to_vec(&h).unwrap_or_default();
+
     forge_secrets::crypto::sha256_hex(&bytes)
 }
 
@@ -77,11 +79,13 @@ pub struct AuditLog {
 }
 
 impl AuditLog {
+    /// Creates an audit log that signs entries with `signer`.
     #[must_use]
     pub fn new(repo: Arc<dyn AuditRepository>, signer: Arc<AuditSigner>, clock: Arc<dyn Clock>) -> Self {
         Self { repo, signer, clock, append_lock: Mutex::new(()) }
     }
 
+    /// A verifier for the signatures this log writes.
     #[must_use]
     pub fn verifier(&self) -> AuditVerifier {
         self.signer.verifier()
@@ -90,12 +94,14 @@ impl AuditLog {
     /// Appends one event and returns the persisted entry.
     pub async fn append(&self, event: AuditEvent) -> DomainResult<AuditEntry> {
         let _guard = self.append_lock.lock().await;
+
         for _ in 0..MAX_APPEND_RETRIES {
             let last = self.repo.last_entry().await?;
             let (seq, prev_hash) = match &last {
                 Some(l) => (l.seq + 1, l.hash.clone()),
                 None => (1, GENESIS_HASH.to_owned()),
             };
+
             let mut entry = AuditEntry {
                 seq,
                 id: uuid::Uuid::now_v7().to_string(),
@@ -112,6 +118,7 @@ impl AuditLog {
             };
             entry.hash = entry_hash(&entry);
             entry.signature = self.signer.sign(&entry.hash);
+
             match self.repo.insert_entry(&entry).await {
                 Ok(()) => return Ok(entry),
                 Err(DomainError::Conflict(_)) => {
@@ -120,6 +127,7 @@ impl AuditLog {
                 Err(e) => return Err(e),
             }
         }
+
         Err(DomainError::Internal("audit append contention".into()))
     }
 
@@ -158,11 +166,13 @@ pub async fn verify_chain(repo: &dyn AuditRepository, verifier: &AuditVerifier) 
     let mut expected_prev = GENESIS_HASH.to_owned();
     let mut expected_seq = 1i64;
     let mut checked = 0u64;
+
     loop {
         let page = repo.entries_from(expected_seq, PAGE).await?;
         if page.is_empty() {
             break;
         }
+
         for e in &page {
             let fail = |why: &str| VerifyReport {
                 ok: false,
@@ -170,23 +180,29 @@ pub async fn verify_chain(repo: &dyn AuditRepository, verifier: &AuditVerifier) 
                 head_hash: None,
                 first_invalid: Some((e.seq, why.to_owned())),
             };
+
             if e.seq != expected_seq {
                 return Ok(fail("sequence gap (entry deleted)"));
             }
+
             if e.prev_hash != expected_prev {
                 return Ok(fail("prev_hash does not match previous entry"));
             }
+
             if entry_hash(e) != e.hash {
                 return Ok(fail("content does not match hash (entry modified)"));
             }
+
             if !verifier.verify(&e.hash, &e.signature) {
                 return Ok(fail("invalid signature"));
             }
+
             expected_prev.clone_from(&e.hash);
             expected_seq += 1;
             checked += 1;
         }
     }
+
     Ok(VerifyReport {
         ok: true,
         entries_checked: checked,

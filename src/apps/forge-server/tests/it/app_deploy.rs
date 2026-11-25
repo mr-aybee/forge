@@ -13,12 +13,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use crate::common::*;
 use forge_core::ports::{InstallationRepository, ServiceRepository};
 use forge_proto::messages::{CommandBody, CommandResult, command_body::Command};
 use prost::Message;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 async fn node(h: &Harness, hostname: &str) -> forge_core::ServerId {
     let server = forge_core::model::Server {
@@ -39,6 +40,7 @@ async fn node(h: &Harness, hostname: &str) -> forge_core::ServerId {
         created_at: forge_core::Timestamp(0),
     };
     forge_core::ports::ServerRepository::create_server(&h.app.state.store, &server).await.unwrap();
+
     server.id
 }
 
@@ -63,6 +65,7 @@ async fn container(admin: &Client, name: &str, server: forge_core::ServerId) -> 
     let id = app["id"].as_str().unwrap().to_owned();
     let (s, r) = admin.put(&format!("/api/v1/services/{id}/instances"), json!([{ "server_id": server }])).await;
     assert_eq!(s, StatusCode::OK, "{r}");
+
     id
 }
 
@@ -84,14 +87,17 @@ fn fake_node(h: &Harness, server: forge_core::ServerId, docker: bool) -> FakeNod
     let hub = h.app.state.hub.clone();
     let docker = Arc::new(AtomicBool::new(docker));
     let has_docker = docker.clone();
+
     // The first poll happens here, so the server sees a connected agent at once.
     assert!(hub.take(server, 1).is_empty());
     let task = tokio::spawn(async move {
         let wake = hub.notifier(server);
+
         loop {
             for cmd in hub.take(server, 16) {
                 let body = CommandBody::decode(cmd.body.as_slice()).unwrap();
                 let gone = format!("{} (/var/run/docker.sock: No such file)", forge_catalog::apps::DOCKER_UNAVAILABLE);
+
                 let answer: Result<Value, String> = match body.command {
                     Some(Command::ContainerAction(c)) if c.op == "info" => {
                         if has_docker.load(Ordering::SeqCst) {
@@ -104,6 +110,7 @@ fn fake_node(h: &Harness, server: forge_core::ServerId, docker: bool) -> FakeNod
                         if p.package == "docker" && p.action == "install" {
                             has_docker.store(true, Ordering::SeqCst);
                         }
+
                         Ok(json!({ "output": "forge: done", "state": "running" }))
                     }
                     Some(Command::AppAction(_)) if !has_docker.load(Ordering::SeqCst) => Err(gone),
@@ -114,6 +121,7 @@ fn fake_node(h: &Harness, server: forge_core::ServerId, docker: bool) -> FakeNod
                     Some(Command::AppAction(_)) => Ok(json!({ "state": "active", "logs": null })),
                     _ => Err("unexpected command".into()),
                 };
+
                 let result = match answer {
                     Ok(out) => CommandResult {
                         operation_id: body.operation_id,
@@ -125,11 +133,14 @@ fn fake_node(h: &Harness, server: forge_core::ServerId, docker: bool) -> FakeNod
                         CommandResult { operation_id: body.operation_id, ok: false, error, ..Default::default() }
                     }
                 };
+
                 hub.resolve(server, result);
             }
+
             wake.notified().await;
         }
     });
+
     FakeNode { docker, task }
 }
 
@@ -168,6 +179,7 @@ async fn deploying_a_container_installs_docker_on_a_node_that_has_none() {
         let done = wait_job(&admin, j["id"].as_str().unwrap(), Duration::from_secs(60)).await;
         assert_eq!(done["status"], "succeeded", "{done}");
     }
+
     assert!(fake.docker.load(Ordering::SeqCst));
     let installed = h.app.state.store.list_installations(Some(server)).await.unwrap();
     assert_eq!(
@@ -235,6 +247,7 @@ async fn a_site_takes_targets_without_an_upstreams_list() {
     let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
     let edge = node(&h, "edge-a").await;
     let backend = node(&h, "web-1").await;
+
     // `upstreams` left out: they are resolved from the typed targets.
     let site = json!({
         "name": "shop", "domains": ["shop.example.com"], "edges": [edge],
@@ -252,6 +265,7 @@ async fn a_site_takes_targets_without_an_upstreams_list() {
         admin.post("/api/v1/sites", json!({ "name": "empty", "domains": ["e.example.com"], "edges": [edge] })).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "{e}");
     assert!(e.to_string().contains("at least one upstream"), "{e}");
+
     // An explicit list works as before.
     let (s, created) = admin
         .post(

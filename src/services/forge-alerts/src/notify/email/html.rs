@@ -50,6 +50,7 @@ const FONT: &str = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica
 #[must_use]
 pub fn escape(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
+
     for c in value.chars() {
         match c {
             '&' => out.push_str("&amp;"),
@@ -60,6 +61,7 @@ pub fn escape(value: &str) -> String {
             c => out.push(c),
         }
     }
+
     out
 }
 
@@ -80,6 +82,7 @@ fn severity_colour(s: Severity) -> &'static str {
 /// The banner: its colour and its words.
 fn banner(p: &Payload) -> (&'static str, &'static str) {
     let sev = p.alarm.as_ref().map_or(Severity::Info, |a| a.severity);
+
     match p.event.kind {
         DeliveryEvent::Fired => (severity_colour(sev), "FIRING"),
         DeliveryEvent::Reminder => (severity_colour(sev), "REMINDER \u{b7} STILL FIRING"),
@@ -114,11 +117,13 @@ fn resource_label(p: &Payload) -> String {
     match &p.resource {
         Some(r) => {
             let name = mail_plain(r.name.as_deref().unwrap_or(&r.id));
+
             let kind = match r.kind.as_str() {
                 "server" => "Node".to_owned(),
                 "service" => "Service".to_owned(),
                 k => mail_plain(k),
             };
+
             format!("{kind} {name}")
         }
         None => "The resource".to_owned(),
@@ -129,6 +134,7 @@ fn resource_label(p: &Payload) -> String {
 fn value_text(p: &Payload) -> Option<String> {
     let o = p.observation.as_ref()?;
     let val = observed(&o.value)?;
+
     Some(if o.subject.ends_with("percent") { format!("{val}%") } else { val })
 }
 
@@ -139,6 +145,7 @@ fn explain(p: &Payload, a: &AlarmView) -> (String, &'static [&'static str]) {
     let value = value_text(p);
     let open = span(p.event.at.0 - a.fired_at.0);
     let closed = a.resolved_at.map(|r| span(r.0 - a.fired_at.0));
+
     if p.event.kind == DeliveryEvent::Resolved {
         let took = closed.unwrap_or(open);
         return (
@@ -152,6 +159,7 @@ fn explain(p: &Payload, a: &AlarmView) -> (String, &'static [&'static str]) {
             ],
         );
     }
+
     if p.event.kind == DeliveryEvent::Ended {
         let why = mail_plain(a.end_reason.as_deref().unwrap_or("tracking stopped"));
         return (
@@ -167,8 +175,10 @@ fn explain(p: &Payload, a: &AlarmView) -> (String, &'static [&'static str]) {
             ],
         );
     }
+
     let still = if p.event.kind == DeliveryEvent::Reminder { " still" } else { "" };
     let val = value.as_deref().unwrap_or("unknown");
+
     if subject == "node.agent.status" {
         return (
             format!(
@@ -182,7 +192,9 @@ fn explain(p: &Payload, a: &AlarmView) -> (String, &'static [&'static str]) {
             ],
         );
     }
+
     let metric = |what: &str| format!("{who} is{still} reporting high {what}: {val}. This started {open} ago.");
+
     match subject {
         "node.cpu.percent" => (
             metric("CPU use"),
@@ -312,13 +324,16 @@ fn details(out: &mut String, p: &Payload, a: &AlarmView) {
             severity_colour(a.severity)
         ),
     );
+
     let state = match a.state {
         AlarmState::Firing => "Firing",
         AlarmState::Resolved => "Resolved",
         AlarmState::Ended => "Ended (tracking stopped)",
     };
+
     let ack = if a.acknowledged { " \u{b7} acknowledged" } else { " \u{b7} not acknowledged" };
     row(out, "State", &format!("{state}{}", if a.state == AlarmState::Firing { ack } else { "" }));
+
     if let Some(r) = &p.resource {
         row(
             out,
@@ -329,10 +344,12 @@ fn details(out: &mut String, p: &Payload, a: &AlarmView) {
                 v(&r.kind)
             ),
         );
+
         if let Some(node) = r.server_id.filter(|n| n.to_string() != r.id) {
             row(out, "Node", &v(&node.to_string()));
         }
     }
+
     if let Some(o) = &p.observation {
         let val = value_text(p).map(|x| format!(" = <strong>{}</strong>", escape(&x))).unwrap_or_default();
         row(
@@ -344,6 +361,7 @@ fn details(out: &mut String, p: &Payload, a: &AlarmView) {
             ),
         );
     }
+
     if let Some(rule) = &p.rule {
         row(
             out,
@@ -351,12 +369,14 @@ fn details(out: &mut String, p: &Payload, a: &AlarmView) {
             &format!("{} <span style=\"color:{MUTED};\">(revision {})</span>", v(&rule.id.to_string()), rule.revision),
         );
     }
+
     let now = p.event.at.0;
     row(
         out,
         "Fired at",
         &format!("{} <span style=\"color:{MUTED};\">({} ago)</span>", when(a.fired_at.0), span(now - a.fired_at.0)),
     );
+
     if let Some(at) = a.resolved_at {
         row(
             out,
@@ -364,6 +384,7 @@ fn details(out: &mut String, p: &Payload, a: &AlarmView) {
             &format!("{} <span style=\"color:{MUTED};\">(after {})</span>", when(at.0), span(at.0 - a.fired_at.0)),
         );
     }
+
     out.push_str("</table>");
 }
 
@@ -391,9 +412,11 @@ fn state_banner(out: &mut String, colour: &str, words: &str, note: Option<&str>)
         out,
         "<tr><td style=\"background:{colour};padding:10px 24px;color:#ffffff;font-family:{FONT};font-size:13px;font-weight:700;letter-spacing:1px;\">{words}"
     );
+
     if let Some(n) = note {
         let _ = write!(out, "<span style=\"font-weight:400;letter-spacing:0;\"> \u{b7} {n}</span>");
     }
+
     out.push_str("</td></tr>");
 }
 
@@ -409,6 +432,7 @@ fn button(out: &mut String, href: &str, label: &str) {
 
 fn foot(out: &mut String, p: &Payload, why: Why<'_>, alarm: Option<&AlarmView>) {
     let mut reason = String::from("You get this email because ");
+
     match (why.policy.trim(), why.channel.trim()) {
         ("", "") => reason.push_str("an Orbyn Forge notification channel sends to this address."),
         ("", c) => {
@@ -426,12 +450,15 @@ fn foot(out: &mut String, p: &Payload, why: Why<'_>, alarm: Option<&AlarmView>) 
             );
         }
     }
+
     reason
         .push_str(" To change who gets these messages, edit the policy in <strong>Alerts \u{2192} Policies</strong>.");
+
     let ids = match alarm {
         Some(a) => format!("Alarm {} \u{b7} delivery {}", v(&a.id.to_string()), v(&p.delivery_id.to_string())),
         None => format!("Delivery {}", v(&p.delivery_id.to_string())),
     };
+
     let _ = write!(
         out,
         "<tr><td style=\"padding:16px 24px 20px;border-top:1px solid {LINE};font-family:{FONT};font-size:12px;line-height:18px;color:{MUTED};\">\
@@ -447,6 +474,7 @@ pub fn html(p: &Payload, why: Why<'_>) -> String {
     let mut out = String::with_capacity(8 * 1024);
     let (colour, words) = banner(p);
     let note = p.after_silence.is_some().then_some("sent after a silence ended");
+
     let Some(a) = &p.alarm else {
         let msg = v(p.message.as_deref().unwrap_or("Test notification from Orbyn Forge."));
         head(&mut out, "Test notification from Orbyn Forge", &msg);
@@ -459,8 +487,10 @@ pub fn html(p: &Payload, why: Why<'_>) -> String {
              </td></tr>"
         );
         foot(&mut out, p, why, None);
+
         return out;
     };
+
     let (explanation, checks) = explain(p, a);
     let title = v(&a.title);
     head(&mut out, &title, &escape(&explanation));
@@ -472,28 +502,34 @@ pub fn html(p: &Payload, why: Why<'_>) -> String {
          <p style=\"margin:0 0 16px;font-size:15px;line-height:22px;color:{FG};\">{}</p>",
         escape(&explanation)
     );
+
     if p.event.kind == DeliveryEvent::Reminder && !a.acknowledged {
         let _ = write!(
             out,
             "<p style=\"margin:0 0 16px;padding:10px 12px;background:#fbf1df;border-left:3px solid {AMBER};font-size:14px;color:{FG};\">Nobody has acknowledged this alarm yet.</p>"
         );
     }
+
     if p.after_silence.is_some() {
         let _ = write!(
             out,
             "<p style=\"margin:0 0 16px;padding:10px 12px;background:{PAGE};border-left:3px solid {ACCENT};font-size:14px;color:{FG};\">A silence held this message back. It is sent now because that silence has ended.</p>"
         );
     }
+
     let _ = write!(
         out,
         "<h2 style=\"margin:8px 0 6px;font-size:14px;text-transform:uppercase;letter-spacing:0.6px;color:{MUTED};\">What to check</h2>\
          <ul style=\"margin:0 0 20px;padding-left:20px;font-size:14px;line-height:21px;color:{FG};\">"
     );
+
     for c in checks {
         let _ = write!(out, "<li style=\"margin:0 0 4px;\">{}</li>", escape(c));
     }
+
     out.push_str("</ul>");
     details(&mut out, p, a);
+
     if let Some(link) = console_link(p) {
         button(&mut out, link, "Open alarm in Forge");
         let silences = link.split_once("/alerts?").map(|(base, _)| format!("{base}/alerts?tab=silences"));
@@ -503,13 +539,17 @@ pub fn html(p: &Payload, why: Why<'_>) -> String {
             escape(link),
             escape(link)
         );
+
         if let Some(s) = silences {
             let _ = write!(out, " <a href=\"{}\" style=\"color:{ACCENT};\">See all silences</a>.", escape(&s));
         }
+
         out.push_str("</p>");
     }
+
     out.push_str("</td></tr>");
     foot(&mut out, p, why, Some(a));
+
     out
 }
 

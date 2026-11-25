@@ -50,9 +50,11 @@ impl Receiver {
 impl Transport for Receiver {
     async fn send(&self, request: &Outbound) -> SendOutcome {
         self.seen.lock().unwrap().push(request.clone());
+
         if self.hung.lock().unwrap().as_deref().is_some_and(|h| request.url.path().contains(h)) {
             return SendOutcome::Failed(FailureClass::Timeout);
         }
+
         let mut a = self.answers.lock().unwrap();
         if a.is_empty() { SendOutcome::Status(204) } else { a.remove(0) }
     }
@@ -120,6 +122,7 @@ impl ChannelSecrets for Secrets {
         if *self.gone.lock().unwrap() || item != self.item || workspace != self.workspace {
             return Err(DomainError::NotFound("vault item".into()));
         }
+
         Ok(if *self.short.lock().unwrap() { b"fifteen-bytes-x".to_vec() } else { SECRET.to_vec() })
     }
 }
@@ -148,6 +151,7 @@ impl Access {
 impl forge_core::ports::Authorizer for Access {
     async fn authorize(&self, request: &forge_core::AccessRequest) -> DomainResult<()> {
         let Principal::User(u) = &request.principal;
+
         if request.action == forge_core::Action::AlertView && self.0.lock().unwrap().contains(u) {
             Ok(())
         } else {
@@ -211,6 +215,7 @@ async fn env() -> Env {
             resolver: store.clone(),
         },
     };
+
     Env { store, access, clock, receiver, mailer, secrets, n, ws, who: Principal::User(UserId::new()), _dir: dir }
 }
 
@@ -283,6 +288,7 @@ impl Env {
             previous: None,
         };
         self.store.open_alarm(&a, &self.event(&a, "fired")).await.unwrap();
+
         a
     }
 
@@ -298,12 +304,14 @@ impl Env {
     async fn deliveries(&self) -> Vec<Delivery> {
         let mut all = self.store.list_deliveries(&DeliveryFilter::default(), 200).await.unwrap();
         all.reverse();
+
         all
     }
 
     async fn only(&self) -> Delivery {
         let mut all = self.deliveries().await;
         assert_eq!(all.len(), 1, "{all:?}");
+
         all.remove(0)
     }
 }
@@ -343,6 +351,7 @@ async fn a_fired_alarm_sends_one_signed_message_per_channel() {
     let at: i64 = header(r, payload::HEADER_TIMESTAMP).unwrap().parse().unwrap();
     assert_eq!(at, e.now().0 / 1000);
     assert!(payload::verify(SECRET, at, &r.body, header(r, payload::HEADER_SIGNATURE).unwrap()));
+
     // Nothing of the secret or the URL's token travels in the body.
     let text = String::from_utf8_lossy(&r.body);
     assert!(!text.contains("signing-secret") && !text.contains("t0p"), "{text}");
@@ -373,6 +382,7 @@ async fn planning_and_dispatching_again_never_sends_twice() {
         assert_eq!(e.n.plan().await.unwrap(), PlanReport::default());
         assert_eq!(e.n.dispatch().await.unwrap(), DispatchReport::default());
     }
+
     let copy = Notifier::new_delivery(&a, DeliveryEvent::Fired, 0, &p, &c, e.now());
     assert_eq!(e.store.plan_transition(&transition, std::slice::from_ref(&copy), e.now()).await.unwrap(), 0);
     assert_eq!(e.store.add_deliveries(std::slice::from_ref(&copy)).await.unwrap(), 0, "the key is taken");
@@ -403,6 +413,7 @@ async fn a_failing_receiver_is_retried_with_backoff_then_the_delivery_fails_and_
     assert_eq!((d.status, d.attempts, d.last_http_status), (DeliveryStatus::Pending, 1, Some(503)));
     let wait = d.next_attempt_at.0 - e.now().0;
     assert!((15 * SEC..=30 * SEC).contains(&wait), "first retry after 15 to 30 s, got {wait} ms");
+
     // Not due yet: nothing is sent.
     e.advance(wait - 1);
     assert_eq!(e.n.dispatch().await.unwrap(), DispatchReport::default());
@@ -455,9 +466,11 @@ async fn refusals_that_a_retry_cannot_fix_fail_at_once() {
             (DeliveryStatus::Failed, 1, Some(class), status)
         );
     }
+
     for s in [408, 425, 429, 500, 502, 503, 599] {
         assert!(retryable_status(s), "{s}");
     }
+
     for s in [300, 301, 400, 401, 403, 404, 410, 422] {
         assert!(!retryable_status(s), "{s}");
     }
@@ -528,12 +541,15 @@ async fn an_alarm_that_recovers_before_its_message_left_sends_neither() {
     e.receiver.script(&[SendOutcome::Status(503)]);
     e.n.plan().await.unwrap();
     assert_eq!(e.n.dispatch().await.unwrap().retried, 1);
+
     // Recovered while the firing message waits for its retry.
     e.resolve(&a).await;
     e.n.plan().await.unwrap();
+
     // The recovery waits for the firing message's fate…
     assert_eq!(e.n.dispatch().await.unwrap().postponed, 1);
     e.advance(MIN);
+
     // …the stale firing message is dropped, and with it the recovery: in
     // the same pass when the recovery is looked at second, in the next one
     // when it is looked at first (deliveries are worked on concurrently).
@@ -640,6 +656,7 @@ async fn policies_choose_by_severity_rule_scope_and_event() {
         e.n.plan().await.unwrap(),
         PlanReport { transitions: 1, deliveries: 0, reminders: 0, ..PlanReport::default() }
     );
+
     // …and speaks when it resolves, with no firing message to wait for.
     e.resolve(&a).await;
     assert_eq!(e.n.plan().await.unwrap().deliveries, 1);
@@ -692,11 +709,13 @@ async fn an_attempt_that_never_reports_back_still_counts() {
     e.fire(Severity::Major).await;
     e.n.plan().await.unwrap();
     let d = e.only().await;
+
     // Three workers take the delivery and die before recording anything.
     for _ in 0..3 {
         assert!(e.store.claim_delivery(d.id, e.now(), Timestamp(e.now().0 + 60 * SEC)).await.unwrap());
         e.advance(61 * SEC);
     }
+
     // All attempts are used up: the delivery fails without another send.
     assert_eq!(e.n.dispatch().await.unwrap().failed, 1);
     let d = e.only().await;
@@ -715,6 +734,7 @@ async fn channels_are_validated_and_keep_their_url_sealed() {
         secret_item: None,
         email: None,
     };
+
     for bad in [
         "http://hooks.example.com/x",
         "https://169.254.169.254/latest/meta-data/",
@@ -729,6 +749,7 @@ async fn channels_are_validated_and_keep_their_url_sealed() {
         assert!(matches!(err, DomainError::Invalid(_)), "{bad}: {err}");
         assert!(!err.to_string().contains("pw@"), "the refusal does not echo the URL");
     }
+
     let mut no_url = input("x");
     no_url.url = None;
     assert!(matches!(e.n.create_channel(e.ws, no_url, e.who.clone()).await, Err(DomainError::Invalid(_))));
@@ -749,6 +770,7 @@ async fn channels_are_validated_and_keep_their_url_sealed() {
     assert_eq!(c.target, "https://hooks.example.com");
     let json = serde_json::to_string(&c).unwrap();
     assert!(!json.contains("t0p") && !json.contains("/in/ops"), "{json}");
+
     // A channel a policy uses cannot be deleted from under it.
     let p = e.policy(&[&c]).await;
     assert!(matches!(e.n.delete_channel(c.id).await, Err(DomainError::Conflict(_))));
@@ -767,6 +789,7 @@ async fn policies_are_validated_against_their_workspace() {
         f(&mut p);
         p
     };
+
     for bad in [
         check(&|p| p.name = String::new()),
         check(&|p| p.events.clear()),
@@ -785,11 +808,13 @@ async fn policies_are_validated_against_their_workspace() {
         let err = e.n.create_policy(e.ws, bad.clone(), e.who.clone()).await.unwrap_err();
         assert!(matches!(err, DomainError::Invalid(_)), "{bad:?}: {err}");
     }
+
     // A channel of another workspace is not a channel of this one.
     assert!(matches!(
         e.n.create_policy(WorkspaceId::new(), ok.clone(), e.who.clone()).await,
         Err(DomainError::Invalid(_))
     ));
+
     // A rule of this workspace is accepted; duplicates collapse.
     let rule = AlertRule {
         id: AlertRuleId::new(),
@@ -906,9 +931,11 @@ async fn old_final_deliveries_are_pruned() {
 #[test]
 fn retry_waits_grow_and_stay_within_the_backoff() {
     let retry = Backoff::new(Duration::from_secs(30), Duration::from_secs(900));
+
     for _ in 0..50 {
         let id = DeliveryId::new();
         let mut last = Duration::ZERO;
+
         for attempts in 1..=8 {
             let d = retry_delay(retry, attempts, id);
             let ceiling = retry.ceiling(attempts - 1);
@@ -916,6 +943,7 @@ fn retry_waits_grow_and_stay_within_the_backoff() {
             assert!(d >= last, "never shorter than the wait before");
             last = d;
         }
+
         assert!(last <= Duration::from_secs(900));
         assert_eq!(retry_delay(retry, 3, id), retry_delay(retry, 3, id), "predictable for one delivery");
     }
@@ -974,6 +1002,7 @@ impl AlertRepository for Unreadable {
         if self.bad.lock().unwrap().contains(&id) {
             return Err(DomainError::Internal("column severity: unknown variant".into()));
         }
+
         self.inner.get_alarm(id).await
     }
     async fn list_alarms(&self, filter: &AlarmFilter, limit: u32) -> DomainResult<Vec<Alarm>> {
@@ -1026,6 +1055,7 @@ async fn an_unreadable_alarm_is_skipped_then_given_up_and_never_blocks_the_other
         let r = e.n.plan().await.unwrap();
         assert_eq!((r.failed, r.abandoned), (1, 0), "pass {pass}");
     }
+
     let r = e.n.plan().await.unwrap();
     assert_eq!((r.failed, r.abandoned), (1, 1));
     assert!(e.store.unplanned_transitions(10).await.unwrap().is_empty(), "out of the queue");
@@ -1048,10 +1078,13 @@ async fn a_hung_receiver_costs_one_request_a_pass_and_never_delays_another_chann
 
     // Sixty alarms wait on the hung channel, more than a batch holds.
     let p = e.policy(&[&hung]).await;
+
     for _ in 0..60 {
         e.fire(Severity::Major).await;
     }
+
     assert_eq!(e.n.plan().await.unwrap().deliveries, 60);
+
     // One alarm, fired last, goes to the healthy channel.
     let mut only_healthy = e.policy_input(&[&healthy]);
     only_healthy.name = p.name.clone();
@@ -1069,11 +1102,14 @@ async fn a_hung_receiver_costs_one_request_a_pass_and_never_delays_another_chann
     // Second timeout in a row: the channel is left alone for a minute.
     assert_eq!(e.n.dispatch().await.unwrap().retried, 1);
     assert_eq!(e.receiver.count_to("/in/hung"), 2);
+
     for _ in 0..3 {
         assert_eq!(e.n.dispatch().await.unwrap(), DispatchReport::default());
         e.advance(15 * SEC);
     }
+
     assert_eq!(e.receiver.count_to("/in/hung"), 2, "paused");
+
     // Meanwhile the healthy channel is served at once.
     e.fire(Severity::Major).await;
     e.n.plan().await.unwrap();
@@ -1115,6 +1151,7 @@ async fn a_signing_secret_shorter_than_sixteen_bytes_is_refused_at_save_and_at_s
     let err = e.n.create_channel(e.ws, input(Some("https://hooks.example.com/x")), e.who.clone()).await.unwrap_err();
     assert!(matches!(&err, DomainError::Invalid(m) if m.contains("16 bytes")), "{err}");
     assert!(matches!(e.n.update_channel(c.id, input(None)).await, Err(DomainError::Invalid(_))));
+
     // An item that does not exist is refused the same way.
     let mut ghost = input(Some("https://hooks.example.com/x"));
     ghost.secret_item = Some(VaultItemId::new());

@@ -7,11 +7,12 @@
 
 use std::time::Duration;
 
-use crate::common::*;
 use forge_agent::enroll::{HostFacts, enroll};
 use forge_agent::{Agent, AgentConfig, StatePaths};
 use reqwest::StatusCode;
 use serde_json::json;
+
+use crate::common::*;
 
 struct Enrolled {
     server_id: String,
@@ -31,14 +32,17 @@ async fn enroll_and_run(h: &Harness, admin: &Client, hostname: &str) -> Enrolled
     let (stop, rx) = tokio::sync::watch::channel(false);
     tokio::spawn(agent.run(rx));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+
     loop {
         let (_, s) = admin.get(&format!("/api/v1/servers/{}", id.server_id)).await;
         if s["status"] == "online" {
             break;
         }
+
         assert!(tokio::time::Instant::now() < deadline, "agent never came online");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+
     Enrolled { server_id: id.server_id, _stop: stop, _dir: dir }
 }
 
@@ -173,6 +177,7 @@ async fn stacks_plan_check_revise_and_deploy_per_node() {
     assert_eq!(jobs[0]["payload"]["server_id"], b.server_id.as_str());
     assert_eq!(jobs[0]["payload"]["revision"], 2);
     assert!(!jobs[0].to_string().contains("hunter2"), "no secrets in job payloads");
+
     // The node is not Linux with Docker here: the job fails and says why.
     let done = wait_job(&admin, jobs[0]["id"].as_str().unwrap(), Duration::from_secs(30)).await;
     assert_eq!(done["status"], "failed", "{done}");
@@ -181,6 +186,7 @@ async fn stacks_plan_check_revise_and_deploy_per_node() {
         got["nodes"].as_array().unwrap().iter().find(|n| n["server_id"] == b.server_id.as_str()).unwrap().clone();
     assert_eq!(node["status"], "failed", "{got}");
     assert!(node["last_error"].as_str().is_some_and(|e| !e.is_empty()));
+
     // A rollback names an older revision; unknown services are refused.
     let (s, jobs) = admin.post(&format!("/api/v1/stacks/{id}/deploy"), json!({ "revision": 1 })).await;
     assert_eq!(s, StatusCode::ACCEPTED, "{jobs}");
@@ -259,6 +265,7 @@ async fn stacks_plan_check_revise_and_deploy_per_node() {
     assert_eq!(s, StatusCode::FORBIDDEN);
 
     let actions = audit_actions(&admin).await;
+
     for a in ["stack.create", "stack.update", "stack.deploy"] {
         assert!(actions.iter().any(|x| x == a), "{a} missing in {actions:?}");
     }
@@ -292,6 +299,7 @@ async fn stack_reads_never_show_env_values_and_preview_needs_the_node() {
     let secrets = ["Sup3r-root-pw", "tag-s3cr3t", "hidden-s3cr3t-dir"];
     let clean = |v: &serde_json::Value| secrets.iter().all(|s| !v.to_string().contains(s));
     assert!(clean(&created), "{created}");
+
     // The bind outside approved roots is a finding, named by its variable.
     assert_eq!(created["preview"]["privileged"], true, "{created}");
     let auditor =

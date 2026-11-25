@@ -230,6 +230,7 @@ mod tests {
         for k in TunnelTargetKind::ALL {
             assert_eq!(k.as_str().parse::<TunnelTargetKind>(), Ok(k));
         }
+
         assert!("vpn".parse::<TunnelTargetKind>().is_err());
         assert!(!TunnelTargetKind::Raw.grantable());
         assert!(TunnelTargetKind::Ssh.grantable());

@@ -102,6 +102,7 @@ async fn exchange(conn: &mut Conn, req: &Request, blob: &[u8]) -> Result<Reply, 
     forge_analytics_proto::write_message(conn, req, blob).await.map_err(|_| CallError::Down)?;
     let (resp, _): (Response, _) =
         forge_analytics_proto::read_message(conn, RESPONSE_LIMITS).await.map_err(|_| CallError::Down)?;
+
     Ok(resp?)
 }
 
@@ -174,6 +175,7 @@ impl WorkerClient {
         if !self.enabled {
             return Err(CallError::Off);
         }
+
         self.link.read().unwrap_or_else(PoisonError::into_inner).clone().ok_or(CallError::Down)
     }
 
@@ -189,7 +191,9 @@ impl WorkerClient {
             Some(c) => c,
             None => open(&link).await?,
         };
+
         let reply = tokio::time::timeout(wait, exchange(&mut conn, req, blob)).await.map_err(|_| CallError::Timeout)?;
+
         // Only a connection that completed an exchange goes back, and only
         // to the worker it was opened for.
         if reply.is_ok() || matches!(reply, Err(CallError::Worker(_))) {
@@ -198,6 +202,7 @@ impl WorkerClient {
                 link.idle.lock().unwrap_or_else(PoisonError::into_inner).push(conn);
             }
         }
+
         reply
     }
 
@@ -212,6 +217,7 @@ impl WorkerClient {
                 _ => Err(CallError::Unexpected),
             }
         };
+
         tokio::time::timeout(wait, fut).await.map_err(|_| CallError::Timeout)?
     }
 

@@ -31,6 +31,7 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
 #[must_use]
 pub fn encode(s: &str, encode_slash: bool) -> String {
     let mut out = String::with_capacity(s.len());
+
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') || (b == b'/' && !encode_slash) {
             out.push(char::from(b));
@@ -38,6 +39,7 @@ pub fn encode(s: &str, encode_slash: bool) -> String {
             out.push_str(&format!("%{b:02X}"));
         }
     }
+
     out
 }
 
@@ -46,6 +48,7 @@ pub fn encode(s: &str, encode_slash: bool) -> String {
 pub fn canonical_query(pairs: &[(&str, &str)]) -> String {
     let mut enc: Vec<(String, String)> = pairs.iter().map(|(k, v)| (encode(k, true), encode(v, true))).collect();
     enc.sort();
+
     enc.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("&")
 }
 
@@ -54,6 +57,7 @@ fn amz_dates(t: SystemTime) -> (String, String) {
     let secs = t.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or_default();
     let days = i64::try_from(secs / 86_400).unwrap_or_default();
     let rem = secs % 86_400;
+
     // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
@@ -66,12 +70,14 @@ fn amz_dates(t: SystemTime) -> (String, String) {
     let y = yoe + era * 400 + i64::from(m <= 2);
     let date = format!("{y:04}{m:02}{d:02}");
     let stamp = format!("{date}T{:02}{:02}{:02}Z", rem / 3600, (rem % 3600) / 60, rem % 60);
+
     (stamp, date)
 }
 
 /// The `Host` header value reqwest will send for this URL.
 fn host(url: &Url) -> String {
     let h = url.host_str().unwrap_or_default();
+
     match url.port() {
         Some(p) => format!("{h}:{p}"),
         None => h.to_owned(),
@@ -106,6 +112,7 @@ pub fn sign(
     let k_service = hmac_sha256(&k_region, b"s3");
     let k_signing = hmac_sha256(&k_service, b"aws4_request");
     let signature = hex::encode(hmac_sha256(&k_signing, to_sign.as_bytes()));
+
     vec![
         ("x-amz-date", stamp),
         ("x-amz-content-sha256", req.payload_hash.to_owned()),
@@ -143,6 +150,7 @@ mod tests {
         let k_region = hmac_sha256(&k_date, b"us-east-1");
         let k_service = hmac_sha256(&k_region, b"s3");
         let k_signing = hmac_sha256(&k_service, b"aws4_request");
+
         // GET /?lifecycle example: known string to sign and signature.
         let to_sign = "AWS4-HMAC-SHA256\n20130524T000000Z\n20130524/us-east-1/s3/aws4_request\n9766c798316ff2757b517bc739a67f6213b4ab36dd5da2f94eaebf79c77395ca";
         assert_eq!(

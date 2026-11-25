@@ -71,6 +71,7 @@ impl ExecStreams {
         let session = hex::encode(forge_secrets::crypto::random_bytes::<16>());
         let token = hex::encode(forge_secrets::crypto::random_bytes::<32>());
         let (tx, rx) = oneshot::channel();
+
         if let Ok(mut m) = self.inner.lock() {
             m.retain(|_, p| now.0 - p.created_ms < PENDING_MS);
             m.insert(
@@ -83,6 +84,7 @@ impl ExecStreams {
                 },
             );
         }
+
         (session, token, rx)
     }
 
@@ -100,6 +102,7 @@ impl ExecStreams {
         let hash = forge_secrets::crypto::sha256_hex(token.as_bytes());
         let ok = from == Some(p.server_id)
             && forge_secrets::crypto::constant_time_eq(hash.as_bytes(), p.token_hash.as_bytes());
+
         ok.then_some(p.tx)
     }
 }
@@ -116,15 +119,20 @@ pub(crate) async fn hub_stream(
         Ok(s) => Some(s.id),
         Err(r) => return *r,
     };
+
     let token = headers.get(TOKEN_HEADER).and_then(|v| v.to_str().ok()).unwrap_or_default();
+
     let Some(tx) = state.exec_streams.accept(&session, from, token) else {
         return StatusCode::FORBIDDEN.into_response();
     };
+
     let (to_node, mut rx) = mpsc::channel::<Bytes>(QUEUE);
     if tx.send(NodeStream { from_node: body, to_node }).is_err() {
         return StatusCode::GONE.into_response();
     }
+
     let stream = futures::stream::poll_fn(move |cx| rx.poll_recv(cx).map(|o| o.map(Ok::<Bytes, Infallible>)));
+
     Response::new(Body::from_stream(stream))
 }
 
@@ -166,6 +174,7 @@ impl NodeShellReader {
                     return None;
                 }
             }
+
             match self.body.next().await {
                 Some(Ok(b)) => self.dec.push(&b),
                 _ => return None,
@@ -228,6 +237,7 @@ impl ShellWriter for NodeShellWriter {
     async fn resize(&self, size: TermSize) -> DomainResult<()> {
         let s = size.clamped();
         let (cols, rows) = (u16::try_from(s.cols).unwrap_or(u16::MAX), u16::try_from(s.rows).unwrap_or(u16::MAX));
+
         self.send(Frame::Resize { cols, rows }.encode()).await
     }
 
@@ -297,9 +307,11 @@ pub async fn open(state: &AppState, r: &OpenRequest) -> Result<NodeShell, OpenEr
         state.exec_streams.forget(&session);
         return Err(OpenError::Offline);
     }
+
     let open_wait = Duration::from_secs(u64::from(state.config.container_shell_open_secs));
     let deadline = tokio::time::Instant::now() + open_wait;
     let mut node_rx = node_rx;
+
     // The node dials back (with `Ready` or the error), or reports why it
     // could not (a refused command, a stream it could not open). An agent
     // that does not know the command does neither.
@@ -313,13 +325,16 @@ pub async fn open(state: &AppState, r: &OpenRequest) -> Result<NodeShell, OpenEr
             _ => tokio::time::timeout_at(deadline, node_rx).await.ok().and_then(Result::ok),
         },
     };
+
     let Some(node) = node else {
         state.exec_streams.forget(&session);
         return Err(OpenError::NoAnswer);
     };
+
     let end = Arc::new(Mutex::new(None));
     let mut reader = NodeShellReader { body: node.from_node.into_data_stream(), dec: Decoder::new(), end: end.clone() };
     let writer = NodeShellWriter { tx: Mutex::new(Some(node.to_node)) };
+
     match tokio::time::timeout_at(deadline, reader.frame()).await {
         Ok(Some(Frame::Ready)) => Ok(NodeShell { reader, writer, end }),
         Ok(Some(Frame::Error(m))) => Err(OpenError::Node(m)),
@@ -353,6 +368,7 @@ mod tests {
         let (id, token, _rx) = s.expect(node, Timestamp(1_000));
         assert!(s.accept(&id, Some(node), &token).is_some());
         assert!(s.accept(&id, Some(node), &token).is_none(), "single use");
+
         // Expired entries are swept by the next expect.
         let (old, token, _rx) = s.expect(node, Timestamp(1_000));
         let _ = s.expect(node, Timestamp(1_000 + PENDING_MS));
@@ -365,6 +381,7 @@ mod tests {
         wire.extend(Frame::Data(Vec::new()).encode());
         wire.extend(Frame::Resize { cols: 1, rows: 1 }.encode());
         wire.extend(Frame::Exit(3).encode());
+
         // Split mid-frame.
         let parts: Vec<Result<Bytes, Infallible>> =
             vec![Ok(Bytes::copy_from_slice(&wire[..3])), Ok(Bytes::copy_from_slice(&wire[3..]))];
@@ -385,9 +402,11 @@ mod tests {
         w.close().await;
         assert!(w.write(b"x").await.is_err(), "closed");
         let mut dec = Decoder::new();
+
         while let Some(b) = rx.recv().await {
             dec.push(&b);
         }
+
         assert_eq!(dec.next_frame().unwrap(), Some(Frame::Data(b"ls\r".to_vec())));
         assert_eq!(dec.next_frame().unwrap(), Some(Frame::Resize { cols: 100, rows: 40 }));
     }

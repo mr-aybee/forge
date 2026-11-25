@@ -1,9 +1,10 @@
 //! Server settings: the runtime public address (D-120).
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use reqwest::StatusCode;
 use serde_json::json;
+
+use crate::common::*;
 
 /// Platform admins set it with MFA; it is validated, audited with the old
 /// and new value, and the generic settings editor cannot bypass it. Others
@@ -23,11 +24,13 @@ async fn the_public_address_is_a_validated_audited_platform_setting() {
     // Without MFA: refused and audited.
     let (s, e) = admin.put("/api/v1/server/public-address", json!({ "value": "https://forge.example.com" })).await;
     assert_eq!((s, e["title"].as_str()), (StatusCode::FORBIDDEN, Some("step_up_required")), "{e}");
+
     // The generic editor refuses `server.` keys.
     let (s, _) = admin.put("/api/v1/settings/server.public_address", json!({ "value": "https://evil.test" })).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
 
     step_up(&mut admin).await;
+
     for bad in [
         "forge.example.com",
         "ftp://forge.example.com",
@@ -39,6 +42,7 @@ async fn the_public_address_is_a_validated_audited_platform_setting() {
         let (s, body) = admin.put("/api/v1/server/public-address", json!({ "value": bad })).await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{bad:?}: {body}");
     }
+
     let (s, v) = admin.put("/api/v1/server/public-address", json!({ "value": "https://Forge.Example.com/" })).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!((v["effective"].as_str(), v["source"].as_str()), (Some("https://forge.example.com"), Some("setting")));

@@ -1,14 +1,16 @@
 //! Audit API: server-side filters, cursor pages, distinct actions and authorization.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 use reqwest::StatusCode;
 use serde_json::json;
+
+use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 
 #[tokio::test]
 async fn audit_pages_filter_and_list_actions() {
     let h = start().await;
     let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+
     // Create some mutations so the log has a few kinds of action.
     for i in 0..5 {
         let (s, c) = admin.post("/api/v1/clusters", json!({ "name": format!("c{i}"), "description": "" })).await;
@@ -33,6 +35,7 @@ async fn audit_pages_filter_and_list_actions() {
     assert!(total >= 5);
     let mut seen: Vec<i64> = Vec::new();
     let mut page = first;
+
     loop {
         seen.extend(page["entries"].as_array().unwrap().iter().map(|e| e["seq"].as_i64().unwrap()));
         let Some(c) = page["next_cursor"].as_i64() else { break };
@@ -41,6 +44,7 @@ async fn audit_pages_filter_and_list_actions() {
         assert!(p.get("total").is_none(), "total only on request");
         page = p;
     }
+
     assert!(seen.windows(2).all(|w| w[0] > w[1]), "strictly newest first: {seen:?}");
     assert!(seen.len() as i64 >= total);
 
@@ -100,10 +104,12 @@ async fn audit_pages_filter_and_list_actions() {
 
     // Someone without audit access is refused on every endpoint.
     let op = user_with_role(&h, &admin, "op@example.com", "operator", "platform:root").await;
+
     for path in ["/api/v1/audit", "/api/v1/audit/page", "/api/v1/audit/actions", "/api/v1/audit/histogram"] {
         let (s, _) = op.get(path).await;
         assert_eq!(s, StatusCode::FORBIDDEN, "{path}");
     }
+
     let auditor = user_with_role(&h, &admin, "aud@example.com", "auditor", "platform:root").await;
     let (s, _) = auditor.get("/api/v1/audit/actions").await;
     assert_eq!(s, StatusCode::OK);

@@ -60,6 +60,7 @@ pub fn refusal_code(r: &HelperResponse) -> Option<RefusalCode> {
     if r.ok {
         return None;
     }
+
     r.data.as_ref().and_then(|d| d.get("code")).and_then(Value::as_str).and_then(RefusalCode::parse)
 }
 
@@ -104,15 +105,18 @@ impl CommandExecutor for LocalExecutor {
         let Command::AgentUpdate(_) = cmd else {
             return self.execute(cmd, signed).await.map_err(CommandError::from);
         };
+
         if !cfg!(target_os = "linux") {
             return Err(CommandError::refused(
                 RefusalCode::Unsupported,
                 "self-update is available for Linux nodes; reinstall the agent instead",
             ));
         }
+
         let req = HelperRequest::from_command(cmd)?.ok_or("this command needs no helper")?;
         let r = crate::helper::call_signed(&req, signed, timeout(&req)).await;
         let code = refusal_code(&r);
+
         result(cmd, r).map_err(|message| CommandError { message, code })
     }
 
@@ -181,12 +185,14 @@ impl CommandExecutor for LocalExecutor {
                         ));
                     }
                 }
+
                 crate::health::apply(&a.spec_json)
             }
             _ => {
                 // Never forward anything the helper would refuse.
                 let req = HelperRequest::from_command(cmd)?.ok_or("this command needs no helper")?;
                 let r = crate::helper::call_signed(&req, signed, timeout(&req)).await;
+
                 // Default health checks follow what is deployed (D-085).
                 if let HelperRequest::App { action, spec, .. } = &req
                     && r.ok
@@ -211,6 +217,7 @@ async fn login_accounts() -> Vec<String> {
     if !cfg!(unix) {
         return Vec::new();
     }
+
     let r = crate::helper::call(&HelperRequest::LoginAccounts {}, Duration::from_secs(10)).await;
     match r.data.and_then(|d| serde_json::from_value::<Vec<String>>(d).ok()) {
         Some(list) if r.ok => list,
@@ -228,6 +235,7 @@ async fn helper_capabilities() -> (crate::helper::HelperCapabilities, Option<boo
     if !cfg!(target_os = "linux") {
         return (crate::helper::HelperCapabilities::default(), None);
     }
+
     let r = crate::helper::call(&HelperRequest::Capabilities {}, Duration::from_secs(10)).await;
     let caps = match r.data.filter(|_| r.ok).map(serde_json::from_value::<crate::helper::HelperCapabilities>) {
         Some(Ok(c)) => c,
@@ -238,12 +246,14 @@ async fn helper_capabilities() -> (crate::helper::HelperCapabilities, Option<boo
         // No helper, or one that refused: nothing is offered.
         None => crate::helper::HelperCapabilities::default(),
     };
+
     (caps, Some(r.ok))
 }
 
 /// How long the agent waits for the helper.
 fn timeout(req: &HelperRequest) -> Duration {
     use forge_catalog::stacks::StackOp;
+
     match req {
         HelperRequest::Dns { .. } => Duration::from_secs(60),
         HelperRequest::UpdateAgent { .. } => Duration::from_secs(15 * 60),
@@ -309,6 +319,7 @@ fn interface_addresses() -> Vec<Value> {
         })
         .collect();
     out.sort_by_key(ToString::to_string);
+
     out
 }
 
@@ -322,10 +333,12 @@ mod refusal_tests {
         assert!(!r.ok);
         assert_eq!(r.error.as_deref(), Some("no systemd"));
         assert_eq!(refusal_code(&r), Some(RefusalCode::Unsupported));
+
         // Through the wire (JSON line) too.
         let back: HelperResponse = serde_json::from_str(&serde_json::to_string(&r).unwrap_or_default())
             .unwrap_or_else(|_| HelperResponse::failed("x"));
         assert_eq!(refusal_code(&back), Some(RefusalCode::Unsupported));
+
         // A plain failure, an older helper and a success carry none.
         assert_eq!(refusal_code(&CommandError::from("boom").into_response()), None);
         assert_eq!(refusal_code(&HelperResponse::failed("old helper")), None);

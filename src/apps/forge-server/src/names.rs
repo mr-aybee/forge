@@ -110,12 +110,14 @@ pub fn free_label(s: &Server, taken: &HashSet<String>) -> String {
     let base = derived_label(s);
     let mut label = base.clone();
     let mut n = 6;
+
     while taken.contains(&label) && n <= 32 {
         let tail = id_tail(&s.id.to_string(), n);
         let head: String = base.chars().take(63 - tail.len() - 1).collect();
         label = format!("{}-{tail}", head.trim_end_matches('-'));
         n += 4;
     }
+
     label
 }
 
@@ -127,18 +129,22 @@ pub fn free_label(s: &Server, taken: &HashSet<String>) -> String {
 pub fn node_labels(servers: &[&Server], stored: &StoredLabels) -> HashMap<ServerId, NodeLabel> {
     let mut out = HashMap::new();
     let mut taken: HashSet<String> = stored.values().map(|(l, _)| l.clone()).collect();
+
     for s in servers {
         if let Some((l, explicit)) = stored.get(&s.id).filter(|(l, _)| check_label(l).is_ok()) {
             out.insert(s.id, NodeLabel { label: l.clone(), explicit: *explicit });
         }
     }
+
     let mut rest: Vec<&&Server> = servers.iter().filter(|s| !out.contains_key(&s.id)).collect();
     rest.sort_by_key(|s| (s.created_at.0, s.id.to_string()));
+
     for s in rest {
         let label = free_label(s, &taken);
         taken.insert(label.clone());
         out.insert(s.id, NodeLabel { label, explicit: false });
     }
+
     out
 }
 
@@ -204,6 +210,7 @@ impl Fleet {
                     (_, _, Some(a)) if !a.is_loopback() || r.server_id == target.id => a,
                     _ => return None,
                 };
+
                 Some(NameEntry { name: r.name.clone(), ip })
             })
             .filter(|e| e.validate().is_ok())
@@ -211,6 +218,7 @@ impl Fleet {
         out.sort();
         out.dedup();
         out.truncate(forge_catalog::names::MAX_ENTRIES);
+
         out
     }
 }
@@ -222,6 +230,7 @@ fn cluster_labels(clusters: &[forge_core::model::Cluster]) -> HashMap<ClusterId,
     sorted.sort_by_key(|c| (c.created_at.0, c.id.to_string()));
     let mut taken = HashSet::new();
     let mut out = HashMap::new();
+
     for c in sorted {
         let tail = id_tail(&c.id.to_string(), 6);
         let mut l = label_from(&c.name).unwrap_or_else(|| format!("cluster-{tail}"));
@@ -229,8 +238,10 @@ fn cluster_labels(clusters: &[forge_core::model::Cluster]) -> HashMap<ClusterId,
             l = format!("{}-{tail}", l.chars().take(56).collect::<String>().trim_end_matches('-'));
             taken.insert(l.clone());
         }
+
         out.insert(c.id, l);
     }
+
     out
 }
 
@@ -264,8 +275,10 @@ pub async fn suffix_with_source(state: &AppState) -> (String, SuffixSource) {
     if let Some(s) = stored_suffix(state).await {
         return (s, SuffixSource::Setting);
     }
+
     let c = &state.config.names.suffix;
     let src = if c == forge_catalog::names::DEFAULT_SUFFIX { SuffixSource::Default } else { SuffixSource::Config };
+
     (c.clone(), src)
 }
 
@@ -296,6 +309,7 @@ async fn load_shared(state: &AppState, servers: &[Server]) -> Result<Shared, Str
         .into_iter()
         .collect();
     let apps = state.store.get_services(&ids).await.map_err(e)?.into_iter().map(|a| (a.id, a)).collect();
+
     // Connected nodes have a live address; the facts table (wide JSON rows)
     // is read only when some node has none.
     let stored_address = if servers.iter().any(|s| crate::facts::live_address(s.id).is_none()) {
@@ -313,6 +327,7 @@ async fn load_shared(state: &AppState, servers: &[Server]) -> Result<Shared, Str
     } else {
         HashMap::new()
     };
+
     Ok(Shared { suffix, instances, apps, stored_address })
 }
 
@@ -320,6 +335,7 @@ async fn load_shared(state: &AppState, servers: &[Server]) -> Result<Shared, Str
 pub async fn fleet(state: &AppState, ws: WorkspaceId) -> Result<Fleet, String> {
     let servers = state.store.list_servers(Some(ws)).await.map_err(|e| e.to_string())?;
     let shared = load_shared(state, &servers).await?;
+
     build_fleet(state, ws, servers, &shared).await
 }
 
@@ -332,12 +348,14 @@ async fn build_fleet(
 ) -> Result<Fleet, String> {
     let e = |e: forge_core::DomainError| e.to_string();
     let suffix = shared.suffix.clone();
+
     // A revoked node has no name (its stored label stays taken, so it is
     // never handed to another node by accident).
     servers.retain(|s| s.status != AgentStatus::Revoked);
     let stored = stored_labels(state, ws).await?;
     let refs: Vec<&Server> = servers.iter().collect();
     let labels = node_labels(&refs, &stored);
+
     // Keep each new node's derived label from now on. A clash with a label
     // stored meanwhile is retried on the next pass.
     for (id, l) in labels.iter().filter(|(id, _)| !stored.contains_key(*id)) {
@@ -345,6 +363,7 @@ async fn build_fleet(
             tracing::debug!(server = %id, error = %err, "storing a derived node label failed; will retry");
         }
     }
+
     let clusters = cluster_labels(&state.store.list_clusters(ws).await.map_err(e)?);
     let address = |id: ServerId| -> Option<IpAddr> {
         crate::facts::live_address(id)
@@ -354,10 +373,13 @@ async fn build_fleet(
             .filter(|a| !a.is_unspecified() && !a.is_multicast())
     };
     let cluster_of: HashMap<ServerId, Option<ClusterId>> = servers.iter().map(|s| (s.id, s.cluster_id)).collect();
+
     // Mesh addresses of nodes in applied fabrics.
     let mut mesh: HashMap<ServerId, Ipv4Addr> = HashMap::new();
+
     for f in state.store.list_fabrics(Some(ws)).await.map_err(e)? {
         let leases: Vec<Lease> = serde_json::from_value(f.leases.clone()).unwrap_or_default();
+
         for l in leases.iter().filter(|l| l.kind == LeaseKind::Node) {
             let Ok(id) = l.owner.parse::<ServerId>() else { continue };
             if cluster_of.get(&id).copied().flatten() == Some(f.cluster_id) {
@@ -365,17 +387,20 @@ async fn build_fleet(
             }
         }
     }
+
     let name = |labels: &[&str], cluster: Option<ClusterId>| -> Option<String> {
         let mut parts: Vec<&str> = labels.to_vec();
         let cl = cluster.and_then(|c| clusters.get(&c));
         if let Some(c) = cl {
             parts.push(c);
         }
+
         parts.push(&suffix);
         let n = parts.join(".");
         forge_catalog::names::valid_name(&n).then_some(n)
     };
     let mut rows = Vec::new();
+
     for s in &servers {
         let Some(l) = labels.get(&s.id) else { continue };
         if let Some(n) = name(&[&l.label], s.cluster_id) {
@@ -392,9 +417,11 @@ async fn build_fleet(
             });
         }
     }
+
     // Services: active instances of the workspace's services.
     let environments: HashMap<_, _> =
         state.store.list_environments(ws, None).await.map_err(e)?.into_iter().map(|n| (n.id, n)).collect();
+
     for i in shared.instances.iter().filter(|i| i.role != "standby") {
         let Some(cluster_id) = cluster_of.get(&i.server_id).copied() else { continue };
         let Some(app) = shared.apps.get(&i.service_id) else { continue };
@@ -423,10 +450,12 @@ async fn build_fleet(
             ports,
         });
     }
+
     // A service name that equals a node name: the node keeps it.
     let nodes: HashSet<String> = rows.iter().filter(|r| r.kind == "node").map(|r| r.name.clone()).collect();
     rows.retain(|r| r.kind == "node" || !nodes.contains(&r.name));
     rows.sort_by(|a, b| a.name.cmp(&b.name).then(a.node.cmp(&b.node)));
+
     Ok(Fleet { suffix, servers, labels, rows })
 }
 
@@ -453,6 +482,7 @@ impl Fleet {
             self.rows.iter().filter(|r| r.address.is_some_and(|a| a.is_loopback())).map(|r| r.server_id).collect();
         let mut built: HashMap<(Option<ClusterId>, Option<ServerId>), Desired> = HashMap::new();
         let mut out = HashMap::with_capacity(self.servers.len());
+
         for s in &self.servers {
             let key = (s.cluster_id, loopback.contains(&s.id).then_some(s.id));
             let d = built
@@ -464,6 +494,7 @@ impl Fleet {
                 .clone();
             out.insert(s.id, d);
         }
+
         out
     }
 }
@@ -523,6 +554,7 @@ pub fn node_sync(id: ServerId) -> Option<NodeSync> {
     let s = sync().lock().ok()?;
     let (h, list) = s.desired.get(&id)?;
     let sent = s.sent.get(&id);
+
     Some(NodeSync {
         names: list.len(),
         in_sync: sent.is_some_and(|(sh, _)| sh == h),
@@ -537,19 +569,25 @@ pub fn on_heartbeat(state: &AppState, server: ServerId, reconnected: bool) {
     if !state.config.names.enabled {
         return;
     }
+
     let now = state.clock.now().0;
+
     let due = {
         let Ok(mut s) = sync().lock() else { return };
+
         if reconnected {
             s.sent.remove(&server);
         }
+
         if !s.desired.contains_key(&server) {
             // A node just enrolled: build its list on the next (debounced)
             // pass, not on the 30 s tick.
             poke();
         }
+
         due_now(&mut s, server, now).map(|d| (d, s.suffix.clone()))
     };
+
     if let Some((list, suffix)) = due {
         spawn_send(state, server, list, suffix);
     }
@@ -557,10 +595,13 @@ pub fn on_heartbeat(state: &AppState, server: ServerId, reconnected: bool) {
 
 fn due_now(s: &mut Sync, server: ServerId, now: i64) -> Option<Desired> {
     let (h, list) = s.desired.get(&server)?.clone();
+
     if s.inflight.contains(&server) || s.failed.get(&server).is_some_and(|f| f.1 > now) {
         return None;
     }
+
     let ms = |d: Duration| i64::try_from(d.as_millis()).unwrap_or(i64::MAX);
+
     match s.sent.get(&server) {
         // In sync: only the periodic repair resend.
         Some((sh, at)) if *sh == h && now - at < ms(RESEND) => return None,
@@ -569,7 +610,9 @@ fn due_now(s: &mut Sync, server: ServerId, now: i64) -> Option<Desired> {
         Some((sh, at)) if *sh != h && now - at < ms(CHANGE_GAP) => return None,
         _ => {}
     }
+
     s.inflight.insert(server);
+
     Some((h, list))
 }
 
@@ -580,6 +623,7 @@ fn spawn_send(state: &AppState, server: ServerId, (h, list): Desired, suffix: St
         let now = state.clock.now().0;
         let Ok(mut s) = sync().lock() else { return };
         s.inflight.remove(&server);
+
         match r {
             Ok(()) => {
                 s.sent.insert(server, (h, now));
@@ -612,6 +656,7 @@ pub async fn refresh(state: &AppState) {
     if !state.config.names.enabled {
         return;
     }
+
     let all = match state.store.list_servers(None).await {
         Ok(all) => all,
         Err(e) => {
@@ -619,6 +664,7 @@ pub async fn refresh(state: &AppState) {
             return;
         }
     };
+
     let shared = match load_shared(state, &all).await {
         Ok(s) => s,
         Err(e) => {
@@ -626,19 +672,25 @@ pub async fn refresh(state: &AppState) {
             return;
         }
     };
+
     let online: Vec<ServerId> = all.iter().filter(|s| s.status == AgentStatus::Online).map(|s| s.id).collect();
     let mut by_ws: BTreeMap<String, (WorkspaceId, Vec<Server>)> = BTreeMap::new();
+
     for s in all {
         by_ws.entry(s.workspace_id.to_string()).or_insert_with(|| (s.workspace_id, Vec::new())).1.push(s);
     }
+
     let mut desired = HashMap::new();
+
     for (ws, servers) in by_ws.into_values() {
         match build_fleet(state, ws, servers, &shared).await {
             Ok(f) => desired.extend(f.lists()),
             Err(e) => tracing::warn!(error = %e, "building local names failed"),
         }
     }
+
     let now = state.clock.now().0;
+
     let due: Vec<(ServerId, Desired)> = {
         let Ok(mut s) = sync().lock() else { return };
         s.desired = desired;
@@ -648,6 +700,7 @@ pub async fn refresh(state: &AppState) {
         s.failed.retain(|k, _| known.contains(k));
         online.iter().filter_map(|id| due_now(&mut s, *id, now).map(|d| (*id, d))).collect()
     };
+
     for (id, d) in due {
         spawn_send(state, id, d, shared.suffix.clone());
     }
@@ -659,6 +712,7 @@ pub async fn refresh(state: &AppState) {
 /// thousand.
 pub(crate) async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
     let mut tick = tokio::time::interval(TICK);
+
     loop {
         tokio::select! {
             _ = tick.tick() => {}
@@ -720,6 +774,7 @@ mod tests {
         assert_eq!(l[&c.id].label, "primary-db", "from the console name");
         assert!(l[&e.id].label.starts_with("node-"));
         assert!(l.values().all(|x| check_label(&x.label).is_ok()));
+
         // A bad stored label is ignored rather than written.
         let l = node_labels(&[&a], &HashMap::from([(a.id, ("Bad Label".to_owned(), true))]));
         assert_eq!(l[&a.id].label, "web");
@@ -735,16 +790,19 @@ mod tests {
         assert_eq!(first[&a.id].label, "web-1");
         let b_label = first[&b.id].label.clone();
         assert!(b_label.starts_with("web-1-"));
+
         // Both are stored after the first pass; a is renamed by a user.
         let mut stored: StoredLabels = first.iter().map(|(id, l)| (*id, (l.label.clone(), false))).collect();
         stored.insert(a.id, ("front".into(), true));
         let after = node_labels(&[&a, &b], &stored);
         assert_eq!(after[&b.id].label, b_label, "b keeps its label");
         assert!(after.values().all(|l| l.label != "web-1"), "web-1 stays free");
+
         // A console rename does not move a stored label either.
         let mut renamed = b.clone();
         renamed.display_name = Some("Totally New".into());
         assert_eq!(node_labels(&[&a, &renamed], &stored)[&b.id].label, b_label);
+
         // A new node never takes a stored label.
         let c = server("front", None, 3, None);
         assert_ne!(node_labels(&[&a, &b, &c], &stored)[&c.id].label, "front");
@@ -838,11 +896,13 @@ mod tests {
             .collect();
         let fleet = Fleet { suffix: "local".into(), servers: servers.clone(), labels: HashMap::new(), rows };
         let lists = fleet.lists();
+
         for s in &servers {
             let own = fleet.entries_for(s);
             assert_eq!(*lists[&s.id].1, own, "{}", s.hostname);
             assert_eq!(lists[&s.id].0, hash(&own));
         }
+
         assert!(Arc::ptr_eq(&lists[&servers[0].id].1, &lists[&servers[1].id].1), "same fabric shares one list");
         assert!(Arc::ptr_eq(&lists[&servers[3].id].1, &lists[&servers[4].id].1), "no fabric shares one list");
         assert!(!Arc::ptr_eq(&lists[&servers[3].id].1, &lists[&servers[5].id].1), "a loopback node gets its own");
@@ -857,6 +917,7 @@ mod tests {
         let gap = i64::try_from(CHANGE_GAP.as_millis()).unwrap();
         assert!(due_now(&mut s, id, gap - 1).is_none(), "sent a moment ago");
         assert!(due_now(&mut s, id, gap).is_some(), "after the gap");
+
         // A first send never waits.
         let new = ServerId::new();
         s.desired.insert(new, (2, Arc::new(vec![])));

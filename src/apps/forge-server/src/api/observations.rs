@@ -34,6 +34,7 @@ fn parse_resource(s: &str) -> ApiResult<EntityRef> {
             r.kind.as_str()
         )));
     }
+
     Ok(r)
 }
 
@@ -67,6 +68,7 @@ impl ObservationView {
     fn new(latest: Latest, now: Timestamp) -> Self {
         let stale = !latest.is_fresh(now);
         let effective = latest.effective(now);
+
         Self { latest, effective, stale }
     }
 }
@@ -87,6 +89,7 @@ pub async fn list(
     let filter = ObservationFilter { resource: Some(resource), server: q.server, subject_prefix: q.subject_prefix };
     let now = state.clock.now();
     let rows = ObservationQuery::latest(&state.store, &filter, limit(q.limit)).await?;
+
     Ok(Json(ListResponse { now, observations: rows.into_iter().map(|l| ObservationView::new(l, now)).collect() }))
 }
 
@@ -141,5 +144,6 @@ pub async fn history(
             skewed: l.skewed,
         })
         .collect();
+
     Ok(Json(HistoryResponse { key, entries }))
 }

@@ -76,6 +76,7 @@ pub fn env_file(package: &str) -> std::path::PathBuf {
 pub fn redacted_env(package: &str) -> BTreeMap<String, String> {
     let path = env_file(package);
     let Ok(text) = std::fs::read_to_string(&path) else { return BTreeMap::new() };
+
     text.lines()
         .map(|l| l.trim_start_matches('\u{feff}').trim_end_matches('\r'))
         .filter_map(|l| l.split_once('='))
@@ -89,11 +90,14 @@ pub fn redacted_env(package: &str) -> BTreeMap<String, String> {
 fn tail(mut s: String) -> String {
     if s.len() > OUTPUT_TAIL {
         let mut cut = s.len() - OUTPUT_TAIL;
+
         while !s.is_char_boundary(cut) {
             cut += 1;
         }
+
         s = format!("…{}", &s[cut..]);
     }
+
     s
 }
 
@@ -107,9 +111,11 @@ pub async fn run(
         match launch(v) {
             Ok((cmd, stdin, cleanup)) => {
                 let r = execute(cmd, stdin, progress, v.package.id).await;
+
                 if let Some(path) = cleanup {
                     let _ = std::fs::remove_file(path);
                 }
+
                 r
             }
             Err(e) => HelperResponse::failed(e),
@@ -129,16 +135,21 @@ pub async fn run_store(
     if let Err(e) = op.validate() {
         return HelperResponse::failed(format!("rejected: {e}"));
     }
+
     let _guard = RUNNING.lock().await;
+
     // `adopt` prints a credential: no live output for it, and the line is
     // taken out of the returned output below.
     let progress = if matches!(op, forge_catalog::storage::StoreOp::Adopt { .. }) { None } else { progress };
+
     match launch_store(op) {
         Ok((cmd, stdin, cleanup)) => {
             let mut r = execute(cmd, stdin, progress, "").await;
+
             if let Some(path) = cleanup {
                 let _ = std::fs::remove_file(path);
             }
+
             let (cred, rest) = forge_catalog::storage::take_credential(r.output.as_deref().unwrap_or_default());
             r.output = Some(rest);
             r.details = cred.map(|c| {
@@ -164,18 +175,22 @@ fn launch_store(op: &forge_catalog::storage::StoreOp) -> Result<Launch, String> 
     cmd.arg("-s");
     cmd.env_clear().env("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin").env("LANG", "C.UTF-8");
     cmd.env("HOME", "/root");
+
     for (k, val) in op.env() {
         cmd.env(k, val);
     }
+
     Ok((cmd, Some(op.linux_script().into_bytes()), None))
 }
 
 #[cfg(windows)]
 fn launch_store(op: &forge_catalog::storage::StoreOp) -> Result<Launch, String> {
     let (mut cmd, file) = powershell_file(forge_catalog::storage::RUSTFS_PS1)?;
+
     for (k, val) in op.env() {
         cmd.env(k, val);
     }
+
     Ok((cmd, None, Some(file)))
 }
 
@@ -197,14 +212,17 @@ fn powershell_file(script: &str) -> Result<(tokio::process::Command, std::path::
     let shell = if which("pwsh.exe") { "pwsh.exe" } else { "powershell.exe" };
     let mut cmd = tokio::process::Command::new(shell);
     cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]).arg(&file);
+
     // A PSModulePath inherited from PowerShell 7 makes Windows PowerShell 5.1
     // load the wrong module versions; each shell rebuilds its own default.
     cmd.env_remove("PSModulePath");
+
     for (k, _) in std::env::vars_os() {
         if k.to_string_lossy().to_ascii_uppercase().starts_with("FORGE_") {
             cmd.env_remove(&k);
         }
     }
+
     Ok((cmd, file))
 }
 
@@ -216,9 +234,11 @@ fn launch(v: &forge_catalog::Validated) -> Result<Launch, String> {
     cmd.arg("-s").arg("--").arg(v.action);
     cmd.env_clear().env("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin").env("LANG", "C.UTF-8");
     cmd.env("HOME", "/root");
+
     for (k, val) in &v.env {
         cmd.env(k, val);
     }
+
     Ok((cmd, Some(forge_catalog::script(v.package).into_bytes()), None))
 }
 
@@ -226,6 +246,7 @@ fn launch(v: &forge_catalog::Validated) -> Result<Launch, String> {
 fn launch(v: &forge_catalog::Validated) -> Result<Launch, String> {
     use std::io::Write;
     let env = forge_catalog::winget_env(v).ok_or_else(|| format!("{} is not available on Windows", v.package.name))?;
+
     // A new, uniquely named file in the service's temp directory (LocalSystem:
     // %SystemRoot%\Temp); `create_new` refuses a file planted in advance.
     let mut name = [0u8; 12];
@@ -236,6 +257,7 @@ fn launch(v: &forge_catalog::Validated) -> Result<Launch, String> {
         .create_new(true)
         .open(&file)
         .map_err(|e| format!("cannot write the recipe to {}: {e}", file.display()))?;
+
     // UTF-8 with BOM: Windows PowerShell 5.1 reads BOM-less files as ANSI.
     f.write_all(b"\xEF\xBB\xBF")
         .and_then(|()| f.write_all(forge_catalog::WINGET_RUNNER.as_bytes()))
@@ -244,18 +266,22 @@ fn launch(v: &forge_catalog::Validated) -> Result<Launch, String> {
     let shell = if which("pwsh.exe") { "pwsh.exe" } else { "powershell.exe" };
     let mut cmd = tokio::process::Command::new(shell);
     cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]).arg(&file);
+
     // A PSModulePath inherited from PowerShell 7 makes Windows PowerShell 5.1
     // load the wrong module versions; each shell rebuilds its own default.
     cmd.env_remove("PSModulePath");
+
     // Inherited FORGE_* variables must not leak into the recipe.
     for (k, _) in std::env::vars_os() {
         if k.to_string_lossy().to_ascii_uppercase().starts_with("FORGE_") {
             cmd.env_remove(&k);
         }
     }
+
     for (k, val) in &env {
         cmd.env(k, val);
     }
+
     Ok((cmd, None, Some(file)))
 }
 
@@ -305,6 +331,7 @@ async fn execute(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+
     // Its own process group, so a cancelled or timed-out recipe takes every
     // process it started (apt-get, curl, docker…) with it.
     #[cfg(unix)]
@@ -313,13 +340,17 @@ async fn execute(
         Ok(c) => c,
         Err(e) => return HelperResponse::failed(format!("cannot start the recipe shell: {e}")),
     };
+
     let _group = GroupKill(child.id());
+
     if let (Some(bytes), Some(mut pipe)) = (stdin, child.stdin.take()) {
         if let Err(e) = pipe.write_all(&bytes).await {
             return HelperResponse::failed(format!("cannot pass recipe: {e}"));
         }
+
         drop(pipe);
     }
+
     let (mut out, mut err) = (child.stdout.take(), child.stderr.take());
     let collect = async {
         use tokio::io::AsyncBufReadExt;
@@ -327,11 +358,14 @@ async fn execute(
         let read_o = async {
             if let Some(s) = out.take() {
                 let mut lines = tokio::io::BufReader::new(s).lines();
+
                 while let Ok(Some(l)) = lines.next_line().await {
                     let l = l.trim_end_matches('\r').to_owned();
+
                     if let Some(p) = progress {
                         let _ = p.send(l.clone());
                     }
+
                     o.push_str(&l);
                     o.push('\n');
                 }
@@ -340,11 +374,14 @@ async fn execute(
         let read_e = async {
             if let Some(s) = err.take() {
                 let mut lines = tokio::io::BufReader::new(s).lines();
+
                 while let Ok(Some(l)) = lines.next_line().await {
                     let l = l.trim_end_matches('\r').to_owned();
+
                     if let Some(p) = progress {
                         let _ = p.send(l.clone());
                     }
+
                     e.push_str(&l);
                     e.push('\n');
                 }
@@ -354,9 +391,11 @@ async fn execute(
         let status = child.wait().await;
         (o, e, status)
     };
+
     let Ok((stdout, stderr, status)) = tokio::time::timeout(TIMEOUT, collect).await else {
         return HelperResponse::failed("recipe timed out after 45 minutes");
     };
+
     let state = stdout.lines().rev().find(|l| !l.trim().is_empty()).map(|l| l.trim().to_owned());
     let ok = status.as_ref().is_ok_and(std::process::ExitStatus::success);
     let combined = if stderr.is_empty() { stdout } else { format!("{stdout}{stderr}") };
@@ -366,6 +405,7 @@ async fn execute(
             |l| l.trim_start_matches("forge: error:").trim().to_owned(),
         )
     });
+
     HelperResponse {
         ok,
         state: if ok { state } else { None },
@@ -378,8 +418,9 @@ async fn execute(
 
 #[cfg(test)]
 mod tests {
-    use super::{APT_LOCK_WAIT_SECS, PACKAGE_COMMAND_TIMEOUT, TIMEOUT, command_timeout, exclusive, is_secret};
     use std::time::Duration;
+
+    use super::{APT_LOCK_WAIT_SECS, PACKAGE_COMMAND_TIMEOUT, TIMEOUT, command_timeout, exclusive, is_secret};
 
     /// A dpkg lock wait must never time out the install first (#17).
     #[test]
@@ -404,16 +445,20 @@ mod tests {
                 tokio::spawn(exclusive(async move {
                     let now = running.fetch_add(1, Ordering::SeqCst) + 1;
                     peak.fetch_max(now, Ordering::SeqCst);
+
                     for _ in 0..10 {
                         tokio::task::yield_now().await;
                     }
+
                     running.fetch_sub(1, Ordering::SeqCst);
                 }))
             })
             .collect();
+
         for t in tasks {
             assert!(t.await.is_ok());
         }
+
         assert_eq!(peak.load(Ordering::SeqCst), 1);
     }
 

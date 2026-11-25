@@ -70,9 +70,11 @@ impl Target {
         key_pem: &str,
     ) -> Result<Self, ClientError> {
         let mut roots = rustls::RootCertStore::empty();
+
         for c in CertificateDer::pem_slice_iter(ca_pem.as_bytes()) {
             roots.add(c.map_err(tls_err)?).map_err(tls_err)?;
         }
+
         let chain =
             CertificateDer::pem_slice_iter(cert_pem.as_bytes()).collect::<Result<Vec<_>, _>>().map_err(tls_err)?;
         let key = PrivateKeyDer::from_pem_slice(key_pem.as_bytes()).map_err(tls_err)?;
@@ -83,6 +85,7 @@ impl Target {
             .with_root_certificates(roots)
             .with_client_auth_cert(chain, key)
             .map_err(tls_err)?;
+
         Ok(Self { address, server_name, tls: Arc::new(cfg) })
     }
 
@@ -94,6 +97,7 @@ impl Target {
             let tcp = TcpStream::connect(&address)
                 .await
                 .map_err(|e| ClientError::Connect { address: address.clone(), reason: e.to_string() })?;
+
             // Interactive streams (attach, exec) should not wait on Nagle.
             let _ = tcp.set_nodelay(true);
             TlsConnector::from(self.tls.clone())
@@ -101,6 +105,7 @@ impl Target {
                 .await
                 .map_err(|e| ClientError::Connect { address: address.clone(), reason: e.to_string() })
         };
+
         tokio::time::timeout(CONNECT_TIMEOUT, run).await.map_err(|_| ClientError::Timeout(self.address.clone()))?
     }
 
@@ -118,6 +123,7 @@ impl Target {
             .await
             .map_err(|e| ClientError::Http(e.to_string()))?;
         tokio::spawn(conn.with_upgrades());
+
         sender.send_request(req).await.map_err(|e| ClientError::Http(e.to_string()))
     }
 
@@ -135,11 +141,13 @@ impl Target {
                 .await
                 .map_err(|e| ClientError::Http(e.to_string()))?
                 .to_bytes();
+
             // A non-JSON answer (an error page from something else on the
             // port) is reported as null; callers check the status first.
             let v = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
             Ok((status, v))
         };
+
         tokio::time::timeout(timeout, run).await.map_err(|_| ClientError::Timeout(self.address.clone()))?
     }
 }

@@ -127,6 +127,7 @@ impl TenancyRepository for Store {
         .execute(self.pool())
         .await
         .map_err(db_err)?;
+
         Ok(())
     }
 
@@ -156,12 +157,14 @@ impl TenancyRepository for Store {
             }
         }
         .map_err(db_err)?;
+
         rows.iter().map(env_row).collect()
     }
 
     async fn set_environment_cluster(&self, id: EnvironmentId, cluster: ClusterId) -> DomainResult<()> {
         let ns = self.get_environment(id).await?;
         let scope = self.environment_scope(ns.workspace_id, Some(cluster), ns.created_at).await?;
+
         // The scope moves with the cluster, so UNIQUE (scope_id, name)
         // refuses a name the target cluster already has.
         let r = sqlx::query("UPDATE environments SET cluster_id = $1, scope_id = $2 WHERE id = $3")
@@ -171,9 +174,11 @@ impl TenancyRepository for Store {
             .execute(self.pool())
             .await
             .map_err(db_err)?;
+
         if r.rows_affected() == 0 {
             return Err(not_found("environment", id));
         }
+
         Ok(())
     }
 
@@ -194,9 +199,11 @@ impl TenancyRepository for Store {
             .execute(self.pool())
             .await
             .map_err(db_err)?;
+
         if r.rows_affected() == 0 {
             return Err(not_found("environment", id));
         }
+
         Ok(())
     }
 
@@ -208,14 +215,17 @@ impl TenancyRepository for Store {
             .execute(self.pool())
             .await
             .map_err(db_err)?;
+
         if r.rows_affected() == 0 {
             return Err(not_found("environment", id));
         }
+
         Ok(())
     }
 
     async fn delete_environment(&self, id: EnvironmentId) -> DomainResult<()> {
         let mut tx = self.pool().begin().await.map_err(db_err)?;
+
         // Nodes and clusters only point at an environment as a label.
         sqlx::query("UPDATE servers SET environment_id = NULL WHERE environment_id = $1")
             .bind(id.to_string())
@@ -227,6 +237,7 @@ impl TenancyRepository for Store {
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
+
         // A store must never point at an environment that is gone (D-107). The
         // check runs inside this transaction, after its first write, so on
         // SQLite no owner can be assigned between the check and the delete.
@@ -241,14 +252,17 @@ impl TenancyRepository for Store {
                 "this environment owns {owned} object store(s); assign them to another environment or clear their owner first"
             )));
         }
+
         let r = sqlx::query("DELETE FROM environments WHERE id = $1")
             .bind(id.to_string())
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
+
         if r.rows_affected() == 0 {
             return Err(not_found("environment", id));
         }
+
         tx.commit().await.map_err(db_err)
     }
 }
@@ -266,6 +280,7 @@ impl Store {
             Some(c) => (c.to_string(), format!("cluster:{c}")),
             None => (ws.to_string(), "workspace".to_owned()),
         };
+
         sqlx::query(
             "INSERT INTO environment_scopes (id, workspace_id, tenant_id, name, created_at) VALUES ($1, $2, NULL, $3, $4)
              ON CONFLICT (id) DO NOTHING",
@@ -277,6 +292,7 @@ impl Store {
         .execute(self.pool())
         .await
         .map_err(db_err)?;
+
         Ok(id)
     }
 }

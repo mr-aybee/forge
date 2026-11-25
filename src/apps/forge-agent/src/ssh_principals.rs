@@ -66,14 +66,17 @@ pub fn tunnel_destination(key_id: &str) -> Option<(std::net::IpAddr, u16)> {
     if parts.next().is_some() || !tunnel_ok {
         return None;
     }
+
     let ip: std::net::IpAddr = ip.parse().ok()?;
     let port: u16 = port.parse().ok().filter(|p| *p != 0)?;
+
     let blocked = ip.is_unspecified()
         || ip.is_multicast()
         || match ip {
             std::net::IpAddr::V4(v4) => v4.is_link_local() || v4.is_broadcast(),
             std::net::IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) == 0xfe80,
         };
+
     (!blocked).then_some((ip, port))
 }
 
@@ -88,14 +91,17 @@ pub fn principals_for(node_file: &str, user: &str, key_id: &str) -> Option<Strin
     if !(valid_id(id) && valid_user(user)) {
         return None;
     }
+
     if user != TUNNEL_USER {
         return Some(principal(id, user));
     }
+
     let (ip, port) = tunnel_destination(key_id)?;
     let dest = match ip {
         std::net::IpAddr::V4(v4) => format!("{v4}:{port}"),
         std::net::IpAddr::V6(v6) => format!("[{v6}]:{port}"),
     };
+
     Some(format!("restrict,port-forwarding,permitopen=\"{dest}\" {}", principal(id, user)))
 }
 
@@ -118,6 +124,7 @@ pub fn tunnel_ready() -> bool {
     let has = |line: &str| drop_in.lines().any(|l| l.trim() == line);
     let account = std::fs::read_to_string("/etc/passwd")
         .is_ok_and(|p| p.lines().any(|l| l.split(':').next() == Some(TUNNEL_USER)));
+
     std::path::Path::new(NODE_FILE).exists() && has(COMMAND) && has(TUNNEL_MATCH) && account
 }
 
@@ -132,10 +139,12 @@ pub fn with_tunnel_block(config: &str, shell: &str) -> Option<String> {
     if !config.lines().any(|l| l.trim() == MARK) || config.lines().any(|l| l.trim() == TUNNEL_MATCH) {
         return None;
     }
+
     let mut out = config.trim_end().to_owned();
     out.push_str("\n\n# Direct port tunnels: forwarding to one destination, nothing else\n");
     out.push_str(TUNNEL_MATCH);
     out.push('\n');
+
     for line in [
         "AllowTcpForwarding local",
         "AllowStreamLocalForwarding no",
@@ -148,9 +157,11 @@ pub fn with_tunnel_block(config: &str, shell: &str) -> Option<String> {
         out.push_str(line);
         out.push('\n');
     }
+
     out.push_str("    ForceCommand ");
     out.push_str(shell);
     out.push('\n');
+
     Some(out)
 }
 
@@ -162,25 +173,32 @@ pub fn with_principals(config: &str) -> Option<String> {
     if config.lines().any(|l| l.trim() == COMMAND) {
         return None;
     }
+
     // Upgrade: the line without the key id becomes the current one.
     if config.lines().any(|l| l.trim() == OLD_COMMAND) {
         let mut out = String::with_capacity(config.len() + 4);
+
         for line in config.lines() {
             out.push_str(if line.trim() == OLD_COMMAND { COMMAND } else { line });
             out.push('\n');
         }
+
         return Some(out);
     }
+
     let trust = format!("TrustedUserCAKeys {CA_FILE}");
     let mut out = String::with_capacity(config.len() + 160);
     let mut done = false;
     let mut in_forge_block = false;
+
     for line in config.lines() {
         out.push_str(line);
         out.push('\n');
+
         if line.trim() == MARK {
             in_forge_block = true;
         }
+
         if !done && in_forge_block && line.trim() == trust {
             out.push_str(COMMAND);
             out.push('\n');
@@ -189,6 +207,7 @@ pub fn with_principals(config: &str) -> Option<String> {
             done = true;
         }
     }
+
     done.then_some(out)
 }
 
@@ -198,20 +217,25 @@ pub fn with_principals(config: &str) -> Option<String> {
 #[cfg(unix)]
 pub async fn ensure(server_id: &str) -> Result<bool, String> {
     use std::os::unix::fs::PermissionsExt;
+
     if !std::path::Path::new(CA_FILE).exists() {
         return Ok(false);
     }
+
     if !valid_id(server_id) {
         return Err(format!("invalid server id `{server_id}`"));
     }
+
     let current = std::fs::read_to_string(NODE_FILE).unwrap_or_default();
     if current.trim() != server_id {
         std::fs::write(NODE_FILE, format!("{server_id}\n")).map_err(|e| format!("{NODE_FILE}: {e}"))?;
         std::fs::set_permissions(NODE_FILE, std::fs::Permissions::from_mode(0o644))
             .map_err(|e| format!("{NODE_FILE}: {e}"))?;
     }
+
     ensure_tunnel_user().await?;
     let path = if std::path::Path::new(DROP_IN).exists() { DROP_IN } else { MAIN_CONFIG };
+
     // The agent (unprivileged) reads this file to report the setup in its
     // facts (`configured`), so it must be world-readable like sshd_config;
     // the installer used to create the drop-in 0600. It holds no secrets.
@@ -219,6 +243,7 @@ pub async fn ensure(server_id: &str) -> Result<bool, String> {
         || std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).map_err(|e| format!("{path}: {e}"));
     let before = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
     let mut after = with_principals(&before).unwrap_or_else(|| before.clone());
+
     // The tunnel account is confined only in Forge's own drop-in, where the
     // `Match` block can end the file; without it the node reports no
     // direct-tunnel support.
@@ -227,10 +252,12 @@ pub async fn ensure(server_id: &str) -> Result<bool, String> {
     {
         after = with_block;
     }
+
     if after == before {
         readable()?;
         return Ok(false);
     }
+
     std::fs::write(path, &after).map_err(|e| format!("{path}: {e}"))?;
     readable()?;
     let sshd = ["/usr/sbin/sshd", "/usr/bin/sshd", "/sbin/sshd"].into_iter().find(|p| std::path::Path::new(p).exists());
@@ -238,11 +265,13 @@ pub async fn ensure(server_id: &str) -> Result<bool, String> {
         Some(s) => tokio::process::Command::new(s).arg("-t").output().await.is_ok_and(|o| o.status.success()),
         None => false,
     };
+
     if !ok {
         // Never leave sshd unable to start.
         let _ = std::fs::write(path, &before);
         return Err("sshd rejected the node-bound certificate settings; left unchanged".into());
     }
+
     for unit in ["ssh", "sshd"] {
         if tokio::process::Command::new("systemctl")
             .args(["reload", unit])
@@ -253,6 +282,7 @@ pub async fn ensure(server_id: &str) -> Result<bool, String> {
             break;
         }
     }
+
     Ok(true)
 }
 
@@ -274,18 +304,22 @@ async fn ensure_tunnel_user() -> Result<(), String> {
         .map_err(|e| format!("/etc/passwd: {e}"))?
         .lines()
         .any(|l| l.split(':').next() == Some(TUNNEL_USER));
+
     if exists {
         return Ok(());
     }
+
     let shell = nologin();
     let out = tokio::process::Command::new("useradd")
         .args(["--system", "--no-create-home", "--home-dir", "/nonexistent", "--shell", shell, "-p", "*", TUNNEL_USER])
         .output()
         .await
         .map_err(|e| format!("useradd: {e}"))?;
+
     if !out.status.success() {
         return Err(format!("useradd {TUNNEL_USER}: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
+
     Ok(())
 }
 
@@ -313,11 +347,13 @@ mod tests {
         let new = with_principals(&drop_in).unwrap();
         assert!(new.contains(COMMAND) && new.contains(COMMAND_USER));
         assert!(with_principals(&new).is_none(), "idempotent");
+
         // Appended to the main config: only inside Forge's block.
         let main = format!("Port 22\nTrustedUserCAKeys /etc/ssh/other_ca.pub\n\n{MARK}\nTrustedUserCAKeys {CA_FILE}\n");
         let out = with_principals(&main).unwrap();
         assert_eq!(out.matches(COMMAND).count(), 1);
         assert!(out.find(COMMAND).unwrap() > out.find(MARK).unwrap());
+
         // Not Forge-managed: untouched.
         assert!(with_principals("Port 22\n").is_none());
     }
@@ -331,6 +367,7 @@ mod tests {
         assert_eq!(line, format!("restrict,port-forwarding,permitopen=\"127.0.0.1:5432\" forge.{a}.forge-tunnel"));
         let v6 = principals_for(a, TUNNEL_USER, "forge-tunnel/ab12/::1/22").unwrap();
         assert!(v6.contains("permitopen=\"[::1]:22\""), "{v6}");
+
         // Not a tunnel certificate (a terminal one), or a bad destination: nothing.
         for bad in [
             "",
@@ -347,6 +384,7 @@ mod tests {
         ] {
             assert!(principals_for(a, TUNNEL_USER, bad).is_none(), "{bad}");
         }
+
         // Other logins ignore the key id: a tunnel certificate's principal
         // (`forge.<id>.forge-tunnel`) never matches theirs.
         assert_eq!(principals_for(a, "root", "forge-tunnel/ab12/127.0.0.1/22").unwrap(), principal(a, "root"));
@@ -359,6 +397,7 @@ mod tests {
         let drop_in = format!("{MARK}\nTrustedUserCAKeys {CA_FILE}\n{COMMAND}\n{COMMAND_USER}\n");
         let out = with_tunnel_block(&drop_in, "/usr/sbin/nologin").unwrap();
         let tail = &out[out.find(TUNNEL_MATCH).unwrap()..];
+
         for want in [
             "AllowTcpForwarding local",
             "AllowStreamLocalForwarding no",
@@ -368,6 +407,7 @@ mod tests {
         ] {
             assert!(tail.contains(want), "{want}");
         }
+
         assert!(out.find(COMMAND).unwrap() < out.find(TUNNEL_MATCH).unwrap(), "global lines stay before the Match");
         assert!(with_tunnel_block(&out, "/usr/sbin/nologin").is_none(), "idempotent");
         assert!(with_principals(&out).is_none(), "principals already there");

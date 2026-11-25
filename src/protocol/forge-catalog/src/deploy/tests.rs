@@ -139,10 +139,12 @@ fn a_slot_has_its_own_names_and_ports() {
     assert_eq!(s.env_path(), "/etc/forge/apps/prod/web--b.env");
     assert_eq!(s.ports, vec!["21000:80".to_owned(), "127.0.0.1:21001:9000/udp".to_owned()]);
     assert_eq!(map, BTreeMap::from([(8080, 21_000), (9090, 21_001)]));
+
     match &s.health.unwrap().readiness[0].probe {
         crate::health::Probe::Http(h) => assert_eq!(h.port, 21_000, "probes follow the slot"),
         other => panic!("{other:?}"),
     }
+
     s = spec("systemd");
     into_slot(&mut s, Slot::A, &[22_000]).unwrap();
     assert_eq!((s.listen_port, s.launcher_file().as_str()), (Some(22_000), "run--a.sh"));
@@ -221,6 +223,7 @@ fn stop_first_on_one_node_needs_accepted_downtime() {
     assert!(p.downtime && !p.slotted);
     assert_eq!(ops(&p), ["start", "gate"]);
     assert_eq!(p.targets[0].slot, None, "in place");
+
     // A first deploy has nothing to take down.
     assert!(plan(&input(policy(Strategy::Rolling, Replacement::StopFirst), vec![node("n1", None)], false)).is_ok());
 }
@@ -230,6 +233,7 @@ fn stop_first_with_two_nodes_drains_each_before_replacing_it() {
     let nodes = vec![node("n1", Some(Some(Slot::A))), node("n2", Some(Some(Slot::A)))];
     let p = plan(&input(policy(Strategy::Rolling, Replacement::StopFirst), nodes, true)).unwrap();
     assert!(!p.downtime);
+
     // n1 back in and n2 out are one route.
     assert_eq!(ops(&p), ["route", "wait", "start", "gate", "route", "wait", "start", "gate", "route"]);
     assert_eq!(p.targets[0].slot, Some(Slot::A), "in the slot that serves now");

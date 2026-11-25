@@ -43,6 +43,7 @@ impl FileTransport for HubFileTransport {
     async fn call(&self, server: ServerId, principal: &str, op: &FileOp) -> Result<Value, String> {
         let op_json = serde_json::to_string(op).map_err(|e| e.to_string())?;
         let wait = wait_for(op);
+
         // The command must be *started* within its TTL; it may run longer.
         let (body, signed) = self.signer.issue(
             &server.to_string(),
@@ -58,6 +59,7 @@ impl FileTransport for HubFileTransport {
             "transport: the node did not answer in time: it may be offline, or its agent may be too old for the file explorer"
                 .to_owned()
         })?;
+
         if result.ok {
             serde_json::from_str(&result.output).map_err(|_| "transport: the node sent an invalid answer".to_owned())
         } else {
@@ -70,6 +72,7 @@ impl FileTransport for HubFileTransport {
     /// waits for each answer.
     async fn call_many(&self, server: ServerId, principal: &str, ops: &[FileOp]) -> Vec<Result<Value, String>> {
         let mut queued = Vec::with_capacity(ops.len());
+
         for op in ops {
             let op_json = match serde_json::to_string(op) {
                 Ok(j) => j,
@@ -78,6 +81,7 @@ impl FileTransport for HubFileTransport {
                     continue;
                 }
             };
+
             let wait = wait_for(op);
             let (body, signed) = self.signer.issue(
                 &server.to_string(),
@@ -93,7 +97,9 @@ impl FileTransport for HubFileTransport {
                     .map_err(|e| format!("transport: cannot reach the node: {e}")),
             );
         }
+
         let mut out = Vec::with_capacity(ops.len());
+
         for q in queued {
             out.push(match q {
                 Err(e) => Err(e),
@@ -105,6 +111,7 @@ impl FileTransport for HubFileTransport {
                 },
             });
         }
+
         out
     }
 }

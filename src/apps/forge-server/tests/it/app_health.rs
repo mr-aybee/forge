@@ -2,9 +2,10 @@
 //! MFA for command checks, fleet targets, stale writes and audit redaction.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 async fn fleet_node(h: &Harness, hostname: &str) {
     let server = forge_core::model::Server {
@@ -36,6 +37,7 @@ fn http_policy_with(host: &str, secret: Option<&str>) -> Value {
         Some(s) => json!([{ "name": "Authorization", "secret": s }]),
         None => json!([{ "name": "Accept", "value": "application/json" }]),
     };
+
     json!({
         "readiness": [{ "name": "api", "success_threshold": 2,
             "probe": { "type": "http", "host": host, "allow_remote_host": !host.is_empty(), "port": 8080, "path": "/ready",
@@ -74,6 +76,7 @@ async fn health_policies_are_validated_saved_authorized_and_audited() {
         (json!(true), json!(false)),
         "command needs MFA: {v}"
     );
+
     // Unknown fields come back as an error, not a bare 400.
     let (s, r) = admin.post(&format!("{url}/validate"), json!({ "policy": { "readyness": [] } })).await;
     assert_eq!((s, r["valid"].clone()), (StatusCode::OK, json!(false)), "{r}");
@@ -88,6 +91,7 @@ async fn health_policies_are_validated_saved_authorized_and_audited() {
     assert_eq!(r["valid"], false);
     let fields: Vec<&str> = r["errors"].as_array().unwrap().iter().map(|e| e["field"].as_str().unwrap()).collect();
     assert!(fields.contains(&"readiness[0].probe.host") && fields.contains(&"readiness[0].probe.port"), "{r}");
+
     // Another node of the fleet, also by its `.local` name.
     for host in ["db-1", "DB-1.local"] {
         let (_, r) = admin.post(&format!("{url}/validate"), json!({ "policy": http_policy(host) })).await;
@@ -101,6 +105,7 @@ async fn health_policies_are_validated_saved_authorized_and_audited() {
     assert_eq!(s, StatusCode::OK, "{v}");
     let configured = v["summaries"].as_array().unwrap().iter().filter(|s| s["default"] != true).count();
     assert_eq!(configured, 2, "{v}");
+
     // Readiness is configured, so only the default liveness check remains.
     let defaults: Vec<&Value> = v["summaries"].as_array().unwrap().iter().filter(|s| s["default"] == true).collect();
     assert_eq!((defaults.len(), defaults[0]["purpose"].as_str()), (1, Some("liveness")), "{v}");
@@ -210,6 +215,7 @@ async fn native_services_declare_a_listening_port() {
         )
         .await;
     assert_eq!((s, b["spec"]["listen_port"].clone()), (StatusCode::OK, json!(9090)), "{b}");
+
     for (runtime, extra) in [("container", json!({ "image": "nginx:1" }))] {
         let mut body = json!({ "environment_id": ns["id"], "name": format!("x-{runtime}"), "runtime": runtime, "listen_port": 80 });
         body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
@@ -251,6 +257,7 @@ async fn node_reports_become_instance_status_and_go_unknown_when_offline() {
     };
     forge_core::ports::ServerRepository::create_server(&h.app.state.store, &server).await.unwrap();
     let mut ids = Vec::new();
+
     for name in ["api", "admin", "loose"] {
         let (s, a) = admin
             .post(
@@ -261,6 +268,7 @@ async fn node_reports_become_instance_status_and_go_unknown_when_offline() {
         assert_eq!(s, StatusCode::CREATED, "{a}");
         ids.push(a["id"].as_str().unwrap().to_owned());
     }
+
     // `api` and `admin` are placed on the node; `loose` isn't.
     for id in &ids[..2] {
         h.app
@@ -279,6 +287,7 @@ async fn node_reports_become_instance_status_and_go_unknown_when_offline() {
             .await
             .unwrap();
     }
+
     let report = |app: &str, purpose: &str, state: &str| forge_proto::messages::HealthReport {
         environment: "uat".into(),
         app: app.into(),
@@ -303,22 +312,28 @@ async fn node_reports_become_instance_status_and_go_unknown_when_offline() {
     );
     let url = format!("/api/v1/services/{}/health", ids[0]);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+
     let v = loop {
         let (_, v) = admin.get(&url).await;
         if v["instances"][0]["status"] == "healthy" || std::time::Instant::now() > deadline {
             break v;
         }
+
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     };
+
     assert_eq!(v["instances"][0]["status"], "healthy", "{v}");
     assert_eq!(v["instances"][0]["checks"].as_array().unwrap().len(), 2, "{v}");
+
     // The effective default checks are listed with their resolved form.
     let defaults: Vec<&Value> = v["summaries"].as_array().unwrap().iter().filter(|s| s["default"] == true).collect();
     assert_eq!(defaults.len(), 2, "{v}");
     assert!(defaults[0]["summary"].as_str().unwrap().contains("TCP connect to port 8080"), "{v}");
+
     // Two apps declare port 8080 on this node.
     assert_eq!(v["warnings"][0]["code"], "ambiguous_listen_port", "{v}");
     assert!(v["warnings"][0]["message"].as_str().unwrap().contains("admin"), "{v}");
+
     // The unplaced app's report was dropped.
     let (_, loose) = admin.get(&format!("/api/v1/services/{}/health", ids[2])).await;
     assert!(loose["instances"].as_array().unwrap().is_empty(), "{loose}");
@@ -336,6 +351,7 @@ async fn node_reports_become_instance_status_and_go_unknown_when_offline() {
 fn pushed_policies(h: &Harness, node: forge_core::ServerId) -> Vec<Value> {
     use forge_proto::messages::{CommandBody, command_body::Command};
     use prost::Message;
+
     h.app
         .state
         .hub
@@ -423,15 +439,18 @@ async fn a_saved_policy_is_sent_to_the_nodes_and_configured_checks_decide_the_st
         let (admin, url) = (&admin, &url);
         async move {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+
             loop {
                 let (_, v) = admin.get(url).await;
                 if v["instances"][0]["status"] == want || std::time::Instant::now() > deadline {
                     break v;
                 }
+
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
         }
     };
+
     // The node reports under that revision: nothing is sent again, the
     // status follows the configured checks, and a result of a check the
     // policy no longer has is left out.
@@ -469,13 +488,16 @@ async fn a_saved_policy_is_sent_to_the_nodes_and_configured_checks_decide_the_st
     h.app.state.store.put_service(&stored).await.unwrap();
     forge_server::health_ingest::ingest(&h.app.state, node, vec![report("liveness", "tcp", "passing", revision)]);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+
     let again = loop {
         let p = pushed_policies(&h, node);
         if !p.is_empty() || std::time::Instant::now() > deadline {
             break p;
         }
+
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     };
+
     assert_eq!(again.len(), 1, "{again:?}");
     assert_ne!(again[0]["revision"].as_i64().unwrap(), revision);
     assert_eq!(again[0]["policy"]["liveness"][0]["period_secs"], 30);
@@ -489,6 +511,7 @@ async fn a_real_agent_runs_configured_checks_and_reports_them() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let h = start().await;
     let mut admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+
     // A vault item for a credential header needs an MFA-verified session.
     step_up(&mut admin).await;
     let (_, cl) = admin.post("/api/v1/clusters", json!({ "name": "shop" })).await;
@@ -535,6 +558,7 @@ async fn a_real_agent_runs_configured_checks_and_reports_them() {
     )
     .await
     .unwrap();
+
     // What a deploy leaves on the node (deploying needs the root helper).
     let dir = forge_agent::health::descriptor_dir().expect("the agent set up health checks");
     std::fs::create_dir_all(dir).unwrap();
@@ -550,6 +574,7 @@ async fn a_real_agent_runs_configured_checks_and_reports_them() {
         c["probe"] = probe;
         c
     };
+
     // One check sends a credential from the vault (D-111): the agent asks
     // Forge for the value over its own link just before it probes.
     let (s, item) = admin
@@ -575,11 +600,13 @@ async fn a_real_agent_runs_configured_checks_and_reports_them() {
         async move {
             // The agent's first round starts within 10 s; then one period and a heartbeat.
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+
             loop {
                 let (_, v) = admin.get(url).await;
                 if v["instances"][0]["status"] == want || std::time::Instant::now() > deadline {
                     break v;
                 }
+
                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             }
         }
@@ -589,11 +616,14 @@ async fn a_real_agent_runs_configured_checks_and_reports_them() {
     let checks = v["instances"][0]["checks"].as_array().unwrap();
     assert_eq!(checks.len(), 3, "{v}");
     assert!(checks.iter().all(|c| c["state"] == "passing" && c["received_at"].is_i64()), "{v}");
+
     // The value reached the target in the header, and only there.
     let mut requests = Vec::new();
+
     while let Ok(r) = seen.try_recv() {
         requests.push(r);
     }
+
     let private: Vec<&String> = requests.iter().filter(|r| r.starts_with("GET /private ")).collect();
     assert!(!private.is_empty(), "{requests:?}");
     assert!(private.iter().all(|r| r.contains("Authorization: Bearer e2e-token\r\n")), "{private:?}");
@@ -680,6 +710,7 @@ async fn vault_header_values_reach_a_node_on_the_savers_authority_only() {
         policy_revision,
     };
     let secrets = &h.app.state.health_secrets;
+
     for _ in 0..3 {
         let r = secrets.resolve(node, &ask("readiness", "api", revision)).await;
         assert!(r.granted && r.denial.is_empty(), "{r:?}");
@@ -687,6 +718,7 @@ async fn vault_header_values_reach_a_node_on_the_savers_authority_only() {
         assert_eq!(r.headers.len(), 1);
         assert_eq!((r.headers[0].name.as_str(), r.headers[0].value.as_str()), ("Authorization", "Bearer e2e-token"));
     }
+
     // What a node may not ask for: another revision, a check without a
     // reference, an unknown check, and a service placed elsewhere.
     for (req, code) in [
@@ -699,6 +731,7 @@ async fn vault_header_values_reach_a_node_on_the_savers_authority_only() {
         assert!(!r.granted && r.headers.is_empty(), "{r:?}");
         assert_eq!(r.denial, code);
     }
+
     fleet_node(&h, "web-2").await;
     let other = forge_core::ports::ServerRepository::list_servers(&h.app.state.store, None)
         .await
@@ -745,11 +778,13 @@ async fn vault_header_values_reach_a_node_on_the_savers_authority_only() {
     for b in h.app.state.store.list_bindings_for_user(saver_id["user:".len()..].parse().unwrap()).await.unwrap() {
         h.app.state.revoke(b.id).await.unwrap();
     }
+
     for _ in 0..2 {
         let r = secrets.resolve(node, &ask("readiness", "api", revision)).await;
         assert_eq!((r.granted, r.denial.as_str(), r.headers.len()), (false, "not_allowed", 0), "{r:?}");
         assert_eq!(r.ttl_secs, 60);
     }
+
     let (_, audit) = admin.get("/api/v1/audit?limit=200").await;
     let used = uses(&audit);
     assert_eq!(used.len(), 4, "granted, no authority, granted again, not allowed: {used:?}");
@@ -817,28 +852,35 @@ async fn a_policy_with_a_remote_target_carries_the_fleets_addresses() {
         .await
         .unwrap();
     let url = format!("/api/v1/services/{id}/health");
+
     // The address of another node is refused when the policy is saved.
     let (s, e) = admin.call(Method::PUT, &url, Some(json!({ "policy": http_policy("db-1") }))).await;
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{e}");
+
     // IPv6 transition addresses are refused whatever they stand for.
     for host in ["2002:a9fe:a9fe::1", "64:ff9b:1::a9fe:a9fe"] {
         let (s, e) = admin.call(Method::PUT, &url, Some(json!({ "policy": http_policy(host) }))).await;
         assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{host}: {e}");
         assert!(e.to_string().contains("transition"), "{host}: {e}");
     }
+
     // A name Forge can't judge is saved, and the node gets the list.
     let (s, b) = admin.call(Method::PUT, &url, Some(json!({ "policy": http_policy("api.partner.example") }))).await;
     assert_eq!(s, StatusCode::OK, "{b}");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+
     let pushed = loop {
         let p = pushed_policies(&h, node);
         if !p.is_empty() || std::time::Instant::now() > deadline {
             break p;
         }
+
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     };
+
     assert_eq!(pushed.len(), 1, "{pushed:?}");
     assert_eq!(pushed[0]["fleet"], json!(["10.9.0.2"]), "the other node's address, not its own: {}", pushed[0]);
+
     // Probing only the workload: no list.
     let (s, b) = admin.call(Method::PUT, &url, Some(json!({ "policy": http_policy("") }))).await;
     assert_eq!(s, StatusCode::OK, "{b}");
@@ -870,6 +912,7 @@ async fn health_summary_lists_visible_apps_and_can_deploy_is_a_per_caller_hint()
     assert_eq!(v["truncated"], false, "{v}");
     let item = v["items"].as_array().unwrap().iter().find(|i| i["service_id"] == app["id"]).cloned();
     assert_eq!(item.map(|i| i["instances"].clone()), Some(json!([])), "{v}");
+
     // The environment filter keeps only that environment.
     let (_, other) =
         admin.get("/api/v1/services/health-summary?environment_id=00000000-0000-0000-0000-000000000000").await;
@@ -882,9 +925,11 @@ async fn health_summary_lists_visible_apps_and_can_deploy_is_a_per_caller_hint()
         user_with_role(&h, &admin, "aud@example.com", "auditor", &format!("workspace:{}", h.default_org)).await;
     let (s, list) = auditor.get("/api/v1/services").await;
     assert_eq!(s, StatusCode::OK, "{list}");
+
     if let Some(a) = list.as_array().unwrap().first() {
         assert_eq!(a["can_deploy"], false, "{list}");
     }
+
     let (s, one) = auditor.get(&format!("/api/v1/services/{}", app["id"].as_str().unwrap())).await;
     if s == StatusCode::OK {
         assert_eq!(one["can_deploy"], false, "{one}");

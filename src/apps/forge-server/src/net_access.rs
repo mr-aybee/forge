@@ -52,6 +52,7 @@ impl Lists {
         if self.deny.iter().any(|n| n.contains(ip)) {
             return false;
         }
+
         let allow = if path.starts_with("/hooks/") {
             &self.webhooks_allow
         } else if node_path(path) {
@@ -59,15 +60,18 @@ impl Lists {
         } else {
             &self.allow
         };
+
         allow.is_empty() || allow.iter().any(|n| n.contains(ip))
     }
 }
 
 fn refuse(status: StatusCode, message: &'static str) -> Response {
     let mut r = (status, axum::Json(serde_json::json!({ "error": message }))).into_response();
+
     if status == StatusCode::TOO_MANY_REQUESTS {
         r.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from_static("60"));
     }
+
     r
 }
 
@@ -82,6 +86,7 @@ pub async fn guard(
     if !state.access_lists.permits(ip, path) {
         return refuse(StatusCode::FORBIDDEN, "access from this address is not allowed");
     }
+
     let limits = &state.config.security.rate_limit;
     if limits.enabled && !EXEMPT.contains(&path) {
         let limit = usize::try_from(limits.per_ip_per_minute).unwrap_or(usize::MAX);
@@ -89,6 +94,7 @@ pub async fn guard(
             return refuse(StatusCode::TOO_MANY_REQUESTS, "too many requests from this address; slow down");
         }
     }
+
     next.run(req).await
 }
 

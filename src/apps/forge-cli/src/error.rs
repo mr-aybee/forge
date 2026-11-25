@@ -87,6 +87,7 @@ impl CliError {
                 | "mfa_enrollment_required"
                 | "approval_required"
         );
+
         let exit = match status {
             _ if mfa => Exit::MfaRequired,
             400 | 422 => Exit::Usage,
@@ -98,7 +99,9 @@ impl CliError {
             502 | 503 => Exit::Transport,
             _ => Exit::General,
         };
+
         let message = detail.filter(|d| !d.is_empty()).map_or_else(|| format!("HTTP {status}"), str::to_owned);
+
         Self {
             exit,
             code: if title.is_empty() { exit.code().to_owned() } else { title.to_owned() },
@@ -141,6 +144,7 @@ mod tests {
     fn http_statuses_map_to_documented_exit_codes() {
         assert_eq!(CliError::from_http(401, None, None, None).exit, Exit::Auth);
         assert_eq!(CliError::from_http(403, Some("forbidden"), None, None).exit, Exit::Denied);
+
         // A step-up demand is not a permission denial.
         let e = CliError::from_http(403, Some("step_up_required"), Some("verify with MFA"), None);
         assert_eq!((e.exit, e.code.as_str()), (Exit::MfaRequired, "step_up_required"));

@@ -17,6 +17,7 @@ fn unit_name(name: &str) -> Result<String, String> {
     if !valid_service_name(name) {
         return Err(format!("invalid unit name `{name}`"));
     }
+
     Ok(if name.contains('.') { name.to_owned() } else { format!("{name}.service") })
 }
 
@@ -32,9 +33,11 @@ impl ServiceManager for Systemd {
             }
             Err(e) => return Err(e.to_string()),
         };
+
         let path: OwnedObjectPath = reply.body().deserialize().map_err(|e| e.to_string())?;
         let proxy = zbus::Proxy::new(&conn, DEST, path, UNIT).await.map_err(|e| e.to_string())?;
         let active: String = proxy.get_property("ActiveState").await.map_err(|e| e.to_string())?;
+
         Ok(match active.as_str() {
             "active" | "reloading" => ServiceState::Running,
             "inactive" => ServiceState::Stopped,
@@ -48,6 +51,7 @@ impl ServiceManager for Systemd {
     async fn restart(&self, name: &str) -> Result<(), String> {
         let unit = unit_name(name)?;
         let conn = zbus::Connection::system().await.map_err(|e| e.to_string())?;
+
         conn.call_method(Some(DEST), PATH, Some(MANAGER), "RestartUnit", &(unit.as_str(), "replace"))
             .await
             .map(|_| ())
@@ -66,10 +70,12 @@ pub(super) async fn active_state(name: &str) -> Result<Option<(String, String)>,
         Err(zbus::Error::MethodError(n, _, _)) if n.as_str().ends_with("NoSuchUnit") => return Ok(None),
         Err(e) => return Err(e.to_string()),
     };
+
     let path: OwnedObjectPath = reply.body().deserialize().map_err(|e| e.to_string())?;
     let proxy = zbus::Proxy::new(&conn, DEST, path, UNIT).await.map_err(|e| e.to_string())?;
     let active: String = proxy.get_property("ActiveState").await.map_err(|e| e.to_string())?;
     let id: Vec<u8> = proxy.get_property("InvocationID").await.unwrap_or_default();
     let hex: String = id.iter().map(|b| format!("{b:02x}")).collect();
+
     Ok(Some((active, hex)))
 }

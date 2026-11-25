@@ -57,6 +57,7 @@ async fn require_platform_admin(state: &AppState, caller: &Caller, ws: Workspace
             .await;
         return Err(ApiError::forbidden("the credential vault is for platform administrators"));
     }
+
     Ok(())
 }
 
@@ -87,17 +88,21 @@ pub struct ItemInput {
 /// and displaying links.
 async fn link_targets(state: &AppState, ws: WorkspaceId) -> ApiResult<HashMap<(String, String), String>> {
     let mut m = HashMap::new();
+
     for s in state.store.list_servers(Some(ws)).await? {
         m.insert(("node".into(), s.id.to_string()), s.display_name.clone().unwrap_or(s.hostname.clone()));
     }
+
     for c in state.store.list_clusters(ws).await? {
         m.insert(("cluster".into(), c.id.to_string()), c.name.clone());
     }
+
     for ns in state.store.list_environments(ws, None).await? {
         for a in state.store.list_services(Some(ns.id)).await? {
             m.insert(("service".into(), a.id.to_string()), format!("{}.{}", a.name, ns.name));
         }
     }
+
     Ok(m)
 }
 
@@ -109,38 +114,49 @@ fn clean(
     if name.is_empty() || name.chars().count() > 100 {
         return Err(bad("name: 1 to 100 characters"));
     }
+
     if req.username.chars().count() > 200 || req.notes.chars().count() > 4000 {
         return Err(bad("username or notes too long"));
     }
+
     let url = req.url.trim();
     let lower = url.to_ascii_lowercase();
+
     if url.len() > 500
         || !(url.is_empty() || ["https://", "http://", "ssh://", "rdp://"].iter().any(|p| lower.starts_with(p)))
     {
         return Err(bad("url: http(s)://, ssh:// or rdp://"));
     }
+
     let mut tags: Vec<String> = Vec::new();
+
     for t in &req.tags {
         let t = t.trim().to_lowercase();
         if t.is_empty() || t.len() > 40 || !t.chars().all(|c| c.is_alphanumeric() || "-_.:".contains(c)) {
             return Err(bad(format!("tag {t:?}: letters, digits and - _ . : (up to 40)")));
         }
+
         if !tags.contains(&t) {
             tags.push(t);
         }
     }
+
     if tags.len() > 20 || req.links.len() > 20 {
         return Err(bad("at most 20 tags and 20 links"));
     }
+
     let mut links = Vec::new();
+
     for l in &req.links {
         if !targets.contains_key(&(l.kind.clone(), l.id.clone())) {
             return Err(bad(format!("unknown {} {}", l.kind, l.id)));
         }
+
         if !links.contains(l) {
             links.push(l.clone());
         }
     }
+
     Ok((name, tags, links))
 }
 
@@ -176,12 +192,14 @@ fn seal(state: &AppState, id: VaultItemId, password: &str) -> ApiResult<String> 
     if password.is_empty() || password.len() > MAX_PASSWORD {
         return Err(bad("password: 1 to 4096 bytes"));
     }
+
     Ok(state.envelope.seal(password.as_bytes(), &aad(id)).map_err(DomainError::internal)?)
 }
 
 pub async fn list(State(state): State<AppState>, caller: Caller, Ws(ws): Ws) -> ApiResult<Json<Vec<Value>>> {
     require_platform_admin(&state, &caller, ws, "vault.list").await?;
     let targets = link_targets(&state, ws).await?;
+
     Ok(Json(state.store.list_vault_items(ws).await?.iter().map(|i| view(i, &targets)).collect()))
 }
 
@@ -192,6 +210,7 @@ pub async fn create(
     Json(req): Json<ItemInput>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     require_platform_admin(&state, &caller, ws, "vault.create").await?;
+
     // Through Cedar too, so the MFA guardrail and connector limits apply.
     caller.authorize(Action::SecretManage, EntityRef::platform()).await?;
     let targets = link_targets(&state, ws).await?;
@@ -223,6 +242,7 @@ pub async fn create(
             json!({ "item": id, "name": item.name, "tags": item.tags, "links": item.links }),
         )
         .await;
+
     Ok((StatusCode::CREATED, Json(view(&item, &targets))))
 }
 
@@ -234,6 +254,7 @@ pub async fn update(
     Json(req): Json<ItemInput>,
 ) -> ApiResult<Json<Value>> {
     require_platform_admin(&state, &caller, ws, "vault.update").await?;
+
     // Through Cedar too, so the MFA guardrail and connector limits apply.
     caller.authorize(Action::SecretManage, EntityRef::platform()).await?;
     let mut item = load(&state, ws, id).await?;
@@ -241,10 +262,12 @@ pub async fn update(
     let (name, tags, links) = clean(&req, &targets)?;
     let now = state.clock.now();
     let rotated = req.password.as_deref().is_some_and(|p| !p.is_empty());
+
     if let Some(p) = req.password.as_deref().filter(|p| !p.is_empty()) {
         item.sealed = seal(&state, id, p)?;
         item.rotated_at = now;
     }
+
     item.name = name;
     item.username = req.username.trim().to_owned();
     item.url = req.url.trim().to_owned();
@@ -261,6 +284,7 @@ pub async fn update(
             json!({ "item": id, "name": item.name, "rotated": rotated }),
         )
         .await;
+
     Ok(Json(view(&item, &targets)))
 }
 
@@ -271,6 +295,7 @@ pub async fn delete(
     Path(id): Path<VaultItemId>,
 ) -> ApiResult<StatusCode> {
     require_platform_admin(&state, &caller, ws, "vault.delete").await?;
+
     // Through Cedar too, so the MFA guardrail and connector limits apply.
     caller.authorize(Action::SecretManage, EntityRef::platform()).await?;
     let item = load(&state, ws, id).await?;
@@ -283,6 +308,7 @@ pub async fn delete(
             json!({ "item": id, "name": item.name }),
         )
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -301,12 +327,15 @@ pub(super) async fn authorize_item_use(
 ) -> ApiResult<()> {
     require_platform_admin(state, caller, ws, what).await?;
     let target = EntityRef::new(EntityKind::Workspace, ws);
+
     if caller.via_api_key() {
         caller.audit_denied(what, &target, Some(ws), "vault items cannot be used with an API key").await;
         return Err(ApiError::forbidden("vault items cannot be used with an API key"));
     }
+
     caller.authorize(Action::SecretRead, target).await?;
     load(state, ws, id).await?;
+
     Ok(())
 }
 
@@ -318,14 +347,17 @@ pub async fn reveal(
 ) -> ApiResult<Json<Value>> {
     require_platform_admin(&state, &caller, ws, "vault.reveal").await?;
     let target = EntityRef::new(EntityKind::Workspace, ws);
+
     if caller.via_api_key() {
         caller.audit_denied("vault.reveal", &target, Some(ws), "passwords cannot be revealed with an API key").await;
         return Err(ApiError::forbidden("passwords cannot be revealed with an API key"));
     }
+
     caller.authorize(Action::SecretRead, target.clone()).await?;
     let item = load(&state, ws, id).await?;
     let plain = state.envelope.open(&item.sealed, &aad(id)).map_err(DomainError::internal)?;
     let password = String::from_utf8(plain).map_err(|_| ApiError::conflict("stored password is not text"))?;
     caller.audit("vault.reveal", &target, Some(ws), json!({ "item": id, "name": item.name })).await;
+
     Ok(Json(json!({ "password": password })))
 }

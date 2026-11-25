@@ -57,6 +57,7 @@ impl FabricRepository for Store {
             None => sqlx::query("SELECT * FROM cluster_fabrics").fetch_all(self.pool()).await,
         }
         .map_err(db_err)?;
+
         rows.iter().map(fabric_row).collect()
     }
 

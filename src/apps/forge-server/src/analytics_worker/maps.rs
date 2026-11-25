@@ -31,12 +31,15 @@ fn app_key(service: &Service) -> Option<String> {
 fn node_names(s: &Server) -> Vec<String> {
     let host = s.hostname.to_lowercase();
     let mut names = vec![host.clone()];
+
     if let Some(short) = host.split('.').next().filter(|x| *x != host) {
         names.push(short.to_owned());
     }
+
     if let Some(d) = s.display_name.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
         names.push(d.to_lowercase());
     }
+
     names
 }
 
@@ -67,17 +70,22 @@ pub type NodeKeys = HashMap<ServerId, Arc<Vec<forge_proto::messages::IngestKey>>
 /// The keys each node accepts: a key works only where its service is placed.
 fn node_keys(maps: &AnalyticsMaps) -> NodeKeys {
     let mut by_service: HashMap<forge_core::ServiceId, Vec<&KeyService>> = HashMap::new();
+
     for k in &maps.key_services {
         by_service.entry(k.service_id).or_default().push(k);
     }
+
     let mut out: HashMap<ServerId, Vec<forge_proto::messages::IngestKey>> = HashMap::new();
+
     for p in &maps.placements {
         let Some(keys) = by_service.get(&p.service_id) else { continue };
         let list = out.entry(p.server_id).or_default();
+
         for k in keys {
             if list.len() >= forge_proto::messages::MAX_INGEST_KEYS {
                 break;
             }
+
             // Stored hashes are hex SHA-256; anything else is skipped.
             if let Ok(hash) = hex::decode(&k.token_hash)
                 && hash.len() == 32
@@ -86,6 +94,7 @@ fn node_keys(maps: &AnalyticsMaps) -> NodeKeys {
             }
         }
     }
+
     out.into_iter()
         .map(|(n, mut v)| {
             v.sort_by(|a, b| a.hash.cmp(&b.hash));
@@ -130,17 +139,21 @@ impl MapsPublisher {
                 })
                 .collect(),
         };
+
         for i in &instances {
             let Some(server) = by_id.get(&i.server_id) else { continue };
+
             if let Some(Some(app)) = apps.get(&i.service_id) {
                 maps.app_keys.push(AppKey { server_id: i.server_id, app: app.clone(), service_id: i.service_id });
             }
+
             maps.placements.push(Placement {
                 service_id: i.service_id,
                 server_id: i.server_id,
                 names: node_names(server),
             });
         }
+
         // Bounded: the worker refuses larger pushes, so cut here and say so.
         if !maps.within_limits() {
             tracing::warn!(limit = MAX_MAP_ENTRIES, "analytics maps are cut to the limit");
@@ -149,6 +162,7 @@ impl MapsPublisher {
             maps.placements.truncate(MAX_MAP_ENTRIES);
             maps.node_certs.truncate(MAX_MAP_ENTRIES);
         }
+
         Ok(maps)
     }
 
@@ -163,9 +177,11 @@ impl MapsPublisher {
     pub async fn sync(&self, client: &WorkerClient) -> Result<bool, SyncError> {
         let maps = self.build().await?;
         *self.node_keys.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(node_keys(&maps));
+
         if !client.connected() {
             return Ok(false);
         }
+
         let generation = client.generation();
         let json = serde_json::to_vec(&maps).map_err(|e| SyncError::Encode(e.to_string()))?;
         let hash = forge_secrets::crypto::sha256_hex(&json);
@@ -175,11 +191,14 @@ impl MapsPublisher {
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
             .is_some_and(|(g, h)| *g == generation && *h == hash);
+
         if unchanged {
             return Ok(false);
         }
+
         client.push_maps(maps).await?;
         *self.last.lock().unwrap_or_else(PoisonError::into_inner) = Some((generation, hash));
+
         Ok(true)
     }
 }
@@ -200,10 +219,12 @@ pub async fn run(publisher: Arc<MapsPublisher>, client: Arc<WorkerClient>, mut s
     if !client.enabled() {
         return;
     }
+
     loop {
         if let Err(e) = publisher.sync(&client).await {
             tracing::warn!(error = %e, "pushing the analytics maps failed; retrying");
         }
+
         tokio::select! {
             () = tokio::time::sleep(CHECK_EVERY) => {}
             () = publisher.wake.notified() => {}

@@ -84,6 +84,7 @@ pub async fn create(
     if target_ws != ws {
         return Err(crate::error::ApiError::bad_request("the target belongs to another workspace"));
     }
+
     let minted = state.webhooks.create(ws, &caller.principal(), body.into()).await?;
     let w = &minted.webhook;
     caller
@@ -94,6 +95,7 @@ pub async fn create(
             json!({ "id": w.id, "name": w.name, "target": w.target, "signature": w.signature }),
         )
         .await;
+
     Ok((StatusCode::CREATED, Json(minted)))
 }
 
@@ -101,6 +103,7 @@ async fn owned(state: &AppState, caller: &Caller, id: WebhookId) -> ApiResult<We
     let w = state.webhooks.get(id).await?;
     caller.authorize(Action::WebhookManage, ws_ref(w.workspace_id)).await?;
     authorize_target(state, caller, w.target).await?;
+
     Ok(w)
 }
 
@@ -120,6 +123,7 @@ pub async fn update(
             json!({ "id": id, "enabled": updated.enabled, "tag_pattern": updated.tag_pattern }),
         )
         .await;
+
     Ok(Json(updated))
 }
 
@@ -131,6 +135,7 @@ pub async fn rotate(
     let w = owned(&state, &caller, id).await?;
     let minted = state.webhooks.rotate(id, &caller.principal()).await?;
     caller.audit(AUDIT_ROTATE, &ws_ref(w.workspace_id), Some(w.workspace_id), json!({ "id": id })).await;
+
     Ok(Json(minted))
 }
 
@@ -140,6 +145,7 @@ pub async fn delete(State(state): State<AppState>, caller: Caller, Path(id): Pat
     caller
         .audit(AUDIT_DELETE, &ws_ref(w.workspace_id), Some(w.workspace_id), json!({ "id": id, "name": w.name }))
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -150,5 +156,6 @@ pub async fn deliveries(
 ) -> ApiResult<Json<Vec<Delivery>>> {
     let w = state.webhooks.get(id).await?;
     caller.authorize(Action::View, ws_ref(w.workspace_id)).await?;
+
     Ok(Json(state.webhooks.repo.list_deliveries(id, forge_core::webhooks::DELIVERIES_KEPT).await?))
 }

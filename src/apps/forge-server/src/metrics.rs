@@ -126,10 +126,13 @@ impl Telemetry {
     pub fn record(&self, server: ServerId, sample: Sample) {
         self.with(|i| {
             let q = i.samples.entry(server).or_default();
+
             while q.len() >= MAX_SAMPLES || q.front().is_some_and(|f| sample.t - f.t > MAX_AGE_MS) {
                 q.pop_front();
             }
+
             q.push_back(sample);
+
             // A node watched live and then idle keeps a large buffer: give
             // the memory back once it is mostly empty.
             if q.capacity() > 256 && q.len() < q.capacity() / 4 {
@@ -203,6 +206,7 @@ impl Telemetry {
             if q.len() >= MAX_PROBES {
                 q.pop_front();
             }
+
             q.push_back(run);
         });
     }
@@ -222,11 +226,14 @@ mod tests {
         let t = Telemetry::default();
         let id = ServerId::new();
         let m = NodeMetrics::default();
+
         for n in 0..(MAX_SAMPLES as i64 + 10) {
             t.record(id, Sample::from_wire(Timestamp(n), &m));
         }
+
         assert_eq!(t.since(id, -1).len(), MAX_SAMPLES);
         assert_eq!(t.since(id, MAX_SAMPLES as i64 + 5).len(), 4);
+
         // An hour later only the new sample is left, and the buffer shrank.
         t.record(id, Sample::from_wire(Timestamp(MAX_AGE_MS + MAX_SAMPLES as i64 + 20), &m));
         assert_eq!(t.since(id, -1).len(), 1, "older than an hour is dropped");

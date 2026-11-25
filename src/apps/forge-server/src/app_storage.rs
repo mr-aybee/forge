@@ -103,7 +103,9 @@ pub fn attachment(item: &VaultItem, app: ServiceId) -> Option<Attachment> {
     if tag(item, TAG_APP)? != app.to_string() {
         return None;
     }
+
     let prefix = tag(item, TAG_PREFIX)?.to_owned();
+
     Some(Attachment {
         access_key: item.username.clone(),
         store_id: tag(item, TAG_STORE)?.parse().ok()?,
@@ -147,6 +149,7 @@ pub async fn attachments(vault: &dyn VaultRepository, app: &Service) -> DomainRe
         .filter_map(|i| attachment(&i, app.id).map(|a| (a, i)))
         .collect();
     out.sort_by(|a, b| a.0.prefix.cmp(&b.0.prefix));
+
     Ok(out)
 }
 
@@ -160,6 +163,7 @@ pub async fn deploy_env(
     app: &Service,
 ) -> DomainResult<Vec<(String, String)>> {
     let mut out = Vec::new();
+
     for (a, item) in attachments(vault, app).await? {
         let store = stores.get_object_store(a.store_id).await?.ok_or_else(|| {
             DomainError::Conflict(format!(
@@ -178,6 +182,7 @@ pub async fn deploy_env(
         out.push((a.env.access_key, a.access_key));
         out.push((a.env.secret_key, secret));
     }
+
     Ok(out)
 }
 
@@ -200,9 +205,11 @@ mod tests {
         for ok in ["S3", "MEDIA", "BACKUP_2", "A"] {
             assert!(valid_prefix(ok), "{ok}");
         }
+
         for bad in ["", "s3", "3S", "S3_", "A-B", "A B", "ABCDEFGHIJKLMNOPQRSTUVWXYZ"] {
             assert!(!valid_prefix(bad), "{bad}");
         }
+
         let n = EnvNames::of("MEDIA");
         assert_eq!(
             n.all(),

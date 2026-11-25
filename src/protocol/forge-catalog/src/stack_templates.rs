@@ -227,7 +227,9 @@ pub fn render_env(
     if let Some(k) = values.keys().find(|k| !t.variables.iter().any(|v| v.name == k.as_str())) {
         return Err(format!("`{k}` is not a variable of the {} template", t.title));
     }
+
     let mut out = String::new();
+
     for v in t.variables {
         let given = values.get(v.name).map(|s| s.trim()).filter(|s| !s.is_empty());
         let value = match given {
@@ -235,20 +237,24 @@ pub fn render_env(
             None if v.secret => generate(),
             None => v.default.to_owned(),
         };
+
         if !value_ok(&value) {
             return Err(format!("`{}`: one printable line without `'`, at most 1024 characters", v.name));
         }
+
         // Single-quoted, so `#` and spaces stay part of the value.
         out.push_str(&format!("{}='{}'\n", v.name, value));
     }
+
     Ok(out)
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::*;
     use std::collections::BTreeMap;
+
+    use super::*;
 
     #[test]
     fn every_template_declares_its_placeholders_and_pins_images() {
@@ -256,13 +262,16 @@ mod tests {
             for line in t.compose.lines().filter(|l| l.trim_start().starts_with("image:")) {
                 assert!(line.contains(':') && !line.trim_end().ends_with(":latest"), "{}: {line}", t.id);
             }
+
             let mut rest = t.compose;
+
             while let Some(i) = rest.find("${") {
                 let end = rest[i..].find('}').unwrap();
                 let name = &rest[i + 2..i + end];
                 assert!(t.variables.iter().any(|v| v.name == name), "{}: ${{{name}}} is not declared", t.id);
                 rest = &rest[i + end..];
             }
+
             assert!(find(t.id).is_some());
         }
     }

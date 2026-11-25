@@ -32,6 +32,7 @@ impl JobHandler for DiagnosticsJob {
         let ms = ctx.job.payload.get("step_ms").and_then(Value::as_u64).unwrap_or(500).min(60_000);
         tokio::time::sleep(Duration::from_millis(ms)).await;
         ctx.set_state(&format!("step{index}"), json!("done"));
+
         Ok(())
     }
 }

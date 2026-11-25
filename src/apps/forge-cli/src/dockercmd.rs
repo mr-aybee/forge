@@ -150,8 +150,10 @@ pub async fn run(g: &Global, cmd: DockerCmd) -> Result<()> {
     if let DockerCmd::Resources(r) = cmd {
         return crate::containercmd::docker_resources(g, r).await;
     }
+
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         DockerCmd::Resources(_) => Ok(()),
         DockerCmd::Endpoint(e) => endpoint(g, &mut api, e).await,
@@ -207,13 +209,16 @@ async fn endpoint(g: &Global, api: &mut crate::api::Api, cmd: EndpointCmd) -> Re
 /// Waits for the job (unless `no_wait`), then prints the endpoint.
 async fn finish(g: &Global, api: &mut crate::api::Api, id: &str, started: &Value, no_wait: bool) -> Result<()> {
     let job = started["job_id"].as_str().unwrap_or_default().to_owned();
+
     if no_wait {
         out::result(g.output, started, None);
         return Ok(());
     }
+
     crate::cmds::wait_jobs(api, &[job], Duration::from_secs(10 * 60)).await?;
     let v = api.get(&endpoint_path(id)).await?;
     out::result(g.output, &v, Some(ENDPOINT_COLS));
+
     Ok(())
 }
 
@@ -231,12 +236,16 @@ impl Body {
                 Some(file) => std::fs::read_to_string(file).map_err(|e| CliError::usage(format!("{file}: {e}")))?,
                 None => d,
             };
+
             let v = serde_json::from_str(&text).map_err(|e| CliError::usage(format!("--data is not JSON: {e}")))?;
+
             return Ok(Self::Json(v));
         }
+
         if let Some(f) = upload {
             return Ok(Self::Raw(std::fs::read(&f).map_err(|e| CliError::usage(format!("{f}: {e}")))?));
         }
+
         Ok(Self::None)
     }
 }
@@ -251,29 +260,37 @@ async fn call(
 ) -> Result<()> {
     let method = Method::from_bytes(method.to_ascii_uppercase().as_bytes())
         .map_err(|_| CliError::usage(format!("unknown method {method}")))?;
+
     if !matches!(method, Method::GET | Method::HEAD | Method::POST | Method::PUT | Method::DELETE) {
         return Err(CliError::usage("the method must be GET, HEAD, POST, PUT or DELETE"));
     }
+
     let path = path.strip_prefix('/').unwrap_or(path);
     let url = format!("/api/v1/servers/{}/docker/engine/{path}", enc(id));
+
     // Engine calls stream (logs, events, pulls): no overall time limit.
     api.set_request_timeout(None);
+
     let resp = match body {
         Body::None => api.send(method, &url, None).await?,
         Body::Json(v) => api.send(method, &url, Some(&v)).await?,
         Body::Raw(bytes) => api.send_bytes(method, &url, bytes).await?,
     };
+
     let mut sink: Box<dyn tokio::io::AsyncWrite + Unpin> = match output {
         Some(f) => {
             Box::new(tokio::fs::File::create(f).await.map_err(|e| CliError::new(Exit::General, format!("{f}: {e}")))?)
         }
         None => Box::new(tokio::io::stdout()),
     };
+
     let mut stream = resp.bytes_stream();
+
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| CliError::new(Exit::Transport, format!("the stream ended: {e}")))?;
         sink.write_all(&chunk).await.map_err(|e| CliError::new(Exit::General, e.to_string()))?;
         sink.flush().await.map_err(|e| CliError::new(Exit::General, e.to_string()))?;
     }
+
     Ok(())
 }

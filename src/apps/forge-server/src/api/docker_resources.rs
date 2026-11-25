@@ -99,6 +99,7 @@ pub async fn op(
     }
     op.validate().map_err(ApiError::bad_request)?;
     let ws = state.docker_resources.workspace(id).await?;
+
     // Pushes go only to registries added in Forge: an image never leaves for
     // a registry nobody approved.
     // Pushes use the workspace's stored credentials: only administrators
@@ -114,8 +115,10 @@ pub async fn op(
     let audit = format!("docker.{}", op.name());
     let details = json!({ "op": op.name(), "request": redacted(&op) });
     let principal = caller.principal().to_string();
+
     if op.read_only() {
         let mut out = state.docker_resources.run(id, &principal, &op).await?;
+
         if matches!(op, DockerOp::ImageInspect { .. } | DockerOp::ImageHistory { .. })
             && !caller.can(Action::ContainerInspectEnv, server_ref(id)).await
         {
@@ -123,11 +126,14 @@ pub async fn op(
             // secrets: keys only.
             hide_env_values(&mut out);
         }
+
         if op.is_inspect() {
             caller.audit(&audit, &server_ref(id), Some(ws), details).await;
         }
+
         return Ok((StatusCode::OK, Json(out)));
     }
+
     if is_slow(&op) {
         let job = state
             .jobs
@@ -143,6 +149,7 @@ pub async fn op(
                 max_attempts: 2,
             })
             .await;
+
         return match job {
             Ok(job) => {
                 caller.audit(&audit, &server_ref(id), Some(ws), json!({ "details": details, "job_id": job.id })).await;
@@ -154,6 +161,7 @@ pub async fn op(
             }
         };
     }
+
     match state.docker_resources.run(id, &principal, &op).await {
         Ok(out) => {
             caller.audit(&audit, &server_ref(id), Some(ws), details).await;
@@ -174,6 +182,7 @@ fn hide_env_values(detail: &mut Value) {
             e["value"] = Value::Null;
         }
     }
+
     if let Some(layers) = detail.as_array_mut() {
         for l in layers {
             if let Some(cmd) = l["created_by"].as_str() {
@@ -209,15 +218,19 @@ fn words(cmd: &str) -> Vec<(String, bool)> {
     let mut out: Vec<(String, bool)> = Vec::new();
     let mut quote: Option<char> = None;
     let mut chars = cmd.chars();
+
     while let Some(c) = chars.next() {
         let space = quote.is_none() && c.is_whitespace();
+
         match out.last_mut() {
             Some((w, s)) if *s == space => w.push(c),
             _ => out.push((c.to_string(), space)),
         }
+
         if space {
             continue;
         }
+
         match (c, quote) {
             ('\\', _) => {
                 if let (Some(n), Some((w, _))) = (chars.next(), out.last_mut()) {
@@ -229,6 +242,7 @@ fn words(cmd: &str) -> Vec<(String, bool)> {
             _ => {}
         }
     }
+
     out
 }
 
@@ -248,12 +262,15 @@ fn is_key(k: &str) -> bool {
 fn mask_assignments(cmd: &str) -> String {
     let mut out = String::with_capacity(cmd.len());
     let mut mask_next = false;
+
     for (w, space) in words(cmd) {
         if space {
             out.push_str(&w);
             continue;
         }
+
         let bare = w.trim_matches(['"', '\'']).to_ascii_lowercase();
+
         if mask_next {
             // `Authorization: Bearer x`: keep the scheme, mask what follows.
             if matches!(bare.as_str(), "bearer" | "basic" | "token") {
@@ -262,8 +279,10 @@ fn mask_assignments(cmd: &str) -> String {
                 out.push_str(MASK);
                 mask_next = false;
             }
+
             continue;
         }
+
         if SECRET_FLAGS.contains(&bare.as_str()) || bare == "bearer" {
             out.push_str(&w);
             mask_next = true;
@@ -277,6 +296,7 @@ fn mask_assignments(cmd: &str) -> String {
                 out.push_str(head);
                 out.push(' ');
                 out.push_str(MASK);
+
                 if let Some(q) = w.chars().last().filter(|c| *c == '"' || *c == '\'') {
                     out.push(q);
                 }
@@ -291,6 +311,7 @@ fn mask_assignments(cmd: &str) -> String {
             out.push_str(&w);
         }
     }
+
     out
 }
 
@@ -301,6 +322,7 @@ fn redacted(op: &DockerOp) -> Value {
     if let Some(o) = v.as_object_mut() {
         o.remove("registry_auth");
     }
+
     v
 }
 

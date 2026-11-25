@@ -84,11 +84,13 @@ fn node_and_service_scopes_cover_what_they_name() {
     let on_nodes = silence(ws, SilenceScope::Servers { ids: vec![n1] });
     assert!(silence_matches(&on_nodes, &alarm(ws, node(n1), Severity::Major), &place));
     assert!(!silence_matches(&on_nodes, &alarm(ws, node(n2), Severity::Major), &place));
+
     // A service instance on a silenced node is not covered: the
     // service may sit in an environment the silencer holds no role on.
     let mut instance = alarm(ws, app("a1"), Severity::Major);
     instance.server = Some(n1);
     assert!(!silence_matches(&on_nodes, &instance, &place));
+
     // A package installation sits under its node, so the node's silence
     // covers it (D-118).
     let mut package = alarm(ws, EntityRef::new(EntityKind::Installation, "i1"), Severity::Major);
@@ -116,12 +118,14 @@ fn cluster_and_environment_scopes_follow_where_the_resource_sits() {
     assert!(!silence_matches(&silence(ws, SilenceScope::Cluster { id: other_cluster }), &a, &in_both));
     assert!(silence_matches(&silence(ws, SilenceScope::Environment { id: ns }), &a, &in_both));
     assert!(!silence_matches(&silence(ws, SilenceScope::Environment { id: other_ns }), &a, &in_both));
+
     // A service instance on a node of the cluster, in an environment
     // that is not under the cluster: not covered.
     let mut instance = alarm(ws, app("a1"), Severity::Major);
     instance.server = Some(ServerId::new());
     let app_place = AlarmPlace { ancestors: vec![EntityRef::new(EntityKind::Environment, other_ns)] };
     assert!(!silence_matches(&silence(ws, SilenceScope::Cluster { id: cluster }), &instance, &app_place));
+
     // A resource that no longer resolves has no place: neither covers it.
     let nowhere = AlarmPlace::default();
     assert!(!silence_matches(&silence(ws, SilenceScope::Cluster { id: cluster }), &a, &nowhere));
@@ -143,12 +147,14 @@ fn rules_and_severity_bounds_narrow_a_silence() {
     // Up to major: a critical alarm is not silenced.
     let mut capped = silence(ws, SilenceScope::Workspace);
     capped.max_severity = Some(Severity::Major);
+
     for (severity, covered) in
         [(Severity::Info, true), (Severity::Warning, true), (Severity::Major, true), (Severity::Critical, false)]
     {
         let a = alarm(ws, node(ServerId::new()), severity);
         assert_eq!(silence_matches(&capped, &a, &place), covered, "{severity:?} with max major");
     }
+
     // From warning up: an info alarm is not silenced.
     let mut floored = silence(ws, SilenceScope::Workspace);
     floored.min_severity = Some(Severity::Warning);
@@ -221,6 +227,7 @@ async fn env() -> Env {
     let node = server(ws.id, Some(ns.id), Some(cluster.id));
     store.create_server(&node).await.unwrap();
     let s = Silences { store: store.clone(), alerts: store.clone(), resolver: store.clone(), clock: clock.clone() };
+
     Env {
         store,
         clock,
@@ -289,6 +296,7 @@ async fn a_silence_starts_now_or_later_and_its_state_follows_the_clock() {
     assert_eq!(ids(e.s.list(e.ws, Some(SilenceState::Active), None, 100).await.unwrap()), [now_one.id]);
     assert_eq!(ids(e.s.list(e.ws, Some(SilenceState::Scheduled), None, 100).await.unwrap()), [window.id]);
     assert!(e.s.list(e.ws, Some(SilenceState::Expired), None, 100).await.unwrap().is_empty());
+
     // The next page starts after the last one seen.
     assert_eq!(ids(e.s.list(e.ws, None, Some((window.starts_at, window.id)), 100).await.unwrap()), [now_one.id]);
 
@@ -312,6 +320,7 @@ async fn a_silence_needs_a_reason_a_bounded_window_and_things_that_exist() {
     Env::invalid(e.create(SilenceInput { ends_at: at(30 * 1000), ..ws() }).await, "ends_at");
     Env::invalid(e.create(SilenceInput { ends_at: at(30 * DAY + 1), ..ws() }).await, "ends_at");
     assert!(e.create(SilenceInput { ends_at: at(30 * DAY), ..ws() }).await.is_ok(), "30 days is allowed");
+
     // The bound is on the length, so a scheduled window may end later.
     let far = SilenceInput { starts_at: Some(at(10 * DAY)), ends_at: at(40 * DAY), ..ws() };
     assert!(e.create(far).await.is_ok());
@@ -320,6 +329,7 @@ async fn a_silence_needs_a_reason_a_bounded_window_and_things_that_exist() {
         e.create(SilenceInput { starts_at: Some(at(366 * DAY)), ends_at: at(367 * DAY), ..ws() }).await,
         "starts_at",
     );
+
     // A start a moment ago (a caller's clock slightly behind) means now.
     let s = e.create(SilenceInput { starts_at: Some(at(-MIN)), ..ws() }).await.unwrap();
     assert_eq!(s.starts_at, e.now());
@@ -336,6 +346,7 @@ async fn a_silence_needs_a_reason_a_bounded_window_and_things_that_exist() {
     Env::invalid(e.create(e.input(SilenceScope::Services { ids: vec!["nope".into()] })).await, "scope");
     let many = (0..=MAX_SILENCE_SCOPE_IDS).map(|_| ServerId::new()).collect();
     Env::invalid(e.create(e.input(SilenceScope::Servers { ids: many })).await, "scope");
+
     // A node of another workspace reads like one that does not exist.
     let other =
         Workspace { id: WorkspaceId::new(), name: "Other".into(), slug: "other".into(), created_at: Timestamp(1) };
@@ -343,6 +354,7 @@ async fn a_silence_needs_a_reason_a_bounded_window_and_things_that_exist() {
     let foreign = server(other.id, None, None);
     e.store.create_server(&foreign).await.unwrap();
     Env::invalid(e.create(e.input(SilenceScope::Servers { ids: vec![foreign.id] })).await, "scope");
+
     for scope in [
         SilenceScope::Servers { ids: vec![e.node] },
         SilenceScope::Cluster { id: e.cluster },
@@ -376,25 +388,33 @@ async fn a_silence_needs_a_reason_a_bounded_window_and_things_that_exist() {
 #[tokio::test]
 async fn a_workspace_holds_a_bounded_number_of_open_silences() {
     let mut e = env().await;
+
     // One person holds a bounded number.
     for _ in 0..MAX_OPEN_SILENCES_PER_PERSON {
         e.create(e.input(SilenceScope::Workspace)).await.unwrap();
     }
+
     assert!(matches!(e.create(e.input(SilenceScope::Workspace)).await, Err(DomainError::Conflict(_))));
+
     // Others fill the workspace up to its cap.
     let per = usize::try_from(MAX_OPEN_SILENCES_PER_PERSON).unwrap();
     let total = usize::try_from(MAX_OPEN_SILENCES).unwrap();
+
     for _ in 0..(total / per - 1) {
         e.who = Principal::User(UserId::new());
+
         for _ in 0..per {
             e.create(e.input(SilenceScope::Workspace)).await.unwrap();
         }
     }
+
     e.who = Principal::User(UserId::new());
     assert!(matches!(e.create(e.input(SilenceScope::Workspace)).await, Err(DomainError::Conflict(_))));
+
     // A workspace manager can still silence during an incident.
     let admin = SilenceInput { manages_workspace: true, ..e.input(SilenceScope::Workspace) };
     assert!(e.create(admin).await.is_ok());
+
     // Ended silences do not count.
     e.advance(3 * HOUR);
     assert!(e.create(e.input(SilenceScope::Workspace)).await.is_ok());
@@ -420,6 +440,7 @@ async fn a_silence_is_extended_and_ended_but_never_after_it_expired() {
     assert_eq!((ended.ends_at, ended.ended_by.clone()), (e.now(), Some(other)));
     assert_eq!(ended.state(e.now()), SilenceState::Expired);
     assert_eq!(e.s.get(s.id).await.unwrap(), ended, "kept as history");
+
     // An expired silence never changes.
     assert!(matches!(e.s.end(s.id, e.who.clone()).await, Err(DomainError::Conflict(_))));
     assert!(matches!(e.s.extend(s.id, Timestamp(e.now().0 + HOUR)).await, Err(DomainError::Conflict(_))));

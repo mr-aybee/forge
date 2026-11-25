@@ -30,6 +30,7 @@ fn shell_flags(script: &str) -> Vec<String> {
 fn ps_params(script: &str) -> Vec<String> {
     let Some(start) = script.find("param(") else { return Vec::new() };
     let block = &script[start..script[start..].find("\n)").map_or(script.len(), |e| start + e)];
+
     block
         .split('$')
         .skip(1)

@@ -69,9 +69,11 @@ pub fn parse_yaml(text: &str) -> Result<Value, String> {
     if text.len() > cat::MAX_DOC_BYTES {
         return Err(format!("the document is larger than {} KiB", cat::MAX_DOC_BYTES / 1024));
     }
+
     if text.trim().is_empty() {
         return Err("the document is empty".into());
     }
+
     let mut budget = serde_saphyr::Budget::default();
     budget.max_depth = 32;
     budget.max_nodes = 20_000;
@@ -85,6 +87,7 @@ pub fn parse_yaml(text: &str) -> Result<Value, String> {
     options.budget = Some(budget);
     options.strict_booleans = true;
     options.leading_zero_numbers_as_strings = true;
+
     serde_saphyr::from_str_with_options(text, options).map_err(|e| {
         let msg = e.to_string();
         format!("invalid YAML: {}", msg.lines().next().unwrap_or(&msg))
@@ -130,6 +133,7 @@ pub fn site_targets(config: &Value, app: forge_core::ServiceId) -> bool {
                 .any(|t| matches!(t, Target::App { service_id, .. } if *service_id == id))
         })
     };
+
     // The default rule's targets, then each path rule's (D-169).
     routes(config) || config["spec"]["rules"].as_array().is_some_and(|rules| rules.iter().any(routes))
 }
@@ -144,9 +148,11 @@ pub fn release_app(app: &Service, release: &Release) -> Service {
     let mut a = app.clone();
     a.spec = release.spec.clone();
     a.env = release.env.clone();
+
     if let Some(r) = release.spec.get("runtime").and_then(Value::as_str) {
         r.clone_into(&mut a.runtime);
     }
+
     a
 }
 
@@ -269,6 +275,7 @@ impl DeployService {
             .ok_or_else(|| DomainError::NotFound(format!("environment `{env_slug}`")))?;
         let existing = self.apps.list_services(Some(ns.id)).await?.into_iter().find(|a| a.name == doc.metadata.name);
         let runtime = runtime_name(doc.spec.runtime);
+
         if let Some(a) = &existing
             && a.runtime != runtime
         {
@@ -277,6 +284,7 @@ impl DeployService {
                 a.name, a.runtime
             )));
         }
+
         let now = self.clock.now();
         let app = existing.clone().unwrap_or_else(|| Service {
             id: forge_core::ServiceId::new(),
@@ -310,10 +318,13 @@ impl DeployService {
             created_at: now,
         };
         crate::jobs::app::build_spec(&release_app(&app, &release), None).map_err(DomainError::Invalid)?;
+
         if let Some(prepared) = self.swarm_prepared(&app, existing.is_none(), &release, &policy).await? {
             return Ok(prepared);
         }
+
         let current: Vec<ServerId> = self.apps.list_instances(app.id).await?.iter().map(|i| i.server_id).collect();
+
         let nodes = match &doc.spec.placement {
             Some(p) => self.place(ws, p, &current).await?,
             None if current.is_empty() => {
@@ -323,9 +334,11 @@ impl DeployService {
             }
             None => current.clone(),
         };
+
         let added = nodes.iter().copied().filter(|n| !current.contains(n)).collect();
         let removed = current.iter().copied().filter(|n| !nodes.contains(n)).collect();
         let (plan, names) = self.plan(&app, &release, &policy, &nodes).await?;
+
         Ok(Prepared {
             app,
             is_new: existing.is_none(),
@@ -353,14 +366,17 @@ impl DeployService {
         let Some(cluster) = self.swarm.swarm_of_environment(app.environment_id).await? else { return Ok(None) };
         let runtime: forge_catalog::Runtime =
             serde_json::from_value(release.spec["runtime"].clone()).map_err(DomainError::internal)?;
+
         if runtime != forge_catalog::Runtime::Container {
             return Err(DomainError::Invalid("Docker Swarm clusters run container services only".into()));
         }
+
         // No Swarm settings in the release: Swarm's defaults (one replica).
         let settings: forge_catalog::swarm_service::SwarmSettings = match &release.spec["swarm"] {
             Value::Null => forge_catalog::swarm_service::SwarmSettings::default(),
             v => serde_json::from_value(v.clone()).map_err(|e| DomainError::Invalid(format!("swarm settings: {e}")))?,
         };
+
         // The slot serving now: a weighted slot, else the unslotted service
         // once a release went live, else nothing yet.
         let slots = self.deploys.list_slots(app.id).await?;
@@ -370,6 +386,7 @@ impl DeployService {
             None if self.deploys.current_release(app.id).await? > 0 => Some(String::new()),
             None => None,
         };
+
         let routed = self.sites.list_sites().await?.iter().any(|s| site_targets(&s.config, app.id));
         let input = forge_catalog::swarm_rollout::SwarmPlanInput {
             policy,
@@ -386,6 +403,7 @@ impl DeployService {
             notes: vec!["Docker Swarm places the tasks on the swarm's nodes".into()],
             targets: Vec::new(),
         };
+
         Ok(Some(Prepared {
             app: app.clone(),
             is_new,
@@ -412,11 +430,14 @@ impl DeployService {
         if let Some(prepared) = self.swarm_prepared(app, false, &release, &policy).await? {
             return Ok(prepared);
         }
+
         let nodes: Vec<ServerId> = self.apps.list_instances(app.id).await?.iter().map(|i| i.server_id).collect();
         if nodes.is_empty() {
             return Err(DomainError::Invalid("the service runs on no node".into()));
         }
+
         let (plan, names) = self.plan(app, &release, &policy, &nodes).await?;
+
         Ok(Prepared {
             app: app.clone(),
             is_new: false,
@@ -435,12 +456,15 @@ impl DeployService {
     /// the current one.
     pub async fn rollback_target(&self, app: &Service, to: Option<i64>) -> DomainResult<i64> {
         let current = self.deploys.current_release(app.id).await?;
+
         if let Some(n) = to {
             if n == current {
                 return Err(DomainError::Invalid(format!("release {n} is already the current one")));
             }
+
             return Ok(n);
         }
+
         let older = self
             .deploys
             .list_deployments(app.id, MAX_LISTED)
@@ -449,6 +473,7 @@ impl DeployService {
             .filter(|d| d.state == DeploymentState::Succeeded && d.release_number != current)
             .map(|d| d.release_number)
             .next();
+
         older.ok_or_else(|| DomainError::Invalid("there is no earlier release that ran".into()))
     }
 
@@ -463,14 +488,17 @@ impl DeployService {
         let instances = self.apps.list_instances(app.id).await?;
         let mut plan_nodes = Vec::with_capacity(nodes.len());
         let mut names = BTreeMap::new();
+
         for id in nodes {
             let server = self.servers.get_server(*id).await?;
             let name = server.display_name.clone().unwrap_or_else(|| server.hostname.clone());
             names.insert(id.to_string(), name.clone());
+
             let serving_now = match serving(&slots, *id) {
                 Some(s) => Some(Slot::parse(&s.slot)),
                 None => instances.iter().find(|i| i.server_id == *id && i.status != "pending").map(|_| None),
             };
+
             plan_nodes.push(PlanNode {
                 server_id: id.to_string(),
                 name,
@@ -478,16 +506,20 @@ impl DeployService {
                 serving: serving_now,
             });
         }
+
         let spec = &release.spec;
         let runtime: forge_catalog::Runtime =
             serde_json::from_value(spec["runtime"].clone()).unwrap_or(forge_catalog::Runtime::Systemd);
+
         let has_ports = match runtime {
             forge_catalog::Runtime::Container => spec["ports"].as_array().is_some_and(|p| !p.is_empty()),
             _ => spec["listen_port"].as_u64().is_some(),
         };
+
         let routed = self.sites.list_sites().await?.iter().any(|s| site_targets(&s.config, app.id));
         let input = PlanInput { nodes: plan_nodes, policy: policy.clone(), runtime, routed, has_ports };
         let plan = cat::plan(&input).map_err(|e| DomainError::Invalid(e.0))?;
+
         Ok((plan, names))
     }
 
@@ -508,6 +540,7 @@ impl DeployService {
             .filter(|s| s.status != AgentStatus::Revoked)
             .collect();
         let mut picked = Vec::new();
+
         if p.nodes.is_empty() {
             picked.extend(servers.iter());
         } else {
@@ -521,11 +554,13 @@ impl DeployService {
                             || s.display_name.as_deref().is_some_and(|d| d.to_lowercase() == w)
                     })
                     .ok_or_else(|| DomainError::Invalid(format!("spec.placement.nodes: no node `{want}`")))?;
+
                 if !picked.iter().any(|x: &&forge_core::model::Server| x.id == s.id) {
                     picked.push(s);
                 }
             }
         }
+
         if !p.node_selector.is_empty() {
             let tags = self.tags.tags_of_kind(TagKind::Server).await?;
             let wanted: Vec<String> = p.node_selector.iter().map(|(k, v)| format!("{k}:{v}").to_lowercase()).collect();
@@ -535,6 +570,7 @@ impl DeployService {
                 wanted.iter().all(|w| have.contains(w))
             });
         }
+
         picked.sort_by_key(|s| {
             (
                 !current.contains(&s.id),
@@ -543,12 +579,15 @@ impl DeployService {
                 s.hostname.clone(),
             )
         });
+
         if let Some(n) = p.replicas {
             picked.truncate(n as usize);
         }
+
         if picked.is_empty() {
             return Err(DomainError::Invalid("no node matches spec.placement".into()));
         }
+
         Ok(picked.into_iter().map(|s| s.id).collect())
     }
 
@@ -565,13 +604,17 @@ impl DeployService {
         if self.deploys.active_deployment(app.id).await?.is_some() {
             return Err(DomainError::Conflict("the service already has a deployment running".into()));
         }
+
         let now = self.clock.now();
+
         if prepared.is_new {
             let mut a = release_app(app, &prepared.release);
             a.updated_at = now;
             self.apps.put_service(&a).await?;
         }
+
         let swarm = prepared.swarm.clone();
+
         for server in &prepared.added {
             self.apps
                 .put_instance(&ServiceInstance {
@@ -586,6 +629,7 @@ impl DeployService {
                 })
                 .await?;
         }
+
         if prepared.release.number == 0 {
             prepared.release.number = match self.releases.create_release(&prepared.release).await {
                 // Another release of the service took the number: once more.
@@ -593,6 +637,7 @@ impl DeployService {
                 other => other?,
             };
         }
+
         let mut d = Deployment {
             id: DeploymentId::new(),
             service_id: app.id,
@@ -642,6 +687,7 @@ impl DeployService {
                 max_attempts: 3,
             })
             .await;
+
         match job {
             Ok(j) => {
                 d.job_id = Some(j.id);
@@ -681,23 +727,30 @@ fn release_spec(
         Value::Object(m) => m,
         _ => serde_json::Map::new(),
     };
+
     m.insert("environment".into(), json!(ns_slug));
     m.insert("runtime".into(), json!(runtime_name(doc.spec.runtime)));
+
     if let Some(image) = artifact.image_ref() {
         m.insert("image".into(), json!(image));
     }
+
     let health = match &doc.spec.health.checks {
         Some(c) => Some(cat::snake_keys(c.clone())),
         None => existing.and_then(|a| a.spec.get("health").cloned()).filter(|h| !h.is_null()),
     };
+
     if let Some(h) = health {
         let policy: forge_catalog::health::HealthPolicy =
             serde_json::from_value(h.clone()).map_err(|e| DomainError::Invalid(format!("spec.health.checks: {e}")))?;
+
         if let Some(e) = policy.validate().into_iter().next() {
             return Err(DomainError::Invalid(format!("spec.health.checks.{}: {}", e.field, e.message)));
         }
+
         m.insert("health".into(), h);
     }
+
     Ok(Value::Object(m))
 }
 
@@ -710,6 +763,7 @@ fn release_env(doc: &DeploymentDoc, existing: Option<&Service>) -> DomainResult<
         .iter()
         .map(|(k, v)| EnvVar { key: k.clone(), value: Some(v.clone()), secret: false, sealed: None })
         .collect();
+
     for key in &doc.spec.secrets {
         let found = existing
             .and_then(|a| a.env.iter().find(|e| e.key == *key && e.secret && e.sealed.is_some()))
@@ -720,6 +774,7 @@ fn release_env(doc: &DeploymentDoc, existing: Option<&Service>) -> DomainResult<
             })?;
         env.push(found.clone());
     }
+
     Ok(env)
 }
 

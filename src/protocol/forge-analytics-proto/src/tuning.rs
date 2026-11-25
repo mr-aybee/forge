@@ -200,10 +200,12 @@ pub fn validate(o: &Overrides) -> Result<(), Invalid> {
         if !v.is_finite() || v < lo || v > hi {
             return Err(Invalid { setting: *s, reason: format!("must be between {lo} and {hi}") });
         }
+
         if *s == Setting::cpu_quota_vcpu && v > 0.0 && v < 0.1 {
             return Err(Invalid { setting: *s, reason: "use 0 (no cap) or at least 0.1 vCPU".into() });
         }
     }
+
     Ok(())
 }
 

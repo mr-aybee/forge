@@ -84,6 +84,7 @@ impl Catalog {
         for f in Family::ALL {
             std::fs::create_dir_all(root.join(f.dir()))?;
         }
+
         let temp = root.join("tmp");
         std::fs::create_dir_all(&temp)?;
         let config = duckdb::Config::default()
@@ -93,10 +94,13 @@ impl Catalog {
             .with("temp_directory", temp.to_string_lossy())?;
         let admin = Connection::open_in_memory_with_flags(config)?;
         admin.execute_batch(&format!("ATTACH {} AS meta", quote(&root.join("meta.duckdb").to_string_lossy())))?;
+
         for s in schema::meta() {
             admin.execute_batch(s)?;
         }
+
         let mut state = State::default();
+
         for f in Family::ALL {
             for e in std::fs::read_dir(root.join(f.dir()))? {
                 let name = e?.file_name();
@@ -105,11 +109,13 @@ impl Catalog {
                 }
             }
         }
+
         {
             let mut st = admin.prepare("SELECT family, part, min_t, max_t FROM meta.ranges")?;
             let rows = st.query_map([], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?))
             })?;
+
             for row in rows {
                 let (f, index, lo, hi) = row?;
                 if let Some(family) = Family::parse(&f) {
@@ -119,6 +125,7 @@ impl Catalog {
                 }
             }
         }
+
         Ok(Arc::new(Self { root: root.to_path_buf(), admin: Mutex::new(admin), state: Mutex::new(state) }))
     }
 
@@ -151,26 +158,32 @@ impl Catalog {
         let mut st = lock(&self.state);
         let mut held = Vec::with_capacity(parts.len());
         let mut result = Ok(());
+
         for p in parts {
             if st.doomed.contains(p) || (!create && !st.known.contains(p)) {
                 continue;
             }
+
             if !st.attached.contains_key(p) {
                 if let Err(e) = self.attach(*p) {
                     result = Err(e);
                     break;
                 }
+
                 st.known.insert(*p);
                 st.attached.insert(*p, Slot { leases: 0, last_used: Instant::now() });
             }
+
             if let Some(s) = st.attached.get_mut(p) {
                 s.leases += 1;
                 s.last_used = Instant::now();
                 held.push(*p);
             }
         }
+
         drop(st);
         let lease = Lease { catalog: self.clone(), parts: held };
+
         result.map(|()| lease)
     }
 
@@ -179,21 +192,25 @@ impl Catalog {
         let alias = p.alias();
         let admin = lock(&self.admin);
         admin.execute_batch(&format!("ATTACH {} AS {alias}", quote(&path.to_string_lossy())))?;
+
         for s in schema::family(p.family, &alias) {
             if let Err(e) = admin.execute_batch(&s) {
                 let _ = admin.execute_batch(&format!("DETACH {alias}"));
                 return Err(e.into());
             }
         }
+
         Ok(())
     }
 
     fn release(&self, parts: &[Part]) {
         let mut st = lock(&self.state);
+
         for p in parts {
             if let Some(s) = st.attached.get_mut(p) {
                 s.leases = s.leases.saturating_sub(1);
                 s.last_used = Instant::now();
+
                 if s.leases == 0 && st.doomed.contains(p) {
                     self.remove(&mut st, *p);
                 }
@@ -208,8 +225,10 @@ impl Catalog {
         {
             tracing::warn!(file = %p.file_name(), error = %e, "detaching an expired analytics file failed");
         }
+
         let path = p.path(&self.root);
         let wal = path.with_extension("duckdb.wal");
+
         for f in [&path, &wal] {
             match std::fs::remove_file(f) {
                 Ok(()) => {}
@@ -217,6 +236,7 @@ impl Catalog {
                 Err(e) => tracing::warn!(file = %f.display(), error = %e, "deleting an expired analytics file failed"),
             }
         }
+
         st.known.remove(&p);
         st.ranges.remove(&p);
         st.doomed.remove(&p);
@@ -251,17 +271,21 @@ impl Catalog {
     pub fn widen(&self, updates: &[(Part, i64, i64)]) -> Result<(), Error> {
         let mut st = lock(&self.state);
         let mut changed = Vec::new();
+
         for (p, lo, hi) in updates {
             let next = match st.ranges.get(p) {
                 Some((a, b)) if *a <= *lo && *b >= *hi => continue,
                 Some((a, b)) => ((*a).min(*lo), (*b).max(*hi)),
                 None => (*lo, *hi),
             };
+
             changed.push((*p, next));
         }
+
         if changed.is_empty() {
             return Ok(());
         }
+
         let admin = lock(&self.admin);
         admin.execute_batch("BEGIN")?;
         let r = (|| -> Result<(), Error> {
@@ -277,6 +301,7 @@ impl Catalog {
             }
             Ok(())
         })();
+
         match r {
             Ok(()) => admin.execute_batch("COMMIT")?,
             Err(e) => {
@@ -284,9 +309,11 @@ impl Catalog {
                 return Err(e);
             }
         }
+
         for (p, r) in changed {
             st.ranges.insert(p, r);
         }
+
         Ok(())
     }
 
@@ -295,12 +322,15 @@ impl Catalog {
     pub fn expire(&self, family: Family, keep_from: i64) -> usize {
         let mut st = lock(&self.state);
         let old: Vec<Part> = st.known.iter().filter(|p| p.family == family && p.index < keep_from).copied().collect();
+
         for p in &old {
             st.doomed.insert(*p);
+
             if st.attached.get(p).is_none_or(|s| s.leases == 0) {
                 self.remove(&mut st, *p);
             }
         }
+
         old.len()
     }
 
@@ -310,6 +340,7 @@ impl Catalog {
         if st.attached.contains_key(&p) {
             lock(&self.admin).execute_batch(&format!("CHECKPOINT {}", p.alias()))?;
         }
+
         Ok(())
     }
 
@@ -323,11 +354,14 @@ impl Catalog {
             .filter(|(p, s)| s.leases == 0 && now.duration_since(s.last_used) >= idle && !keep.contains(p))
             .map(|(p, _)| *p)
             .collect();
+
         for p in idle_parts {
             let admin = lock(&self.admin);
+
             // A checkpoint first, so the file is complete without its WAL.
             let r = admin.execute_batch(&format!("CHECKPOINT {0}; DETACH {0}", p.alias()));
             drop(admin);
+
             match r {
                 Ok(()) => {
                     st.attached.remove(&p);
@@ -342,6 +376,7 @@ impl Catalog {
     pub fn attached(&self) -> Vec<Part> {
         let mut v: Vec<Part> = lock(&self.state).attached.keys().copied().collect();
         v.sort();
+
         v
     }
 

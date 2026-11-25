@@ -65,12 +65,14 @@ impl Part {
     #[must_use]
     pub fn at(family: Family, ms: i64) -> Self {
         let day = ms.div_euclid(DAY_MS);
+
         let index = if family.monthly() {
             let (y, m, _) = civil(day);
             y * 12 + i64::from(m) - 1
         } else {
             day
         };
+
         Self { family, index }
     }
 
@@ -109,7 +111,9 @@ impl Part {
             }
             _ => return None,
         };
+
         let p = Self { family, index };
+
         (p.file_name() == name).then_some(p)
     }
 
@@ -145,6 +149,7 @@ pub fn civil(days: i64) -> (i64, u32, u32) {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
+
     (y, u32::try_from(m).unwrap_or(1), u32::try_from(d).unwrap_or(1))
 }
 
@@ -157,6 +162,7 @@ pub fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     let (m, d) = (i64::from(m), i64::from(d));
     let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+
     era * 146_097 + doe - 719_468
 }
 

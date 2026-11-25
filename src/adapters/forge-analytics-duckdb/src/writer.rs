@@ -87,13 +87,16 @@ impl Seen {
         if !self.0.contains_key(&(f, node)) && self.0.len() >= MAX_NODES * Family::SPOOL.len() {
             return;
         }
+
         let ids = self.0.entry((f, node)).or_default();
         if ids.iter().any(|i| i == id) {
             return;
         }
+
         if ids.len() >= IDS_PER_NODE {
             ids.pop_front();
         }
+
         ids.push_back(id.to_owned());
     }
 }
@@ -171,6 +174,7 @@ impl Writer {
             let lease = self.catalog.lease(&parts, true)?;
             self.current = Some((today, lease));
         }
+
         Ok(self.current.as_ref().map(|(_, l)| l.parts().to_vec()).unwrap_or_default())
     }
 
@@ -183,11 +187,13 @@ impl Writer {
         while let Ok(first) = rx.recv() {
             let mut batch = Vec::new();
             let mut job = None;
+
             match first {
                 Cmd::Job(j, reply) => job = Some((j, reply)),
                 c => {
                     let mut rows = c.rows();
                     batch.push(c);
+
                     while batch.len() < MAX_ITEMS && rows < batch_rows {
                         match rx.try_recv() {
                             Ok(Cmd::Job(j, reply)) => {
@@ -203,9 +209,11 @@ impl Writer {
                     }
                 }
             }
+
             if !batch.is_empty() {
                 self.write(batch);
             }
+
             if let Some((j, reply)) = job {
                 let _ = reply.send(j(&mut self));
             }
@@ -217,8 +225,10 @@ impl Writer {
             Ok(o) => (o, None),
             Err(e) => (Vec::new(), Some(e.to_string())),
         };
+
         for (i, cmd) in batch.into_iter().enumerate() {
             let err = || Error::Write(error.clone().unwrap_or_default());
+
             match cmd {
                 Cmd::Spool(_, reply) => {
                     let _ = reply.send(outcomes.get(i).copied().ok_or_else(err));
@@ -236,9 +246,11 @@ impl Writer {
         let parts = self.current_parts()?;
         let part = |f: Family| parts.iter().find(|p| p.family == f).copied();
         let mut shares: HashMap<Family, Share<'_>> = Family::SPOOL.iter().map(|f| (*f, Share::default())).collect();
+
         // Per item: (families with rows, families skipped as already stored).
         let mut counts = vec![(0u8, 0u8); batch.len()];
         let mut batch_ids: HashSet<(Family, ServerId, &str)> = HashSet::new();
+
         for (i, cmd) in batch.iter().enumerate() {
             let (logs, minutes, processes, containers, id) = match cmd {
                 Cmd::Spool(f, _) => {
@@ -247,6 +259,7 @@ impl Writer {
                 Cmd::Rows(r, _) => (&r.logs, &r.minutes, &r.processes, &r.containers, None),
                 Cmd::Job(..) => continue,
             };
+
             for fam in Family::SPOOL {
                 let has = match fam {
                     Family::Logs => !logs.is_empty(),
@@ -254,17 +267,22 @@ impl Writer {
                     Family::Processes => !processes.is_empty(),
                     Family::Rollups => false,
                 };
+
                 if !has {
                     continue;
                 }
+
                 counts[i].0 += 1;
+
                 if let Some((node, fid)) = id
                     && (self.seen.contains(fam, node, fid) || !batch_ids.insert((fam, node, fid)))
                 {
                     counts[i].1 += 1;
                     continue;
                 }
+
                 let Some(s) = shares.get_mut(&fam) else { continue };
+
                 match fam {
                     Family::Logs => s.logs.extend(logs.iter()),
                     Family::Metrics => {
@@ -274,27 +292,34 @@ impl Writer {
                     Family::Processes => s.processes.extend(processes.iter()),
                     Family::Rollups => {}
                 }
+
                 if let Some((node, fid)) = id {
                     s.ids.push((node, fid));
                 }
+
                 s.items.push(i);
             }
         }
+
         // Ranges first: a crash after this leaves them too wide, never too narrow.
         let widen: Vec<(Part, i64, i64)> =
             shares.iter().filter_map(|(f, s)| Some((part(*f)?, s.range()?))).map(|(p, (lo, hi))| (p, lo, hi)).collect();
         self.catalog.widen(&widen)?;
         let now = self.clock.now().0;
+
         for fam in Family::SPOOL {
             let (Some(s), Some(p)) = (shares.get_mut(&fam), part(fam)) else { continue };
             if s.is_empty() {
                 continue;
             }
+
             self.commit(&p, s, now)?;
+
             for (node, fid) in &s.ids {
                 self.seen.insert(fam, *node, fid);
             }
         }
+
         Ok(counts
             .iter()
             .map(|(has, skipped)| if *has > 0 && has == skipped { FileWrite::AlreadyStored } else { FileWrite::Stored })
@@ -320,8 +345,10 @@ impl Writer {
 
     fn append(&self, p: &Part, s: &Share<'_>, now: i64) -> Result<(), Error> {
         let c = &self.conn;
+
         if !s.logs.is_empty() {
             let mut a = appender(c, p, "app_logs")?;
+
             for e in &s.logs {
                 let props = serde_json::to_string(&e.properties).map_err(|e| Error::Write(e.to_string()))?;
                 a.append_row(params![
@@ -346,10 +373,13 @@ impl Writer {
                     e.stream.map_or("", LogStream::as_str),
                 ])?;
             }
+
             a.flush()?;
         }
+
         if !s.minutes.is_empty() {
             let mut a = appender(c, p, "node_minute")?;
+
             for m in &s.minutes {
                 a.append_row(params![
                     m.server_id.to_string(),
@@ -367,10 +397,13 @@ impl Writer {
                     m.samples,
                 ])?;
             }
+
             a.flush()?;
         }
+
         if !s.containers.is_empty() {
             let mut a = appender(c, p, "container_minute")?;
+
             for m in &s.containers {
                 a.append_row(params![
                     m.server_id.to_string(),
@@ -390,22 +423,30 @@ impl Writer {
                     m.restarts,
                 ])?;
             }
+
             a.flush()?;
         }
+
         if !s.processes.is_empty() {
             let mut a = appender(c, p, "top_process")?;
+
             for r in &s.processes {
                 a.append_row(params![r.server_id.to_string(), r.minute.0, r.pid, r.name, r.user, r.cpu, r.mem, r.cmd])?;
             }
+
             a.flush()?;
         }
+
         if !s.ids.is_empty() {
             let mut a = appender(c, p, "spool_files")?;
+
             for (node, fid) in &s.ids {
                 a.append_row(params![node.to_string(), some(fid), now])?;
             }
+
             a.flush()?;
         }
+
         Ok(())
     }
 }
@@ -413,12 +454,14 @@ impl Writer {
 /// Reads the last ids per node of the spool families' recent files.
 pub fn load_seen(catalog: &Arc<Catalog>, conn: &Connection, today: i64) -> Result<Seen, Error> {
     let mut seen = Seen::default();
+
     for fam in Family::SPOOL {
         let parts: Vec<Part> = catalog.files(fam).into_iter().filter(|p| p.index > today - ID_DAYS).collect();
         let lease = catalog.lease(&parts, false)?;
         if lease.parts().is_empty() {
             continue;
         }
+
         let union = lease
             .parts()
             .iter()
@@ -430,6 +473,7 @@ pub fn load_seen(catalog: &Arc<Catalog>, conn: &Connection, today: i64) -> Resul
         );
         let mut st = conn.prepare(&sql)?;
         let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?;
+
         for row in rows {
             let (node, fid) = row?;
             if let (Ok(node), Some(fid)) = (node.parse::<ServerId>(), fid) {
@@ -437,6 +481,7 @@ pub fn load_seen(catalog: &Arc<Catalog>, conn: &Connection, today: i64) -> Resul
             }
         }
     }
+
     Ok(seen)
 }
 
@@ -445,12 +490,14 @@ pub fn load_rolled(conn: &Connection) -> Result<HashMap<(i64, &'static str), i64
     let mut out = HashMap::new();
     let mut st = conn.prepare("SELECT part, tbl, max(upto) FROM meta.rolled GROUP BY part, tbl")?;
     let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))?;
+
     for row in rows {
         let (part, tbl, upto) = row?;
         if let Some(t) = crate::jobs::MINUTE_TABLES.iter().find(|t| **t == tbl) {
             out.insert((part, *t), upto);
         }
     }
+
     Ok(out)
 }
 

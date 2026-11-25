@@ -69,6 +69,7 @@ pub struct StorageView {
 
 async fn view(state: &AppState, caller: &Caller, app: &Service) -> ApiResult<StorageView> {
     let mut attachments = Vec::new();
+
     for (attachment, _) in app_storage::attachments(&state.store, app).await? {
         let store = state.store.get_object_store(attachment.store_id).await?;
         attachments.push(AttachmentView {
@@ -77,6 +78,7 @@ async fn view(state: &AppState, caller: &Caller, app: &Service) -> ApiResult<Sto
             attachment,
         });
     }
+
     Ok(StorageView { attachments, can_change: caller.can(Action::Deploy, ns_of(app)).await })
 }
 
@@ -87,6 +89,7 @@ pub async fn list(
 ) -> ApiResult<Json<StorageView>> {
     let app = super::services::load_own(&state, id).await?;
     caller.authorize(Action::View, ns_of(&app)).await?;
+
     Ok(Json(view(&state, &caller, &app).await?))
 }
 
@@ -134,16 +137,19 @@ pub async fn attach(
     caller.authorize(Action::Deploy, ns_of(&app)).await?;
     let (store, members) = stores::authorized_for_attach(&state, &caller, ws, req.store_id, &app, &req.bucket).await?;
     stores::keys_supported(&store)?;
+
     if !forge_s3::valid_bucket(&req.bucket) {
         return Err(ApiError::bad_request(
             "bucket name: 3-63 lowercase letters, digits, dots and hyphens, starting and ending with a letter or digit",
         ));
     }
+
     if !app_storage::valid_prefix(&req.prefix) {
         return Err(ApiError::bad_request(
             "prefix: an uppercase letter, then uppercase letters, digits and underscores (at most 24), not ending in an underscore",
         ));
     }
+
     // The variables must be free: in the service's own environment and
     // among its other attachments.
     let names = EnvNames::of(&req.prefix);
@@ -152,20 +158,24 @@ pub async fn attach(
             "the service already defines `{taken}`; choose another prefix or remove that variable"
         )));
     }
+
     if app_storage::attachments(&state.store, &app).await?.iter().any(|(a, _)| a.prefix == req.prefix) {
         return Err(ApiError::conflict(format!(
             "another bucket is attached with the prefix `{}`; choose another prefix",
             req.prefix
         )));
     }
+
     let client = stores::client(&state, &store).await?;
     if req.create_bucket && client.list_objects(&req.bucket, "", None, 1).await.is_err() {
         client.create_bucket(&req.bucket).await.map_err(stores::s3_error)?;
+
         // A new bucket: bucket grants left for this name do not carry over.
         let target = stores::store_ref(&store, &members);
         let reason = crate::bucket_grants::REASON_BUCKET_RECREATED;
         super::storage_grants::revoke_for_bucket(&state, &caller, &store, &target, &req.bucket, reason).await?;
     }
+
     // The bucket must exist, so a typo does not create a useless key.
     client.list_objects(&req.bucket, "", None, 1).await.map_err(stores::s3_error)?;
     let (access_key, secret_key) = client
@@ -176,6 +186,7 @@ pub async fn attach(
         )
         .await
         .map_err(stores::s3_error)?;
+
     // Two steps that can't be one transaction (the store, then the vault):
     // when recording the key fails, the key is revoked again.
     let recorded = async {
@@ -210,12 +221,15 @@ pub async fn attach(
         ApiResult::Ok(())
     }
     .await;
+
     if let Err(e) = recorded {
         if let Err(revoke) = client.delete_service_account(&access_key).await {
             tracing::warn!(store = %store.id, access_key, error = %revoke, "could not revoke a key that was not recorded");
         }
+
         return Err(e);
     }
+
     caller
         .audit(
             AUDIT_ATTACH,
@@ -226,6 +240,7 @@ pub async fn attach(
                     "bucket_created": req.create_bucket }),
         )
         .await;
+
     Ok((StatusCode::CREATED, Json(view(&state, &caller, &app).await?)))
 }
 
@@ -242,12 +257,14 @@ pub async fn detach(
         .into_iter()
         .find(|(a, _)| a.access_key == access_key)
         .ok_or_else(|| ApiError::not_found("no bucket is attached to this service with that key"))?;
+
     // `deploy` on the service's environment is all a detach needs, whoever
     // owns the store: it revokes the service's own key and nothing else.
     // A store that is gone has no key left to revoke: only the record goes.
     if let Some(store) = state.store.get_object_store(attachment.store_id).await?.filter(|s| s.workspace_id == ws) {
         stores::client(&state, &store).await?.delete_service_account(&access_key).await.map_err(stores::s3_error)?;
     }
+
     state.store.delete_vault_item(item.id).await?;
     caller
         .audit(
@@ -258,5 +275,6 @@ pub async fn detach(
                     "prefix": attachment.prefix, "access_key": access_key }),
         )
         .await;
+
     Ok(Json(view(&state, &caller, &app).await?))
 }

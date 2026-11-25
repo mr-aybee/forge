@@ -30,6 +30,7 @@ fn file(name: &str) -> String {
 /// Runs one operation.
 pub async fn run(op: &DockerTlsOp) -> Result<Value, String> {
     op.validate()?;
+
     match op {
         DockerTlsOp::Prepare {} => prepare().await,
         DockerTlsOp::Apply { ca_pem, cert_pem, listen, port } => {
@@ -44,6 +45,7 @@ pub async fn run(op: &DockerTlsOp) -> Result<Value, String> {
 fn installed() -> Option<String> {
     let text = std::fs::read_to_string(DROP_IN).ok()?;
     text.contains(MARK).then_some(())?;
+
     text.split_whitespace().find_map(|w| w.strip_prefix("tcp://").map(str::to_owned))
 }
 
@@ -52,6 +54,7 @@ async fn sh(program: &str, args: &[&str], timeout: Duration) -> Result<String, S
         .await
         .map_err(|_| format!("{program} timed out"))?
         .map_err(|e| format!("{program}: {e}"))?;
+
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
@@ -62,6 +65,7 @@ async fn sh(program: &str, args: &[&str], timeout: Duration) -> Result<String, S
 fn mkdir_private() -> Result<(), String> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     std::fs::DirBuilder::new().recursive(true).mode(0o700).create(DIR).map_err(|e| format!("{DIR}: {e}"))?;
+
     std::fs::set_permissions(DIR, std::fs::Permissions::from_mode(0o700)).map_err(|e| format!("{DIR}: {e}"))
 }
 
@@ -78,6 +82,7 @@ fn write(path: &str, data: &str, mode: u32) -> Result<(), String> {
         .map_err(|e| format!("{tmp}: {e}"))?;
     f.write_all(data.as_bytes()).map_err(|e| format!("{tmp}: {e}"))?;
     f.sync_all().map_err(|e| format!("{tmp}: {e}"))?;
+
     std::fs::rename(&tmp, path).map_err(|e| format!("{path}: {e}"))
 }
 
@@ -113,6 +118,7 @@ async fn prepare() -> Result<Value, String> {
         running_containers: info["ContainersRunning"].as_u64().unwrap_or(0),
         installed: installed(),
     };
+
     serde_json::to_value(prepared).map_err(|e| e.to_string())
 }
 
@@ -121,7 +127,9 @@ async fn addresses() -> Vec<std::net::IpAddr> {
     let Ok(out) = sh("ip", &["-j", "addr", "show"], Duration::from_secs(5)).await else {
         return Vec::new();
     };
+
     let v: Value = serde_json::from_str(&out).unwrap_or(Value::Null);
+
     v.as_array()
         .into_iter()
         .flatten()
@@ -139,13 +147,16 @@ async fn base_command() -> Result<String, String> {
     {
         return Ok(saved.trim().to_owned());
     }
+
     let shown =
         sh("systemctl", &["show", "docker.service", "-p", "ExecStart", "--value"], Duration::from_secs(10)).await?;
     let argv = parse_exec_start(&shown).ok_or("cannot read dockerd's command line from systemd")?;
     if argv.contains("tcp://") {
         return Err("dockerd already listens on TCP outside Forge; remove that listener first".into());
     }
+
     write(&file("execstart"), &argv, 0o600)?;
+
     Ok(argv)
 }
 
@@ -155,6 +166,7 @@ fn parse_exec_start(shown: &str) -> Option<String> {
     let rest = &shown[start..];
     let end = rest.find(" ;").unwrap_or(rest.len());
     let argv = rest[..end].trim();
+
     (argv.contains("dockerd") && !argv.contains('\n')).then(|| argv.to_owned())
 }
 
@@ -171,18 +183,21 @@ async fn restart_and_wait() -> Result<(), String> {
     sh("systemctl", &["daemon-reload"], Duration::from_secs(30)).await?;
     sh("systemctl", &["restart", "docker.service"], Duration::from_secs(120)).await?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+
     loop {
         if crate::docker::api("GET", "/_ping", None, Duration::from_secs(5)).await.is_ok()
             && sh("systemctl", &["is-active", "docker.service"], Duration::from_secs(5)).await.is_ok()
         {
             return Ok(());
         }
+
         if tokio::time::Instant::now() >= deadline {
             let log = sh("journalctl", &["-u", "docker.service", "-n", "15", "--no-pager"], Duration::from_secs(10))
                 .await
                 .unwrap_or_default();
             return Err(format!("dockerd did not come back: {}", log.trim()));
         }
+
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
@@ -191,6 +206,7 @@ async fn apply(ca_pem: &str, cert_pem: &str, listen: &str, port: u16) -> Result<
     if !Path::new(&file("key.pem")).exists() {
         return Err("no dockerd key on this node: prepare first".into());
     }
+
     let base = base_command().await?;
     let unit = drop_in(&base, listen, port);
     let previous = std::fs::read_to_string(DROP_IN).ok();
@@ -200,6 +216,7 @@ async fn apply(ca_pem: &str, cert_pem: &str, listen: &str, port: u16) -> Result<
     {
         return Ok(json!({ "listening": format!("{listen}:{port}"), "restarted": false }));
     }
+
     let old_ca = std::fs::read_to_string(file("ca.pem")).ok();
     let old_cert = std::fs::read_to_string(file("cert.pem")).ok();
     mkdir_private()?;
@@ -207,6 +224,7 @@ async fn apply(ca_pem: &str, cert_pem: &str, listen: &str, port: u16) -> Result<
     write(&file("cert.pem"), cert_pem, 0o644)?;
     std::fs::create_dir_all(DROP_IN_DIR).map_err(|e| format!("{DROP_IN_DIR}: {e}"))?;
     write(DROP_IN, &unit, 0o644)?;
+
     if let Err(e) = restart_and_wait().await {
         // Put back what was there, so Docker keeps running as before.
         match &previous {
@@ -215,16 +233,20 @@ async fn apply(ca_pem: &str, cert_pem: &str, listen: &str, port: u16) -> Result<
                 let _ = std::fs::remove_file(DROP_IN);
             }
         }
+
         if let (Some(ca), Some(cert)) = (&old_ca, &old_cert) {
             write(&file("ca.pem"), ca, 0o644)?;
             write(&file("cert.pem"), cert, 0o644)?;
         }
+
         let back = restart_and_wait().await;
+
         return Err(match back {
             Ok(()) => format!("{e} (rolled back; Docker runs as before)"),
             Err(b) => format!("{e}; rolling back also failed: {b}"),
         });
     }
+
     Ok(json!({ "listening": format!("{listen}:{port}"), "restarted": true }))
 }
 
@@ -234,9 +256,11 @@ async fn remove() -> Result<Value, String> {
         std::fs::remove_file(DROP_IN).map_err(|e| format!("{DROP_IN}: {e}"))?;
         restart_and_wait().await?;
     }
+
     // The key and certificates are useless without the listener; the CA is
     // dropped on the control plane, so nothing it signed opens anything.
     let _ = std::fs::remove_dir_all(DIR);
+
     Ok(json!({ "removed": had }))
 }
 

@@ -77,17 +77,20 @@ pub enum PinAdded {
 #[must_use]
 pub fn reorder(current: &[Pin], wanted: &[(PinKind, String)]) -> Vec<(PinKind, String)> {
     let mut out: Vec<(PinKind, String)> = Vec::with_capacity(current.len());
+
     for (k, id) in wanted {
         let pinned = current.iter().any(|p| p.kind == *k && p.entity_id == *id);
         if pinned && !out.iter().any(|(ok, oid)| ok == k && oid == id) {
             out.push((*k, id.clone()));
         }
     }
+
     for p in current {
         if !out.iter().any(|(k, id)| *k == p.kind && *id == p.entity_id) {
             out.push((p.kind, p.entity_id.clone()));
         }
     }
+
     out
 }
 
@@ -141,6 +144,7 @@ mod tests {
         for k in PinKind::ALL {
             assert_eq!(k.as_str().parse::<PinKind>().ok(), Some(k));
         }
+
         assert!("server".parse::<PinKind>().is_err());
     }
 }

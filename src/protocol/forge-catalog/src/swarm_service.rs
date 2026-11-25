@@ -194,6 +194,7 @@ fn constraint_ok(c: &str) -> bool {
     let value = value.trim();
     let key_ok = ["node.id", "node.hostname", "node.role", "node.platform.os", "node.platform.arch"].contains(&key)
         || ["node.labels.", "engine.labels."].iter().any(|p| key.strip_prefix(p).is_some_and(label_name_ok));
+
     key_ok && !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
 }
 
@@ -208,20 +209,25 @@ impl SwarmSettings {
                 "service name: lowercase letters, digits and `-`, starting with a letter or digit, up to {MAX_NAME} characters"
             ));
         }
+
         if self.mode == ServiceMode::Replicated && self.replicas > MAX_REPLICAS {
             return Err(format!("replicas: at most {MAX_REPLICAS}"));
         }
+
         if self.constraints.len() > MAX_CONSTRAINTS || !self.constraints.iter().all(|c| constraint_ok(c)) {
             return Err("constraints look like `node.role==worker` or `node.labels.zone==a`".into());
         }
+
         if self.spread.len() > 4
             || !self.spread.iter().all(|s| s.strip_prefix("node.labels.").is_some_and(label_name_ok))
         {
             return Err("spread uses node labels, e.g. `node.labels.zone` (at most 4)".into());
         }
+
         if !(0.0..=1.0).contains(&self.update.max_failure_ratio) {
             return Err("max failure ratio is between 0 and 1".into());
         }
+
         Ok(())
     }
 }
@@ -256,6 +262,7 @@ pub fn docker_name_ok(n: &str) -> bool {
 #[must_use]
 pub fn default_name(environment: &str, service: &str) -> Option<String> {
     let mut out = String::new();
+
     for c in format!("{environment}-{service}").chars() {
         let c = c.to_ascii_lowercase();
         if c.is_ascii_lowercase() || c.is_ascii_digit() {
@@ -264,8 +271,10 @@ pub fn default_name(environment: &str, service: &str) -> Option<String> {
             out.push('-');
         }
     }
+
     let cut: String = out.trim_matches('-').chars().take(MAX_NAME).collect();
     let name = cut.trim_end_matches('-').to_owned();
+
     docker_name_ok(&name).then_some(name)
 }
 
@@ -295,10 +304,12 @@ pub const SPEC_LABEL: &str = "forge.spec";
 /// FNV-1a (64 bit): a stable fingerprint, not a security measure.
 fn fingerprint(v: &Value) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+
     for b in v.to_string().bytes() {
         h ^= u64::from(b);
         h = h.wrapping_mul(0x0100_0000_01b3);
     }
+
     format!("{h:016x}")
 }
 
@@ -404,14 +415,17 @@ fn port(p: &str) -> Result<PortDef, String> {
         Some(_) => return Err(format!("port `{p}`: protocol is tcp or udp")),
         None => (p, Protocol::Tcp),
     };
+
     let parts: Vec<&str> = body.split(':').collect();
     let (published, target) = match parts.as_slice() {
         [t] => (None, *t),
         [h, t] | [_, h, t] => (Some(*h), *t),
         _ => return Err(format!("port `{p}` is not `[ip:]host:container`")),
     };
+
     let target = target.parse().map_err(|_| format!("port `{p}`: bad container port"))?;
     let published = published.map(|h| h.parse().map_err(|_| format!("port `{p}`: bad host port"))).transpose()?;
+
     Ok(PortDef { protocol: proto, target, published })
 }
 
@@ -422,7 +436,9 @@ fn mount(v: &str) -> Result<MountDef, String> {
         [s, t, "ro"] => (*s, *t, true),
         _ => return Err(format!("volume `{v}` is not `source:target[:ro]`")),
     };
+
     let (source, target) = (source.to_owned(), target.to_owned());
+
     Ok(if source.starts_with('/') {
         MountDef::Bind { source, target, read_only }
     } else {
@@ -450,6 +466,7 @@ pub fn service_def(
     if app.runtime != Runtime::Container {
         return Err("only container services run on Docker Swarm".into());
     }
+
     let (command, args) = match (app.entrypoint.trim(), app.command.trim()) {
         ("", "") => (Vec::new(), Vec::new()),
         ("", cmd) => (vec!["/bin/sh".to_owned(), "-c".to_owned(), cmd.to_owned()], Vec::new()),
@@ -459,6 +476,7 @@ pub fn service_def(
             vec!["/bin/sh".to_owned(), "-c".to_owned(), cmd.to_owned()],
         ),
     };
+
     let def = ServiceDef {
         service_id: service_id.to_owned(),
         slot: String::new(),
@@ -490,6 +508,7 @@ pub fn service_def(
         settings: settings.clone(),
     };
     def.validate()?;
+
     Ok(def)
 }
 
@@ -504,6 +523,7 @@ impl ServiceDef {
         } else {
             Some(self.settings.name.clone())
         };
+
         match base {
             Some(b) if self.slot.is_empty() => b,
             Some(b) => format!("{b}-{}", self.slot),
@@ -518,12 +538,15 @@ impl ServiceDef {
         if !slot_ok(slot) || slot.is_empty() {
             return Err("a slot is `a` or `b`".into());
         }
+
         for p in &mut self.ports {
             p.published =
                 Some(*ports.get(&p.target).ok_or_else(|| format!("no slot port for container port {}", p.target))?);
         }
+
         self.slot = slot.to_owned();
         self.validate()?;
+
         Ok(self)
     }
 
@@ -545,25 +568,31 @@ impl ServiceDef {
         if !id_ok(&self.service_id) || !id_ok(&self.environment_id) || !slot_ok(&self.slot) {
             return Err("invalid service id, environment id or slot".into());
         }
+
         if self.image.is_empty() || !crate::apps::valid_image_ref(&self.image) {
             return Err("a container service needs a valid image reference".into());
         }
+
         if self.env.len() > 500 || !self.env.iter().all(|(k, v)| crate::apps::valid_env_key(k) && !v.contains('\0')) {
             return Err("invalid environment variable".into());
         }
+
         for word in self.command.iter().chain(&self.args) {
             if word.len() > 16 * 1024 || word.contains('\0') {
                 return Err("command words must be text without NUL, up to 16 KiB".into());
             }
         }
+
         for (what, v) in [("user", &self.user), ("hostname", &self.hostname)] {
             if v.len() > 253 || v.chars().any(|c| c.is_control() || c.is_whitespace()) {
                 return Err(format!("invalid {what}"));
             }
         }
+
         if self.mounts.len() > 64 {
             return Err("at most 64 mounts".into());
         }
+
         for m in &self.mounts {
             match m {
                 MountDef::Volume { name, target, .. } => {
@@ -575,22 +604,26 @@ impl ServiceDef {
                     if let Some(why) = crate::stacks::protected_host_path(source) {
                         return Err(format!("binding `{source}` is not allowed: {why}"));
                     }
+
                     if !container_path_ok(target) {
                         return Err(format!("mount target `{target}` must be an absolute container path"));
                     }
                 }
             }
         }
+
         if let Some(h) = &self.healthcheck
             && (h.command.trim().is_empty() || h.command.len() > 4096 || h.command.contains('\0'))
         {
             return Err("invalid health check command".into());
         }
+
         if !self.extra_hosts.iter().all(|h| {
             h.split_once(':').is_some_and(|(n, ip)| volume_name_ok(n) && ip.parse::<std::net::IpAddr>().is_ok())
         }) {
             return Err("extra hosts are `name:ip`".into());
         }
+
         if self.labels.len() > 64
             || !self.labels.iter().all(|(k, v)| {
                 label_name_ok(k) && !k.starts_with("forge.") && v.len() <= 1024 && !v.chars().any(char::is_control)
@@ -598,12 +631,15 @@ impl ServiceDef {
         {
             return Err("labels: letters, digits, `.` `-` `_`; `forge.*` is reserved".into());
         }
+
         if self.ports.len() > 64 || self.ports.iter().any(|p| p.target == 0 || p.published == Some(0)) {
             return Err("invalid port".into());
         }
+
         // Slot ports are Forge's: a slot publishes only there, and nothing
         // else may, so one service can never take another's slot port.
         let slot_range = crate::deploy::SLOT_PORTS;
+
         for p in self.ports.iter().filter_map(|p| p.published) {
             if self.slot.is_empty() == slot_range.contains(&p) {
                 return Err(if self.slot.is_empty() {
@@ -617,6 +653,7 @@ impl ServiceDef {
                 });
             }
         }
+
         self.settings.validate()
     }
 
@@ -625,9 +662,11 @@ impl ServiceDef {
     pub fn engine_spec(&self) -> Value {
         let s = &self.settings;
         let mut labels = Map::new();
+
         for (k, v) in &self.labels {
             labels.insert(k.clone(), json!(v));
         }
+
         let mounts: Vec<Value> = self
             .mounts
             .iter()
@@ -648,20 +687,25 @@ impl ServiceDef {
             "ReadOnly": self.read_only,
             "Hosts": self.extra_hosts.iter().filter_map(|h| h.split_once(':').map(|(n, ip)| format!("{ip} {n}"))).collect::<Vec<_>>(),
         });
+
         if !self.command.is_empty() {
             container["Command"] = json!(self.command);
         }
+
         if !self.args.is_empty() {
             container["Args"] = json!(self.args);
         }
+
         for (key, value) in [("User", &self.user), ("Hostname", &self.hostname)] {
             if !value.is_empty() {
                 container[key] = json!(value);
             }
         }
+
         if self.stop_grace_secs > 0 {
             container["StopGracePeriod"] = json!(secs(self.stop_grace_secs));
         }
+
         if let Some(hc) = &self.healthcheck {
             container["Healthcheck"] = json!({
                 "Test": ["CMD-SHELL", hc.command],
@@ -671,20 +715,26 @@ impl ServiceDef {
                 "StartPeriod": secs(hc.start_period_secs),
             });
         }
+
         let mut limits = Map::new();
+
         if self.cpu_millis > 0 {
             limits.insert("NanoCPUs".into(), json!(u64::from(self.cpu_millis) * 1_000_000));
         }
+
         if self.memory_mb > 0 {
             limits.insert("MemoryBytes".into(), json!(u64::from(self.memory_mb) * 1024 * 1024));
         }
+
         let mut placement = json!({
             "Constraints": s.constraints,
             "Preferences": s.spread.iter().map(|l| json!({ "Spread": { "SpreadDescriptor": l } })).collect::<Vec<_>>(),
         });
+
         if s.max_per_node > 0 {
             placement["MaxReplicas"] = json!(s.max_per_node);
         }
+
         let restart = json!({
             "Condition": match s.restart.condition {
                 RestartCondition::Any => "any",
@@ -701,10 +751,12 @@ impl ServiceDef {
             "Placement": placement,
             "Networks": [{ "Target": network_name(&self.environment_id) }],
         });
+
         if self.log_max_mb > 0 {
             task["LogDriver"] =
                 json!({ "Name": "json-file", "Options": { "max-size": format!("{}m", self.log_max_mb) } });
         }
+
         let update = json!({
             "Parallelism": s.update.parallelism,
             "Delay": secs(s.update.delay_secs),
@@ -715,14 +767,17 @@ impl ServiceDef {
         });
         let mut rollback = update.clone();
         rollback["FailureAction"] = json!("pause");
+
         let mode = match s.mode {
             ServiceMode::Replicated => json!({ "Replicated": { "Replicas": s.replicas } }),
             ServiceMode::Global => json!({ "Global": {} }),
         };
+
         let publish = match s.publish {
             PublishMode::Ingress => "ingress",
             PublishMode::Host => "host",
         };
+
         let ports: Vec<Value> = self
             .ports
             .iter()
@@ -732,9 +787,11 @@ impl ServiceDef {
                     "TargetPort": p.target,
                     "PublishMode": publish,
                 });
+
                 if let Some(h) = p.published {
                     v["PublishedPort"] = json!(h);
                 }
+
                 v
             })
             .collect();
@@ -757,6 +814,7 @@ impl ServiceDef {
         let print = fingerprint(&spec);
         spec["Labels"][SPEC_LABEL] = json!(print);
         spec["TaskTemplate"]["ContainerSpec"]["Labels"][SPEC_LABEL] = json!(print);
+
         spec
     }
 }
@@ -810,6 +868,7 @@ pub fn ha_report(settings: &SwarmSettings, has_healthcheck: bool, managers: usiz
     ];
     let passed = checks.iter().filter(|c| c.ok).count();
     let score = u8::try_from(passed * 100 / checks.len()).unwrap_or(100);
+
     HaReport { score, checks }
 }
 
@@ -926,6 +985,7 @@ mod tests {
             a.volumes = vec![format!("{src}:/x")];
             assert!(service_def(&a, &SwarmSettings::default(), SVC, ENV).is_err(), "{src}");
         }
+
         let mut a = app();
         a.volumes = vec!["/srv/data:relative".into()];
         assert!(service_def(&a, &SwarmSettings::default(), SVC, ENV).is_err(), "relative target");

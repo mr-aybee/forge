@@ -25,6 +25,7 @@ impl Env {
         let op: FileOp = serde_json::from_str(&json).unwrap_or_else(|e| panic!("{json}: {e}"));
         op.validate()?;
         let root = Root::at(self.base.path(), self.store.path())?;
+
         Ops::new(&root, &RootSpec::Node, false).run(&op)
     }
 
@@ -35,6 +36,7 @@ impl Env {
             r#"{{"op":"upload_chunk","root":ROOT,"path":"{path}","upload":"{id}","offset":0,"data_b64":"{b64}"}}"#
         ))?;
         let sha = super::hex(ring::digest::digest(&ring::digest::SHA256, data).as_ref());
+
         self.run(&format!(
             r#"{{"op":"upload_commit","root":ROOT,"path":"{path}","upload":"{id}","size":{},"sha256":"{sha}","overwrite":{overwrite}}}"#,
             data.len()
@@ -87,6 +89,7 @@ fn lists_pages_and_reads_with_versions() {
 fn uploads_commit_atomically_with_conflict_checks() {
     let e = Env::new();
     std::fs::create_dir(e.p("d")).unwrap();
+
     // New file.
     let r = e.upload("/d/new.txt", b"first", r#"{"mode":"never"}"#).unwrap();
     assert_eq!(std::fs::read(e.p("d/new.txt")).unwrap(), b"first");
@@ -99,13 +102,16 @@ fn uploads_commit_atomically_with_conflict_checks() {
     }
     // Never overwrites.
     assert!(e.upload("/d/new.txt", b"x", r#"{"mode":"never"}"#).unwrap_err().contains("already exists"));
+
     // Matching version replaces and keeps a revision.
     e.upload("/d/new.txt", b"second", &format!(r#"{{"mode":"if_version","version":"{v1}"}}"#)).unwrap();
     assert_eq!(std::fs::read(e.p("d/new.txt")).unwrap(), b"second");
+
     // A stale version is a conflict and leaves the file alone.
     let err = e.upload("/d/new.txt", b"third", &format!(r#"{{"mode":"if_version","version":"{v1}"}}"#)).unwrap_err();
     assert!(err.contains("source changed"), "{err}");
     assert_eq!(std::fs::read(e.p("d/new.txt")).unwrap(), b"second");
+
     // Partial files never show up in listings.
     let l = e.run(r#"{"op":"list","root":ROOT,"path":"/d","hidden":true}"#).unwrap();
     assert_eq!(names(&l), ["new.txt"]);
@@ -130,6 +136,7 @@ fn uploads_commit_atomically_with_conflict_checks() {
     );
     assert!(e.run(&bad).unwrap_err().contains("checksum"));
     assert!(!e.p("d/c.txt").exists());
+
     // Resume: status reports the bytes received; a wrong offset is refused.
     let st = e.run(r#"{"op":"upload_status","root":ROOT,"path":"/d/c.txt","upload":"u9"}"#).unwrap();
     assert_eq!(st["received"], 3);
@@ -185,6 +192,7 @@ fn mkdir_rename_copy_delete_trash_restore() {
     // Permanent delete.
     e.run(r#"{"op":"delete","root":ROOT,"path":"/a","permanent":true}"#).unwrap();
     assert!(!e.p("a").exists());
+
     // The root itself can never be changed.
     assert!(e.run(r#"{"op":"delete","root":ROOT,"path":"/","permanent":true}"#).is_err());
 }
@@ -218,6 +226,7 @@ fn search_names_and_content_with_limits() {
             .unwrap_err()
             .contains("invalid pattern")
     );
+
     // Resume after a file.
     let r = e
         .run(r#"{"op":"search","root":ROOT,"path":"/","spec":{"name":"*.conf","after":"etc/nginx/nginx.conf"}}"#)
@@ -326,14 +335,17 @@ fn never_follows_links_out_of_the_root() {
         let err = e.run(op).unwrap_err();
         assert!(err.contains("link"), "{op}: {err}");
     }
+
     // Uploads into a linked folder, or over a link, never write outside.
     assert!(e.upload("/escape/planted", b"x", r#"{"mode":"always"}"#).is_err());
     assert!(e.upload("/d/file-link", b"x", r#"{"mode":"always"}"#).is_err());
     assert_eq!(std::fs::read(outside.path().join("secret")).unwrap(), b"top secret");
     assert!(!outside.path().join("planted").exists());
+
     // Deleting a link removes the link, not its target.
     e.run(r#"{"op":"delete","root":ROOT,"path":"/escape","permanent":true}"#).unwrap();
     assert!(outside.path().join("secret").exists());
+
     // stat reports the link itself.
     let s = e.run(r#"{"op":"stat","root":ROOT,"path":"/d/file-link"}"#).unwrap();
     assert_eq!(s["entry"]["kind"], "symlink");
@@ -343,11 +355,13 @@ fn never_follows_links_out_of_the_root() {
 #[test]
 fn rejects_windows_special_names() {
     use super::windows::valid_name;
+
     for bad in
         ["file.txt:secret", "CON", "con.txt", "LPT1", "COM9.log", "x.", "x ", "a*b", "nul", "PROGRA~3", "AGENT~1.TOM"]
     {
         assert!(valid_name(bad).is_err(), "{bad} accepted");
     }
+
     for ok in ["file.txt", "CONFIG", "COMPUTER.txt", ".env", "LPT", "notes~1.backup", "~1"] {
         assert!(valid_name(ok).is_ok(), "{ok} rejected");
     }
@@ -359,15 +373,19 @@ fn rejects_windows_special_names() {
 fn zip_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
     use std::io::Write as _;
     let mut cur = std::io::Cursor::new(Vec::new());
+
     {
         let mut z = zip::ZipWriter::new(&mut cur);
         let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
         for (name, data) in entries {
             z.start_file(*name, opts).unwrap();
             z.write_all(data).unwrap();
         }
+
         z.finish().unwrap();
     }
+
     cur.into_inner()
 }
 
@@ -376,6 +394,7 @@ fn archive_names_are_checked() {
     use super::manage::safe_entry;
     assert_eq!(safe_entry("a/b/c.txt").unwrap(), ["a", "b", "c.txt"]);
     assert_eq!(safe_entry("./a//b").unwrap(), ["a", "b"]);
+
     for bad in ["../evil", "a/../../evil", "/etc/passwd", "C:/Windows/x", "a\\..\\..\\x", "x/.forge-upload-1.part"] {
         assert!(safe_entry(bad).is_err(), "{bad} accepted");
     }
@@ -387,6 +406,7 @@ fn compress_and_extract_round_trip() {
     std::fs::create_dir_all(e.p("src/sub")).unwrap();
     std::fs::write(e.p("src/a.txt"), b"alpha").unwrap();
     std::fs::write(e.p("src/sub/b.txt"), b"beta").unwrap();
+
     for (fmt, name) in [("zip", "out.zip"), ("tar_gz", "out.tar.gz")] {
         if cfg!(windows) && fmt != "zip" {
             // Windows nodes create .zip only.
@@ -394,12 +414,15 @@ fn compress_and_extract_round_trip() {
                 r#"{{"op":"compress","root":ROOT,"sources":["/src"],"dest":"/{name}","format":"{fmt}"}}"#
             ));
             assert!(r.is_err(), "{fmt} must be refused on Windows");
+
             continue;
         }
+
         let r = e
             .run(&format!(r#"{{"op":"compress","root":ROOT,"sources":["/src"],"dest":"/{name}","format":"{fmt}"}}"#))
             .unwrap();
         assert_eq!(r["entries"], 4, "{r}");
+
         // A finished archive gets the usual 0644, not the private 0600 it
         // is written with.
         #[cfg(unix)]
@@ -417,18 +440,22 @@ fn compress_and_extract_round_trip() {
         let x = e.run(&format!(r#"{{"op":"extract","root":ROOT,"archive":"/{name}","dest":"/{dest}"}}"#)).unwrap();
         assert_eq!(x["bytes"], 9, "{x}");
         assert_eq!(std::fs::read(e.p(&format!("{dest}/src/sub/b.txt"))).unwrap(), b"beta");
+
         // The destination must be new.
         assert!(e.run(&format!(r#"{{"op":"extract","root":ROOT,"archive":"/{name}","dest":"/{dest}"}}"#)).is_err());
     }
+
     // A temporary archive for download, then read and delete it.
     let t = e.run(r#"{"op":"compress","root":ROOT,"sources":["/src/a.txt"],"format":"zip"}"#).unwrap();
     let id = t["temp_id"].as_str().unwrap().to_owned();
     let r = e.run(&format!(r#"{{"op":"temp_read","root":ROOT,"id":"{id}","length":100000}}"#)).unwrap();
     assert!(r["size"].as_u64().unwrap() > 0);
+
     // The store is shared by the node's roots: another root cannot open
     // or delete the archive by its id.
     let other = Root::at(e.base.path(), e.store.path()).unwrap();
     let spec = RootSpec::Dir { base: forge_core::files::FilePath::parse("/elsewhere").unwrap() };
+
     for op in [
         format!(r#"{{"op":"temp_read","root":{{"kind":"dir","base":"/elsewhere"}},"id":"{id}","length":10}}"#),
         format!(r#"{{"op":"temp_delete","root":{{"kind":"dir","base":"/elsewhere"}},"id":"{id}"}}"#),
@@ -436,6 +463,7 @@ fn compress_and_extract_round_trip() {
         let op: FileOp = serde_json::from_str(&op).unwrap();
         assert!(Ops::new(&other, &spec, false).run(&op).unwrap_err().contains("gone"));
     }
+
     assert!(e.run(&format!(r#"{{"op":"temp_read","root":ROOT,"id":"{id}","length":10}}"#)).is_ok());
     e.run(&format!(r#"{{"op":"temp_delete","root":ROOT,"id":"{id}"}}"#)).unwrap();
     assert!(e.run(&format!(r#"{{"op":"temp_read","root":ROOT,"id":"{id}","length":10}}"#)).is_err());
@@ -445,11 +473,13 @@ fn compress_and_extract_round_trip() {
 fn hostile_archives_write_nothing_outside() {
     let e = Env::new();
     let outside = tempfile::tempdir().unwrap();
+
     for (i, name) in ["../escape.txt", "a/../../escape.txt", "/abs.txt"].iter().enumerate() {
         std::fs::write(e.p(&format!("evil{i}.zip")), zip_bytes(&[("ok.txt", b"ok"), (name, b"pwned")])).unwrap();
         let err =
             e.run(&format!(r#"{{"op":"extract","root":ROOT,"archive":"/evil{i}.zip","dest":"/out{i}"}}"#)).unwrap_err();
         assert!(err.contains("unsafe archive entry"), "{err}");
+
         // Nothing left behind: no destination, no partial folder.
         assert!(!e.p(&format!("out{i}")).exists());
         let leftovers: Vec<_> = std::fs::read_dir(e.base.path())
@@ -459,8 +489,10 @@ fn hostile_archives_write_nothing_outside() {
             .collect();
         assert!(leftovers.is_empty(), "partial folder left");
     }
+
     assert!(!e.base.path().parent().unwrap().join("escape.txt").exists());
     assert!(std::fs::read_dir(outside.path()).unwrap().next().is_none());
+
     // A zip bomb: 20 MiB of zeros compress to a few KiB.
     let zeros = vec![0u8; 20 * 1024 * 1024];
     std::fs::write(e.p("bomb.zip"), zip_bytes(&[("zeros.bin", &zeros)])).unwrap();
@@ -474,8 +506,10 @@ fn hostile_archives_write_nothing_outside() {
 fn tar_links_are_skipped_and_permissions_change() {
     use std::os::unix::fs::PermissionsExt;
     let e = Env::new();
+
     // A tar.gz with a symlink to /etc and a file.
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+
     {
         let mut t = tar::Builder::new(&mut gz);
         let mut h = tar::Header::new_gnu();
@@ -489,10 +523,12 @@ fn tar_links_are_skipped_and_permissions_change() {
         t.append_data(&mut h, "file.txt", &b"hi"[..]).unwrap();
         t.finish().unwrap();
     }
+
     std::fs::write(e.p("links.tar.gz"), gz.finish().unwrap()).unwrap();
     let r = e.run(r#"{"op":"extract","root":ROOT,"archive":"/links.tar.gz","dest":"/x"}"#).unwrap();
     assert_eq!(r["skipped"][0]["reason"], "link", "{r}");
     assert!(std::fs::symlink_metadata(e.p("x/etc-link")).is_err(), "link created");
+
     // setuid from the archive is not kept.
     let mode = std::fs::metadata(e.p("x/file.txt")).unwrap().permissions().mode() & 0o7777;
     assert_eq!(mode, 0o644);
@@ -508,6 +544,7 @@ fn tar_links_are_skipped_and_permissions_change() {
     assert_eq!(a["skipped"], 1, "{a}");
     assert_eq!(std::fs::metadata(e.p("x/file.txt")).unwrap().permissions().mode() & 0o777, 0o700);
     assert_eq!(a["sample"][0]["after"], "0700");
+
     // A path through a link is an error, not a silent no-op.
     std::os::unix::fs::symlink("/etc", e.p("etc-link")).unwrap();
     let err = e.run(r#"{"op":"set_permissions","root":ROOT,"path":"/etc-link/passwd","mode":511}"#).unwrap_err();
@@ -533,13 +570,16 @@ fn mkdir_with_parents_and_errors_that_name_the_missing_folder() {
     let out = e.run(r#"{"op":"mkdir","root":ROOT,"path":"/srv/forge/apps/site","parents":true}"#).unwrap();
     assert_eq!(out["created"], 4);
     assert!(e.p("srv/forge/apps/site").is_dir());
+
     // Again: nothing to create, not an error.
     let out = e.run(r#"{"op":"mkdir","root":ROOT,"path":"/srv/forge/apps/site","parents":true}"#).unwrap();
     assert_eq!(out["created"], 0);
+
     // A file in the way is refused.
     std::fs::write(e.p("srv/file"), b"x").unwrap();
     let err = e.run(r#"{"op":"mkdir","root":ROOT,"path":"/srv/file/x","parents":true}"#).unwrap_err();
     assert!(err.contains("/srv/file") && err.contains("not a folder"), "{err}");
+
     // Uploads name the missing folder too.
     let err = e.upload("/srv/nope/deeper/f.txt", b"x", r#"{"mode":"never"}"#).unwrap_err();
     assert!(err.contains("/srv/nope/deeper") && err.contains("/srv/nope is missing"), "{err}");
@@ -560,11 +600,13 @@ fn extract_replace_swaps_the_folder() {
     assert_eq!(std::fs::read(e.p("site/index.html")).unwrap(), b"new");
     assert!(e.p("site/css/a.css").exists() && !e.p("site/old.html").exists());
     assert!(parts(e.base.path()).is_empty(), "old tree left behind");
+
     // A bad archive: the live folder stays as it was.
     std::fs::write(e.p("evil.zip"), zip_bytes(&[("ok.txt", b"ok"), ("../x.txt", b"x")])).unwrap();
     assert!(e.run(r#"{"op":"extract","root":ROOT,"archive":"/evil.zip","dest":"/site","replace":true}"#).is_err());
     assert_eq!(std::fs::read(e.p("site/index.html")).unwrap(), b"new");
     assert!(parts(e.base.path()).is_empty());
+
     // A file is never replaced by a folder.
     std::fs::write(e.p("file"), b"x").unwrap();
     assert!(e.run(r#"{"op":"extract","root":ROOT,"archive":"/v2.zip","dest":"/file","replace":true}"#).is_err());
@@ -579,6 +621,7 @@ fn refused_uploads_leave_no_partial_file_and_stale_ones_are_swept() {
     let err = e.upload("/x.zip", b"new bytes", r#"{"mode":"never"}"#).unwrap_err();
     assert!(err.contains("already exists"), "{err}");
     assert!(parts(e.base.path()).is_empty(), "partial file left after a conflict");
+
     // A partial upload that is still resumable or retryable is kept.
     let b64 = base64::engine::general_purpose::STANDARD.encode(b"abc");
     e.run(&format!(
@@ -591,18 +634,22 @@ fn refused_uploads_leave_no_partial_file_and_stale_ones_are_swept() {
             r#"{{"op":"upload_commit","root":ROOT,"path":"/y.bin","upload":"u2","size":{size},"sha256":"{zero}","overwrite":{{"mode":"never"}}}}"#
         )
     };
+
     // Incomplete: kept for resuming.
     assert!(e.run(&commit(10)).unwrap_err().contains("incomplete"));
     assert_eq!(parts(e.base.path()).len(), 1);
+
     // A checksum mismatch: kept, so the commit can be retried with the right checksum.
     assert!(e.run(&commit(3)).unwrap_err().contains("checksum"));
     assert_eq!(parts(e.base.path()).len(), 1);
+
     // The target appeared meanwhile: refused for good, partial file removed.
     std::fs::write(e.p("y.bin"), b"theirs").unwrap();
     let sha = super::hex(ring::digest::digest(&ring::digest::SHA256, b"abc").as_ref());
     let ok = commit(3).replace(&zero, &sha);
     assert!(e.run(&ok).unwrap_err().contains("already exists"));
     assert!(parts(e.base.path()).is_empty());
+
     // An abandoned partial file (not written for over a day) goes when the
     // next upload starts in that folder; a recent one stays.
     let stale = e.p(".forge-upload-dead.part");

@@ -15,6 +15,7 @@ fn cpu_ms() -> f64 {
     let s = std::fs::read_to_string("/proc/self/stat").unwrap_or_default();
     let f: Vec<&str> = s.rsplit(')').next().unwrap_or("").split_whitespace().collect();
     let t = |i: usize| f.get(i).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+
     (t(11) + t(12)) * 10.0
 }
 
@@ -24,6 +25,7 @@ type Ids = (Vec<ServiceId>, Vec<ServerId>, i64);
 fn ids(dir: &str) -> Result<Ids, Box<dyn std::error::Error>> {
     let c = duckdb::Connection::open_in_memory()?;
     let mut parts = Vec::new();
+
     for (i, e) in std::fs::read_dir(format!("{dir}/logs"))?.enumerate() {
         let p = e?.path();
         if p.extension().is_some_and(|x| x == "duckdb") {
@@ -31,12 +33,14 @@ fn ids(dir: &str) -> Result<Ids, Box<dyn std::error::Error>> {
             parts.push(format!("SELECT * FROM d{i}.app_logs"));
         }
     }
+
     let src = parts.join(" UNION ALL ");
     let mut st = c.prepare(&format!("SELECT DISTINCT service_id FROM ({src}) WHERE service_id IS NOT NULL"))?;
     let svc = st.query_map([], |r| r.get::<_, String>(0))?.filter_map(|r| r.ok()?.parse().ok()).collect();
     let mut st = c.prepare(&format!("SELECT DISTINCT server_id FROM ({src}) WHERE server_id IS NOT NULL"))?;
     let nodes = st.query_map([], |r| r.get::<_, String>(0))?.filter_map(|r| r.ok()?.parse().ok()).collect();
     let max: i64 = c.query_row(&format!("SELECT max(ts) FROM ({src})"), [], |r| r.get(0))?;
+
     Ok((svc, nodes, max))
 }
 
@@ -73,8 +77,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         limits: SearchLimits::default(),
     };
     let (from, to) = (Timestamp(max - 3_600_000), Timestamp(max));
+
     for name in ["health", "logs_search", "logs_histogram", "node_history", "container_metrics"] {
         let (c0, t0) = (cpu_ms(), Instant::now());
+
         for _ in 0..calls {
             match name {
                 "health" => s.health().await?,
@@ -84,6 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 _ => drop(s.container_series(node, None, (from, to), Resolution::Minute, 200).await?),
             }
         }
+
         let n = f64::from(calls);
         println!(
             "{name}: {:.1} ms CPU, {:.1} ms wall per call",
@@ -91,17 +98,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             t0.elapsed().as_secs_f64() * 1000.0 / n
         );
     }
+
     // Raw statements on the same instance (SQL given after the call count).
     let conn = s.catalog().connect()?;
+
     for sql in args {
         let (c0, t0) = (cpu_ms(), Instant::now());
+
         for _ in 0..calls {
             let mut st = conn.prepare(&sql)?;
             let _ = st.query_map([], |_| Ok(()))?.count();
         }
+
         let n = f64::from(calls);
         println!("{:.1} ms CPU, {:.1} ms wall: {sql}", (cpu_ms() - c0) / n, t0.elapsed().as_secs_f64() * 1000.0 / n);
     }
+
     tokio::time::sleep(Duration::from_millis(100)).await;
+
     Ok(())
 }

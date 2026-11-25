@@ -99,9 +99,11 @@ impl CheckRef {
         if !valid_slug(&self.environment, 40) || !valid_slug(&self.app, 40) {
             return Err(RefError::App);
         }
+
         if !forge_catalog::health::valid_name(&self.check) {
             return Err(RefError::Check);
         }
+
         Ok(())
     }
 
@@ -314,14 +316,18 @@ fn save(dir: &Path, s: &Stored) -> Result<(), StoreError> {
     if !valid_slug(&s.environment, 40) || !valid_slug(&s.name, 40) {
         return Err(StoreError::InvalidName);
     }
+
     if load(dir, &s.environment, &s.name).is_some_and(|held| held.issued_at_ms > s.issued_at_ms) {
         return Err(StoreError::Older);
     }
+
     if let Some(parent) = dir.parent() {
         ensure_private_dir(parent).map_err(StoreError::Io)?;
     }
+
     ensure_private_dir(dir).map_err(StoreError::Io)?;
     let raw = serde_json::to_vec(s).map_err(|e| StoreError::Io(e.to_string()))?;
+
     write_nofollow(&file_of(dir, &s.environment, &s.name), &raw).map_err(StoreError::Io)
 }
 
@@ -332,9 +338,11 @@ pub fn store(dir: &Path, spec: &ApplySpec, at: Times) -> Result<Applied, StoreEr
     if let Some(e) = spec.policy.validate().into_iter().next() {
         return Err(StoreError::InvalidPolicy { field: e.field, message: e.message });
     }
+
     let mut s = Stored::new(&spec.environment, &spec.name, spec.runtime, spec.revision, &spec.policy, at);
     s.slot.clone_from(&spec.slot);
     save(dir, &s)?;
+
     Ok(Applied { stored: true, revision: s.revision, command_checks: s.checks.len() })
 }
 
@@ -346,9 +354,11 @@ pub fn on_app_action(dir: &Path, action: &str, spec: &AppSpec, now_ms: i64) {
     if !spec.slot.is_empty() {
         return;
     }
+
     let r = match action {
         "deploy" => {
             let policy = spec.health.clone().unwrap_or_default();
+
             // A deploy is the newest word on the app: issued "now".
             let at = Times { issued_at_ms: now_ms, now_ms };
             save(dir, &Stored::new(&spec.environment, &spec.name, spec.runtime, 0, &policy, at))
@@ -359,6 +369,7 @@ pub fn on_app_action(dir: &Path, action: &str, spec: &AppSpec, now_ms: i64) {
         },
         _ => return,
     };
+
     if let Err(e) = r {
         tracing::warn!(app = %spec.key(), error = %e, "could not update the stored command checks");
     }
@@ -371,11 +382,14 @@ pub fn lookup(dir: &Path, r: &CheckRef, now_ms: i64) -> Result<(Runtime, Check, 
     if s.revision != r.revision {
         return Err(Refusal::StalePolicy);
     }
+
     let max_age = i64::try_from(MAX_POLICY_AGE.as_millis()).unwrap_or(i64::MAX);
     if now_ms.saturating_sub(s.stored_at_ms) > max_age {
         return Err(Refusal::PolicyExpired);
     }
+
     let found = s.checks.into_iter().find(|c| c.purpose == r.purpose && c.check.name == r.check);
+
     found.map(|c| (s.runtime, c.check, s.slot)).ok_or(Refusal::NoSuchCheck)
 }
 
@@ -427,18 +441,22 @@ fn expectations(probe: &Probe) -> (&[i32], bool) {
 pub fn sanitize(output: &[u8]) -> String {
     let mut out = String::new();
     let mut gap = false;
+
     for b in output {
         if b.is_ascii_graphic() {
             if gap && !out.is_empty() {
                 out.push(' ');
             }
+
             gap = false;
             out.push(char::from(*b));
         } else {
             gap = true;
         }
     }
+
     let cut = out.len().saturating_sub(MAX_DETAIL);
+
     out.split_off(cut)
 }
 
@@ -448,6 +466,7 @@ pub fn sanitize(output: &[u8]) -> String {
 pub fn exited(probe: &Probe, code: i32, output: &[u8]) -> ExecResult {
     let (expected, show_output) = expectations(probe);
     let passed = expected.contains(&code);
+
     ExecResult::Exited { code, passed, output: if passed || !show_output { String::new() } else { sanitize(output) } }
 }
 
@@ -611,8 +630,10 @@ mod linux {
             // takes the lock, and must only ever free a place it took.
             {
                 let mut all = self.places.lock().map_err(|_| Refusal::WorkerFailed)?;
+
                 // Places of checks that are gone do not pile up.
                 all.retain(|_, p| p.active || now.saturating_duration_since(p.started) < Duration::from_secs(3600));
+
                 match all.get_mut(&key) {
                     Some(p) if p.active => return Err(Refusal::Busy),
                     Some(p) if now.saturating_duration_since(p.started) < MIN_INTERVAL => {
@@ -624,17 +645,20 @@ mod linux {
                     }
                 }
             }
+
             Ok(Running { places: self.places.clone(), key })
         }
 
         /// The app's limit of running checks.
         fn app_limit(&self, r: &CheckRef) -> Result<Arc<Semaphore>, Refusal> {
             let mut apps = self.apps.lock().map_err(|_| Refusal::WorkerFailed)?;
+
             // Limits nobody holds are dropped; a new one starts full.
             apps.retain(|_, s| Arc::strong_count(s) > 1);
             let s = apps
                 .entry(format!("{}/{}", r.environment, r.app))
                 .or_insert_with(|| Arc::new(Semaphore::new(MAX_PER_APP)));
+
             Ok(s.clone())
         }
 
@@ -646,6 +670,7 @@ mod linux {
                 let n = self.node.clone().acquire_owned().await.ok()?;
                 Some((a, n))
             };
+
             match tokio::time::timeout(QUEUE_WAIT, both).await {
                 Ok(Some(permits)) => Ok(permits),
                 Ok(None) | Err(_) => Err(Refusal::Throttled),
@@ -662,14 +687,17 @@ mod linux {
                 Ok(Err(why)) => return ExecResult::Refused { why },
                 Err(_) => return ExecResult::Refused { why: Refusal::WorkerFailed },
             };
+
             let _running = match self.enter(r.key(), Instant::now()) {
                 Ok(place) => place,
                 Err(why) => return ExecResult::Refused { why },
             };
+
             let _permits = match self.queue(r).await {
                 Ok(p) => p,
                 Err(why) => return ExecResult::Refused { why },
             };
+
             match runtime {
                 Runtime::Systemd => native(r, &check, &self.opts).await,
                 Runtime::Container => container(r, &check, &slot, &self.stuck).await,
@@ -692,24 +720,29 @@ mod linux {
             let root = Path::new(CGROUP_ROOT);
             let has =
                 |controllers: &str| ["pids", "memory"].iter().all(|c| controllers.split_whitespace().any(|x| x == *c));
+
             // cgroup v2 only: v1 and hybrid layouts have no such file here.
             let available = fs::read_to_string(root.join("cgroup.controllers")).await.ok()?;
             if !has(&available) {
                 return None;
             }
+
             let parent = root.join(CGROUP_PARENT);
             match fs::create_dir(&parent).await {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(_) => return None,
             }
+
             // The controllers must be handed down twice: root to the
             // parent, the parent to the run. Writing what is already set
             // is not an error; whether it worked is read back.
             let _ = fs::write(root.join("cgroup.subtree_control"), "+pids +memory").await;
+
             if !has(&fs::read_to_string(parent.join("cgroup.controllers")).await.ok()?) {
                 return None;
             }
+
             let _ = fs::write(parent.join("cgroup.subtree_control"), "+pids +memory").await;
             let path = parent.join(format!("{}--{}--{}--{}", r.environment, r.app, r.purpose.as_str(), r.check));
             let cage = Self { path };
@@ -719,15 +752,19 @@ mod linux {
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => cage.kill(),
                 Err(_) => return None,
             }
+
             // Without the kill switch and both limits there is no cage.
             if fs::metadata(cage.path.join("cgroup.kill")).await.is_err() {
                 return None;
             }
+
             fs::write(cage.path.join("pids.max"), PIDS_MAX.to_string()).await.ok()?;
             fs::write(cage.path.join("memory.max"), MEMORY_MAX.to_string()).await.ok()?;
+
             // Where the kernel has them: no swap, and an out-of-memory kill takes the whole run.
             let _ = fs::write(cage.path.join("memory.swap.max"), "0").await;
             let _ = fs::write(cage.path.join("memory.oom.group"), "1").await;
+
             Some(cage)
         }
 
@@ -749,6 +786,7 @@ mod linux {
                 if tokio::fs::remove_dir(&self.path).await.is_ok() {
                     return;
                 }
+
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
             // Still dying: the next run of the check empties and reuses it.
@@ -809,17 +847,22 @@ mod linux {
     async fn native(r: &CheckRef, check: &Check, opts: &RunOptions) -> ExecResult {
         let refused = |why| ExecResult::Refused { why };
         let Some((argv, stdin)) = native_command(&check.probe) else { return refused(Refusal::NoSuchCheck) };
+
         // The account is resolved here, on this node, never from a request.
         let Ok((account, uid, gid)) = crate::apps::app_account(&r.environment, &r.app).await else {
             return refused(Refusal::NoAccount);
         };
+
         if uid == 0 || gid == 0 {
             return refused(Refusal::NoAccount);
         }
+
         let base = forge_catalog::apps::app_home(&r.environment, &r.app);
+
         let Ok(input) = serde_json::to_vec(&Job { argv, stdin, account }) else {
             return refused(Refusal::WorkerFailed);
         };
+
         // This binary, by its absolute path: never a PATH lookup.
         let exe = match &opts.worker_exe {
             Some(p) => p.clone(),
@@ -828,14 +871,17 @@ mod linux {
                 Err(_) => return refused(Refusal::WorkerFailed),
             },
         };
+
         // Before anything runs as the app: without a cage, no run.
         let Some(cage) = Cage::create(r).await else { return refused(Refusal::NotContained) };
         let limit = Duration::from_secs(u64::from(check.timeout_secs.max(1)));
         let mut cmd = tokio::process::Command::new(exe);
         cmd.args(["health-worker", &uid.to_string(), &gid.to_string(), &base, &limit.as_secs().to_string()]);
+
         if opts.unconfined() {
             cmd.arg(UNCONFINED_OK);
         }
+
         // Setting the uid as root also clears the supplementary groups; the
         // worker checks all of it again before it starts anything.
         let spawned = cmd
@@ -850,17 +896,21 @@ mod linux {
             .kill_on_drop(true)
             .spawn();
         let Ok(mut child) = spawned else { return refused(Refusal::WorkerFailed) };
+
         // The worker starts nothing before it has read its command, and it
         // gets the command only once it is in the cage.
         let caged = match child.id() {
             Some(pid) => cage.add(pid).await,
             None => false,
         };
+
         let (Some(mut stdin), Some(mut stdout), true) = (child.stdin.take(), child.stdout.take(), caged) else {
             let _ = child.kill().await;
             cage.end().await;
+
             return refused(if caged { Refusal::WorkerFailed } else { Refusal::NotContained });
         };
+
         let exchange = async {
             stdin.write_all(&input).await.ok()?;
             drop(stdin);
@@ -869,19 +919,23 @@ mod linux {
             (out.len() <= MAX_ANSWER).then_some(out)
         };
         let answer = tokio::time::timeout(limit, exchange).await;
+
         // On a timeout and after a normal end alike: whatever the command
         // started dies with the cage, wherever it moved itself.
         cage.end().await;
         let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+
         let out = match answer {
             Err(_) => return ExecResult::TimedOut,
             Ok(None) => return refused(Refusal::WorkerFailed),
             Ok(Some(out)) => out,
         };
+
         let Ok(answer) = serde_json::from_slice::<Answer>(&out) else { return refused(Refusal::WorkerFailed) };
         let enforced = answer.abi >= MIN_LANDLOCK_ABI && matches!(answer.confined.as_str(), "full" | "partial");
         tracing::debug!(app = %r.key(), landlock = %answer.confined.chars().take(40).collect::<String>(), abi = answer.abi,
             "command check worker answered");
+
         match answer.outcome {
             WorkerOutcome::NotConfined => {
                 tracing::warn!(landlock = %answer.confined.chars().take(200).collect::<String>(), abi = answer.abi,
@@ -906,9 +960,11 @@ mod linux {
 
     async fn container(r: &CheckRef, check: &Check, slot: &str, stuck: &Arc<crate::docker::StuckRuns>) -> ExecResult {
         use crate::docker::{ExecEnd, ExecTarget, exec_in_app};
+
         let Some(cmd) = container_command(&check.probe) else {
             return ExecResult::Refused { why: Refusal::NoSuchCheck };
         };
+
         let target = ExecTarget {
             container: if slot.is_empty() {
                 format!("forge-app-{}-{}", r.environment, r.app)
@@ -997,6 +1053,7 @@ mod linux {
         let status = std::fs::read_to_string("/proc/self/status")?;
         crate::files::app_worker::check_identity(&status, uid, gid).map_err(WorkerError::Identity)?;
         limit_resources(timeout);
+
         // Before anything is started: Landlock binds this process and every
         // child, and sets `no_new_privs`, so no setuid program gains rights.
         let abi = landlock_abi();
@@ -1005,12 +1062,16 @@ mod linux {
         if !enforced && !unconfined_ok {
             return Ok(WorkerOutcome::NotConfined);
         }
+
         let mut input = Vec::new();
         std::io::Read::read_to_end(&mut std::io::Read::take(std::io::stdin(), MAX_JOB as u64 + 1), &mut input)?;
+
         if input.len() > MAX_JOB {
             return Err(WorkerError::TooLarge);
         }
+
         let job: Job = serde_json::from_slice(&input)?;
+
         Ok(run_command(&job, base))
     }
 
@@ -1022,6 +1083,7 @@ mod linux {
         let failed = |detail: String| WorkerOutcome::StartFailed { detail };
         let Some((program, rest)) = job.argv.split_first() else { return failed("no program".into()) };
         let mut cmd = std::process::Command::new(program);
+
         // None of the app's own variables: a check gets what any process of
         // the account would find, not the app's secrets.
         cmd.args(rest)
@@ -1032,14 +1094,17 @@ mod linux {
             .env("LOGNAME", &job.account)
             .env("LANG", "C.UTF-8")
             .current_dir(base);
+
         let (mut reader, writer) = match std::io::pipe() {
             Ok(p) => p,
             Err(e) => return failed(e.to_string()),
         };
+
         match writer.try_clone() {
             Ok(w) => cmd.stdout(w).stderr(writer),
             Err(e) => return failed(e.to_string()),
         };
+
         match &job.stdin {
             None => cmd.stdin(std::process::Stdio::null()),
             Some(script) => {
@@ -1052,14 +1117,17 @@ mod linux {
                 }
             }
         };
+
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => return failed(format!("cannot start `{program}`: {e}")),
         };
+
         // Close this process's ends of the output pipe, or it never ends.
         drop(cmd);
         let mut tail: Vec<u8> = Vec::new();
         let mut chunk = [0u8; 8192];
+
         loop {
             match reader.read(&mut chunk) {
                 Ok(0) | Err(_) => break,
@@ -1070,6 +1138,7 @@ mod linux {
                 }
             }
         }
+
         match child.wait() {
             Ok(s) => match (s.code(), s.signal()) {
                 (Some(code), _) => WorkerOutcome::Exited { code, output: tail },
@@ -1088,6 +1157,7 @@ mod linux {
         use landlock::{AccessFs, AccessNet, CompatLevel, Compatible, Ruleset, RulesetAttr, Scope};
         let hard = || Ruleset::default().set_compatibility(CompatLevel::HardRequirement);
         let fs = |right: AccessFs| hard().handle_access(right).and_then(|r| r.create()).is_ok();
+
         if hard().handle_access(AccessFs::Execute).and_then(|r| r.scope(Scope::Signal)).and_then(|r| r.create()).is_ok()
         {
             6
@@ -1136,6 +1206,7 @@ mod linux {
                 .restrict_self()?
                 .ruleset)
         })();
+
         match status {
             Ok(RulesetStatus::FullyEnforced) => "full".into(),
             Ok(RulesetStatus::PartiallyEnforced) => "partial".into(),
@@ -1186,9 +1257,11 @@ mod linux {
             drop(first);
             assert_eq!(r.enter(key(), t0 + Duration::from_millis(100)).err(), Some(Refusal::Throttled));
             let again = r.enter(key(), t0 + MIN_INTERVAL).unwrap();
+
             // Another check is not held up by this one.
             assert!(r.enter(check("api", "two").key(), t0).is_ok());
             drop(again);
+
             // Places of checks nobody ran for a long time are forgotten.
             let later = t0 + Duration::from_secs(7200);
             let _new = r.enter(check("api", "three").key(), later).unwrap();
@@ -1201,15 +1274,19 @@ mod linux {
         async fn an_app_has_its_own_limit_inside_the_nodes() {
             let r = Runner::new(std::env::temp_dir());
             let mut held = Vec::new();
+
             for i in 0..MAX_PER_APP {
                 held.push(r.queue(&check("api", &format!("c{i}"))).await.unwrap());
             }
+
             // The app is full: another of its checks waits, then is turned away.
             let started = tokio::time::Instant::now();
             assert_eq!(r.queue(&check("api", "more")).await.err(), Some(Refusal::Throttled));
             assert!(started.elapsed() >= super::QUEUE_WAIT);
+
             // Another app still gets a place at once.
             let other = r.queue(&check("web", "c")).await.unwrap();
+
             // A place that frees up within the wait is taken.
             let more = check("api", "more");
             let (got, ()) = tokio::join!(r.queue(&more), async {
@@ -1277,12 +1354,15 @@ mod tests {
         assert_eq!(stored, Applied { stored: true, revision: 7, command_checks: 2 });
         let (runtime, c, _) = lookup(&state, &check_ref(Purpose::Readiness, "cmd", 7), now).unwrap();
         assert_eq!((runtime, c.name.as_str()), (Runtime::Systemd, "cmd"));
+
         // Same name, other purpose: the other check.
         let (_, live, _) = lookup(&state, &check_ref(Purpose::Liveness, "cmd", 7), now).unwrap();
         assert!(matches!(live.probe, Probe::Shell(_)));
+
         // Another revision, a disabled check, a check that runs no code, an
         // unknown name, another app and a name that is no slug: refused.
         assert_eq!(lookup(&state, &check_ref(Purpose::Readiness, "cmd", 8), now), Err(Refusal::StalePolicy));
+
         for name in ["off", "tcp", "nope"] {
             assert_eq!(
                 lookup(&state, &check_ref(Purpose::Readiness, name, 7), now),
@@ -1290,11 +1370,13 @@ mod tests {
                 "{name}"
             );
         }
+
         assert_eq!(lookup(&state, &check_ref(Purpose::Startup, "cmd", 7), now), Err(Refusal::NoSuchCheck));
         let other = CheckRef { app: "web".into(), ..check_ref(Purpose::Readiness, "cmd", 7) };
         assert_eq!(lookup(&state, &other, now), Err(Refusal::NoPolicy));
         let escape = CheckRef { app: "../x".into(), ..check_ref(Purpose::Readiness, "cmd", 7) };
         assert!(lookup(&state, &escape, now).is_err() && escape.validate().is_err());
+
         // An invalid policy is refused.
         let bad =
             spec(1, serde_json::json!({ "liveness": [{ "name": "X", "probe": { "type": "exec", "argv": ["a"] } }] }));
@@ -1312,16 +1394,20 @@ mod tests {
         let max = i64::try_from(MAX_POLICY_AGE.as_millis()).unwrap();
         assert!(lookup(&state, &cmd, AT.now_ms + max).is_ok());
         assert_eq!(lookup(&state, &cmd, AT.now_ms + max + 1), Err(Refusal::PolicyExpired));
+
         // The helper's clock went back: not expired, not a panic.
         assert!(lookup(&state, &cmd, 0).is_ok());
+
         // Forge sends the same policy again: fresh from then on.
         let again = Times { issued_at_ms: AT.issued_at_ms + 600_000, now_ms: AT.now_ms + 600_000 };
         store(&state, &spec(7, commands()), again).unwrap();
         assert!(lookup(&state, &cmd, again.now_ms + max).is_ok());
+
         // A newer policy without command checks replaces it...
         let newer = Times { issued_at_ms: again.issued_at_ms + 1, now_ms: again.now_ms + 1 };
         assert_eq!(store(&state, &spec(9, tcp_only()), newer).unwrap().command_checks, 0);
         assert_eq!(lookup(&state, &check_ref(Purpose::Readiness, "cmd", 9), newer.now_ms), Err(Refusal::NoSuchCheck));
+
         // ...and the older command, delivered late or replayed, is refused.
         assert_eq!(store(&state, &spec(7, commands()), again), Err(StoreError::Older));
         assert_eq!(lookup(&state, &cmd, newer.now_ms), Err(Refusal::StalePolicy));
@@ -1344,6 +1430,7 @@ mod tests {
             lookup(&state, &check_ref(Purpose::Readiness, "cmd", 0), 9_500).is_ok(),
             "other actions change nothing"
         );
+
         // A policy command issued before the deploy does not undo it.
         assert_eq!(store(&state, &spec(7, commands()), AT), Err(StoreError::Older));
         on_app_action(&state, "remove", &app, 9_900);
@@ -1389,6 +1476,7 @@ mod tests {
         assert_eq!(failed, ExecResult::Exited { code: 1, passed: false, output: "line one [31mred tail".into() });
         assert_eq!(sanitize("x".repeat(1000).as_bytes()).len(), MAX_DETAIL);
         assert_eq!(sanitize(b"\n\n"), "");
+
         // The wire form the agent parses.
         let v = serde_json::to_value(ExecResult::Refused { why: Refusal::NotConfined }).unwrap();
         assert_eq!(v, serde_json::json!({ "result": "refused", "why": "not_confined" }));
@@ -1407,6 +1495,7 @@ mod tests {
         ] {
             assert!(why.permanent(), "{why:?}");
         }
+
         for why in [
             Refusal::NoPolicy,
             Refusal::StalePolicy,

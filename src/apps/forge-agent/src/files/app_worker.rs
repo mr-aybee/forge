@@ -72,6 +72,7 @@ struct Answer {
 /// with the reason, so a blocked syscall can be told from an old kernel.
 fn note_confinement(level: Option<&str>) {
     static NOTED: OnceLock<()> = OnceLock::new();
+
     if level != Some("full") && NOTED.set(()).is_ok() {
         tracing::warn!(
             landlock = level.unwrap_or("unknown"),
@@ -86,13 +87,16 @@ pub(crate) fn prepare(op: FileOp, base: &FilePath) -> Result<FileOp, String> {
     if matches!(op, FileOp::SetOwner { .. }) {
         return Err("files in an app's folder belong to the app's account; changing the owner is not allowed".into());
     }
+
     let launcher = |p: &FilePath| p.components().first().is_some_and(|c| c == ".forge");
     if op.paths().into_iter().any(launcher) {
         return Err("`.forge` holds the app's launcher, which Forge manages; it cannot be changed here".into());
     }
+
     if op.subtrees().into_iter().any(FilePath::is_root) {
         return Err("the app's folder itself cannot be moved or removed here".into());
     }
+
     let op = match op {
         // No setuid or setgid programs from an app's folder.
         FileOp::SetPermissions { root, path, mode, recursive, dry_run } => {
@@ -100,6 +104,7 @@ pub(crate) fn prepare(op: FileOp, base: &FilePath) -> Result<FileOp, String> {
         }
         other => other,
     };
+
     Ok(op.with_root(RootSpec::Dir { base: base.clone() }))
 }
 
@@ -108,6 +113,7 @@ pub async fn run(op: FileOp) -> Result<Value, String> {
     let RootSpec::App { environment, app } = op.root().clone() else {
         return Err("not an app root".into());
     };
+
     let (account, uid, gid) = crate::apps::app_account(&environment, &app).await?;
     let base = RootSpec::app_base(&environment, &app);
     let search = matches!(op, FileOp::Search { .. });
@@ -117,12 +123,15 @@ pub async fn run(op: FileOp) -> Result<Value, String> {
     if input.len() > MAX_INPUT {
         return Err("the request is too large".into());
     }
+
     let _slot = slots().acquire().await.map_err(|_| "the file service is shutting down".to_owned())?;
+
     // This binary, by its absolute path: never a PATH lookup.
     let exe = match WORKER_EXE.get() {
         Some(p) => p.clone(),
         None => std::env::current_exe().map_err(|e| format!("cannot find the helper binary: {e}"))?,
     };
+
     let mut child = tokio::process::Command::new(exe)
         .args(["file-worker", &uid.to_string(), &gid.to_string(), &base.to_string(), &store])
         .uid(uid)
@@ -142,9 +151,11 @@ pub async fn run(op: FileOp) -> Result<Value, String> {
         drop(stdin);
         let mut out = Vec::new();
         (&mut stdout).take(MAX_OUTPUT as u64 + 1).read_to_end(&mut out).await.map_err(|e| e.to_string())?;
+
         if out.len() > MAX_OUTPUT {
             return Err("the file worker's answer is too large".to_owned());
         }
+
         let _ = child.wait().await;
         Ok(out)
     };
@@ -154,9 +165,11 @@ pub async fn run(op: FileOp) -> Result<Value, String> {
         // Dropping the child (kill_on_drop) ends the worker.
         Err(_) => return Err(format!("the operation did not finish within {} s", limit.as_secs())),
     };
+
     let answer: Answer =
         serde_json::from_slice(&out).map_err(|_| "the file worker sent an invalid answer".to_owned())?;
     note_confinement(answer.confined.as_deref());
+
     match (answer.ok, answer.data, answer.error) {
         (true, Some(mut data), None) => {
             // The account the helper resolved, and the confinement the
@@ -167,6 +180,7 @@ pub async fn run(op: FileOp) -> Result<Value, String> {
                 let level = level.split(':').next().unwrap_or("unknown").trim();
                 o.insert("confined_reported".into(), Value::from(level.chars().take(16).collect::<String>()));
             }
+
             Ok(data)
         }
         (false, None, Some(e)) => Err(e.chars().take(2000).collect()),
@@ -183,6 +197,7 @@ pub fn worker_main(args: &[String]) -> i32 {
         Ok(data) => Answer { ok: true, data: Some(data), error: None, confined },
         Err(e) => Answer { ok: false, data: None, error: Some(e), confined },
     };
+
     match serde_json::to_string(&answer) {
         Ok(line) => {
             println!("{line}");
@@ -198,6 +213,7 @@ fn worker(args: &[String], confined: &mut Option<String>) -> Result<Value, Strin
     let gid: u32 = gid.parse().map_err(|_| "bad gid")?;
     check_identity(&std::fs::read_to_string("/proc/self/status").map_err(|e| e.to_string())?, uid, gid)?;
     limit_resources();
+
     // Before any thread exists: Landlock binds this thread and its children.
     *confined = Some(confine(base, store));
     let base = FilePath::parse(base)?;
@@ -205,15 +221,20 @@ fn worker(args: &[String], confined: &mut Option<String>) -> Result<Value, Strin
     let mut input = Vec::new();
     std::io::Read::read_to_end(&mut std::io::Read::take(std::io::stdin(), MAX_INPUT as u64 + 1), &mut input)
         .map_err(|e| e.to_string())?;
+
     if input.len() > MAX_INPUT {
         return Err("the request is too large".into());
     }
+
     let op: FileOp = serde_json::from_slice(&input).map_err(|e| format!("invalid request: {e}"))?;
+
     // Only the operation the helper prepared: on this folder, never an owner change.
     if op.root() != &(RootSpec::Dir { base }) || matches!(op, FileOp::SetOwner { .. }) {
         return Err("refused: not the app's folder".into());
     }
+
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+
     rt.block_on(super::run_local(op))
 }
 
@@ -224,18 +245,22 @@ pub(crate) fn check_identity(status: &str, uid: u32, gid: u32) -> Result<(), Str
     if uid == 0 || gid == 0 {
         return Err("refused: a worker never runs as root".into());
     }
+
     let ids = |key: &str| -> Option<Vec<u32>> {
         let line = status.lines().find(|l| l.starts_with(key))?;
         line[key.len()..].split_whitespace().map(|v| v.parse().ok()).collect()
     };
     let all =
         |v: Option<Vec<u32>>, want: u32, n: usize| v.is_some_and(|v| v.len() == n && v.iter().all(|x| *x == want));
+
     if !all(ids("Uid:"), uid, 4) || !all(ids("Gid:"), gid, 4) {
         return Err("refused: the worker does not run as the app's account".into());
     }
+
     if !ids("Groups:").is_some_and(|g| g.iter().all(|x| *x == gid)) {
         return Err("refused: the worker holds other groups".into());
     }
+
     Ok(())
 }
 
@@ -264,6 +289,7 @@ fn confine(base: &str, store: &str) -> String {
             .restrict_self()?
             .ruleset)
     })();
+
     match status {
         Ok(RulesetStatus::FullyEnforced) => "full".into(),
         Ok(RulesetStatus::PartiallyEnforced) => "partial".into(),
@@ -282,6 +308,7 @@ fn limit_resources() {
     set(Resource::Core, 0);
     set(Resource::Nofile, 512);
     set(Resource::Cpu, SEARCH_TIMEOUT.as_secs() + 60);
+
     // Copies and moves are capped at 1 GiB; leave room for one such file.
     set(Resource::Fsize, 2 * 1024 * 1024 * 1024);
 }
@@ -332,6 +359,7 @@ mod tests {
             recursive: false,
             dry_run: false,
         };
+
         match prepare(op, &base) {
             Ok(FileOp::SetPermissions { mode, .. }) => assert_eq!(mode, 0o755),
             other => panic!("{other:?}"),

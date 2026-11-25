@@ -70,6 +70,7 @@ pub fn decoded_size(e: &LogEvent) -> u64 {
             _ => 16,
         }
     }
+
     let opt = |s: &Option<String>| s.as_ref().map_or(0, String::len);
     let n = 256
         + e.message.len()
@@ -81,6 +82,7 @@ pub fn decoded_size(e: &LogEvent) -> u64 {
         + opt(&e.container_name)
         + opt(&e.stack)
         + e.properties.iter().map(|(k, v)| 24 + k.len() + value(v)).sum::<usize>();
+
     u64::try_from(n).unwrap_or(u64::MAX)
 }
 
@@ -100,6 +102,7 @@ impl LogBatcher {
         let (tx, rx) = mpsc::channel(QUEUE_REQUESTS);
         let queue = Arc::new(Queue::default());
         tokio::spawn(run(analytics, rx, queue.clone(), tuning.clone()));
+
         Self { tx, queue, tuning }
     }
 
@@ -107,23 +110,29 @@ impl LogBatcher {
     pub async fn write(&self, events: Vec<LogEvent>) -> Result<(), BatchError> {
         let bytes: u64 = events.iter().map(decoded_size).sum();
         let max = self.tuning.borrow().max_queued_bytes();
+
         // Reserve the bytes first so concurrent senders cannot overshoot.
         let before = self.queue.bytes.fetch_add(bytes, Ordering::AcqRel);
         if before > 0 && before + bytes > max {
             self.queue.bytes.fetch_sub(bytes, Ordering::AcqRel);
             return Err(BatchError::Busy);
         }
+
         let (done, wait) = oneshot::channel();
+
         // Queued before sending, so the writer always finds an entry to pop.
         self.queue.since.lock().unwrap_or_else(PoisonError::into_inner).push_back(Instant::now());
+
         if let Err(e) = self.tx.try_send(Pending { events, bytes, done }) {
             self.queue.bytes.fetch_sub(bytes, Ordering::AcqRel);
             self.queue.since.lock().unwrap_or_else(PoisonError::into_inner).pop_back();
+
             return Err(match e {
                 mpsc::error::TrySendError::Full(_) => BatchError::Busy,
                 mpsc::error::TrySendError::Closed(_) => BatchError::Stopped,
             });
         }
+
         wait.await.map_err(|_| BatchError::Stopped)?
     }
 
@@ -151,9 +160,11 @@ async fn run(
             let t = tuning.borrow();
             (Duration::from_millis(u64::from(t.ingest_flush_interval_ms)), t.ingest_max_batch_rows as usize)
         };
+
         let mut rows = first.events.len();
         let mut batch = vec![first];
         let deadline = Instant::now() + linger;
+
         while rows < max_rows {
             match timeout_at(deadline, rx.recv()).await {
                 Ok(Some(p)) => {
@@ -164,6 +175,7 @@ async fn run(
                 Ok(None) | Err(_) => break,
             }
         }
+
         write_batch(&analytics, &queue, batch).await;
     }
 }
@@ -173,17 +185,21 @@ async fn write_batch(analytics: &Analytics, queue: &Queue, batch: Vec<Pending>) 
     let mut events = Vec::new();
     let mut waiting = Vec::with_capacity(batch.len());
     let (mut bytes, mut skipped) = (0, 0usize);
+
     for p in batch {
         bytes += p.bytes;
+
         // Nobody waits for it any more: the sender was told it failed and
         // will send it again, so writing it now would store it twice.
         if p.done.is_closed() {
             skipped += 1;
             continue;
         }
+
         events.extend(p.events);
         waiting.push(p.done);
     }
+
     let result = if events.is_empty() {
         Ok(())
     } else {
@@ -192,17 +208,22 @@ async fn write_batch(analytics: &Analytics, queue: &Queue, batch: Vec<Pending>) 
             Err(e) => Err(BatchError::Write(e.to_string())),
         }
     };
+
     match &result {
         Ok(()) => tracing::debug!(rows = events.len(), requests, skipped, "log batch stored"),
         Err(e) => tracing::warn!(rows = events.len(), requests, error = %e, "log batch write failed"),
     }
+
     queue.bytes.fetch_sub(bytes, Ordering::AcqRel);
+
     {
         let mut since = queue.since.lock().unwrap_or_else(PoisonError::into_inner);
+
         for _ in 0..requests {
             since.pop_front();
         }
     }
+
     for done in waiting {
         // The sender may have gone meanwhile; nothing to tell it.
         let _ = done.send(result.clone());
@@ -212,11 +233,12 @@ async fn write_batch(analytics: &Analytics, queue: &Queue, batch: Vec<Pending>) 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // reason: tests
 pub(crate) mod tests {
-    use super::*;
-    use crate::memory::MemoryStore;
     use forge_core::analytics::Retention;
     use forge_core::logs::{IngestContext, parse_batch};
     use forge_core::{ServiceId, Timestamp};
+
+    use super::*;
+    use crate::memory::MemoryStore;
 
     pub(crate) fn tuning() -> Tuning {
         Tuning {
@@ -241,6 +263,7 @@ pub(crate) mod tests {
     pub(crate) fn events(n: usize, size: usize) -> Vec<LogEvent> {
         let line = format!("{{\"@t\":\"2024-01-01T00:00:00Z\",\"@mt\":\"{}\"}}\n", "x".repeat(size));
         let cx = IngestContext { service_id: ServiceId::new(), server_id: None, node_ts: None, now: Timestamp(1) };
+
         parse_batch(&line.repeat(n), cx).unwrap()
     }
 
@@ -250,26 +273,31 @@ pub(crate) mod tests {
             Retention { node_metrics_days: 7, top_processes_days: 7, node_rollup_days: 365, app_logs_days: 30 },
         ));
         assert!(a.prepare().await);
+
         a
     }
 
     #[tokio::test]
     async fn a_full_queue_answers_busy_at_once_and_holds_nothing() {
         let store = Arc::new(MemoryStore::default());
+
         // Every insert waits until released, so the queue fills.
         let gate = store.hold_writes();
         let a = ready(store.clone()).await;
         let b = LogBatcher::start(a, watch::channel(tuning()).1);
+
         // About 0.6 MiB decoded: fits the 1 MiB cap once.
         let first = tokio::spawn({
             let b = b.clone();
             async move { b.write(events(20, 30_000)).await }
         });
         let deadline = Instant::now() + Duration::from_secs(5);
+
         while b.stats().queued_requests == 0 {
             assert!(Instant::now() < deadline, "the first batch never queued");
             tokio::task::yield_now().await;
         }
+
         let queued = b.stats().queued_bytes;
         assert!(queued > 500_000, "decoded size is counted: {queued}");
         let second = events(20, 30_000);
@@ -289,26 +317,31 @@ pub(crate) mod tests {
         let gate = store.hold_writes();
         let a = ready(store.clone()).await;
         let b = LogBatcher::start(a, watch::channel(tuning()).1);
+
         // The first batch occupies the writer.
         let first = tokio::spawn({
             let b = b.clone();
             async move { b.write(events(1, 10)).await }
         });
         let deadline = Instant::now() + Duration::from_secs(5);
+
         while store.writes_started() == 0 {
             assert!(Instant::now() < deadline, "the writer never started");
             tokio::task::yield_now().await;
         }
+
         // The second waits behind it, then its waiter gives up.
         let late = b.write(events(5, 10));
         assert!(tokio::time::timeout(Duration::from_millis(50), late).await.is_err());
         gate.release();
         assert_eq!(first.await.unwrap(), Ok(()));
         let deadline = Instant::now() + Duration::from_secs(5);
+
         while b.stats().queued_requests > 0 {
             assert!(Instant::now() < deadline, "the queue never drained");
             tokio::task::yield_now().await;
         }
+
         assert_eq!(store.log_count(), 1, "the abandoned batch was skipped");
     }
 }

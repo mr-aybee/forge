@@ -38,6 +38,7 @@ impl Action {
     #[must_use]
     pub const fn info(self) -> ActionInfo {
         use AccessLevel::{Admin, Read, Write};
+
         match self {
             Action::View => {
                 info("Fleet", "View", "See clusters, nodes, environments, services and jobs in scope.", Read)

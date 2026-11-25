@@ -45,13 +45,16 @@ impl ClickHouseTarget {
         if !matches!(u.scheme(), "http" | "https") {
             return Err(DomainError::Invalid("a ClickHouse url starts with http:// or https://".into()));
         }
+
         let database = u.path().trim_start_matches('/').to_string();
         if database.is_empty() || !database.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err(DomainError::Invalid("analytics database name must be letters, digits and _".into()));
         }
+
         let host = u.host_str().ok_or_else(|| DomainError::Invalid("analytics url has no host".into()))?;
         let port = u.port_or_known_default().unwrap_or(8123);
         let user = if u.username().is_empty() { "default".to_string() } else { u.username().to_string() };
+
         Ok(Self {
             endpoint: format!("{}://{host}:{port}", u.scheme()),
             user,
@@ -122,23 +125,28 @@ impl ClickHouse {
             .post(format!("{}/", self.target.endpoint))
             .header("X-ClickHouse-User", &self.target.user)
             .header("X-ClickHouse-Key", &self.target.password);
+
         for (k, v) in BASE_SETTINGS {
             if !settings.iter().any(|(o, _)| *o == k) {
                 req = req.query(&[(k, v)]);
             }
         }
+
         for (k, v) in settings {
             req = req.query(&[(*k, v.as_str())]);
         }
+
         // A search with a longer engine timeout needs a longer HTTP timeout.
         if let Some((_, t)) = settings.iter().find(|(k, _)| *k == "max_execution_time")
             && let Ok(secs) = t.parse::<u64>()
         {
             req = req.timeout(Duration::from_secs(secs.saturating_add(10)));
         }
+
         if let Some(db) = database {
             req = req.query(&[("database", db)]);
         }
+
         // An insert carries its rows in the body after the statement; any
         // other statement is the body itself, or with parameters a form.
         req = match body {
@@ -148,19 +156,23 @@ impl ClickHouse {
                 for (k, v) in &q.params {
                     req = req.query(&[(format!("param_{k}"), v)]);
                 }
+
                 let packed = zstd::bulk::compress(rows.as_bytes(), 1).map_err(db_err)?;
                 req.query(&[("query", q.sql.as_str())]).header("Content-Encoding", "zstd").body(packed)
             }
             None if q.params.is_empty() => req.body(q.sql),
             None => req.header(CONTENT_TYPE, FORM_CONTENT_TYPE).body(form(&q.sql, &q.params)?),
         };
+
         let res = req.send().await.map_err(db_err)?;
         let status = res.status();
         let text = res.text().await.map_err(db_err)?;
+
         if !status.is_success() {
             let first = text.lines().next().unwrap_or_default();
             return Err(DomainError::Internal(format!("analytics: {status}: {first}")));
         }
+
         Ok(text)
     }
 
@@ -176,6 +188,7 @@ impl ClickHouse {
         let mut q = q;
         q.sql.push_str(" FORMAT JSONEachRow");
         let text = self.send_with(Some(&self.target.database), q, None, settings).await?;
+
         text.lines().filter(|l| !l.trim().is_empty()).map(|l| serde_json::from_str(l).map_err(db_err)).collect()
     }
 
@@ -183,9 +196,11 @@ impl ClickHouse {
         if rows.is_empty() {
             return Ok(());
         }
+
         let mut body = String::with_capacity(rows.len() * 160);
         ndjson(rows, &mut body)?;
         let q = Query { sql: format!("INSERT INTO {table} FORMAT JSONEachRow"), params: Vec::new() };
+
         // Asynchronous inserts (D-142): the engine groups many small inserts
         // into larger parts. `wait_for_async_insert` answers only once the
         // rows are written. These rows carry no file id. The tables keep a
@@ -193,6 +208,7 @@ impl ClickHouse {
         // to a recent one is dropped; that only happens when the same rows
         // are written again (log rows carry unique ids).
         let settings = [("async_insert", "1".to_owned()), ("wait_for_async_insert", "1".to_owned())];
+
         self.send_with(Some(&self.target.database), q, Some(body), &settings).await.map(drop)
     }
 
@@ -203,7 +219,9 @@ impl ClickHouse {
         if body.is_empty() {
             return Ok(());
         }
+
         let q = Query { sql: format!("INSERT INTO {table} FORMAT JSONEachRow"), params: Vec::new() };
+
         self.send_with(Some(&self.target.database), q, Some(body), &crate::spool::insert_settings(token))
             .await
             .map(drop)
@@ -234,10 +252,12 @@ fn form<K: AsRef<str>>(sql: &str, params: &[(K, String)]) -> DomainResult<String
         .chain(params.iter().map(|(k, v)| (format!("param_{}", k.as_ref()), v.as_str())));
     let mut out =
         String::with_capacity(sql.len() + params.iter().map(|(k, v)| k.as_ref().len() + v.len() + 96).sum::<usize>());
+
     for (name, value) in fields {
         if value.contains(FORM_BOUNDARY) || name.contains(['"', '\r', '\n']) {
             return Err(DomainError::Invalid(format!("analytics: the {name} value cannot be sent")));
         }
+
         out.push_str("--");
         out.push_str(FORM_BOUNDARY);
         out.push_str("\r\nContent-Disposition: form-data; name=\"");
@@ -246,9 +266,11 @@ fn form<K: AsRef<str>>(sql: &str, params: &[(K, String)]) -> DomainResult<String
         out.push_str(value);
         out.push_str("\r\n");
     }
+
     out.push_str("--");
     out.push_str(FORM_BOUNDARY);
     out.push_str("--\r\n");
+
     Ok(out)
 }
 
@@ -265,6 +287,7 @@ fn ttl_days(engine_full: &str) -> Option<u32> {
     let rest = &engine_full[engine_full.find(" TTL ")?..];
     let start = rest.find("toIntervalDay(")? + "toIntervalDay(".len();
     let digits: String = rest[start..].chars().take_while(char::is_ascii_digit).collect();
+
     digits.parse().ok()
 }
 
@@ -272,15 +295,19 @@ fn ttl_days(engine_full: &str) -> Option<u32> {
 fn search_settings(q: &LogQuery) -> Vec<(&'static str, String)> {
     let l = q.limits;
     let mut out = Vec::new();
+
     if l.timeout_secs > 0 {
         out.push(("max_execution_time", l.timeout_secs.to_string()));
     }
+
     if l.threads > 0 {
         out.push(("max_threads", l.threads.to_string()));
     }
+
     if l.memory_bytes > 0 {
         out.push(("max_memory_usage", l.memory_bytes.to_string()));
     }
+
     out
 }
 
@@ -455,6 +482,7 @@ pub(crate) fn ndjson<T: serde::Serialize>(rows: impl IntoIterator<Item = T>, out
         out.push_str(&serde_json::to_string(&r).map_err(db_err)?);
         out.push('\n');
     }
+
     Ok(())
 }
 
@@ -535,7 +563,9 @@ impl LogOut {
             // A bag that cannot be read is shown empty rather than failing the page.
             _ => serde_json::Map::new(),
         };
+
         let some = |s: String| (!s.is_empty()).then_some(s);
+
         LogEvent {
             id: self.id,
             service_id: self.service_id,
@@ -582,27 +612,33 @@ fn log_where(q: &LogQuery) -> (String, Vec<(String, String)>) {
         ("inst".to_string(), list(q.instances.iter().map(|(a, s)| format!("'{a}:{s}'")).collect())),
         ("open".to_string(), list(q.open_nodes.iter().map(|s| format!("'{s}'")).collect())),
     ];
+
     if !q.nodes.is_empty() {
         sql.push_str(" AND server_id IN {nodes:Array(UUID)}");
         p.push(("nodes".into(), list(q.nodes.iter().map(|s| format!("'{s}'")).collect())));
     }
+
     if let Some(c) = &q.container {
         sql.push_str(" AND (container_name = {container:String} OR startsWith(container_id, {container:String}))");
         p.push(("container".into(), c.clone()));
     }
+
     if let Some(st) = &q.stack {
         sql.push_str(" AND stack = {stack:String}");
         p.push(("stack".into(), st.clone()));
     }
+
     if let Some(src) = q.source {
         sql.push_str(" AND source = {source:String}");
         p.push(("source".into(), src.as_str().to_owned()));
     }
+
     if !q.levels.is_empty() {
         sql.push_str(" AND level IN {levels:Array(String)}");
         let l: Vec<String> = q.levels.iter().map(|l| format!("'{}'", l.as_str())).collect();
         p.push(("levels".into(), format!("[{}]", l.join(","))));
     }
+
     if let Some(t) = &q.filter.text {
         sql.push_str(
             " AND (positionCaseInsensitiveUTF8(message, {text:String}) > 0
@@ -610,30 +646,36 @@ fn log_where(q: &LogQuery) -> (String, Vec<(String, String)>) {
         );
         p.push(("text".into(), t.clone()));
     }
+
     for (i, (k, v)) in q.filter.properties.iter().enumerate() {
         // A value matches a JSON string or, when it reads as a JSON scalar
         // (number, true, false, null), that raw value.
         let quoted = serde_json::Value::String(v.clone()).to_string();
+
         let raw = match serde_json::from_str::<serde_json::Value>(v) {
             Ok(j @ (serde_json::Value::Number(_) | serde_json::Value::Bool(_) | serde_json::Value::Null)) => {
                 j.to_string()
             }
             _ => quoted.clone(),
         };
+
         let _ =
             write!(sql, " AND JSONExtractRaw(properties, {{pk{i}:String}}) IN ({{pv{i}:String}}, {{pq{i}:String}})");
         p.push((format!("pk{i}"), k.clone()));
         p.push((format!("pv{i}"), raw));
         p.push((format!("pq{i}"), quoted));
     }
+
     if let Some(f) = q.from {
         sql.push_str(" AND ts >= fromUnixTimestamp64Milli({from:Int64})");
         p.push(("from".into(), f.0.to_string()));
     }
+
     if let Some(t) = q.to {
         sql.push_str(" AND ts < fromUnixTimestamp64Milli({to:Int64})");
         p.push(("to".into(), t.0.to_string()));
     }
+
     (sql, p)
 }
 
@@ -645,20 +687,25 @@ impl AnalyticsStore for ClickHouse {
 
     async fn migrate(&self, retention: Retention) -> DomainResult<()> {
         let db = &self.target.database;
+
         // The name was validated in `from_url`, so it is a safe identifier.
         self.send(None, Query { sql: format!("CREATE DATABASE IF NOT EXISTS {db}"), params: Vec::new() }, None).await?;
         self.exec("CREATE TABLE IF NOT EXISTS forge_schema (version UInt32, applied_at DateTime('UTC') DEFAULT now()) ENGINE = MergeTree ORDER BY version".into()).await?;
         let have = self.applied().await?;
+
         for (version, statements) in MIGRATIONS {
             if *version <= have {
                 continue;
             }
+
             for s in *statements {
                 self.exec(fill(s, retention)).await?;
             }
+
             self.exec(format!("INSERT INTO forge_schema (version) VALUES ({version})")).await?;
             tracing::info!(version, "analytics schema migrated");
         }
+
         if let Some((latest, _)) = MIGRATIONS.last()
             && have > *latest
         {
@@ -666,6 +713,7 @@ impl AnalyticsStore for ClickHouse {
                 "the analytics database has schema version {have}; this Forge knows up to {latest}"
             )));
         }
+
         self.apply_retention(retention).await
     }
 
@@ -674,6 +722,7 @@ impl AnalyticsStore for ClickHouse {
             self.exec(fill(&format!("ALTER TABLE {table} MODIFY TTL {column} + INTERVAL {key} DAY"), retention))
                 .await?;
         }
+
         Ok(())
     }
 
@@ -693,6 +742,7 @@ impl AnalyticsStore for ClickHouse {
             let t = rows.iter().find(|t| t.name == table).ok_or_else(|| db_err(format!("table {table} is missing")))?;
             ttl_days(&t.engine_full).ok_or_else(|| db_err(format!("table {table} has no TTL in days")))
         };
+
         Ok(Retention {
             node_metrics_days: days("node_metrics_1m")?,
             top_processes_days: days("node_top_processes_1m")?,
@@ -715,6 +765,7 @@ impl AnalyticsStore for ClickHouse {
             v: Option<u64>,
         }
         let q = |sql: &str| Query { sql: sql.into(), params: Vec::new() };
+
         // Each read is separate: an engine or user may allow some and not others.
         let mem: Option<Vec<M>> =
             self.rows(q("SELECT value AS v FROM system.metrics WHERE metric = 'MemoryTracking'")).await.ok();
@@ -723,6 +774,7 @@ impl AnalyticsStore for ClickHouse {
             .await
             .ok();
         let disk: Option<Vec<D>> = self.rows(q("SELECT min(free_space) AS v FROM system.disks")).await.ok();
+
         Ok(EngineStats {
             memory_used_bytes: mem.and_then(|r| r.first()?.v).and_then(|v| u64::try_from(v).ok()),
             server_memory_limit_bytes: limit.and_then(|r| r.first()?.v.as_deref()?.parse().ok()),
@@ -771,6 +823,7 @@ impl AnalyticsStore for ClickHouse {
                 GROUP BY hour ORDER BY hour"
             }
         };
+
         self.rows(Query {
             sql: sql.to_string(),
             params: vec![
@@ -794,6 +847,7 @@ impl AnalyticsStore for ClickHouse {
             TopBy::Cpu => "cpu_avg",
             TopBy::Mem => "mem_avg",
         };
+
         let mut sql = String::from(
             "SELECT name, user, avg(cpu) AS cpu_avg, max(cpu) AS cpu_max,
                 toUInt64(avg(mem)) AS mem_avg, max(mem) AS mem_max,
@@ -802,8 +856,10 @@ impl AnalyticsStore for ClickHouse {
             WHERE server_id = {server:UUID} AND minute >= {from:Int64} AND minute < {to:Int64}
             GROUP BY name, user",
         );
+
         // `order` is one of two fixed column names, not input.
         let _ = write!(sql, " ORDER BY {order} DESC LIMIT {{limit:UInt32}}");
+
         self.rows(Query {
             sql,
             params: vec![
@@ -851,6 +907,7 @@ impl AnalyticsStore for ClickHouse {
                 maxMerge(restarts) AS restarts",
             ),
         };
+
         // `table`, `col` and `select` are fixed text chosen above, not input.
         let mut sql = format!(
             "SELECT container_name, toUnixTimestamp({col}) * 1000 AS t, {select}
@@ -863,6 +920,7 @@ impl AnalyticsStore for ClickHouse {
             ("to", secs(window.1).to_string()),
             ("limit", limit.clamp(1, 500).to_string()),
         ];
+
         match container {
             Some(name) => {
                 sql.push_str(" AND container_name = {name:String}");
@@ -874,8 +932,10 @@ impl AnalyticsStore for ClickHouse {
                     ORDER BY container_name LIMIT {{limit:UInt32}})"
             )),
         }
+
         let _ = write!(sql, " GROUP BY container_name, {col} ORDER BY container_name, {col}");
         let rows: Vec<ContainerOut> = self.rows(Query { sql, params }).await?;
+
         Ok(group_series(rows))
     }
 
@@ -888,18 +948,23 @@ impl AnalyticsStore for ClickHouse {
         if q.is_empty() {
             return Ok(Vec::new());
         }
+
         let (mut wh, mut params) = log_where(q);
+
         let (cursor, order) = match q.page {
             LogPage::Older(c) => (c.map(|c| (c, "<")), "DESC"),
             LogPage::Newer(c) => (Some((c, ">")), "ASC"),
         };
+
         if let Some((c, op)) = cursor {
             // `op` is one of two fixed comparison operators.
             let _ = write!(wh, " AND (ts, id) {op} (fromUnixTimestamp64Milli({{cts:Int64}}), {{cid:UUID}})");
             params.push(("cts".into(), c.ts.to_string()));
             params.push(("cid".into(), c.id.to_string()));
         }
+
         params.push(("limit".into(), q.limit.clamp(1, 1000).to_string()));
+
         // `order` is one of two fixed words.
         let sql = format!(
             "SELECT {LOG_COLUMNS} FROM app_logs WHERE {wh} ORDER BY ts {order}, id {order} LIMIT {{limit:UInt32}}"
@@ -907,9 +972,11 @@ impl AnalyticsStore for ClickHouse {
         let params: Vec<(&str, String)> = params.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
         let rows: Vec<LogOut> = self.rows_with(Query { sql, params }, &search_settings(q)).await?;
         let mut out: Vec<LogEvent> = rows.into_iter().map(LogOut::into_event).collect();
+
         if matches!(q.page, LogPage::Newer(_)) {
             out.reverse(); // newest first, like every page
         }
+
         Ok(out)
     }
 
@@ -923,6 +990,7 @@ impl AnalyticsStore for ClickHouse {
         if q.is_empty() {
             return Ok(Vec::new());
         }
+
         let (wh, mut params) = log_where(q);
         params.push(("step".into(), step_ms.max(1000).to_string()));
         let sql = format!(
@@ -931,6 +999,7 @@ impl AnalyticsStore for ClickHouse {
         );
         let params: Vec<(&str, String)> = params.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
         let rows: Vec<B> = self.rows_with(Query { sql, params }, &search_settings(q)).await?;
+
         Ok(rows
             .into_iter()
             .filter_map(|b| LogLevel::parse_lenient(&b.level).map(|level| LogBucket { t: b.t, level, count: b.count }))

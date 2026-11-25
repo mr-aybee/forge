@@ -174,9 +174,11 @@ pub fn subnet(c: &str) -> Option<(std::net::IpAddr, u8)> {
     let (ip, len) = c.split_once('/')?;
     let ip: std::net::IpAddr = ip.parse().ok()?;
     let len: u8 = len.parse().ok()?;
+
     let ok = match ip {
         std::net::IpAddr::V4(v) => {
             let o = v.octets();
+
             // 0/8 (this network), 240/4 (reserved) and 100.64/10 (carrier
             // NAT, used by overlay VPNs such as Tailscale) are left alone.
             let reserved = o[0] == 0 || o[0] >= 240 || (o[0] == 100 && (o[1] & 0xc0) == 64);
@@ -195,6 +197,7 @@ pub fn subnet(c: &str) -> Option<(std::net::IpAddr, u8)> {
                 && (v.segments()[0] & 0xffc0) != 0xfe80
         }
     };
+
     ok.then_some((ip, len))
 }
 
@@ -334,12 +337,14 @@ impl DockerOp {
                 if network_protected(id) {
                     return Err(format!("network `{id}` belongs to Docker or Forge and cannot be removed"));
                 }
+
                 name_ok(id)
             }
             Self::NetworkCreate { name, driver, subnet, gateway, attachable, labels, .. } => {
                 if network_protected(name) {
                     return Err(format!("the network name `{name}` is reserved"));
                 }
+
                 let net = match subnet.as_deref() {
                     Some(c) => match self::subnet(c) {
                         Some(n) => Some(n),
@@ -349,21 +354,25 @@ impl DockerOp {
                     },
                     None => None,
                 };
+
                 let gateway_ok = match (gateway.as_deref(), net) {
                     (None, _) => true,
                     (Some(g), Some((n, len))) => g.parse().is_ok_and(|ip| contains(n, len, ip)),
                     (Some(_), None) => false,
                 };
+
                 name_ok(name) && labels_ok(labels) && gateway_ok && (!attachable || *driver == NetworkDriver::Overlay)
             }
             Self::NetworkConnect { network, container } | Self::NetworkDisconnect { network, container, .. } => {
                 if network_protected(network) {
                     return Err(format!("network `{network}` is managed by Docker or Forge"));
                 }
+
                 name_ok(network) && name_ok(container)
             }
             Self::Events { since_secs } => *since_secs <= 86_400,
         };
+
         if ok { Ok(()) } else { Err(format!("invalid {} request", self.name())) }
     }
 }
@@ -386,6 +395,7 @@ mod tests {
         for n in ["bridge", "host", "ingress", "forge-net-0190"] {
             assert!(DockerOp::NetworkRemove { id: n.into() }.validate().is_err(), "{n}");
         }
+
         assert!(DockerOp::NetworkRemove { id: "app_default".into() }.validate().is_ok());
         let create =
             |name: &str, subnet: Option<&str>, attachable: bool, driver: NetworkDriver| DockerOp::NetworkCreate {

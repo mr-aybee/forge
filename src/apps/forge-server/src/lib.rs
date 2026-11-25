@@ -101,6 +101,7 @@ impl App {
         let api_listener = TcpListener::bind(config.api_listen).await?;
         let agent_listener = TcpListener::bind(config.agent_listen).await?;
         let state = Services::build(config).await?;
+
         // One deployment is one workspace (D-016): requests fail closed
         // (`503 multiple_workspaces`) if the store holds more.
         match forge_core::ports::TenancyRepository::list_workspaces(&state.store).await {
@@ -110,6 +111,7 @@ impl App {
             ),
             _ => {}
         }
+
         Self::start_with(state, api_listener, agent_listener)
     }
 
@@ -124,11 +126,13 @@ impl App {
         let mut srx = rx.clone();
         tasks.push(tokio::spawn(async move {
             tracing::info!(addr = %api_addr, "API listening");
+
             // The peer address reaches handlers (per-address sign-in limits).
             let app = router.into_make_service_with_connect_info::<std::net::SocketAddr>();
             let serve = axum::serve(api, app).with_graceful_shutdown(async move {
                 let _ = srx.changed().await;
             });
+
             if let Err(e) = serve.await {
                 tracing::error!(error = %e, "API server failed");
             }
@@ -147,6 +151,7 @@ impl App {
         tasks.push(tokio::spawn(alerting::run(state.clone(), rx.clone())));
         tasks.push(tokio::spawn(notifying::run(state.clone(), rx.clone())));
         tasks.push(tokio::spawn(access::run(state.clone(), rx.clone())));
+
         // The analytics worker (D-141) and the maps it is fed.
         tasks.push(tokio::spawn(state.analytics_worker.clone().run(rx.clone())));
         tasks.push(tokio::spawn(analytics_worker::maps::run(
@@ -159,8 +164,10 @@ impl App {
         tasks.push(tokio::spawn(api::package_updates::run(state.clone(), rx.clone())));
         tasks.push(tokio::spawn(api::system_update::run(state.clone(), rx.clone())));
         tasks.push(tokio::spawn(api::agent_updates::auto_run(state.clone(), rx.clone())));
+
         // Forge-managed SFTP gateway (temporary file access).
         let mut sftp_addr = None;
+
         if let (true, Some(key)) = (state.config.sftp.enabled, state.sftp_host_key.clone()) {
             let std_listener = std::net::TcpListener::bind(state.config.sftp.listen)?;
             std_listener.set_nonblocking(true)?;
@@ -181,6 +188,7 @@ impl App {
     /// Signals shutdown and waits for all loops to stop.
     pub async fn stop(self) {
         let _ = self.shutdown.send(true);
+
         for t in self.tasks {
             let _ = tokio::time::timeout(std::time::Duration::from_secs(5), t).await;
         }

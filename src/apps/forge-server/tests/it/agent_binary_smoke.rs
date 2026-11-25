@@ -12,12 +12,13 @@
 
 use std::time::{Duration, Instant};
 
-use crate::common::*;
 use forge_agent::enroll::{HostFacts, enroll};
 use forge_agent::{AgentConfig, StatePaths};
 use forge_core::model::AgentStatus;
 use reqwest::StatusCode;
 use serde_json::json;
+
+use crate::common::*;
 
 /// `FORGE_AGENT_BIN`, else the nearest `forge-agent` above the test
 /// executable: `target/<profile>/deps/it-<hash>` and the newer build-dir
@@ -27,8 +28,10 @@ fn agent_binary() -> Option<std::path::PathBuf> {
     if let Some(p) = std::env::var_os("FORGE_AGENT_BIN").map(std::path::PathBuf::from) {
         return p.is_file().then_some(p);
     }
+
     let name = format!("forge-agent{}", std::env::consts::EXE_SUFFIX);
     let exe = std::env::current_exe().ok()?;
+
     exe.ancestors().skip(1).take(6).map(|d| d.join(&name)).find(|p| p.is_file())
 }
 
@@ -50,8 +53,10 @@ async fn the_agent_binary_starts_heartbeats_and_stays_up() {
             "forge-agent binary not found next to the test target; build it first (cargo build -p forge-agent)"
         );
         eprintln!("skipped: forge-agent binary not built");
+
         return;
     };
+
     let h = start().await;
     let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
     let (s, body) = admin.post("/api/v1/enrollment-tokens", json!({ "ttl_minutes": 10 })).await;
@@ -86,17 +91,21 @@ async fn the_agent_binary_starts_heartbeats_and_stays_up() {
 
     // It heartbeats: the server sees the node online.
     let deadline = Instant::now() + Duration::from_secs(20);
+
     loop {
         let s = forge_core::ports::ServerRepository::get_server(&h.app.state.store, server_id).await.unwrap();
         if s.status == AgentStatus::Online && s.last_seen_at.is_some() {
             break;
         }
+
         if let Some(status) = child.0.try_wait().unwrap() {
             panic!("forge-agent exited during startup ({status}):\n{}", log_text());
         }
+
         assert!(Instant::now() < deadline, "the agent never heartbeated:\n{}", log_text());
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+
     // And it stays up (startup panics, crashes in the first background ticks).
     tokio::time::sleep(Duration::from_secs(5)).await;
     assert!(child.0.try_wait().unwrap().is_none(), "forge-agent exited after connecting:\n{}", log_text());

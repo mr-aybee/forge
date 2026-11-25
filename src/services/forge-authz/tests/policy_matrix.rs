@@ -23,6 +23,7 @@ fn server_in(workspace_id: &str, env: &str) -> ResourceRef {
 fn bind(engine: &PolicyEngine, user: UserId, role: Role, scope: EntityRef) -> RoleBinding {
     let b = RoleBinding { id: RoleBindingId::new(), user_id: user, role, scope, created_at: Timestamp(0) };
     engine.link_binding(&b).unwrap();
+
     b
 }
 
@@ -41,6 +42,7 @@ fn policies_validate_against_schema() {
 fn default_is_deny() {
     let engine = PolicyEngine::new().unwrap();
     let user = UserId::new();
+
     for action in Action::ALL {
         assert!(!allowed(&engine, user, action, &server_in("a", "e1"), true), "{action} should be denied");
     }
@@ -49,6 +51,7 @@ fn default_is_deny() {
 #[test]
 fn role_matrix_on_server() {
     use Action::*;
+
     // role -> actions expected to be allowed on a server within its org scope
     let expected: HashMap<Role, Vec<Action>> = HashMap::from([
         (
@@ -105,6 +108,7 @@ fn role_matrix_on_server() {
         let user = UserId::new();
         let scope = if role == Role::PlatformAdmin { EntityRef::platform() } else { workspace("a") };
         bind(&engine, user, role, scope);
+
         for action in server_actions {
             let got = allowed(&engine, user, action, &server_in("a", "e1"), true);
             assert_eq!(got, allowed_actions.contains(&action), "role {role} action {action}");
@@ -140,6 +144,7 @@ fn sensitive_actions_require_mfa_even_for_admins() {
     assert!(allowed(&engine, user, Action::ServerCommand, &srv, true));
     assert!(!allowed(&engine, user, Action::ProcessManage, &srv, false));
     assert!(allowed(&engine, user, Action::ProcessManage, &srv, true));
+
     // non-sensitive action unaffected
     assert!(allowed(&engine, user, Action::View, &srv, false));
 }
@@ -235,10 +240,12 @@ fn object_storage_roles_and_mfa() {
     bind(&engine, op, Role::Operator, workspace("a"));
     bind(&engine, dev, Role::Developer, workspace("a"));
     bind(&engine, auditor, Role::Auditor, workspace("a"));
+
     // Managing a store runs as root on the node: MFA required.
     assert!(!allowed(&engine, op, Action::StorageManage, &srv, false));
     assert!(allowed(&engine, op, Action::StorageManage, &srv, true));
     assert!(!allowed(&engine, dev, Action::StorageManage, &srv, true));
+
     // Object data: operators and developers, no MFA.
     assert!(allowed(&engine, op, Action::StorageData, &srv, false));
     assert!(allowed(&engine, dev, Action::StorageData, &srv, false));
@@ -258,15 +265,19 @@ fn storage_data_on_a_environment_stays_in_that_environment() {
     bind(&engine, auditor, Role::Auditor, EntityRef::new(EntityKind::Environment, "prod"));
     bind(&engine, customer, Role::Customer, EntityRef::new(EntityKind::Environment, "prod"));
     bind(&engine, dba, Role::Dba, EntityRef::new(EntityKind::Environment, "prod"));
+
     for user in [dev, op] {
         assert!(allowed(&engine, user, Action::StorageData, &ns("prod"), false));
         assert!(!allowed(&engine, user, Action::StorageData, &ns("dev"), true), "another environment");
+
         // An environment role says nothing about the workspace's shared stores.
         let ws = ResourceRef::new(workspace("a"), vec![]);
         assert!(!allowed(&engine, user, Action::StorageData, &ws, true));
+
         // Managing a store is never decided on an environment.
         assert!(!allowed(&engine, user, Action::StorageManage, &ns("prod"), true));
     }
+
     for user in [auditor, customer, dba] {
         assert!(allowed(&engine, user, Action::View, &ns("prod"), false));
         assert!(!allowed(&engine, user, Action::StorageData, &ns("prod"), true), "read-only roles see, not browse");
@@ -289,25 +300,31 @@ fn evaluate_many_matches_evaluate() {
     let engine = PolicyEngine::new().unwrap();
     let ws = workspace("a");
     let mut resources = Vec::new();
+
     for i in 0..40 {
         let ns = EntityRef::new(EntityKind::Environment, format!("ns{}", i % 4));
         let mut r = ResourceRef::new(EntityRef::new(EntityKind::Server, format!("n{i}")), vec![ns, ws.clone()]);
+
         if i % 3 == 0 {
             r.add_chain(&[r.entity.clone(), EntityRef::new(EntityKind::Cluster, format!("c{}", i % 2)), ws.clone()]);
         }
+
         resources.push(r);
     }
+
     // Another workspace's server in the same batch.
     resources.push(server_in("b", "x"));
     let users = [UserId::new(), UserId::new(), UserId::new(), UserId::new()];
     bind(&engine, users[0], Role::Developer, EntityRef::new(EntityKind::Environment, "ns1"));
     bind(&engine, users[1], Role::Operator, EntityRef::new(EntityKind::Cluster, "c0"));
     bind(&engine, users[2], Role::WorkspaceAdmin, ws.clone());
+
     for user in users {
         for action in [Action::View, Action::ServerManage, Action::ServerCommand, Action::ProcessManage] {
             for mfa in [false, true] {
                 let p = Principal::User(user);
                 let batch = engine.evaluate_many(&p, action, &resources, AuthzContext { mfa }).unwrap();
+
                 for (r, d) in resources.iter().zip(&batch) {
                     assert_eq!(
                         d.allowed,
@@ -330,9 +347,11 @@ fn file_explorer_roles_and_mfa() {
     bind(&engine, op, Role::Operator, workspace("a"));
     bind(&engine, dev, Role::Developer, workspace("a"));
     bind(&engine, auditor, Role::Auditor, workspace("a"));
+
     // Reads inside a root: operators and admins, no MFA.
     assert!(allowed(&engine, op, Action::FileRead, &srv, false));
     assert!(allowed(&engine, admin, Action::FileRead, &srv, false));
+
     // The whole-node root: admins only, no MFA.
     assert!(allowed(&engine, admin, Action::FileNode, &srv, false));
     assert!(!allowed(&engine, op, Action::FileNode, &srv, true));
@@ -345,6 +364,7 @@ fn file_explorer_roles_and_mfa() {
     assert!(!allowed(&engine, customer, Action::FileNode, &srv, true));
     assert!(!allowed(&engine, dev, Action::FileRead, &srv, true));
     assert!(!allowed(&engine, auditor, Action::FileRead, &srv, true));
+
     // Writes and deletes: operators and admins, only with MFA.
     for a in [Action::FileWrite, Action::FileDelete] {
         assert!(!allowed(&engine, op, a, &srv, false));
@@ -353,10 +373,12 @@ fn file_explorer_roles_and_mfa() {
         assert!(!allowed(&engine, dev, a, &srv, true));
         assert!(!allowed(&engine, auditor, a, &srv, true));
     }
+
     // Approving roots: admins only, with MFA.
     assert!(!allowed(&engine, op, Action::FileAdmin, &srv, true));
     assert!(!allowed(&engine, admin, Action::FileAdmin, &srv, false));
     assert!(allowed(&engine, admin, Action::FileAdmin, &srv, true));
+
     // Another workspace's node is out of reach.
     assert!(!allowed(&engine, op, Action::FileRead, &server_in("b", "e2"), false));
 }
@@ -368,6 +390,7 @@ fn raw_port_tunnels_are_for_administrators_with_mfa() {
     let engine = PolicyEngine::new().unwrap();
     let srv = server_in("a", "e1");
     let other = server_in("b", "e2");
+
     for role in Role::ALL {
         let user = UserId::new();
         let scope = if role == Role::PlatformAdmin { EntityRef::platform() } else { workspace("a") };
@@ -375,10 +398,12 @@ fn raw_port_tunnels_are_for_administrators_with_mfa() {
         let holds = matches!(role, Role::PlatformAdmin | Role::WorkspaceAdmin);
         assert_eq!(allowed(&engine, user, Action::NetworkTunnelAny, &srv, true), holds, "{role} with MFA");
         assert!(!allowed(&engine, user, Action::NetworkTunnelAny, &srv, false), "{role} without MFA");
+
         if role != Role::PlatformAdmin {
             assert!(!allowed(&engine, user, Action::NetworkTunnelAny, &other, true), "{role} in another workspace");
         }
     }
+
     // Not declared on an environment: fails closed.
     let admin = UserId::new();
     bind(&engine, admin, Role::WorkspaceAdmin, workspace("a"));
@@ -403,9 +428,11 @@ fn cluster_binding_does_not_widen_to_its_environments() {
 
     let cluster_admin = UserId::new();
     bind(&engine, cluster_admin, Role::WorkspaceAdmin, EntityRef::new(EntityKind::Cluster, "c1"));
+
     for action in [Action::View, Action::WorkspaceManage, Action::Deploy] {
         assert!(!allowed(&engine, cluster_admin, action, &dev, true), "{action:?} via cluster");
     }
+
     assert!(!allowed(&engine, cluster_admin, Action::View, &job_in_dev, true));
 
     let dev_op = UserId::new();
@@ -448,6 +475,7 @@ fn project_binding_covers_its_environments() {
     assert!(!allowed(&engine, dev, Action::View, &crm_test, true), "another group");
     assert!(!allowed(&engine, dev, Action::View, &legacy, true), "unassigned environment");
     assert!(!allowed(&engine, dev, Action::View, &ResourceRef::new(workspace("a"), vec![]), true), "not the workspace");
+
     // Only administrators manage the group itself.
     let group = ResourceRef::new(shop.clone(), vec![workspace("a")]);
     assert!(allowed(&engine, dev, Action::View, &group, false));
@@ -497,13 +525,16 @@ fn certificate_use_is_for_administrators_with_mfa() {
     bind(&engine, op, Role::Operator, workspace("a"));
     bind(&engine, dev, Role::Developer, workspace("a"));
     bind(&engine, other, Role::WorkspaceAdmin, workspace("b"));
+
     for r in [&ws, &edge] {
         assert!(!allowed(&engine, admin, Action::CertificateUse, r, false), "MFA is required");
         assert!(allowed(&engine, admin, Action::CertificateUse, r, true));
+
         for u in [op, dev, other] {
             assert!(!allowed(&engine, u, Action::CertificateUse, r, true));
         }
     }
+
     // Operators keep proxy.manage on the edge: they apply endpoints, but an
     // uploaded certificate's key needs an administrator.
     assert!(allowed(&engine, op, Action::ProxyManage, &edge, true));
@@ -518,14 +549,18 @@ fn compose_stacks_roles_and_mfa() {
     bind(&engine, op, Role::Operator, workspace("a"));
     bind(&engine, dev, Role::Developer, workspace("a"));
     bind(&engine, auditor, Role::Auditor, workspace("a"));
+
     // Ordinary stacks: whoever may deploy, without MFA.
     for u in [admin, op, dev] {
         assert!(allowed(&engine, u, Action::StackManage, &ns, false));
     }
+
     assert!(!allowed(&engine, auditor, Action::StackManage, &ns, true));
+
     // Privileged stacks: administrators only, and only with MFA.
     assert!(!allowed(&engine, admin, Action::StackPrivileged, &ns, false));
     assert!(allowed(&engine, admin, Action::StackPrivileged, &ns, true));
+
     for u in [op, dev, auditor] {
         assert!(!allowed(&engine, u, Action::StackPrivileged, &ns, true));
     }
@@ -540,29 +575,35 @@ fn process_manage_roles_and_mfa() {
     let srv = server_in("a", "e1");
     let other = server_in("b", "e2");
     let users: Vec<(Role, UserId)> = Role::ALL.into_iter().map(|r| (r, UserId::new())).collect();
+
     for &(role, user) in &users {
         let scope = if role == Role::PlatformAdmin { EntityRef::platform() } else { workspace("a") };
         bind(&engine, user, role, scope);
     }
+
     for &(role, user) in &users {
         let holds = matches!(role, Role::PlatformAdmin | Role::WorkspaceAdmin | Role::Operator);
         assert_eq!(allowed(&engine, user, Action::ProcessManage, &srv, true), holds, "{role} with MFA");
         assert!(!allowed(&engine, user, Action::ProcessManage, &srv, false), "{role} without MFA");
+
         // Same holders as server.command.
         assert_eq!(
             allowed(&engine, user, Action::ProcessManage, &srv, true),
             allowed(&engine, user, Action::ServerCommand, &srv, true),
             "{role}: process.manage and server.command differ"
         );
+
         if role != Role::PlatformAdmin {
             assert!(!allowed(&engine, user, Action::ProcessManage, &other, true), "{role} in another workspace");
         }
     }
+
     // An environment-scoped operator reaches only that environment's nodes.
     let ns_op = UserId::new();
     bind(&engine, ns_op, Role::Operator, EntityRef::new(EntityKind::Environment, "dev"));
     assert!(allowed(&engine, ns_op, Action::ProcessManage, &server_in("a", "dev"), true));
     assert!(!allowed(&engine, ns_op, Action::ProcessManage, &server_in("a", "prod"), true));
+
     // Not declared on a workspace: the request does not fit the schema and fails closed.
     let (_, admin) = users[0];
     let ws = ResourceRef::new(workspace("a"), vec![]);
@@ -579,27 +620,32 @@ fn container_exec_and_inspect_env_roles() {
     let srv = server_in("a", "e1");
     let other = server_in("b", "e2");
     let users: Vec<(Role, UserId)> = Role::ALL.into_iter().map(|r| (r, UserId::new())).collect();
+
     for &(role, user) in &users {
         let scope = if role == Role::PlatformAdmin { EntityRef::platform() } else { workspace("a") };
         bind(&engine, user, role, scope);
     }
+
     for &(role, user) in &users {
         let holds = matches!(role, Role::PlatformAdmin | Role::WorkspaceAdmin | Role::Operator);
         assert_eq!(allowed(&engine, user, Action::ContainerExec, &srv, false), holds, "{role} exec without MFA");
         assert_eq!(allowed(&engine, user, Action::ContainerExec, &srv, true), holds, "{role} exec with MFA");
         assert_eq!(allowed(&engine, user, Action::ContainerInspectEnv, &srv, true), holds, "{role} env with MFA");
         assert!(!allowed(&engine, user, Action::ContainerInspectEnv, &srv, false), "{role} env without MFA");
+
         // Same holders as container.manage.
         assert_eq!(
             allowed(&engine, user, Action::ContainerExec, &srv, true),
             allowed(&engine, user, Action::ContainerManage, &srv, true),
             "{role}: container.exec and container.manage differ"
         );
+
         if role != Role::PlatformAdmin {
             assert!(!allowed(&engine, user, Action::ContainerExec, &other, true), "{role} in another workspace");
             assert!(!allowed(&engine, user, Action::ContainerInspectEnv, &other, true), "{role} in another workspace");
         }
     }
+
     // Not declared on a workspace: fails closed.
     let (_, admin) = users[0];
     let ws = ResourceRef::new(workspace("a"), vec![]);
@@ -615,6 +661,7 @@ fn alert_roles_per_workspace() {
     let engine = PolicyEngine::new().unwrap();
     let ws = ResourceRef::new(workspace("a"), vec![]);
     let other = ResourceRef::new(workspace("b"), vec![]);
+
     for role in Role::ALL {
         let user = UserId::new();
         let scope = if role == Role::PlatformAdmin { EntityRef::platform() } else { workspace("a") };
@@ -623,6 +670,7 @@ fn alert_roles_per_workspace() {
         let manages = matches!(role, Role::PlatformAdmin | Role::WorkspaceAdmin | Role::Operator);
         assert_eq!(allowed(&engine, user, Action::AlertView, &ws, false), sees, "{role} alert.view");
         assert_eq!(allowed(&engine, user, Action::AlertManage, &ws, false), manages, "{role} alert.manage");
+
         if role != Role::PlatformAdmin {
             assert!(!allowed(&engine, user, Action::AlertView, &other, true), "{role} in another workspace");
             assert!(!allowed(&engine, user, Action::AlertManage, &other, true), "{role} in another workspace");
@@ -643,19 +691,23 @@ fn network_tunnel_roles_and_mfa() {
         EntityRef::new(EntityKind::Service, "app1"),
         vec![EntityRef::new(EntityKind::Environment, "e1"), workspace("a")],
     );
+
     for role in Role::ALL {
         let user = UserId::new();
         let scope = if role == Role::PlatformAdmin { EntityRef::platform() } else { workspace("a") };
         bind(&engine, user, role, scope);
         let holds = matches!(role, Role::PlatformAdmin | Role::WorkspaceAdmin | Role::Operator | Role::Developer);
+
         for r in [&srv, &ns, &app] {
             assert_eq!(allowed(&engine, user, Action::NetworkTunnel, r, true), holds, "{role} with MFA");
             assert!(!allowed(&engine, user, Action::NetworkTunnel, r, false), "{role} without MFA");
         }
+
         if role != Role::PlatformAdmin {
             assert!(!allowed(&engine, user, Action::NetworkTunnel, &other, true), "{role} in another workspace");
         }
     }
+
     // A developer on environment `dev` tunnels to dev's services, not prod's.
     let dev = UserId::new();
     bind(&engine, dev, Role::Developer, EntityRef::new(EntityKind::Environment, "dev"));
@@ -663,6 +715,7 @@ fn network_tunnel_roles_and_mfa() {
     let prod_ns = ResourceRef::new(EntityRef::new(EntityKind::Environment, "prod"), vec![workspace("a")]);
     assert!(allowed(&engine, dev, Action::NetworkTunnel, &dev_ns, true));
     assert!(!allowed(&engine, dev, Action::NetworkTunnel, &prod_ns, true));
+
     // Auditors never tunnel; a grant (D-100) is checked outside Cedar.
     let auditor = UserId::new();
     bind(&engine, auditor, Role::Auditor, workspace("a"));
@@ -676,6 +729,7 @@ fn notification_channels_need_an_administrator_with_mfa() {
     let engine = PolicyEngine::new().unwrap();
     let ws = ResourceRef::new(workspace("a"), vec![]);
     let other = ResourceRef::new(workspace("b"), vec![]);
+
     for role in Role::ALL {
         let user = UserId::new();
         let scope = if role == Role::PlatformAdmin { EntityRef::platform() } else { workspace("a") };
@@ -683,6 +737,7 @@ fn notification_channels_need_an_administrator_with_mfa() {
         let admin = matches!(role, Role::PlatformAdmin | Role::WorkspaceAdmin);
         assert_eq!(allowed(&engine, user, Action::NotificationManage, &ws, true), admin, "{role} with MFA");
         assert!(!allowed(&engine, user, Action::NotificationManage, &ws, false), "{role} without MFA");
+
         if role != Role::PlatformAdmin {
             assert!(!allowed(&engine, user, Action::NotificationManage, &other, true), "{role} in another workspace");
         }
@@ -698,6 +753,7 @@ fn deploy_approve_roles() {
         EntityRef::new(EntityKind::Service, "app1"),
         vec![EntityRef::new(EntityKind::Environment, "prod"), workspace("a")],
     );
+
     for (role, ok) in [
         (Role::PlatformAdmin, true),
         (Role::WorkspaceAdmin, true),
@@ -711,6 +767,7 @@ fn deploy_approve_roles() {
         bind(&engine, u, role, workspace("a"));
         assert_eq!(allowed(&engine, u, Action::DeployApprove, &app, false), ok, "{role:?}");
     }
+
     let dev = UserId::new();
     bind(&engine, dev, Role::Developer, workspace("a"));
     assert!(allowed(&engine, dev, Action::Deploy, &app, false), "developers still deploy");
@@ -731,6 +788,7 @@ fn swarm_manage_is_admin_only_with_mfa() {
     bind(&engine, auditor, Role::Auditor, workspace("a"));
     assert!(!allowed(&engine, admin, Action::SwarmManage, &cl, false));
     assert!(allowed(&engine, admin, Action::SwarmManage, &cl, true));
+
     for u in [op, dev, auditor] {
         assert!(!allowed(&engine, u, Action::SwarmManage, &cl, true));
     }
@@ -747,6 +805,7 @@ fn docker_resources_are_for_operators() {
     bind(&engine, op, Role::Operator, workspace("a"));
     bind(&engine, dev, Role::Developer, workspace("a"));
     bind(&engine, auditor, Role::Auditor, workspace("a"));
+
     for a in [Action::ImageManage, Action::VolumeManage, Action::NetworkManage] {
         assert!(allowed(&engine, admin, a, &node, false), "{a:?}");
         assert!(allowed(&engine, op, a, &node, false), "{a:?}");

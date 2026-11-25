@@ -10,12 +10,15 @@ pub(crate) fn matches(pattern: &str, path: &str, case_sensitive: bool) -> bool {
     } else {
         (pattern.to_lowercase(), path.to_lowercase())
     };
+
     if !p.contains('/') {
         let name = s.rsplit('/').next().unwrap_or(&s);
         return component(p.as_bytes(), name.as_bytes());
     }
+
     let pc: Vec<&str> = p.split('/').filter(|c| !c.is_empty()).collect();
     let sc: Vec<&str> = s.split('/').filter(|c| !c.is_empty()).collect();
+
     components(&pc, &sc)
 }
 
@@ -33,6 +36,7 @@ fn components(p: &[&str], s: &[&str]) -> bool {
 fn component(p: &[u8], s: &[u8]) -> bool {
     let (mut pi, mut si) = (0usize, 0usize);
     let (mut star, mut mark) = (None, 0usize);
+
     while si < s.len() {
         if pi < p.len() {
             match p[pi] {
@@ -40,11 +44,13 @@ fn component(p: &[u8], s: &[u8]) -> bool {
                     star = Some(pi);
                     mark = si;
                     pi += 1;
+
                     continue;
                 }
                 b'?' => {
                     pi += 1;
                     si += 1;
+
                     continue;
                 }
                 b'[' => {
@@ -53,17 +59,20 @@ fn component(p: &[u8], s: &[u8]) -> bool {
                     {
                         pi += len;
                         si += 1;
+
                         continue;
                     }
                 }
                 c if c == s[si] => {
                     pi += 1;
                     si += 1;
+
                     continue;
                 }
                 _ => {}
             }
         }
+
         match star {
             Some(st) => {
                 pi = st + 1;
@@ -73,6 +82,7 @@ fn component(p: &[u8], s: &[u8]) -> bool {
             None => return false,
         }
     }
+
     p[pi..].iter().all(|&b| b == b'*')
 }
 
@@ -84,8 +94,10 @@ fn class(p: &[u8], ch: u8) -> Option<(bool, usize)> {
         Some(b'!' | b'^') => (true, &body[1..]),
         _ => (false, body),
     };
+
     let mut hit = false;
     let mut i = 0;
+
     while i < body.len() {
         if i + 2 < body.len() && body[i + 1] == b'-' {
             hit |= (body[i]..=body[i + 2]).contains(&ch);
@@ -95,6 +107,7 @@ fn class(p: &[u8], ch: u8) -> Option<(bool, usize)> {
             i += 1;
         }
     }
+
     Some((hit != neg, end + 1))
 }
 

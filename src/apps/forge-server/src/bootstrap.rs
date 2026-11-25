@@ -35,10 +35,13 @@ pub async fn init_admin(
     if !state.store.list_users().await?.is_empty() {
         anyhow::bail!("already initialised: users exist");
     }
+
     let user = state.identity.create_account(username, email, display_name, password).await?;
+
     if generated_password {
         state.store.put_setting(INITIAL_PASSWORD_USER, &user.id.to_string(), state.clock.now()).await?;
     }
+
     let binding = RoleBinding {
         id: RoleBindingId::new(),
         user_id: user.id,
@@ -61,6 +64,7 @@ pub async fn init_admin(
                 .with_details(json!({ "admin": user.login(), "default_org": org.id })),
         )
         .await?;
+
     Ok(InitResult { user_id: user.id, workspace_id: org.id })
 }
 
@@ -72,12 +76,14 @@ pub async fn forget_initial_password(state: &AppState, user: UserId) {
     if !ours {
         return;
     }
+
     let path = state.config.data_dir.join(INITIAL_PASSWORD_FILE);
     match std::fs::remove_file(&path) {
         Ok(()) => tracing::info!(path = %path.display(), "removed the installer's initial administrator password"),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => tracing::warn!(path = %path.display(), error = %e, "could not remove the initial password file"),
     }
+
     let _ = state.store.delete_setting(INITIAL_PASSWORD_USER).await;
 }
 
@@ -101,16 +107,20 @@ pub async fn local_enroll_token(
     {
         anyhow::bail!("cluster name: 1-63 letters, digits, space, - _ .");
     }
+
     let hostname = hostname.trim();
     if hostname.is_empty() || hostname.len() > 253 || hostname.chars().any(char::is_control) {
         anyhow::bail!("hostname: 1-253 characters");
     }
+
     let ttl = ttl_minutes.clamp(1, 1440);
+
     let ws = match state.store.list_workspaces().await?.as_slice() {
         [only] => only.id,
         [] => anyhow::bail!("no workspace: run `forge-server init` first"),
         _ => anyhow::bail!("more than one workspace in the store (D-016 allows one)"),
     };
+
     let mut admins: Vec<RoleBinding> = state
         .store
         .list_bindings()
@@ -120,12 +130,14 @@ pub async fn local_enroll_token(
         .collect();
     admins.sort_by_key(|b| b.created_at.0);
     let mut owner = None;
+
     for b in admins {
         if state.store.get_user(b.user_id).await.is_ok_and(|u| !u.disabled) {
             owner = Some(b.user_id);
             break;
         }
     }
+
     let owner =
         owner.ok_or_else(|| anyhow::anyhow!("no enabled platform administrator: run `forge-server init` first"))?;
     let existing = state.store.list_clusters(ws).await?.into_iter().find(|c| c.name.eq_ignore_ascii_case(name));
@@ -153,6 +165,7 @@ pub async fn local_enroll_token(
             (c.id, true)
         }
     };
+
     let generated =
         forge_pki::enrollment::generate(state.ca.fingerprint(), Some(&state.agent_keys.current_fingerprint()));
     let token = EnrollmentToken {
@@ -176,5 +189,6 @@ pub async fn local_enroll_token(
             }),
         )
         .await;
+
     Ok(generated.display)
 }

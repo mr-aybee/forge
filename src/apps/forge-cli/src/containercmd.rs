@@ -148,6 +148,7 @@ pub async fn cluster_swarm(g: &Global, cmd: ClusterSwarmCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
     let base = |id: &str| format!("/api/v1/clusters/{}/swarm", enc(id));
+
     match cmd {
         ClusterSwarmCmd::Status { cluster } => {
             let id = cluster_id(&mut api, &cluster).await?;
@@ -162,13 +163,16 @@ pub async fn cluster_swarm(g: &Global, cmd: ClusterSwarmCmd) -> Result<()> {
                 "default_addr_pool": addr_pools, "autolock": autolock,
             });
             let v = api.post(&format!("{}/members", base(&id)), &body).await?;
+
             // The join job, plus Docker installs it waits for.
             let mut jobs = vec![v["job"]["id"].as_str().unwrap_or_default().to_owned()];
             jobs.retain(|j| !j.is_empty());
+
             if wait.wait && !jobs.is_empty() {
                 let done = wait_jobs(&mut api, &jobs, Duration::from_secs(wait.timeout)).await?;
                 return show(g, &json!(done), None);
             }
+
             show(g, &v, None)
         }
         ClusterSwarmCmd::Leave { cluster, node, force, yes, wait } => {
@@ -182,6 +186,7 @@ pub async fn cluster_swarm(g: &Global, cmd: ClusterSwarmCmd) -> Result<()> {
         ClusterSwarmCmd::Node { cluster, node, role, availability, labels, clear_labels } => {
             let id = cluster_id(&mut api, &cluster).await?;
             let server = node_id(&mut api, &node).await?;
+
             let labels = if clear_labels {
                 Some(BTreeMap::new())
             } else if labels.is_empty() {
@@ -189,11 +194,13 @@ pub async fn cluster_swarm(g: &Global, cmd: ClusterSwarmCmd) -> Result<()> {
             } else {
                 Some(pairs(&labels, "--label")?)
             };
+
             if role.is_none() && availability.is_none() && labels.is_none() {
                 return Err(CliError::usage(
                     "nothing to change: give --role, --availability, --label or --clear-labels",
                 ));
             }
+
             let body = json!({ "role": role, "availability": availability, "labels": labels });
             let v = api.call(Method::PATCH, &format!("{}/members/{}", base(&id), enc(&server)), Some(&body)).await?;
             show(g, &v, None)
@@ -202,6 +209,7 @@ pub async fn cluster_swarm(g: &Global, cmd: ClusterSwarmCmd) -> Result<()> {
             if !worker && !manager {
                 return Err(CliError::usage("give --worker, --manager or both"));
             }
+
             let id = cluster_id(&mut api, &cluster).await?;
             confirm(g, yes, &format!("Rotate the join tokens of {cluster}? Old tokens stop working."))?;
             let v = api
@@ -292,6 +300,7 @@ enum ServiceAction {
 pub async fn service_swarm(g: &Global, cmd: ServiceSwarmCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     let svc = match &cmd {
         ServiceSwarmCmd::Status { svc }
         | ServiceSwarmCmd::Deploy { svc, .. }
@@ -301,19 +310,24 @@ pub async fn service_swarm(g: &Global, cmd: ServiceSwarmCmd) -> Result<()> {
         | ServiceSwarmCmd::Remove { svc, .. }
         | ServiceSwarmCmd::Logs { svc, .. } => svc.clone(),
     };
+
     let app = crate::rescmd::resolve_app(&mut api, &svc.service, svc.environment.as_deref()).await?;
     let path = format!("/api/v1/services/{}/swarm", enc(app["id"].as_str().unwrap_or_default()));
+
     let (action, wait) = match cmd {
         ServiceSwarmCmd::Status { .. } => return show(g, &api.get(&path).await?, None),
         ServiceSwarmCmd::Logs { tail, .. } => {
             let v = api.get(&format!("{path}/logs?tail={tail}")).await?;
+
             if g.output.is_machine() {
                 return show(g, &v, None);
             }
+
             match v["logs"].as_str() {
                 Some(text) => print!("{text}"),
                 None => return show(g, &v, None),
             }
+
             return Ok(());
         }
         ServiceSwarmCmd::Deploy { wait, .. } => (ServiceAction::Deploy, wait),
@@ -328,8 +342,10 @@ pub async fn service_swarm(g: &Global, cmd: ServiceSwarmCmd) -> Result<()> {
             (ServiceAction::Remove, wait)
         }
     };
+
     let body = serde_json::to_value(&action).map_err(|e| CliError::usage(e.to_string()))?;
     let v = api.post(&path, &body).await?;
+
     job_or_wait(g, &mut api, v, wait).await
 }
 
@@ -505,12 +521,14 @@ async fn op(g: &Global, api: &mut Api, node: &str, op: DockerOp, wait: Option<Wa
     let id = node_id(api, node).await?;
     let body = serde_json::to_value(&op).map_err(|e| CliError::usage(e.to_string()))?;
     let v = api.post(&format!("/api/v1/servers/{}/docker/ops", enc(&id)), &body).await?;
+
     job_or_wait(g, api, v, wait.unwrap_or(WaitFlags { wait: false, timeout: 0 })).await
 }
 
 async fn list(g: &Global, api: &mut Api, node: &str, what: &str, cols: Option<&[Col]>) -> Result<()> {
     let id = node_id(api, node).await?;
     let v = api.get(&format!("/api/v1/servers/{}/docker/{what}", enc(&id))).await?;
+
     show(g, &v, cols)
 }
 
@@ -518,6 +536,7 @@ pub async fn docker_resources(g: &Global, cmd: DockerResCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
     let api = &mut api;
+
     match cmd {
         DockerResCmd::Images { node } => list(g, api, &node, "images", Some(IMAGE_COLS)).await,
         DockerResCmd::Volumes { node } => list(g, api, &node, "volumes", Some(VOLUME_COLS)).await,
@@ -585,6 +604,7 @@ async fn network(g: &Global, api: &mut Api, cmd: NetworkCmd) -> Result<()> {
                 Driver::Bridge => NetworkDriver::Bridge,
                 Driver::Overlay => NetworkDriver::Overlay,
             };
+
             let labels = pairs(&labels, "--label")?;
             let o = DockerOp::NetworkCreate { name, driver, subnet, gateway, internal, attachable, labels };
             op(g, api, &node, o, None).await
@@ -665,12 +685,14 @@ fn read_secret(stdin: bool) -> Result<Option<String>> {
     if !stdin {
         return Ok(None);
     }
+
     let mut s = String::new();
     std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)?;
     let s = s.trim_end_matches(['\n', '\r']).to_owned();
     if s.is_empty() {
         return Err(CliError::usage("--secret-stdin: stdin was empty"));
     }
+
     Ok(Some(s))
 }
 
@@ -678,6 +700,7 @@ async fn by_name(api: &mut Api, path: &str, what: &str, key: &str) -> Result<Str
     if crate::admincmd::looks_like_id(key) {
         return Ok(key.to_owned());
     }
+
     let all = api.get(path).await?;
     let hits: Vec<&Value> = all.as_array().into_iter().flatten().filter(|r| r["name"] == key).collect();
     match hits.as_slice() {
@@ -706,6 +729,7 @@ pub async fn registries(g: &Global, cmd: RegistriesCmd) -> Result<()> {
             "secret": read_secret(f.secret_stdin)?, "allow_push": f.allow_push,
         }))
     };
+
     match cmd {
         RegistriesCmd::List => show(g, &api.get(PATH).await?, Some(REGISTRY_COLS)),
         RegistriesCmd::Add { name, flags } => {
@@ -820,6 +844,7 @@ async fn webhook_body(api: &mut Api, name: String, f: WebhookFlags) -> Result<Va
         (None, Some(s)) => json!({"kind": "stack", "id": s}),
         (None, None) => return Err(CliError::usage("give --service or --stack")),
     };
+
     Ok(json!({
         "name": name, "target": target, "signature": f.signature,
         "tag_pattern": f.tag_pattern, "enabled": !f.disabled,
@@ -831,14 +856,17 @@ pub async fn webhooks(g: &Global, cmd: WebhooksCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
     let api = &mut api;
+
     match cmd {
         WebhooksCmd::List => show(g, &api.get(PATH).await?, Some(WEBHOOK_COLS)),
         WebhooksCmd::Create { name, flags } => {
             let b = webhook_body(api, name, flags).await?;
             let v = api.post(PATH, &b).await?;
+
             if !g.output.is_machine() {
                 eprintln!("The URL and secret are shown only now: store them in your CI's secrets.");
             }
+
             show(g, &v, None)
         }
         WebhooksCmd::Update { webhook, name, flags } => {
@@ -894,6 +922,7 @@ const TEMPLATE_COLS: &[Col] =
 pub async fn templates(g: &Global, cmd: TemplatesCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         TemplatesCmd::Templates => {
             let v = api.get("/api/v1/stack-templates").await?;

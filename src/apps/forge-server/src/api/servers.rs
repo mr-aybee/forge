@@ -48,17 +48,20 @@ pub async fn list(
     let facts = state.store.all_facts().await.unwrap_or_default();
     let tags = state.store.tags_of_kind(TagKind::Server).await.unwrap_or_default();
     let mut out = Vec::new();
+
     for (s, ok) in all.into_iter().zip(allowed) {
         let t = tags.get(&s.id.to_string()).cloned().unwrap_or_default();
         if !ok || !has_all(&t, &wanted) {
             continue;
         }
+
         let f = crate::facts::with_live(&state, s.id, facts.get(&s.id));
         let mut v = serde_json::to_value(&s).unwrap_or_default();
         v["facts"] = f;
         v["tags"] = serde_json::json!(t);
         out.push(v);
     }
+
     Ok(Json(out))
 }
 
@@ -76,6 +79,7 @@ pub async fn get(
     v["facts"] = crate::facts::with_live(&state, id, facts.get(&id));
     v["tags"] = serde_json::json!(state.store.tags_of(TagKind::Server, &id.to_string()).await.unwrap_or_default());
     v["dns"] = super::names::of_node(&state, &s).await;
+
     Ok(Json(v))
 }
 
@@ -108,10 +112,12 @@ pub async fn create_enrollment_token(
             if state.store.get_environment(env).await?.workspace_id != org {
                 return Err(ApiError::bad_request("environment belongs to another org"));
             }
+
             EntityRef::new(EntityKind::Environment, env)
         }
         None => EntityRef::new(EntityKind::Workspace, org),
     };
+
     caller.authorize(Action::ServerEnroll, scope.clone()).await?;
     let ttl = req.ttl_minutes.unwrap_or(60).clamp(1, 1440);
     let generated =
@@ -126,17 +132,22 @@ pub async fn create_enrollment_token(
         used_at: None,
         server_id: None,
     };
+
     if let Some(c) = req.cluster_id {
         if state.store.get_cluster(c).await?.workspace_id != org {
             return Err(ApiError::bad_request("cluster belongs to another workspace"));
         }
+
         caller.authorize(Action::ServerEnroll, EntityRef::new(EntityKind::Cluster, c)).await?;
     }
+
     let hostname = req.hostname.as_deref().map(str::trim).filter(|h| !h.is_empty() && h.len() <= 253);
     state.store.create_token(&token).await?;
+
     if req.cluster_id.is_some() || hostname.is_some() {
         state.store.put_enrollment_target(&token.id, req.cluster_id, hostname, state.clock.now()).await?;
     }
+
     caller
         .audit(
             "server.enrollment_token.create",
@@ -145,9 +156,11 @@ pub async fn create_enrollment_token(
             json!({ "token_id": token.id, "ttl_minutes": ttl, "cluster_id": req.cluster_id }),
         )
         .await;
+
     // From the address this person is on (D-167).
     let urls = crate::request_origin::NodeUrls::from_state(&state, &origin);
     let (server, forge_url) = (&urls.agent_url, &urls.forge_url);
+
     Ok((
         StatusCode::CREATED,
         Json(json!({
@@ -193,17 +206,22 @@ pub async fn revoke(
     caller.authorize(Action::ServerManage, server_ref(id)).await?;
     let server = state.store.get_server(id).await?;
     confirm(&state, &caller, &server, "server.revoke", body.map(|b| b.0).unwrap_or_default()).await?;
+
     if let Some(serial) = &server.cert_serial {
         state.store.revoke_certificate(&forge_pki::canonical_serial(serial), id, state.clock.now()).await?;
     }
+
     state.store.set_status(id, AgentStatus::Revoked).await?;
     state.publish(ServerEvent::server(id, AgentStatus::Revoked));
+
     // The analytics worker stops taking its uploads now (D-145).
     state.analytics_maps.nudge();
+
     // The other members drop the revoked node from their peers now (#24).
     if let Some(c) = server.cluster_id {
         super::fabric_reconcile::membership_changed(&state, &[c]).await;
     }
+
     caller
         .audit(
             "server.revoke",
@@ -212,6 +230,7 @@ pub async fn revoke(
             json!({ "cert_serial": server.cert_serial }),
         )
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -230,22 +249,28 @@ pub async fn remove(
     if server.role == forge_core::model::NodeRole::Control {
         return Err(ApiError::conflict("the control node cannot be removed"));
     }
+
     confirm(&state, &caller, &server, "server.remove", body.map(|b| b.0).unwrap_or_default()).await?;
     let now = state.clock.now();
+
     // Revoked first: the serial stays on the revocation list after the
     // node row is gone, so the old certificate can never reconnect.
     if let Some(serial) = &server.cert_serial {
         state.store.revoke_certificate(&forge_pki::canonical_serial(serial), id, now).await?;
     }
+
     state.store.delete_server(id, now).await?;
     state.publish(ServerEvent::server(id, AgentStatus::Revoked));
     state.analytics_maps.nudge();
+
     if let Some(c) = server.cluster_id {
         if let Err(e) = super::fabric::reallocate(&state, c).await {
             tracing::warn!(error = ?e, cluster = %c, "could not replan the fabric after removing a node");
         }
+
         super::fabric_reconcile::membership_changed(&state, &[c]).await;
     }
+
     crate::names::poke();
     caller
         .audit(
@@ -260,6 +285,7 @@ pub async fn remove(
             }),
         )
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -273,12 +299,15 @@ async fn confirm(
     req: RevokeRequest,
 ) -> ApiResult<()> {
     let id = server.id;
+
     if req.confirm_hostname.trim() != server.hostname {
         caller.audit_denied(action, &server_ref(id), Some(server.workspace_id), "hostname confirmation mismatch").await;
         return Err(ApiError::bad_request("type the node's hostname exactly to confirm"));
     }
+
     if caller.session.user.mfa_enabled() && state.config.mfa_required() {
         let code = req.totp_code.as_deref().map(str::trim).unwrap_or_default();
+
         // Same throttle as step-up: an inline code is no side door for guessing.
         let key = format!("step-up:{}", caller.session.user.id);
         if !state.login_throttle.allowed(&key) {
@@ -288,13 +317,17 @@ async fn confirm(
                 "too many attempts; try again in 15 minutes",
             ));
         }
+
         if code.is_empty() || state.identity.verify_step_up(&caller.session.user, code).is_err() {
             state.login_throttle.record_failure(&key);
             caller.audit_denied(action, &server_ref(id), Some(server.workspace_id), "invalid MFA code").await;
+
             return Err(ApiError::forbidden("a valid authenticator code is required to revoke or remove a node"));
         }
+
         state.login_throttle.reset(&key);
     }
+
     Ok(())
 }
 
@@ -313,18 +346,22 @@ pub async fn command(
     Json(req): Json<CommandRequest>,
 ) -> ApiResult<(StatusCode, Json<Job>)> {
     parse_command(&req.command).map_err(ApiError::bad_request)?;
+
     // Only applying an endpoint (POST /sites/{id}/apply) sends an uploaded
     // certificate's key, to that endpoint's edges.
     if req.command["type"] == "site" && req.command.pointer("/spec/tls").and_then(Value::as_str) == Some("uploaded") {
         return Err(ApiError::bad_request("uploaded certificates are sent by applying the endpoint, not as a command"));
     }
+
     // An endpoint's logs and cache are reached through the endpoint.
     if req.command["type"] == "site"
         && matches!(req.command["action"].as_str(), Some("access_log" | "error_log" | "clear_cache"))
     {
         return Err(ApiError::bad_request("use the endpoint's Logs and Clear cache instead of a command"));
     }
+
     let server = state.store.get_server(id).await.map_err(|_| ApiError::not_found("server not found"))?;
+
     // The job engine authorizes job.create and the command's action, and
     // re-authorizes before every step.
     let job = state
@@ -340,6 +377,7 @@ pub async fn command(
             max_attempts: 3,
         })
         .await?;
+
     Ok((StatusCode::ACCEPTED, Json(job)))
 }
 
@@ -364,6 +402,7 @@ pub async fn rename(
     if name.chars().count() > 63 || name.chars().any(char::is_control) {
         return Err(ApiError::bad_request("node names are at most 63 characters, without control characters"));
     }
+
     let new = (!name.is_empty() && name != server.hostname).then_some(name);
     state.store.rename_server(id, new).await?;
     caller
@@ -374,7 +413,9 @@ pub async fn rename(
             json!({ "from": server.display_name, "to": new, "hostname": server.hostname }),
         )
         .await;
+
     // A node that has no local name yet takes one from this name (D-084).
     crate::names::poke();
+
     Ok(Json(state.store.get_server(id).await?))
 }

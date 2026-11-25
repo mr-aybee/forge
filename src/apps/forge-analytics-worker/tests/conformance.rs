@@ -63,6 +63,7 @@ fn app_logs(f: &Fixture) -> Vec<LogEvent> {
     let mut out = parse_batch(&body, cx(f.svc, f.node)).unwrap();
     out.extend(parse_batch(r#"{"@t":"2026-11-22T10:00:04Z","@mt":"node two"}"#, cx(f.svc, f.node2)).unwrap());
     out.extend(parse_batch(r#"{"@t":"2026-11-22T10:00:05Z","@mt":"other app"}"#, cx(f.other, f.node)).unwrap());
+
     // An unattributed container line on node 2.
     out.push(container_event(
         &ContainerContext {
@@ -77,6 +78,7 @@ fn app_logs(f: &Fixture) -> Vec<LogEvent> {
         T0 + 6_000,
         "{\"level\":\"error\",\"msg\":\"evicted\"}",
     ));
+
     out
 }
 
@@ -139,11 +141,13 @@ fn messages(page: &[LogEvent]) -> Vec<&str> {
 /// Polls a read until it sees `want` rows (asynchronous inserts settle).
 async fn settled(store: &dyn AnalyticsStore, q: &LogQuery, want: usize) -> Vec<LogEvent> {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
+
     loop {
         let page = store.query_logs(q).await.unwrap();
         if page.len() >= want || std::time::Instant::now() > deadline {
             return page;
         }
+
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
@@ -159,14 +163,17 @@ async fn suite(store: Arc<dyn AnalyticsStore>) {
     assert_eq!(messages(&page), ["four", "node two", "three", "Two BOOM", "one"], "{}", store.engine());
     assert_eq!(page[1].server_id, Some(f.node2));
     assert_eq!(page[0].exception.as_deref(), Some("Boom trace"));
+
     // One node of a service, plus unattributed lines of a node.
     let q = LogQuery { services: vec![], instances: vec![(f.svc, f.node2)], open_nodes: vec![f.node2], ..base(&f) };
     let page = store.query_logs(&q).await.unwrap();
     assert_eq!(messages(&page), ["evicted", "node two"]);
     assert_eq!(page[0].container_name.as_deref(), Some("cache"));
     assert_eq!(page[0].level, LogLevel::Error);
+
     // Nothing in scope matches nothing.
     assert!(store.query_logs(&LogQuery { services: vec![], ..base(&f) }).await.unwrap().is_empty());
+
     // Filters.
     let q = LogQuery { levels: vec![LogLevel::Error, LogLevel::Warning], ..base(&f) };
     assert_eq!(messages(&store.query_logs(&q).await.unwrap()), ["three", "Two BOOM"]);
@@ -179,6 +186,7 @@ async fn suite(store: Arc<dyn AnalyticsStore>) {
     let q = LogQuery { nodes: vec![f.node2], ..base(&f) };
     assert_eq!(messages(&store.query_logs(&q).await.unwrap()), ["node two"]);
     let open = LogQuery { services: vec![], open_nodes: vec![f.node2], ..base(&f) };
+
     for q in [
         LogQuery { container: Some("cache".into()), ..open.clone() },
         LogQuery { container: Some("abcdef".into()), ..open.clone() },
@@ -187,8 +195,10 @@ async fn suite(store: Arc<dyn AnalyticsStore>) {
     ] {
         assert_eq!(messages(&store.query_logs(&q).await.unwrap()), ["evicted"], "{q:?}");
     }
+
     let q = LogQuery { from: Some(Timestamp(T0 + 2_000)), to: Some(Timestamp(T0 + 4_000)), ..base(&f) };
     assert_eq!(messages(&store.query_logs(&q).await.unwrap()), ["three", "Two BOOM"], "from inclusive, to exclusive");
+
     // Paging both ways.
     let first = store.query_logs(&LogQuery { limit: 2, ..base(&f) }).await.unwrap();
     assert_eq!(messages(&first), ["four", "node two"]);
@@ -197,6 +207,7 @@ async fn suite(store: Arc<dyn AnalyticsStore>) {
     assert_eq!(messages(&second), ["three", "Two BOOM"]);
     let newer = LogQuery { limit: 1, page: LogPage::Newer(second[0].cursor()), ..base(&f) };
     assert_eq!(messages(&store.query_logs(&newer).await.unwrap()), ["node two"], "the nearest newer event");
+
     // Histogram: per level and minute.
     let q = LogQuery { from: Some(Timestamp(T0)), to: Some(Timestamp(T0 + 2 * MIN)), ..base(&f) };
     let mut h = store.log_histogram(&q, MIN).await.unwrap();
@@ -278,6 +289,7 @@ async fn clickhouse_store_conforms() {
         eprintln!("FORGE_TEST_CLICKHOUSE_URL is not set; skipping the ClickHouse run");
         return;
     };
+
     let url = format!("{}_{}", url.trim_end_matches('/'), uuid::Uuid::new_v4().simple());
     let password = std::env::var("FORGE_TEST_CLICKHOUSE_PASSWORD").ok();
     let target = forge_analytics::ClickHouseTarget::from_url(&url, password.as_deref(), "clickhouse").unwrap();

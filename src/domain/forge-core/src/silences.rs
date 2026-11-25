@@ -216,6 +216,7 @@ mod tests {
         assert_eq!(s.state(Timestamp(100)), SilenceState::Active);
         assert_eq!(s.state(Timestamp(199)), SilenceState::Active);
         assert_eq!(s.state(Timestamp(200)), SilenceState::Expired);
+
         // Ended before it started: expired, never scheduled.
         assert_eq!(silence(100, 50).state(Timestamp(60)), SilenceState::Expired);
     }

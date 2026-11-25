@@ -10,9 +10,10 @@
 
 use std::time::{Duration, Instant};
 
-use crate::common::*;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 /// `FORGE_ANALYTICS_WORKER_BIN`, else the nearest `forge-analytics-worker`
 /// above the test executable.
@@ -20,8 +21,10 @@ fn worker_binary() -> Option<std::path::PathBuf> {
     if let Some(p) = std::env::var_os("FORGE_ANALYTICS_WORKER_BIN").map(std::path::PathBuf::from) {
         return p.is_file().then_some(p);
     }
+
     let name = format!("forge-analytics-worker{}", std::env::consts::EXE_SUFFIX);
     let exe = std::env::current_exe().ok()?;
+
     exe.ancestors().skip(1).take(6).map(|d| d.join(&name)).find(|p| p.is_file())
 }
 
@@ -34,6 +37,7 @@ fn require_or_skip() -> Option<std::path::PathBuf> {
         );
         eprintln!("skipped: forge-analytics-worker binary not built");
     }
+
     bin
 }
 
@@ -49,6 +53,7 @@ async fn start_with_worker(bin: std::path::PathBuf, limit_mb: u32) -> Harness {
 /// Polls the analytics status until the worker runs a pid other than `not`.
 async fn running(admin: &Client, not: Option<u64>) -> Value {
     let deadline = Instant::now() + Duration::from_secs(30);
+
     loop {
         let (s, v) = admin.get("/api/v1/analytics/status").await;
         assert_eq!(s, StatusCode::OK, "{v}");
@@ -56,6 +61,7 @@ async fn running(admin: &Client, not: Option<u64>) -> Value {
         if v["worker"]["status"] == "running" && v["ready"] == true && pid.is_some() && pid != not {
             return v;
         }
+
         assert!(Instant::now() < deadline, "the worker never came up: {v}");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -80,6 +86,7 @@ async fn service_with_key(h: &Harness, admin: &Client) -> (String, String) {
     let (s, key) = admin.post(&format!("/api/v1/services/{id}/log-keys"), json!({ "name": "test" })).await;
     assert_eq!(s, StatusCode::CREATED, "{key}");
     let _ = h;
+
     (id, key["token"].as_str().unwrap().to_owned())
 }
 
@@ -93,6 +100,7 @@ async fn ingest(h: &Harness, token: &str, message: &str) -> (StatusCode, Value) 
         .await
         .unwrap();
     let status = r.status();
+
     (status, r.json().await.unwrap_or(Value::Null))
 }
 
@@ -106,6 +114,7 @@ fn kill(pid: u64) {
 fn own_rss_mib() -> Option<u64> {
     let s = std::fs::read_to_string("/proc/self/status").ok()?;
     let kb: u64 = s.lines().find_map(|l| l.strip_prefix("VmRSS:"))?.split_whitespace().next()?.parse().ok()?;
+
     Some(kb / 1024)
 }
 
@@ -148,6 +157,7 @@ async fn the_worker_serves_logs_is_restarted_when_killed_and_the_api_recovers() 
             Client { http: admin.http.clone(), base: admin.base.clone(), csrf: admin.csrf.clone(), bearer: None };
         tokio::spawn(async move {
             let mut seen = Vec::new();
+
             for i in 0..40 {
                 let body = format!("{{\"@t\":\"2024-05-01T10:00:00Z\",\"@mt\":\"load {i}\"}}\n");
                 let r = reqwest::Client::new()
@@ -162,16 +172,20 @@ async fn the_worker_serves_logs_is_restarted_when_killed_and_the_api_recovers() 
                 seen.push(s);
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
+
             seen
         })
     };
+
     tokio::time::sleep(Duration::from_millis(200)).await;
     kill(pid);
+
     // Straight after the kill: down, with the typed error.
     let (s, e) = ingest(&h, &token, "during the crash").await;
     assert_eq!((s, e["title"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("analytics_worker_down")), "{e}");
     let (s, e) = admin.get(&format!("/api/v1/logs?services={svc}")).await;
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "{e}");
+
     // forge-server itself is fine.
     let (s, _) = admin.get("/api/v1/servers").await;
     assert_eq!(s, StatusCode::OK);
@@ -202,18 +216,22 @@ async fn the_worker_serves_logs_is_restarted_when_killed_and_the_api_recovers() 
 #[tokio::test]
 async fn a_worker_over_its_memory_limit_is_restarted() {
     let Some(bin) = require_or_skip() else { return };
+
     // 1 MiB: any process is over it (forge.toml refuses values under 128).
     let h = start_with_worker(bin, 1).await;
     let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
     let deadline = Instant::now() + Duration::from_secs(60);
+
     loop {
         let (_, log) = admin.get("/api/v1/audit?action=analytics.worker.restart").await;
         if log.as_array().is_some_and(|l| l.iter().any(|e| e["details"]["reason"] == "memory_limit")) {
             break;
         }
+
         assert!(Instant::now() < deadline, "no memory-limit restart was audited: {log}");
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+
     let (_, v) = admin.get("/api/v1/analytics/status").await;
     assert_eq!(v["worker"]["memory_limit_bytes"], 1024 * 1024, "{v}");
     h.app.stop().await;

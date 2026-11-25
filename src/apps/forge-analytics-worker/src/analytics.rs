@@ -79,6 +79,7 @@ fn push_bounded<T>(q: &mut VecDeque<T>, row: T, max: usize, dropped: &mut u64) {
         q.pop_front();
         *dropped += 1;
     }
+
     q.push_back(row);
 }
 
@@ -113,6 +114,7 @@ impl Analytics {
         if self.ready.load(Ordering::Relaxed) {
             return Ok(&self.store);
         }
+
         Err(AnalyticsError::Unavailable(
             self.status().last_error.unwrap_or_else(|| "the analytics database is starting".into()),
         ))
@@ -160,15 +162,18 @@ impl Analytics {
                 b.dropped += 1;
                 return;
             }
+
             let bucket = b.open.entry(server).or_insert_with(|| MinuteBucket::new(minute));
             if bucket.minute() != minute {
                 let closed = NodeMinute::from_row(server, &bucket.close());
                 *bucket = MinuteBucket::new(minute);
                 push_bounded(&mut b.minutes, closed, MAX_PENDING_MINUTES, &mut b.dropped);
             }
+
             if let Some(bucket) = b.open.get_mut(&server) {
                 bucket.add(&sample(m));
             }
+
             for p in &m.top_processes {
                 let row = NodeProcessMinute {
                     server_id: server,
@@ -201,6 +206,7 @@ impl Analytics {
         let current = now.0 - now.0.rem_euclid(MINUTE_MS);
         self.with(|b| {
             let ended: Vec<ServerId> = b.open.iter().filter(|(_, k)| k.minute() < current).map(|(s, _)| *s).collect();
+
             for s in ended {
                 if let Some(k) = b.open.remove(&s) {
                     let row = NodeMinute::from_row(s, &k.close());
@@ -215,32 +221,39 @@ impl Analytics {
         if !self.ready.load(Ordering::Relaxed) {
             return;
         }
+
         let store = self.store.clone();
+
         loop {
             let minutes: Vec<NodeMinute> = self.with(|b| b.minutes.iter().take(BATCH).cloned().collect());
             if minutes.is_empty() {
                 break;
             }
+
             match store.write_node_minutes(&minutes).await {
                 Ok(()) => self.with(|b| drop(b.minutes.drain(..minutes.len().min(b.minutes.len())))),
                 Err(e) => return self.write_failed(&e),
             }
         }
+
         loop {
             let procs: Vec<NodeProcessMinute> = self.with(|b| b.processes.iter().take(BATCH).cloned().collect());
             if procs.is_empty() {
                 break;
             }
+
             match store.write_top_processes(&procs).await {
                 Ok(()) => self.with(|b| drop(b.processes.drain(..procs.len().min(b.processes.len())))),
                 Err(e) => return self.write_failed(&e),
             }
         }
+
         loop {
             let rows: Vec<ContainerMinute> = self.with(|b| b.containers.iter().take(BATCH).cloned().collect());
             if rows.is_empty() {
                 break;
             }
+
             match store.write_container_minutes(&rows).await {
                 Ok(()) => self.with(|b| drop(b.containers.drain(..rows.len().min(b.containers.len())))),
                 Err(e) => return self.write_failed(&e),
@@ -276,6 +289,7 @@ impl Analytics {
         let (f, t) = (Timestamp(from), Timestamp(to));
         let resolution = Resolution::for_window(f, t);
         let points = store.node_series(server, f, t, resolution).await.map_err(|e| unavailable(&e))?;
+
         Ok(NodeHistory { server_id: server, from, to, resolution, points })
     }
 
@@ -297,6 +311,7 @@ impl Analytics {
             .container_series(server, container, (f, t), resolution, limit.clamp(1, MAX_HISTORY_CONTAINERS))
             .await
             .map_err(|e| unavailable(&e))?;
+
         Ok(ContainerHistory { server_id: server, from, to, resolution, containers })
     }
 
@@ -312,6 +327,7 @@ impl Analytics {
         let peak = |v: &dyn Fn(&forge_core::analytics::NodePoint) -> f64| {
             history.points.iter().map(|p| Peak { t: p.t, value: v(p) }).max_by(|a, b| a.value.total_cmp(&b.value))
         };
+
         #[allow(clippy::cast_precision_loss)] // reason: percentages for display
         let pct = |used: u64, total: u64| if total == 0 { 0.0 } else { used as f64 * 100.0 / total as f64 };
         Ok(NodeReport {
@@ -336,6 +352,7 @@ fn check_window(from: i64, to: i64) -> Result<(), AnalyticsError> {
     if to <= from || to - from > MAX_WINDOW_MS {
         return Err(AnalyticsError::Invalid("`from` must be before `to`, at most 400 days apart".into()));
     }
+
     Ok(())
 }
 
@@ -343,15 +360,18 @@ fn check_window(from: i64, to: i64) -> Result<(), AnalyticsError> {
 /// minute. On shutdown it closes every open minute and writes once more.
 pub async fn run(analytics: Arc<Analytics>, clock: Arc<dyn Clock>, mut shutdown: watch::Receiver<bool>) {
     let mut prepared = false;
+
     loop {
         if prepared {
             analytics.close_ended(clock.now());
             analytics.flush().await;
+
             // A failed write marks the store not ready; check it again.
             analytics.recheck().await;
         } else {
             prepared = analytics.prepare().await;
         }
+
         let wait = if prepared { Duration::from_secs(60) } else { Duration::from_secs(15) };
         tokio::select! {
             () = tokio::time::sleep(wait) => {}
@@ -383,6 +403,7 @@ mod tests {
         let s = ServerId::new();
         a.observe(s, Timestamp(60_000), &metrics(10.0, 100));
         a.observe(s, Timestamp(90_000), &metrics(30.0, 300));
+
         // The next minute closes the first one.
         a.observe(s, Timestamp(120_500), &metrics(50.0, 0));
         let rows: Vec<NodeMinute> = a.with(|b| b.minutes.iter().cloned().collect());
@@ -400,9 +421,11 @@ mod tests {
     fn buffer_is_bounded() {
         let mut q = VecDeque::new();
         let mut dropped = 0;
+
         for i in 0..5 {
             push_bounded(&mut q, i, 3, &mut dropped);
         }
+
         assert_eq!(q, VecDeque::from([2, 3, 4]));
         assert_eq!(dropped, 2);
     }

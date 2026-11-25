@@ -27,11 +27,13 @@ pub struct ForgeHostFunctions {
 }
 
 impl ForgeHostFunctions {
+    /// Creates the host functions.
     #[must_use]
     pub fn new(servers: Arc<dyn ServerRepository>, authz: Arc<dyn Authorizer>) -> Self {
         Self { servers, authz }
     }
 
+    /// Binds the host functions to one invocation.
     #[must_use]
     pub fn bind(&self, invocation: Invocation) -> BoundHostFunctions {
         BoundHostFunctions { functions: self.clone(), invocation }
@@ -60,7 +62,9 @@ impl BoundHostFunctions {
         if hostname.len() > 253 {
             return Err("hostname too long".into());
         }
+
         let candidates = self.functions.servers.list_servers(None).await.map_err(|e| e.to_string())?;
+
         for s in candidates.into_iter().filter(|s| s.hostname.eq_ignore_ascii_case(hostname)) {
             // The *user's* rights bound what the plugin can see.
             let req = AccessRequest::new(
@@ -69,10 +73,12 @@ impl BoundHostFunctions {
                 EntityRef::new(EntityKind::Server, s.id),
                 self.invocation.context,
             );
+
             if self.functions.authz.is_allowed(&req).await {
                 return Ok(json!(s.status == AgentStatus::Online));
             }
         }
+
         // Unknown and invisible servers are indistinguishable.
         Ok(json!(false))
     }
@@ -82,6 +88,7 @@ impl BoundHostFunctions {
 impl HostCalls for BoundHostFunctions {
     async fn call(&self, function: &str, args: Value) -> Result<Value, String> {
         self.require_approved(function)?;
+
         match function {
             host_functions::LOG => {
                 let msg = args.get("message").and_then(Value::as_str).unwrap_or_default();

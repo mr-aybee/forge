@@ -94,13 +94,16 @@ impl Resolver {
     pub async fn new(state: &AppState) -> ApiResult<Self> {
         let mut mesh: HashMap<String, (ClusterId, String)> = HashMap::new();
         let mut domains = HashMap::new();
+
         for f in state.store.list_fabrics(None).await? {
             if let Ok(spec) = serde_json::from_value::<FabricSpec>(f.spec.clone()) {
                 domains.insert(f.cluster_id, spec.domain);
             }
+
             // Only nodes whose mesh is up: an address on a node where the
             // network failed to apply would be unreachable.
             let up = |id: &str| f.status.pointer(&format!("/nodes/{id}/state")).and_then(Value::as_str) == Some("ok");
+
             for l in serde_json::from_value::<Vec<Lease>>(f.leases.clone()).unwrap_or_default() {
                 if l.kind == LeaseKind::Node && up(&l.owner) {
                     let ip = l.cidr.first().to_string();
@@ -108,10 +111,13 @@ impl Resolver {
                 }
             }
         }
+
         let mut lan = HashMap::new();
+
         for s in state.store.list_servers(None).await? {
             lan.insert(s.id.to_string(), super::ingress::node_address(state, &s).await);
         }
+
         Ok(Self { lan, mesh, edges: None, domains })
     }
 
@@ -129,6 +135,7 @@ impl Resolver {
         let mesh = self.mesh.get(id).map(|(c, m)| (*c, m.as_str()));
         let edges: Option<Vec<Option<ClusterId>>> =
             self.edges.as_ref().map(|es| es.iter().map(|e| self.mesh.get(e).map(|(c, _)| *c)).collect());
+
         Some(pick_address(lan, mesh, edges.as_deref()).to_owned())
     }
 
@@ -140,14 +147,17 @@ impl Resolver {
                 if *port == 0 {
                     return Err(ApiError::bad_request("port must be 1–65535"));
                 }
+
                 let id: ServiceId = service_id.parse().map_err(|_| ApiError::bad_request("invalid service id"))?;
                 let slots = forge_core::deploy::DeploymentRepository::list_slots(&state.store, id).await?;
                 let mut out = Vec::new();
+
                 for i in state.store.list_instances(id).await? {
                     let sid = i.server_id.to_string();
                     let Some(host) = self.addr(&sid) else { continue };
                     let copies: Vec<&forge_core::deploy::SlotRecord> =
                         slots.iter().filter(|s| s.server_id == i.server_id).collect();
+
                     if copies.is_empty() {
                         out.push(Upstream {
                             address: host_port(&host, *port),
@@ -158,6 +168,7 @@ impl Resolver {
                         });
                         continue;
                     }
+
                     for c in copies.into_iter().filter(|c| c.weight > 0) {
                         // The unslotted copy listens on the service port itself.
                         let p =
@@ -172,14 +183,17 @@ impl Resolver {
                         });
                     }
                 }
+
                 Ok(out)
             }
             other => {
                 let a = other.resolve(|id| self.addr(id)).map_err(ApiError::bad_request)?;
+
                 let server_id = match other {
                     Target::Node { server_id, .. } => Some(server_id.clone()),
                     _ => None,
                 };
+
                 Ok(vec![Upstream { address: a, standby, server_id, state: None, weight: 100 }])
             }
         }
@@ -201,6 +215,7 @@ impl Resolver {
         let mut act = Vec::new();
         let mut sby = Vec::new();
         let mut weights = std::collections::BTreeMap::new();
+
         for (list, is_standby) in [(targets, false), (standby, true)] {
             for t in list {
                 let ups = self.expand(state, t, is_standby).await?;
@@ -211,24 +226,31 @@ impl Resolver {
                         "service {service_id} is not placed on any node yet; deploy it first"
                     )));
                 }
+
                 for u in ups {
                     let dst = if u.standby { &mut sby } else { &mut act };
+
                     if u.weight != 100 && !u.standby {
                         weights.insert(u.address.clone(), u.weight);
                     }
+
                     if !dst.contains(&u.address) {
                         dst.push(u.address);
                     }
                 }
             }
         }
+
         // A standby that is also active is just active.
         sby.retain(|a| !act.contains(a));
+
         if act.is_empty() && !sby.is_empty() {
             act = std::mem::take(&mut sby);
             weights.clear();
         }
+
         weights.retain(|a, _| act.contains(a));
+
         Ok(Resolved { active: act, standby: sby, weights })
     }
 
@@ -253,6 +275,7 @@ async fn internal_name(state: &AppState, r: &Resolver, app: ServiceId) -> Option
         Some(d) => format!("{}.{}.{d}", a.name, ns.name),
         None => format!("{}.{}", a.name, ns.name),
     };
+
     Some((a.name, name))
 }
 
@@ -268,11 +291,13 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Path(id): Path<C
     let profile = super::ingress::load_profile(&state, id).await.ok().flatten().and_then(|(p, _)| p.ingress).is_some();
     let cid = id.to_string();
     let mut endpoints = Vec::new();
+
     for site in state.store.list_sites().await? {
         let Some(source) = endpoint_source(&site.config, &cid, &members) else { continue };
         if source == "edges" && site.workspace_id != cluster.workspace_id {
             continue;
         }
+
         let edge_ids: Vec<String> = serde_json::from_value(site.config["edges"].clone()).unwrap_or_default();
         let r = r.clone().for_edges(edge_ids);
         let edges: Vec<Value> = site.config["edges"]
@@ -290,8 +315,10 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Path(id): Path<C
             })
             .collect();
         let mut targets = Vec::new();
+
         for (key, standby) in [("targets", false), ("standby_targets", true)] {
             let list: Vec<Target> = serde_json::from_value(site.config[key].clone()).unwrap_or_default();
+
             for t in list {
                 let (label, internal) = match &t {
                     Target::App { service_id, .. } => match service_id.parse().ok() {
@@ -305,10 +332,13 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Path(id): Path<C
                     }
                     Target::External { address } => (address.clone(), None),
                 };
+
                 let ups = r.expand(&state, &t, standby).await.unwrap_or_default();
+
                 // Nginx logs the address it connected to (`$upstream_addr`,
                 // an IP): resolve names so the console can match traffic.
                 let mut resolved = Vec::with_capacity(ups.len());
+
                 for u in &ups {
                     let ips: Vec<String> = match tokio::time::timeout(
                         std::time::Duration::from_secs(2),
@@ -319,8 +349,10 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Path(id): Path<C
                         Ok(Ok(it)) => it.map(|a| a.to_string()).collect(),
                         _ => Vec::new(),
                     };
+
                     resolved.push(ips);
                 }
+
                 targets.push(json!({
                     "target": t,
                     "label": label,
@@ -337,6 +369,7 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Path(id): Path<C
                 }));
             }
         }
+
         endpoints.push(json!({
             "id": site.id,
             "name": site.name,
@@ -348,6 +381,7 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Path(id): Path<C
             "linked": source == "profile",
         }));
     }
+
     Ok(Json(json!({ "endpoints": endpoints, "profile": profile })))
 }
 
@@ -394,16 +428,21 @@ mod tests {
         let (control, lab) = (ClusterId::new(), ClusterId::new());
         let mesh = Some((lab, "10.64.0.16"));
         let lan = "192.168.1.20";
+
         // Edge in another cluster (or with no mesh up): LAN.
         assert_eq!(pick_address(lan, mesh, Some(&[Some(control)])), lan);
         assert_eq!(pick_address(lan, mesh, Some(&[None])), lan);
+
         // Edge in the same fabric: mesh.
         assert_eq!(pick_address(lan, mesh, Some(&[Some(lab)])), "10.64.0.16");
+
         // One edge outside is enough to need the LAN address (one upstream
         // list serves every edge).
         assert_eq!(pick_address(lan, mesh, Some(&[Some(lab), Some(control)])), lan);
+
         // Target without a mesh up: LAN, whatever the edges.
         assert_eq!(pick_address(lan, None, Some(&[Some(lab)])), lan);
+
         // Edges unknown (display only): the mesh address when there is one.
         assert_eq!(pick_address(lan, mesh, None), "10.64.0.16");
         assert_eq!(pick_address(lan, mesh, Some(&[])), lan);

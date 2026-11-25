@@ -26,9 +26,11 @@ pub const MAX_PER_ACCOUNT: u32 = 100;
 #[must_use]
 pub fn login_keys(login: &str, ip: IpAddr) -> Vec<(String, u32)> {
     let mut keys = vec![(format!("{login}|{ip}"), MAX_FAILURES), (format!("account:{login}"), MAX_PER_ACCOUNT)];
+
     if !ip.is_loopback() && !ip.to_canonical().is_loopback() {
         keys.push((format!("ip:{ip}"), MAX_PER_ADDRESS));
     }
+
     keys
 }
 
@@ -46,10 +48,12 @@ impl std::str::FromStr for TrustedNet {
         let (ip, prefix) = s.split_once('/').map_or((s, None), |(a, p)| (a, Some(p)));
         let addr: IpAddr = ip.parse().map_err(|_| format!("`{s}` is not an IP address or CIDR"))?;
         let max = if addr.is_ipv4() { 32 } else { 128 };
+
         let prefix = match prefix {
             None => max,
             Some(p) => p.parse::<u8>().ok().filter(|p| *p <= max).ok_or_else(|| format!("`{s}`: bad prefix length"))?,
         };
+
         Ok(Self { addr, prefix })
     }
 }
@@ -75,7 +79,9 @@ impl TrustedNet {
         if w1 != w2 {
             return false;
         }
+
         let shift = u32::from(w1 - self.prefix.min(w1));
+
         shift >= 128 || (net >> shift) == (ip >> shift)
     }
 }
@@ -91,6 +97,7 @@ pub fn client_ip(headers: &HeaderMap, peer: SocketAddr, trusted: &[TrustedNet]) 
     if !is_trusted(peer) {
         return peer;
     }
+
     let chain: Vec<IpAddr> = headers
         .get_all("x-forwarded-for")
         .iter()
@@ -98,6 +105,7 @@ pub fn client_ip(headers: &HeaderMap, peer: SocketAddr, trusted: &[TrustedNet]) 
         .flat_map(|v| v.split(','))
         .filter_map(|p| p.trim().parse::<IpAddr>().ok())
         .collect();
+
     chain.into_iter().rev().find(|ip| !is_trusted(*ip)).unwrap_or(peer)
 }
 
@@ -109,6 +117,7 @@ pub fn forwarded_https(headers: &HeaderMap, peer: SocketAddr, trusted: &[Trusted
     if !trusted.iter().any(|t| t.contains(peer.ip())) {
         return false;
     }
+
     headers
         .get_all("x-forwarded-proto")
         .iter()
@@ -141,10 +150,12 @@ impl LoginThrottle {
         if map.len() >= MAX_KEYS {
             map.retain(|_, (_, since)| since.elapsed() <= WINDOW);
         }
+
         let e = map.entry(key.to_owned()).or_insert((0, Instant::now()));
         if e.1.elapsed() > WINDOW {
             *e = (0, Instant::now());
         }
+
         e.0 += 1;
     }
 
@@ -167,6 +178,7 @@ mod tests {
     fn xff(v: &str) -> HeaderMap {
         let mut h = HeaderMap::new();
         h.insert("x-forwarded-for", v.parse().unwrap());
+
         h
     }
 
@@ -199,19 +211,23 @@ mod tests {
         let t = LoginThrottle::default();
         let a: IpAddr = "198.51.100.7".parse().unwrap();
         let b: IpAddr = "203.0.113.9".parse().unwrap();
+
         for _ in 0..MAX_FAILURES {
             for (k, _) in login_keys("admin", a) {
                 t.record_failure(&k);
             }
         }
+
         let ok = |login: &str, ip| login_keys(login, ip).iter().all(|(k, max)| t.allowed_up_to(k, *max));
         assert!(!ok("admin", a), "the attacker's address is stopped for this account");
         assert!(ok("admin", b), "the owner can still sign in from elsewhere");
+
         for i in 0..MAX_PER_ADDRESS {
             for (k, _) in login_keys(&format!("user{i}"), a) {
                 t.record_failure(&k);
             }
         }
+
         assert!(!ok("someone-else", a), "spraying from one address is stopped");
         let local: IpAddr = "127.0.0.1".parse().unwrap();
         assert_eq!(login_keys("x", local).len(), 2, "an unconfigured local proxy gets no address-wide limit");
@@ -220,10 +236,12 @@ mod tests {
     #[test]
     fn locks_after_max_failures() {
         let t = LoginThrottle::default();
+
         for _ in 0..MAX_FAILURES {
             assert!(t.allowed("a"));
             t.record_failure("a");
         }
+
         assert!(!t.allowed("a"));
         assert!(t.allowed("b"));
         t.reset("a");

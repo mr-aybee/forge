@@ -18,11 +18,13 @@ async fn receiver(status_line: &'static str) -> String {
                 // Read the head and the body it announces, then answer.
                 let mut seen = Vec::new();
                 let mut buf = [0u8; 4096];
+
                 loop {
                     let Ok(n) = stream.read(&mut buf).await else { return };
                     if n == 0 {
                         break;
                     }
+
                     seen.extend_from_slice(&buf[..n]);
                     let text = String::from_utf8_lossy(&seen);
                     if let Some(head_end) = text.find("\r\n\r\n") {
@@ -32,17 +34,20 @@ async fn receiver(status_line: &'static str) -> String {
                             .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
                             .and_then(|(_, v)| v.trim().parse::<usize>().ok())
                             .unwrap_or(0);
+
                         if seen.len() >= head_end + 4 + length {
                             break;
                         }
                     }
                 }
+
                 let answer = format!("HTTP/1.1 {status_line}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
                 let _ = stream.write_all(answer.as_bytes()).await;
                 let _ = stream.shutdown().await;
             });
         }
     });
+
     base
 }
 

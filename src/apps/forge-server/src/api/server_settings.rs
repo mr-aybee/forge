@@ -102,12 +102,14 @@ pub fn address_view(state: &AppState) -> PublicAddressView {
     let configured = Some(a.configured().to_owned()).filter(|c| !c.is_empty());
     let last_admin = a.last_admin();
     let effective = a.get();
+
     let source = match (&setting, &configured, &last_admin) {
         (Some(_), _, _) => AddressSource::Setting,
         (None, Some(_), _) => AddressSource::Config,
         (None, None, Some(_)) => AddressSource::LastAdmin,
         (None, None, None) => AddressSource::None,
     };
+
     PublicAddressView {
         https: effective.starts_with("https://"),
         source,
@@ -129,6 +131,7 @@ pub async fn get(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
     // Platform-scope readers only (not workspace roles); reading needs no MFA.
     caller.authorize(Action::View, EntityRef::platform()).await?;
     let c = &state.config;
+
     Ok(Json(ServerSettings {
         public_address: address_view(&state),
         allowed_hosts: hosts_view(&state),
@@ -153,6 +156,7 @@ async fn guard(caller: &Caller, action: &str) -> ApiResult<EntityRef> {
     let platform = EntityRef::platform();
     caller.authorize(Action::SystemUpdate, platform.clone()).await?;
     caller.require_mfa(action, &platform).await?;
+
     Ok(platform)
 }
 
@@ -162,14 +166,17 @@ pub async fn put_public_address(
     Json(req): Json<PublicAddressRequest>,
 ) -> ApiResult<Json<PublicAddressView>> {
     let platform = guard(&caller, AUDIT_PUBLIC_ADDRESS_UPDATE).await?;
+
     if let Err(e) = crate::public_address::validate(&req.value) {
         caller.audit_denied(AUDIT_PUBLIC_ADDRESS_UPDATE, &platform, None, &e.to_string()).await;
         return Err(ApiError::bad_request(format!("value: {e}")));
     }
+
     let from = state.public_address.get();
     crate::public_address::save(&state.store, &state.public_address, Some(&req.value), state.clock.now()).await?;
     let view = address_view(&state);
     caller.audit(AUDIT_PUBLIC_ADDRESS_UPDATE, &platform, None, json!({ "from": from, "to": view.effective })).await;
+
     Ok(Json(view))
 }
 
@@ -182,6 +189,7 @@ pub async fn delete_public_address(
     crate::public_address::save(&state.store, &state.public_address, None, state.clock.now()).await?;
     let view = address_view(&state);
     caller.audit(AUDIT_PUBLIC_ADDRESS_CLEAR, &platform, None, json!({ "from": from, "to": view.effective })).await;
+
     Ok(Json(view))
 }
 
@@ -198,14 +206,17 @@ pub async fn put_allowed_hosts(
     Json(req): Json<AllowedHostsRequest>,
 ) -> ApiResult<Json<AllowedHostsView>> {
     let platform = guard(&caller, AUDIT_ALLOWED_HOSTS_UPDATE).await?;
+
     if let Err(e) = forge_core::allowed_hosts::parse_list(&req.hosts) {
         caller.audit_denied(AUDIT_ALLOWED_HOSTS_UPDATE, &platform, None, &e.to_string()).await;
         return Err(ApiError::bad_request(format!("hosts: {e}")));
     }
+
     let from = state.allowed_hosts.list();
     crate::allowed_hosts::save(&state.store, &state.allowed_hosts, Some(&req.hosts), state.clock.now()).await?;
     let view = hosts_view(&state);
     caller.audit(AUDIT_ALLOWED_HOSTS_UPDATE, &platform, None, json!({ "from": from, "to": view.hosts })).await;
+
     Ok(Json(view))
 }
 
@@ -215,5 +226,6 @@ pub async fn delete_allowed_hosts(State(state): State<AppState>, caller: Caller)
     crate::allowed_hosts::save(&state.store, &state.allowed_hosts, None, state.clock.now()).await?;
     let view = hosts_view(&state);
     caller.audit(AUDIT_ALLOWED_HOSTS_CLEAR, &platform, None, json!({ "from": from, "to": view.hosts })).await;
+
     Ok(Json(view))
 }

@@ -341,6 +341,7 @@ impl HealthPolicy {
     #[must_use]
     pub fn validate(&self) -> Vec<FieldError> {
         let mut errs = Vec::new();
+
         for (purpose, list) in [
             (Purpose::Startup, &self.startup),
             (Purpose::Readiness, &self.readiness),
@@ -349,15 +350,20 @@ impl HealthPolicy {
             if list.len() > MAX_CHECKS {
                 errs.push(err(purpose.as_str(), format!("at most {MAX_CHECKS} checks")));
             }
+
             let mut names = HashSet::new();
+
             for (i, c) in list.iter().enumerate() {
                 let at = format!("{}[{i}]", purpose.as_str());
+
                 if !names.insert(c.name.as_str()) {
                     errs.push(err(&format!("{at}.name"), format!("`{}` is used twice", c.name)));
                 }
+
                 c.validate(purpose, &at, &mut errs);
             }
         }
+
         errs
     }
 }
@@ -397,6 +403,7 @@ pub fn forbidden_address(ip: IpAddr) -> bool {
         IpAddr::V4(v4) => v4.is_link_local() || v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast(),
         IpAddr::V6(v6) => {
             let seg = v6.segments();
+
             // fe80::/10 link-local; fd00:ec2::254 is the AWS IPv6 metadata endpoint.
             (seg[0] & 0xffc0) == 0xfe80
                 || v6.is_unspecified()
@@ -416,6 +423,7 @@ pub fn forbidden_address(ip: IpAddr) -> bool {
 pub fn transition_address(ip: IpAddr) -> bool {
     let IpAddr::V6(v6) = ip else { return false };
     let s = v6.segments();
+
     s[0] == 0x2002
         || (s[0] == 0x2001 && s[1] == 0)
         || (s[0] == 0x64 && s[1] == 0xff9b && s[2] == 1)
@@ -429,9 +437,11 @@ pub fn transition_address(ip: IpAddr) -> bool {
 #[must_use]
 pub fn canonical(ip: IpAddr) -> IpAddr {
     let IpAddr::V6(v6) = ip else { return ip };
+
     if let Some(v4) = v6.to_ipv4_mapped() {
         return IpAddr::V4(v4);
     }
+
     let seg = v6.segments();
     let low =
         std::net::Ipv4Addr::new((seg[6] >> 8) as u8, (seg[6] & 0xff) as u8, (seg[7] >> 8) as u8, (seg[7] & 0xff) as u8);
@@ -448,7 +458,9 @@ pub fn numeric_host(host: &str) -> bool {
     if host.parse::<IpAddr>().is_ok() {
         return false;
     }
+
     let last = host.trim_end_matches('.').rsplit('.').next().unwrap_or_default().to_ascii_lowercase();
+
     !last.is_empty() && (last.bytes().all(|b| b.is_ascii_digit()) || last.starts_with("0x"))
 }
 /// Host names that resolve to metadata services.
@@ -463,6 +475,7 @@ fn valid_host(host: &str) -> bool {
     if host.parse::<IpAddr>().is_ok() {
         return true;
     }
+
     !host.is_empty()
         && host.len() <= 253
         && host.split('.').all(|l| {
@@ -479,21 +492,27 @@ fn check_host(host: &str, allow_remote: bool, at: &str, errs: &mut Vec<FieldErro
         if allow_remote {
             errs.push(err(&format!("{at}.allow_remote_host"), "set a host, or turn this off to probe the workload"));
         }
+
         return;
     }
+
     if !valid_host(host) {
         errs.push(err(&format!("{at}.host"), "not a valid host name or IP address"));
         return;
     }
+
     if numeric_host(host) {
         errs.push(err(&format!("{at}.host"), "write an IP address in its normal form, or use a host name"));
         return;
     }
+
     let local = workload_host(host);
+
     if host.parse::<IpAddr>().is_ok_and(forbidden_address) {
         errs.push(err(&format!("{at}.host"), "link-local and metadata addresses can't be probed"));
         return;
     }
+
     // 6to4, Teredo and local-use NAT64 name an IPv4 destination a relay
     // delivers to: `2002:a9fe:a9fe::1` is 169.254.169.254.
     if host.parse::<IpAddr>().is_ok_and(transition_address) {
@@ -503,10 +522,12 @@ fn check_host(host: &str, allow_remote: bool, at: &str, errs: &mut Vec<FieldErro
         ));
         return;
     }
+
     if forbidden_name(host) {
         errs.push(err(&format!("{at}.host"), "metadata service names can't be probed"));
         return;
     }
+
     if !local && !allow_remote {
         errs.push(err(
             &format!("{at}.allow_remote_host"),
@@ -526,18 +547,23 @@ impl Check {
         if !valid_name(&self.name) {
             errs.push(err(&format!("{at}.name"), "lowercase letters, digits and dashes, at most 40"));
         }
+
         if !(1..=3600).contains(&self.period_secs) {
             errs.push(err(&format!("{at}.period_secs"), "between 1 and 3600 seconds"));
         }
+
         if self.timeout_secs == 0 || self.timeout_secs >= self.period_secs.max(1) {
             errs.push(err(&format!("{at}.timeout_secs"), "at least 1 second and shorter than the period"));
         }
+
         if self.initial_delay_secs > 3600 {
             errs.push(err(&format!("{at}.initial_delay_secs"), "at most 3600 seconds"));
         }
+
         if !(1..=100).contains(&self.failure_threshold) {
             errs.push(err(&format!("{at}.failure_threshold"), "between 1 and 100"));
         }
+
         let max_success = if purpose == Purpose::Readiness { 100 } else { 1 };
         if !(1..=max_success).contains(&self.success_threshold) {
             errs.push(err(
@@ -545,31 +571,39 @@ impl Check {
                 if max_success == 1 { "must be 1 for startup and liveness checks" } else { "between 1 and 100" },
             ));
         }
+
         if !self.required && purpose != Purpose::Readiness {
             errs.push(err(&format!("{at}.required"), "only readiness checks can be optional"));
         }
+
         let p = format!("{at}.probe");
+
         match &self.probe {
             Probe::Http(h) => {
                 check_host(&h.host, h.allow_remote_host, &p, errs);
+
                 if h.port == 0 {
                     errs.push(err(&format!("{p}.port"), "between 1 and 65535"));
                 }
+
                 if !h.path.starts_with('/') || h.path.len() > 2048 || h.path.chars().any(char::is_control) {
                     errs.push(err(
                         &format!("{p}.path"),
                         "starts with `/`, at most 2048 characters, no control characters",
                     ));
                 }
+
                 if h.expected_statuses.is_empty()
                     || h.expected_statuses.len() > 10
                     || h.expected_statuses.iter().any(|r| r.from < 100 || r.to > 599 || r.from > r.to)
                 {
                     errs.push(err(&format!("{p}.expected_statuses"), "1 to 10 ranges within 100–599"));
                 }
+
                 if !h.server_name.is_empty() && !valid_host(&h.server_name) {
                     errs.push(err(&format!("{p}.server_name"), "not a valid host name"));
                 }
+
                 // A vault value goes in clear text, or to a peer nobody
                 // verified, only to the workload itself.
                 if h.has_secret() && !h.targets_workload() && !h.verified_tls() {
@@ -579,15 +613,18 @@ impl Check {
                         "a vault secret is sent to another host only over HTTPS with certificate verification",
                     ));
                 }
+
                 if h.headers.len() > MAX_HEADERS {
                     errs.push(err(&format!("{p}.headers"), format!("at most {MAX_HEADERS} headers")));
                 }
+
                 for (j, hd) in h.headers.iter().enumerate() {
                     let hp = format!("{p}.headers[{j}]");
                     let token = |b: u8| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b);
                     if hd.name.is_empty() || hd.name.len() > 64 || !hd.name.bytes().all(token) {
                         errs.push(err(&format!("{hp}.name"), "not a valid header name"));
                     }
+
                     match (&hd.value, &hd.secret) {
                         (Some(_), Some(_)) | (None, None) => {
                             errs.push(err(&hp, "set either a value or a vault secret"));
@@ -599,6 +636,7 @@ impl Check {
                                     "credentials must be a vault secret, not a plain value",
                                 ));
                             }
+
                             if v.len() > 1024 || v.chars().any(char::is_control) {
                                 errs.push(err(
                                     &format!("{hp}.value"),
@@ -616,6 +654,7 @@ impl Check {
             }
             Probe::Tcp(t) => {
                 check_host(&t.host, t.allow_remote_host, &p, errs);
+
                 if t.port == 0 {
                     errs.push(err(&format!("{p}.port"), "between 1 and 65535"));
                 }
@@ -626,15 +665,18 @@ impl Check {
                 } else if e.argv[0].trim().is_empty() {
                     errs.push(err(&format!("{p}.argv"), "the program can't be empty"));
                 }
+
                 if e.argv.iter().any(|a| a.len() > 4096 || a.contains('\0')) {
                     errs.push(err(&format!("{p}.argv"), "arguments: at most 4096 bytes, no NUL"));
                 }
+
                 check_exit_codes(&e.expected_exit_codes, &p, errs);
             }
             Probe::Shell(s) => {
                 if s.script.trim().is_empty() || s.script.len() > MAX_SCRIPT || s.script.contains('\0') {
                     errs.push(err(&format!("{p}.script"), format!("1 to {MAX_SCRIPT} bytes, no NUL")));
                 }
+
                 check_exit_codes(&s.expected_exit_codes, &p, errs);
             }
         }
@@ -675,9 +717,11 @@ pub fn summary(purpose: Purpose, c: &Check) -> String {
             }
         ),
     };
+
     let n = |k: u32, one: &str, many: &str| format!("{k} {}", if k == 1 { one } else { many });
     let delay =
         if c.initial_delay_secs > 0 { format!(", starting after {} s", c.initial_delay_secs) } else { String::new() };
+
     let fail = match purpose {
         Purpose::Startup => format!(
             "Give up after {} (the startup budget); readiness and liveness wait until it succeeds",
@@ -695,6 +739,7 @@ pub fn summary(purpose: Purpose, c: &Check) -> String {
             )
         }
     };
+
     format!("{what} every {} s (timeout {} s){delay}. {fail}.", c.period_secs, c.timeout_secs)
 }
 
@@ -739,12 +784,15 @@ pub fn revision(listen_port: Option<u16>, policy: &HealthPolicy) -> i64 {
     if policy.is_empty() {
         return 0;
     }
+
     let text = serde_json::to_string(&(listen_port, policy)).unwrap_or_default();
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+
     for b in text.bytes() {
         h ^= u64::from(b);
         h = h.wrapping_mul(0x0100_0000_01b3);
     }
+
     i64::try_from(h >> 1).unwrap_or(i64::MAX).max(1)
 }
 

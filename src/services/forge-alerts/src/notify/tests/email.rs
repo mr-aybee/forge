@@ -56,6 +56,7 @@ async fn an_email_channel_keeps_its_password_sealed_and_shows_the_rest() {
     keep.from = "alerts@example.com".into();
     let u = e.n.update_channel(c.id, channel_input(keep)).await.unwrap();
     assert_eq!(e.secrets.open_url(c.id, &u.sealed_url).unwrap(), PASSWORD);
+
     // A different host, port, TLS mode or user needs the password again, so
     // the stored one is never sent to a server it was not set for.
     let changes: [&dyn Fn(&mut EmailInput); 4] = [
@@ -64,24 +65,29 @@ async fn an_email_channel_keeps_its_password_sealed_and_shows_the_rest() {
         &|i| i.tls = SmtpTls::Tls,
         &|i| i.username = Some("other".into()),
     ];
+
     for change in changes {
         let mut i = email_input(Some("forge"), None);
         change(&mut i);
         let err = e.n.update_channel(c.id, channel_input(i)).await.unwrap_err();
         assert!(err.to_string().contains("password: required"), "{err}");
     }
+
     assert_eq!(e.secrets.open_url(c.id, &e.n.channel(c.id).await.unwrap().sealed_url).unwrap(), PASSWORD);
     let mut moved = email_input(Some("forge"), Some(PASSWORD));
     moved.smtp_port = Some(2525);
     let u = e.n.update_channel(c.id, channel_input(moved)).await.unwrap();
     assert_eq!(u.target, "smtp://smtp.example.com:2525");
+
     // Without a user name no password is kept.
     let anon = e.n.update_channel(c.id, channel_input(email_input(None, None))).await.unwrap();
     assert!(!anon.email.unwrap().password_set);
     assert_eq!(e.secrets.open_url(c.id, &anon.sealed_url).unwrap(), "");
+
     // ... and adding a user name back needs the password again.
     let err = e.n.update_channel(c.id, channel_input(email_input(Some("forge"), None))).await.unwrap_err();
     assert!(err.to_string().contains("password: required"), "{err}");
+
     // A sealed password never becomes a webhook URL.
     let to_webhook = ChannelInput { kind: ChannelKind::Webhook, email: None, ..channel_input(email_input(None, None)) };
     let err = e.n.update_channel(c.id, to_webhook).await.unwrap_err();
@@ -111,6 +117,7 @@ async fn email_settings_are_checked() {
         refused("password", &|i| i.password = None),
         refused("password", &|i| i.username = None),
     ];
+
     for (field, input) in cases {
         let err = e.n.create_channel(e.ws, input, e.who.clone()).await.unwrap_err();
         assert!(
@@ -118,6 +125,7 @@ async fn email_settings_are_checked() {
             "{field}: {err}"
         );
     }
+
     let mut no_email = channel_input(email_input(None, None));
     no_email.email = None;
     assert!(e.n.create_channel(e.ws, no_email, e.who.clone()).await.is_err());
@@ -197,9 +205,11 @@ async fn smtp_4xx_is_retried_and_5xx_fails_at_once() {
         (d.status, d.attempts, d.last_error, d.last_http_status),
         (DeliveryStatus::Failed, 1, Some(FailureClass::SmtpReply), Some(550))
     );
+
     for c in [421, 450, 451, 452, 499] {
         assert!(retryable_smtp(c), "{c}");
     }
+
     for c in [500, 535, 550, 552, 554, 250] {
         assert!(!retryable_smtp(c), "{c}");
     }

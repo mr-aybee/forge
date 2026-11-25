@@ -56,34 +56,43 @@ impl std::str::FromStr for TagKind {
 /// key, duplicates (case-insensitive) dropped, at most [`MAX_TAGS`], sorted.
 pub fn normalise_tags(input: &[String]) -> Result<Vec<String>, String> {
     let mut out: Vec<String> = Vec::new();
+
     for raw in input {
         let t = raw.trim();
         if t.is_empty() {
             continue;
         }
+
         if t.chars().count() > MAX_TAG_CHARS {
             return Err(format!("tag `{t}` is longer than {MAX_TAG_CHARS} characters"));
         }
+
         if t.chars().any(char::is_control) || t.contains(',') {
             return Err(format!("tag `{t}` contains a control character or a comma"));
         }
+
         if let Some((k, v)) = t.split_once(':')
             && (k.trim().is_empty() || v.trim().is_empty())
         {
             return Err(format!("tag `{t}`: use `key:value` with both parts, or a plain word"));
         }
+
         let t = match t.split_once(':') {
             Some((k, v)) => format!("{}:{}", k.trim(), v.trim()),
             None => t.to_owned(),
         };
+
         if !out.iter().any(|o| o.eq_ignore_ascii_case(&t)) {
             out.push(t);
         }
     }
+
     if out.len() > MAX_TAGS {
         return Err(format!("at most {MAX_TAGS} tags per item"));
     }
+
     out.sort_by_key(|t| t.to_lowercase());
+
     Ok(out)
 }
 
@@ -204,6 +213,7 @@ mod tests {
         for ok in ["alice", "deploy", "svc.web", "a_b-c", "root"] {
             assert!(valid_login(ok), "{ok}");
         }
+
         for bad in ["", "-x", "a b", "a;b", "a/b", &"x".repeat(33)] {
             assert!(!valid_login(bad), "{bad}");
         }

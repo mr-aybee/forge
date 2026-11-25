@@ -114,6 +114,7 @@ async fn no_compression_for_secrets(
     if NO_COMPRESSION.iter().any(|p| path.contains(p)) {
         req.headers_mut().remove(header::ACCEPT_ENCODING);
     }
+
     next.run(req).await
 }
 
@@ -126,9 +127,11 @@ fn compression() -> tower_http::compression::CompressionLayer<impl tower_http::c
                      _: axum::http::Version,
                      h: &axum::http::HeaderMap,
                      _: &axum::http::Extensions| { !h.contains_key(header::SET_COOKIE) };
+
     // File downloads and other raw bytes are sent as-is: they are often
     // compressed already, and they are streamed from the node.
     let not_raw = tower_http::compression::predicate::NotForContentType::const_new("application/octet-stream");
+
     tower_http::compression::CompressionLayer::new().compress_when(DefaultPredicate::new().and(no_cookie).and(not_raw))
 }
 
@@ -441,6 +444,7 @@ pub fn router(state: AppState) -> Router {
 
     if let Some(dir) = &state.config.ui_dir {
         use tower_http::services::{ServeDir, ServeFile};
+
         // Hashed build assets never change; everything else (index.html and
         // client-side routes) must be revalidated so a new build is picked up.
         let assets = ServeDir::new(dir.join("assets"));

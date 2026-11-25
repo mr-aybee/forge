@@ -61,9 +61,11 @@ pub(crate) async fn call_with_registry_auth(
             .uri(format!("http://docker/v1.43{path}"))
             .header("Host", "docker")
             .header("Content-Type", "application/json");
+
         if let Some(auth) = registry_auth {
             req = req.header("X-Registry-Auth", auth);
         }
+
         let req = req
             .body(Full::new(body.map_or_else(Bytes::new, |b| Bytes::from(b.to_string()))))
             .map_err(|e| e.to_string())?;
@@ -106,13 +108,16 @@ pub(crate) async fn call_lines(
             .uri(format!("http://docker/v1.43{path}"))
             .header("Host", "docker")
             .header("Content-Type", "application/json");
+
         if let Some(auth) = registry_auth {
             req = req.header("X-Registry-Auth", auth);
         }
+
         let req = req.body(Full::new(Bytes::new())).map_err(|e| e.to_string())?;
         let resp = sender.send_request(req).await.map_err(|e| e.to_string())?;
         let status = resp.status().as_u16();
         let mut body = resp.into_body();
+
         if !(200..300).contains(&status) {
             let raw = http_body_util::Limited::new(body, 64 * 1024)
                 .collect()
@@ -122,30 +127,38 @@ pub(crate) async fn call_lines(
                 .unwrap_or_default();
             return Err(docker_error(status, &raw));
         }
+
         let mut buf: Vec<u8> = Vec::new();
+
         // Set while dropping the rest of a line that grew too long.
         let mut skipping = false;
+
         while let Some(frame) = body.frame().await {
             let frame = frame.map_err(|e| format!("reading Docker response: {e}"))?;
             let Ok(data) = frame.into_data() else { continue };
             buf.extend_from_slice(&data);
+
             while let Some(pos) = buf.iter().position(|b| *b == b'\n') {
                 let line: Vec<u8> = buf.drain(..=pos).collect();
+
                 if skipping {
                     skipping = false;
                 } else {
                     on_line(String::from_utf8_lossy(&line).trim());
                 }
             }
+
             if buf.len() > MAX_LINE {
                 // A line this long is not progress: drop it up to its end.
                 buf.clear();
                 skipping = true;
             }
         }
+
         if !buf.is_empty() && !skipping {
             on_line(String::from_utf8_lossy(&buf).trim());
         }
+
         Ok(status)
     };
     tokio::time::timeout(timeout, run).await.map_err(|_| "Docker did not respond in time".to_owned())?
@@ -179,6 +192,7 @@ pub(crate) async fn stream_at(
     if status == 404 {
         return Ok(None);
     }
+
     if status != 200 {
         let body = http_body_util::Limited::new(resp.into_body(), 64 * 1024)
             .collect()
@@ -187,6 +201,7 @@ pub(crate) async fn stream_at(
             .unwrap_or_default();
         return Err(docker_error(status, &body));
     }
+
     Ok(Some(resp.into_body()))
 }
 
@@ -209,6 +224,7 @@ async fn json_call(method: &str, path: &str, timeout: Duration) -> Result<Value,
     if !(200..300).contains(&status) && status != 304 {
         return Err(docker_error(status, &body));
     }
+
     if body.is_empty() { Ok(Value::Null) } else { serde_json::from_slice(&body).map_err(|e| e.to_string()) }
 }
 
@@ -220,7 +236,9 @@ pub async fn container_state(name: &str) -> Result<Value, String> {
     if !crate::helper::valid_app_container(name) {
         return Err(format!("`{name}` is not a Forge app container"));
     }
+
     let v = json_call("GET", &format!("/containers/{name}/json"), Duration::from_secs(5)).await?;
+
     Ok(state_view(&v))
 }
 
@@ -247,12 +265,14 @@ pub(crate) fn demux(raw: &[u8]) -> String {
     if !framed {
         return String::from_utf8_lossy(raw).into_owned();
     }
+
     while i + 8 <= raw.len() {
         let len = u32::from_be_bytes([raw[i + 4], raw[i + 5], raw[i + 6], raw[i + 7]]) as usize;
         let end = (i + 8 + len).min(raw.len());
         out.extend_from_slice(&raw[i + 8..end]);
         i = end;
     }
+
     String::from_utf8_lossy(&out).into_owned()
 }
 
@@ -289,9 +309,11 @@ pub async fn api(method: &str, path: &str, body: Option<&Value>, timeout: Durati
     if status == 404 {
         return Ok(None);
     }
+
     if !(200..300).contains(&status) && status != 304 {
         return Err(docker_error(status, &bytes));
     }
+
     // Pulls stream JSON lines; surface an error that arrives mid-stream.
     let text = String::from_utf8_lossy(&bytes);
     if let Some(err) = text
@@ -301,6 +323,7 @@ pub async fn api(method: &str, path: &str, body: Option<&Value>, timeout: Durati
     {
         return Err(format!("Docker: {err}"));
     }
+
     Ok(Some(serde_json::from_slice(&bytes).unwrap_or(Value::Null)))
 }
 
@@ -312,9 +335,11 @@ pub async fn logs(name: &str, tail: u32) -> Result<String, String> {
         Duration::from_secs(30),
     )
     .await?;
+
     if status != 200 {
         return Err(docker_error(status, &body));
     }
+
     Ok(demux(&body))
 }
 
@@ -327,6 +352,7 @@ pub async fn logs_window(name: &str, since: f64, until: f64) -> Result<Option<St
         Duration::from_secs(15),
     )
     .await?;
+
     match status {
         200 => Ok(Some(demux(&body))),
         404 => Ok(None),
@@ -379,6 +405,7 @@ fn env_values(v: &Value) -> Value {
 /// Runs one validated operation.
 pub async fn run(op: &ContainerOp) -> Result<Value, String> {
     const QUICK: Duration = Duration::from_secs(30);
+
     match op {
         ContainerOp::Info => {
             let v = json_call("GET", "/info", QUICK).await?;
@@ -406,10 +433,12 @@ pub async fn run(op: &ContainerOp) -> Result<Value, String> {
         ContainerOp::Inspect { id, reveal_env } => {
             let v = json_call("GET", &format!("/containers/{id}/json"), QUICK).await?;
             let mut out = inspect_view(&v);
+
             // Environment *values* only on request: they often carry secrets.
             if *reveal_env {
                 out["env"] = env_values(&v);
             }
+
             Ok(out)
         }
         ContainerOp::Start { id } | ContainerOp::Stop { id } | ContainerOp::Restart { id } => {
@@ -418,6 +447,7 @@ pub async fn run(op: &ContainerOp) -> Result<Value, String> {
                 ContainerOp::Stop { .. } => "stop",
                 _ => "restart",
             };
+
             json_call("POST", &format!("/containers/{id}/{verb}"), Duration::from_secs(90)).await?;
             Ok(json!({ "id": id, "done": verb }))
         }
@@ -434,17 +464,22 @@ pub async fn run(op: &ContainerOp) -> Result<Value, String> {
                 QUICK,
             )
             .await?;
+
             if status != 200 {
                 return Err(docker_error(status, &body));
             }
+
             let mut text = demux(&body);
             if text.len() > LOG_LIMIT {
                 let mut cut = text.len() - LOG_LIMIT;
+
                 while !text.is_char_boundary(cut) {
                     cut += 1;
                 }
+
                 text = text[cut..].to_owned();
             }
+
             Ok(json!({ "id": id, "logs": text }))
         }
         ContainerOp::Stats { id } => {
@@ -462,12 +497,15 @@ pub async fn run(op: &ContainerOp) -> Result<Value, String> {
                 Some((n, t)) if !t.contains('/') => (n, t),
                 _ => (image.as_str(), "latest"),
             };
+
             let (status, body) =
                 call("POST", &format!("/images/create?fromImage={name}&tag={tag}"), Duration::from_secs(20 * 60))
                     .await?;
+
             if status != 200 {
                 return Err(docker_error(status, &body));
             }
+
             // The body is a JSON-lines progress stream; an error can arrive mid-stream.
             let text = String::from_utf8_lossy(&body);
             if let Some(err) = text
@@ -477,6 +515,7 @@ pub async fn run(op: &ContainerOp) -> Result<Value, String> {
             {
                 return Err(format!("Docker: {err}"));
             }
+
             Ok(json!({ "image": format!("{name}:{tag}"), "done": "pull" }))
         }
     }
@@ -575,8 +614,10 @@ fn kill_in_container(pid: i64, container: &str) -> bool {
     use rustix::process::{Pid, PidfdFlags, Signal, pidfd_open, pidfd_send_signal};
     let Some(pid) = i32::try_from(pid).ok().filter(|p| *p > 1).and_then(Pid::from_raw) else { return false };
     let Ok(fd) = pidfd_open(pid, PidfdFlags::empty()) else { return false };
+
     // Unreadable (the process is gone): an empty text matches no container.
     let cgroups = std::fs::read_to_string(format!("/proc/{}/cgroup", pid.as_raw_nonzero())).unwrap_or_default();
+
     in_container_cgroup(&cgroups, container) && pidfd_send_signal(&fd, Signal::KILL).is_ok()
 }
 
@@ -589,6 +630,7 @@ fn kill_in_container(_pid: i64, _container: &str) -> bool {
 async fn exec_running(exec: &str) -> Result<Option<i64>, String> {
     // 404: Docker forgot the exec, so it does not run.
     let v = api("GET", &format!("/exec/{exec}/json"), None, EXEC_QUICK).await?.unwrap_or(Value::Null);
+
     // A missing pid is 0, which `kill_in_container` never signals.
     Ok((v["Running"].as_bool() == Some(true)).then(|| v["Pid"].as_i64().unwrap_or(0)))
 }
@@ -603,8 +645,10 @@ async fn end_exec(exec: &str, container: &str) -> bool {
             }
             Err(_) => return false,
         }
+
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+
     matches!(exec_running(exec).await, Ok(None))
 }
 
@@ -632,10 +676,12 @@ impl Drop for ExecGuard {
         if !self.armed {
             return;
         }
+
         // Until it is known to be gone, the check is not started again.
         self.stuck.remember(&self.check, &self.exec, &self.container);
         let (exec, container, check, stuck) =
             (self.exec.clone(), self.container.clone(), self.check.clone(), self.stuck.clone());
+
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             rt.spawn(async move {
                 if end_exec(&exec, &container).await {
@@ -664,12 +710,15 @@ impl StreamTail {
                 let (head, rest) = data.split_at(need.min(data.len()));
                 self.header.extend_from_slice(head);
                 data = rest;
+
                 if let [_, _, _, _, a, b, c, d] = self.header[..] {
                     self.remaining = u32::from_be_bytes([a, b, c, d]) as usize;
                     self.header.clear();
                 }
+
                 continue;
             }
+
             let (payload, rest) = data.split_at(self.remaining.min(data.len()));
             self.remaining -= payload.len();
             self.tail.extend_from_slice(payload);
@@ -700,8 +749,10 @@ async fn exec_start(exec: &str) -> Result<Result<Vec<u8>, String>, String> {
     let status = resp.status().as_u16();
     let mut body = resp.into_body();
     let mut tail = StreamTail::default();
+
     // An error answer is JSON, not a stream: its first bytes are kept as they are.
     let mut error = Vec::new();
+
     while let Some(frame) = body.frame().await {
         let frame = frame.map_err(|e| format!("reading Docker response: {e}"))?;
         if let Some(data) = frame.data_ref() {
@@ -709,11 +760,13 @@ async fn exec_start(exec: &str) -> Result<Result<Vec<u8>, String>, String> {
                 tail.feed(data);
             } else {
                 let room = 4096usize.saturating_sub(error.len());
+
                 // `get` cannot miss: the range ends at or before the data's end.
                 error.extend_from_slice(data.get(..room.min(data.len())).unwrap_or_default());
             }
         }
     }
+
     Ok(if status == 200 { Ok(tail.tail) } else { Err(docker_error(status, &error)) })
 }
 
@@ -730,36 +783,46 @@ pub async fn exec_in_app(
     if !crate::helper::valid_app_container(name) {
         return Err(format!("`{name}` is not a Forge app container"));
     }
+
     if let Some((exec, container)) = stuck.get(&target.check) {
         if !end_exec(&exec, &container).await {
             return Ok(ExecEnd::StillRunning);
         }
+
         stuck.forget(&target.check);
     }
+
     let Some(c) = api("GET", &format!("/containers/{name}/json"), None, EXEC_QUICK).await? else {
         return Ok(ExecEnd::NotRunning);
     };
+
     if !is_app_container(&c, &target.app_label) {
         return Ok(ExecEnd::Foreign);
     }
+
     if c.pointer("/State/Running").and_then(Value::as_bool) != Some(true) {
         return Ok(ExecEnd::NotRunning);
     }
+
     // An empty id matches no cgroup, so nothing is ever signalled for it.
     let container = c["Id"].as_str().unwrap_or_default().to_owned();
+
     // By id from here on: the name could be given to another container.
     let by_id = if container.is_empty() { name } else { container.as_str() };
     let (status, bytes) =
         call_with("POST", &format!("/containers/{by_id}/exec"), Some(&exec_create_body(cmd)), EXEC_QUICK).await?;
+
     let exec = match status {
         201 => serde_json::from_slice::<Value>(&bytes).ok().and_then(|v| v["Id"].as_str().map(str::to_owned)),
         // Gone, stopped or paused since the inspect.
         404 | 409 => return Ok(ExecEnd::NotRunning),
         _ => return Err(docker_error(status, &bytes)),
     };
+
     let Some(exec) = exec.filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_hexdigit())) else {
         return Err("Docker returned no exec id".into());
     };
+
     // From here until the exit code is read, dropping this future (timeout
     // below, or the agent going away) ends the process in the container.
     let guard = ExecGuard {
@@ -769,6 +832,7 @@ pub async fn exec_in_app(
         stuck: stuck.clone(),
         armed: true,
     };
+
     let output = match tokio::time::timeout(limit, exec_start(&exec)).await {
         Ok(Ok(Ok(output))) => output,
         Ok(Ok(Err(detail))) => {
@@ -779,6 +843,7 @@ pub async fn exec_in_app(
         // Closing the stream does not end the process: the guard does.
         Err(_) => return Ok(ExecEnd::TimedOut),
     };
+
     // The stream ends just before Docker records the exit code.
     for _ in 0..20 {
         // 404: Docker forgot the exec; there is no exit code to read.
@@ -789,8 +854,10 @@ pub async fn exec_in_app(
             guard.disarm();
             return Ok(ExecEnd::Exited { code: i32::try_from(code).unwrap_or(-1), output });
         }
+
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+
     Err("Docker did not report how the command ended".into())
 }
 
@@ -806,6 +873,7 @@ mod tests {
         let v = super::exec_create_body(&cmd);
         assert_eq!(v["Cmd"], serde_json::json!(["sh", "-c", "echo \"$(id)\"; exit 3"]));
         assert_eq!((v["Tty"].as_bool(), v["AttachStdin"].as_bool()), (Some(false), Some(false)));
+
         for absent in ["User", "Privileged", "Env", "WorkingDir"] {
             assert!(v.get(absent).is_none(), "{absent}");
         }
@@ -819,6 +887,7 @@ mod tests {
         assert!(super::in_container_cgroup(&v2, &id) && super::in_container_cgroup(&v1, &id));
         assert!(!super::in_container_cgroup("0::/user.slice/user-1000.slice\n", &id));
         assert!(!super::in_container_cgroup(&v2, &"b".repeat(64)));
+
         // A short or empty id would match too much: refused.
         assert!(!super::in_container_cgroup(&v2, "aaaa") && !super::in_container_cgroup(&v2, ""));
     }
@@ -826,6 +895,7 @@ mod tests {
     #[tokio::test]
     async fn exec_is_limited_to_forge_app_containers() {
         let stuck = std::sync::Arc::new(super::StuckRuns::default());
+
         for name in ["postgres", "forge-app-", "forge-app-a/../b"] {
             let target = super::ExecTarget { container: name.into(), app_label: "a/b".into(), check: "k".into() };
             let r = super::exec_in_app(&target, &["true".to_owned()], std::time::Duration::from_secs(1), &stuck).await;
@@ -859,11 +929,14 @@ mod tests {
         raw.extend(frame(2, b"warning\n"));
         raw.extend(frame(1, b""));
         raw.extend(frame(1, b"THE-END\n"));
+
         for chunk in [1usize, 7, 4096, raw.len()] {
             let mut t = super::StreamTail::default();
+
             for part in raw.chunks(chunk) {
                 t.feed(part);
             }
+
             assert_eq!(t.tail.len(), super::EXEC_TAIL, "chunks of {chunk}");
             assert!(t.tail.ends_with(b"warning\nTHE-END\n"), "chunks of {chunk}");
             assert!(!t.tail.contains(&0), "no frame header in the output");

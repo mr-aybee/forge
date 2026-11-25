@@ -4,12 +4,12 @@
 
 use std::time::Duration;
 
+use forge_core::DomainError;
 use serde::Serialize;
 use sqlx::any::AnyPoolOptions;
 use sqlx::{AnyPool, Row};
 
 use crate::{DRIVERS, unknown_versions};
-use forge_core::DomainError;
 
 /// What is already in the target database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -67,6 +67,7 @@ async fn pool(url: &str) -> Result<AnyPool, DomainError> {
 fn with_database(url: &str, db: &str) -> Result<String, DomainError> {
     let mut u = url::Url::parse(url).map_err(DomainError::internal)?;
     u.set_path(&format!("/{db}"));
+
     Ok(u.to_string())
 }
 
@@ -76,6 +77,7 @@ fn database_of(url: &str) -> Result<String, DomainError> {
     if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return Err(DomainError::Invalid("database name must be letters, digits and _".into()));
     }
+
     Ok(name)
 }
 
@@ -88,6 +90,7 @@ pub async fn check(url: &str) -> Result<DbReport, DomainError> {
     if !is_postgres(url) {
         return check_sqlite(url).await;
     }
+
     let name = database_of(url)?;
     let admin = pool(&with_database(url, "postgres")?).await?;
     let version: Option<String> =
@@ -98,6 +101,7 @@ pub async fn check(url: &str) -> Result<DbReport, DomainError> {
         .await
         .map_err(DomainError::internal)?
         .is_some();
+
     if !exists {
         let can = sqlx::query(
             "SELECT CASE WHEN rolcreatedb OR rolsuper THEN 1 ELSE 0 END FROM pg_roles WHERE rolname = current_user",
@@ -108,6 +112,7 @@ pub async fn check(url: &str) -> Result<DbReport, DomainError> {
         .try_get::<i32, _>(0)
         .map_err(DomainError::internal)?;
         admin.close().await;
+
         return Ok(DbReport {
             engine: "postgres",
             server_version: version,
@@ -116,6 +121,7 @@ pub async fn check(url: &str) -> Result<DbReport, DomainError> {
             tables: 0,
         });
     }
+
     admin.close().await;
     let db = pool(url).await?;
     let tables: Vec<String> = sqlx::query(
@@ -129,6 +135,7 @@ pub async fn check(url: &str) -> Result<DbReport, DomainError> {
     .collect();
     let contents = classify(&db, &tables).await?;
     db.close().await;
+
     Ok(DbReport { engine: "postgres", server_version: version, contents, can_create: None, tables: tables.len() })
 }
 
@@ -145,6 +152,7 @@ async fn check_sqlite(url: &str) -> Result<DbReport, DomainError> {
             tables: 0,
         });
     }
+
     let db = pool(url).await?;
     let tables: Vec<String> =
         sqlx::query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
@@ -156,6 +164,7 @@ async fn check_sqlite(url: &str) -> Result<DbReport, DomainError> {
             .collect();
     let contents = classify(&db, &tables).await?;
     db.close().await;
+
     Ok(DbReport { engine: "sqlite", server_version: None, contents, can_create: None, tables: tables.len() })
 }
 
@@ -163,15 +172,18 @@ async fn classify(db: &AnyPool, tables: &[String]) -> Result<Contents, DomainErr
     if tables.is_empty() {
         return Ok(Contents::Empty);
     }
+
     if !tables.iter().any(|t| t == "_sqlx_migrations") {
         return Ok(Contents::Foreign);
     }
+
     let rows =
         sqlx::query("SELECT version FROM _sqlx_migrations").fetch_all(db).await.map_err(DomainError::internal)?;
     let unknown = unknown_versions(rows.iter().filter_map(|r| r.try_get::<i64, _>("version").ok()));
     if !unknown.is_empty() {
         return Ok(Contents::ForgeNewer);
     }
+
     // `_sqlx_migrations` alone does not prove the database is Forge's.
     Ok(if tables.iter().any(|t| t == "workspaces") { Contents::Forge } else { Contents::Foreign })
 }
@@ -182,6 +194,7 @@ pub async fn create_if_missing(url: &str) -> Result<bool, DomainError> {
     if !is_postgres(url) {
         return Ok(false);
     }
+
     let name = database_of(url)?;
     let admin = pool(&with_database(url, "postgres")?).await?;
     let exists = sqlx::query("SELECT 1 FROM pg_database WHERE datname = $1")
@@ -190,10 +203,12 @@ pub async fn create_if_missing(url: &str) -> Result<bool, DomainError> {
         .await
         .map_err(DomainError::internal)?
         .is_some();
+
     if exists {
         admin.close().await;
         return Ok(false);
     }
+
     // The name was validated by `database_of` (letters, digits, _), so
     // quoting it as an identifier is safe; CREATE DATABASE takes no bind.
     sqlx::query(&format!("CREATE DATABASE \"{name}\" ENCODING 'UTF8'"))
@@ -201,5 +216,6 @@ pub async fn create_if_missing(url: &str) -> Result<bool, DomainError> {
         .await
         .map_err(DomainError::internal)?;
     admin.close().await;
+
     Ok(true)
 }

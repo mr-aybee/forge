@@ -11,11 +11,10 @@ use std::time::Duration;
 use forge_catalog::swarm::{
     Availability, JoinTokens, SwarmNode, SwarmOp, SwarmRole, SwarmServiceStatus, SwarmStatus, SwarmTask,
 };
-use serde_json::{Value, json};
-
 use forge_catalog::swarm_service::{
     MANAGED_LABEL, SERVICE_ID_LABEL, SLOT_LABEL, SPEC_LABEL, network_name, service_name,
 };
+use serde_json::{Value, json};
 
 use crate::docker::api;
 
@@ -32,16 +31,20 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
                 // Idempotent: a retried step finds the swarm it made.
                 return to_value(&now);
             }
+
             let mut body = json!({
                 "ListenAddr": format!("0.0.0.0:{port}"),
                 "Spec": { "EncryptionConfig": { "AutoLockManagers": autolock } },
             });
+
             if let Some(a) = advertise_addr {
                 body["AdvertiseAddr"] = json!(format!("{a}:{port}"));
             }
+
             if !default_addr_pool.is_empty() {
                 body["DefaultAddrPool"] = json!(default_addr_pool);
             }
+
             api("POST", "/swarm/init", Some(&body), CONSENSUS).await?;
             to_value(&status().await)
         }
@@ -50,14 +53,17 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
             if now.state == "active" {
                 return to_value(&now);
             }
+
             let mut body = json!({
                 "ListenAddr": "0.0.0.0:2377",
                 "RemoteAddrs": remote_addrs,
                 "JoinToken": join_token,
             });
+
             if let Some(a) = advertise_addr {
                 body["AdvertiseAddr"] = json!(a);
             }
+
             api("POST", "/swarm/join", Some(&body), CONSENSUS).await.map_err(|e| without_token(&e, join_token))?;
             to_value(&status().await)
         }
@@ -65,6 +71,7 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
             if status().await.state == "inactive" {
                 return Ok(json!({ "left": true }));
             }
+
             api("POST", &format!("/swarm/leave?force={force}"), None, CONSENSUS).await?;
             Ok(json!({ "left": true }))
         }
@@ -108,11 +115,13 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
                 });
                 api("POST", "/networks/create", Some(&body), QUICK).await?;
             }
+
             Ok(json!({ "network": name }))
         }
         SwarmOp::ServiceApply { def, registry_auth } => {
             let spec = def.engine_spec();
             let auth = registry_auth.as_ref().map(|a| a.0.as_str());
+
             match owned(&def.service_id, &def.slot).await? {
                 None => {
                     let created = api_auth("POST", "/services/create", &spec, auth).await?;
@@ -120,13 +129,16 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
                 }
                 Some(cur) => {
                     let id = cur["ID"].as_str().ok_or("Docker did not report the service id")?;
+
                     // The same definition again (a retried step): no update,
                     // so Swarm's previous spec stays the release before.
                     if cur["Spec"]["Labels"][SPEC_LABEL] == spec["Labels"][SPEC_LABEL] {
                         return Ok(json!({ "id": id, "created": false, "unchanged": true }));
                     }
+
                     let version =
                         cur["Version"]["Index"].as_u64().ok_or("Docker did not report the service version")?;
+
                     // Docker cannot rename a service: it keeps the name it was created with.
                     let mut spec = spec;
                     spec["Name"] = cur["Spec"]["Name"].clone();
@@ -163,6 +175,7 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
                 let id = cur["ID"].as_str().ok_or("Docker did not report the service id")?;
                 api("DELETE", &format!("/services/{id}"), None, QUICK).await?;
             }
+
             Ok(json!({ "removed": service_id }))
         }
         SwarmOp::ServiceLogs { service_id, slot, tail } => {
@@ -171,9 +184,11 @@ pub async fn run(op: &SwarmOp) -> Result<Value, String> {
             let path = format!("/services/{id}/logs?stdout=1&stderr=1&timestamps=1&tail={tail}");
             let (status, bytes) =
                 crate::docker::call_at(std::path::Path::new(crate::docker::SOCKET), "GET", &path, None, QUICK).await?;
+
             if !(200..300).contains(&status) {
                 return Err(crate::docker::docker_error(status, &bytes));
             }
+
             Ok(json!({ "logs": crate::docker::demux(&bytes) }))
         }
     }
@@ -187,9 +202,11 @@ async fn api_auth(method: &str, path: &str, body: &Value, auth: Option<&str>) ->
     if !(200..300).contains(&status) {
         return Err(crate::docker::docker_error(status, &bytes));
     }
+
     if bytes.iter().all(u8::is_ascii_whitespace) {
         return Ok(Value::Null);
     }
+
     serde_json::from_slice(&bytes).map_err(|e| format!("Docker's answer is not JSON: {e}"))
 }
 
@@ -206,18 +223,24 @@ async fn owned(service_id: &str, slot: &str) -> Result<Option<Value>, String> {
         .into_iter()
         .flatten()
         .filter(|svc| svc["Spec"]["Labels"][SLOT_LABEL].as_str().unwrap_or_default() == slot);
+
     let Some(cur) = found.next() else {
         // Before labels were searched: a service under the id-based name.
         let Some(cur) = api("GET", &format!("/services/{}", service_name(service_id, slot)), None, QUICK).await? else {
             return Ok(None);
         };
+
         check_owner(&cur, service_id, slot)?;
+
         return Ok(Some(cur));
     };
+
     if found.next().is_some() {
         return Err("more than one Swarm service carries this Forge id; remove the extra one".into());
     }
+
     check_owner(cur, service_id, slot)?;
+
     Ok(Some(cur.clone()))
 }
 
@@ -233,6 +256,7 @@ pub(crate) fn check_owner(cur: &Value, service_id: &str, slot: &str) -> Result<(
     if labels[MANAGED_LABEL] != "true" || labels[SERVICE_ID_LABEL] != service_id || slot_label != slot {
         return Err("a Swarm service with this name exists but Forge did not make it for this service".into());
     }
+
     Ok(())
 }
 
@@ -250,6 +274,7 @@ async fn change_service(
     let mut spec = cur["Spec"].clone();
     edit(&mut spec)?;
     api("POST", &format!("/services/{id}/update?version={version}{extra}"), Some(&spec), QUICK).await?;
+
     Ok(json!({ "id": id }))
 }
 
@@ -263,9 +288,11 @@ async fn service_status(service_id: &str, slot: &str) -> Result<SwarmServiceStat
     let Some(svc) = owned(service_id, slot).await? else {
         return Ok(SwarmServiceStatus::default());
     };
+
     let id = svc["ID"].as_str().filter(|i| !i.is_empty() && i.bytes().all(|b| b.is_ascii_alphanumeric()));
     let id = id.ok_or("Docker did not report a valid service id")?;
     let tasks = api("GET", &format!("/tasks?filters={}", task_filter(id)), None, QUICK).await?.unwrap_or(Value::Null);
+
     Ok(status_from(&svc, &tasks))
 }
 
@@ -275,6 +302,7 @@ pub(crate) fn status_from(svc: &Value, tasks: &Value) -> SwarmServiceStatus {
     let replicated = svc["Spec"]["Mode"]["Replicated"].is_object();
     let spec = svc["Spec"]["Labels"][SPEC_LABEL].as_str().unwrap_or_default().to_owned();
     let live = |t: &&SwarmTask| t.state == "running" && t.desired_state == "running";
+
     SwarmServiceStatus {
         exists: true,
         id: svc["ID"].as_str().unwrap_or_default().to_owned(),
@@ -371,11 +399,13 @@ fn labels_of(v: &Value) -> BTreeMap<String, String> {
 /// One entry of `GET /nodes`.
 pub(crate) fn node_view(n: &Value) -> SwarmNode {
     let role = if n["Spec"]["Role"] == "manager" { SwarmRole::Manager } else { SwarmRole::Worker };
+
     let availability = match n["Spec"]["Availability"].as_str() {
         Some("drain") => Availability::Drain,
         Some("pause") => Availability::Pause,
         _ => Availability::Active,
     };
+
     SwarmNode {
         id: n["ID"].as_str().unwrap_or_default().to_owned(),
         hostname: n["Description"]["Hostname"].as_str().unwrap_or_default().to_owned(),
@@ -399,15 +429,19 @@ pub(crate) fn updated_spec(
     labels: Option<&BTreeMap<String, String>>,
 ) -> Value {
     let mut spec = if current.is_object() { current.clone() } else { json!({}) };
+
     if let Some(r) = role {
         spec["Role"] = json!(r.as_str());
     }
+
     if let Some(a) = availability {
         spec["Availability"] = json!(a.as_str());
     }
+
     if let Some(l) = labels {
         spec["Labels"] = json!(l);
     }
+
     spec
 }
 

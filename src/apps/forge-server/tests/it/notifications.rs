@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::common::*;
 use forge_agent::enroll::{HostFacts, enroll};
 use forge_agent::{Agent, AgentConfig, StatePaths};
 use forge_alerts::notify::payload;
@@ -19,6 +18,8 @@ use reqwest::StatusCode;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+
+use crate::common::*;
 
 mod email;
 
@@ -65,11 +66,13 @@ impl Receiver {
                 tokio::spawn(async move {
                     let mut raw = Vec::new();
                     let mut buf = [0u8; 8192];
+
                     let (head_end, length) = loop {
                         let Ok(n) = stream.read(&mut buf).await else { return };
                         if n == 0 {
                             return;
                         }
+
                         raw.extend_from_slice(&buf[..n]);
                         let Some(end) = raw.windows(4).position(|w| w == b"\r\n\r\n") else { continue };
                         let head = String::from_utf8_lossy(&raw[..end]).to_string();
@@ -79,10 +82,12 @@ impl Receiver {
                             .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
                             .and_then(|(_, v)| v.trim().parse::<usize>().ok())
                             .unwrap_or(0);
+
                         if raw.len() >= end + 4 + length {
                             break (end, length);
                         }
                     };
+
                     let head = String::from_utf8_lossy(&raw[..head_end]).to_string();
                     let mut lines = head.lines();
                     let path = lines.next().and_then(|l| l.split(' ').nth(1)).unwrap_or_default().to_owned();
@@ -92,6 +97,7 @@ impl Receiver {
                         .collect();
                     let body = raw[head_end + 4..head_end + 4 + length].to_vec();
                     this.seen.lock().unwrap().push(Seen { path, headers, body });
+
                     let status = {
                         let mut script = this.script.lock().unwrap();
                         if script.is_empty() {
@@ -100,12 +106,14 @@ impl Receiver {
                             script.remove(0)
                         }
                     };
+
                     let answer = format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
                     let _ = stream.write_all(answer.as_bytes()).await;
                     let _ = stream.shutdown().await;
                 });
             }
         });
+
         me
     }
 
@@ -128,12 +136,15 @@ where
     Fut: std::future::Future<Output = Option<T>>,
 {
     let end = std::time::Instant::now() + Duration::from_secs(secs);
+
     while std::time::Instant::now() < end {
         if let Some(v) = f().await {
             return v;
         }
+
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+
     panic!("timed out waiting for {what}");
 }
 
@@ -166,12 +177,14 @@ fn policy(channels: &[&Value]) -> Value {
 async fn created(c: &Client, path: &str, body: Value) -> Value {
     let (s, v) = c.post(path, body).await;
     assert_eq!(s, StatusCode::CREATED, "{path}: {v}");
+
     v
 }
 
 async fn deliveries(c: &Client, query: &str) -> Vec<Value> {
     let (s, v) = c.get(&format!("/api/v1/notification-deliveries{query}")).await;
     assert_eq!(s, StatusCode::OK, "{v}");
+
     v.as_array().unwrap().clone()
 }
 
@@ -189,6 +202,7 @@ async fn node(h: &Harness, admin: &Client, name: &str) -> (String, tempfile::Tem
     let config = AgentConfig::new(h.agent_url.clone());
     let id =
         enroll(&StatePaths::new(dir.path()), config, tok["token"].as_str().unwrap(), facts).await.unwrap().server_id;
+
     (id, dir)
 }
 
@@ -219,6 +233,7 @@ async fn fire(h: &Harness, server: &str) -> Alarm {
     };
     let ev = AlarmEvent { alarm_id: a.id, at: now, kind: "fired".into(), actor: None, detail: json!({}) };
     state.store.open_alarm(&a, &ev).await.unwrap();
+
     a
 }
 
@@ -245,14 +260,18 @@ async fn a_node_alarm_reaches_each_channel_once_signed_and_recovery_follows() {
     let signed = created(&admin, "/api/v1/notification-channels", signed).await;
     let chat = json!({"name": "Team chat", "kind": "slack", "url": rx.url("chat")});
     let chat = created(&admin, "/api/v1/notification-channels", chat).await;
+
     // What comes back of a channel: its host, never its URL.
     assert_eq!(signed["target"], rx.base);
     assert_eq!(signed["secret_item"], item["id"]);
+
     for c in [&signed, &chat] {
         assert!(c.get("url").is_none() && c.get("sealed_url").is_none(), "{c}");
         assert!(!c.to_string().contains(URL_TOKEN) && !c.to_string().contains(SIGNING_SECRET), "{c}");
     }
+
     created(&admin, "/api/v1/notification-policies", policy(&[&signed, &chat])).await;
+
     // Nothing is sent by configuring.
     assert!(rx.requests().is_empty());
 
@@ -309,6 +328,7 @@ async fn a_node_alarm_reaches_each_channel_once_signed_and_recovery_follows() {
     );
     assert_eq!(body["links"]["alarm"], format!("{}/alerts?alarm={aid}", h.base));
     assert_eq!(body["delivery_id"].as_str(), Some(req.headers["x-forge-delivery"].as_str()));
+
     // A valid signature over the exact bytes, made with the vault item's password.
     let at: i64 = req.headers["x-forge-timestamp"].parse().unwrap();
     let sig = &req.headers["x-forge-signature"];
@@ -325,6 +345,7 @@ async fn a_node_alarm_reaches_each_channel_once_signed_and_recovery_follows() {
     // History: exactly one delivery per channel, each sent in one attempt.
     let list = deliveries(&admin, &format!("?alarm={aid}")).await;
     assert_eq!(list.len(), 2, "{list:?}");
+
     for d in &list {
         assert_eq!(
             (d["event"].as_str(), d["status"].as_str(), d["attempt_count"].as_i64()),
@@ -334,6 +355,7 @@ async fn a_node_alarm_reaches_each_channel_once_signed_and_recovery_follows() {
         assert_eq!(d["policy_name"], "Everything");
         assert!(!d.to_string().contains(URL_TOKEN), "{d}");
     }
+
     let one = list.iter().find(|d| d["channel_name"] == "Ops webhook").unwrap();
     let (s, view) = admin.get(&format!("/api/v1/notification-deliveries/{}", one["id"].as_str().unwrap())).await;
     assert_eq!(s, StatusCode::OK, "{view}");
@@ -408,6 +430,7 @@ async fn a_failing_receiver_is_retried_then_failed_and_the_alarm_is_untouched() 
     let attempts = view["attempts"].as_array().unwrap();
     assert_eq!(attempts.iter().map(|a| a["number"].as_i64().unwrap()).collect::<Vec<_>>(), [1, 2, 3]);
     assert!(attempts.iter().all(|a| a["ok"] == false && a["http_status"] == 503 && a["error"] == "http_status"));
+
     // Each retry waited at least half the backoff ceiling (0.5 s, then 1 s).
     let at = |i: usize| attempts[i]["at"].as_i64().unwrap();
     assert!(at(1) - at(0) >= 500 && at(2) - at(1) >= 1000, "{attempts:?}");
@@ -527,6 +550,7 @@ async fn channels_need_an_administrator_with_mfa_and_refuse_internal_targets() {
         assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{bad}: {e}");
         assert!(!e.to_string().contains("pw@"), "{e}");
     }
+
     let (s, e) = admin.post("/api/v1/notification-channels", json!({"name": "no url", "kind": "webhook"})).await;
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{e}");
     let mut unknown = good();
@@ -554,9 +578,11 @@ async fn channels_need_an_administrator_with_mfa_and_refuse_internal_targets() {
     let customer = user_with_role(&h, &admin, "cust@example.com", "customer", &ws).await;
     let channel_path = format!("/api/v1/notification-channels/{cid}");
     assert_eq!(operator.post("/api/v1/notification-channels", good()).await.0, StatusCode::FORBIDDEN);
+
     // By id, a channel the caller may not manage answers like an id of
     // nothing (and the refusal is audited, below).
     let nothing = format!("/api/v1/notification-channels/{}", forge_core::ChannelId::new());
+
     for path in [&channel_path, &nothing] {
         let (s, e) = operator.put(path, good()).await;
         assert_eq!((s, e["detail"].as_str()), (StatusCode::NOT_FOUND, Some("notification channel not found")), "{e}");
@@ -564,13 +590,16 @@ async fn channels_need_an_administrator_with_mfa_and_refuse_internal_targets() {
         assert_eq!(operator.post(&format!("{path}/test"), json!({})).await.0, StatusCode::NOT_FOUND);
         assert_eq!(customer_get(&h, path).await, StatusCode::NOT_FOUND);
     }
+
     assert_eq!(operator.get("/api/v1/notification-channels").await.0, StatusCode::OK);
     let made = created(&operator, "/api/v1/notification-policies", policy(&[&channel])).await;
     let policy_path = format!("/api/v1/notification-policies/{}", made["id"].as_str().unwrap());
+
     for path in ["/api/v1/notification-channels", "/api/v1/notification-policies", "/api/v1/notification-deliveries"] {
         assert_eq!(developer.get(path).await.0, StatusCode::OK, "{path}");
         assert_eq!(customer.get(path).await.0, StatusCode::FORBIDDEN, "{path}");
     }
+
     assert_eq!(developer.post("/api/v1/notification-policies", policy(&[&channel])).await.0, StatusCode::FORBIDDEN);
     assert_eq!(developer.put(&policy_path, policy(&[&channel])).await.0, StatusCode::NOT_FOUND);
     assert_eq!(developer.call(reqwest::Method::DELETE, &policy_path, None).await.0, StatusCode::NOT_FOUND);
@@ -579,6 +608,7 @@ async fn channels_need_an_administrator_with_mfa_and_refuse_internal_targets() {
     // A workspace administrator creates channels, but signing uses the
     // vault, which is the platform administrators'.
     let mut ws_admin = user_with_role(&h, &admin, "wa@example.com", "workspace_admin", &ws).await;
+
     // An administrator who has the role but no second factor yet is told to
     // verify, not that the channel is missing.
     let (s, e) = ws_admin.put(&channel_path, good()).await;
@@ -593,18 +623,21 @@ async fn channels_need_an_administrator_with_mfa_and_refuse_internal_targets() {
     let mut signed = webhook("signed", "https://c.example.com/x");
     signed["secret_item"] = item["id"].clone();
     assert_eq!(ws_admin.post("/api/v1/notification-channels", signed.clone()).await.0, StatusCode::FORBIDDEN);
+
     // An API key is not a person at a keyboard: no channel, and no vault item.
     let (_, key) = admin.post("/api/v1/api-keys", json!({"name": "ci", "expires_days": 1})).await;
     let mut with_key = Client::anonymous(&h.base);
     with_key.bearer = key["secret"].as_str().map(str::to_owned);
     assert_eq!(with_key.post("/api/v1/notification-channels", good()).await.0, StatusCode::FORBIDDEN);
     assert_eq!(with_key.post("/api/v1/notification-channels", signed.clone()).await.0, StatusCode::FORBIDDEN);
+
     // The platform administrator may; a missing item is refused.
     let signed_channel = created(&admin, "/api/v1/notification-channels", signed.clone()).await;
     assert_eq!(signed_channel["secret_item"], item["id"]);
     let mut ghost = webhook("ghost", "https://d.example.com/x");
     ghost["secret_item"] = json!(forge_core::VaultItemId::new());
     assert_eq!(admin.post("/api/v1/notification-channels", ghost).await.0, StatusCode::NOT_FOUND);
+
     // Pointing a signed channel somewhere else uses the item anew.
     let signed_path = format!("/api/v1/notification-channels/{}", signed_channel["id"].as_str().unwrap());
     let mut moved = signed.clone();
@@ -639,6 +672,7 @@ async fn channels_need_an_administrator_with_mfa_and_refuse_internal_targets() {
     let (s, e) = admin.call(reqwest::Method::DELETE, &channel_path, None).await;
     assert_eq!(s, StatusCode::CONFLICT, "{e}");
     assert!(e.to_string().contains("Majors"), "{e}");
+
     // A signing secret too short to sign with is refused when saving.
     let weak = created(&admin, "/api/v1/vault/items", json!({"name": "weak", "password": "only-15-bytes!!"})).await;
     let mut weakly = webhook("weak", "https://e.example.com/x");
@@ -653,6 +687,7 @@ async fn channels_need_an_administrator_with_mfa_and_refuse_internal_targets() {
     // Audit: every change, the refusals, and never a URL or a secret.
     let (_, audit) = admin.get("/api/v1/audit?limit=500").await;
     let text = audit.to_string();
+
     for action in [
         "notification.channel.create",
         "notification.channel.delete",
@@ -663,11 +698,13 @@ async fn channels_need_an_administrator_with_mfa_and_refuse_internal_targets() {
     ] {
         assert!(text.contains(action), "{action} audited");
     }
+
     let denied =
         audit.as_array().or_else(|| audit["events"].as_array()).or_else(|| audit["items"].as_array()).map(|events| {
             events.iter().filter(|e| e["action"] == "notification.manage" && e["outcome"] == "denied").count()
         });
     assert!(denied.is_some_and(|n| n >= 4), "denied channel changes are audited: {denied:?}");
+
     // A policy edit records what it matched before and after.
     let update = audit
         .as_array()

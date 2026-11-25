@@ -22,6 +22,7 @@ pub fn install(paths: &EmbeddedPaths, from: &Path, sha256: &str) -> anyhow::Resu
     if !forge_secrets::crypto::constant_time_eq(got.as_bytes(), sha256.trim().to_lowercase().as_bytes()) {
         anyhow::bail!("SHA-256 mismatch: the file is {got}");
     }
+
     let dir = paths.binary.parent().context("binary path has no directory")?;
     std::fs::create_dir_all(dir)?;
     let tmp = paths.binary.with_extension("new");
@@ -32,6 +33,7 @@ pub fn install(paths: &EmbeddedPaths, from: &Path, sha256: &str) -> anyhow::Resu
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o750))?;
     }
     std::fs::rename(&tmp, &paths.binary)?;
+
     Ok(())
 }
 

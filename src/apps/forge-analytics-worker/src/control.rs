@@ -16,13 +16,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use forge_analytics_duckdb::DuckDb;
 use forge_analytics_proto::WorkerError;
 use forge_analytics_proto::tuning::{Group, Setting, Tuning};
 use forge_analytics_proto::views::{ApplyStatus, SettingResult, Usage, WorkerReport};
 use forge_core::analytics::EngineStats;
 use tokio::sync::watch;
-
-use forge_analytics_duckdb::DuckDb;
 
 use crate::analytics::Analytics;
 use crate::batcher::LogBatcher;
@@ -96,8 +95,10 @@ impl Control {
     pub fn set_tuning(&self, t: Tuning) {
         self.analytics.set_retention(t.retention());
         self.tuning.send_replace(t);
+
         if let Some(duck) = self.duck.clone() {
             let limits = crate::wiring::duck_limits(&t);
+
             // `SET` on the instance: quick, but off the async threads.
             tokio::task::spawn_blocking(move || {
                 if let Err(e) = duck.set_limits(limits) {
@@ -111,6 +112,7 @@ impl Control {
     fn duck_applied(&self, settings: &[Setting], t: &Tuning, group: Group) -> Option<Vec<SettingResult>> {
         self.duck.as_ref()?;
         let l = crate::wiring::duck_limits(t);
+
         Some(
             settings
                 .iter()
@@ -130,6 +132,7 @@ impl Control {
     pub fn report(&self) -> WorkerReport {
         let t = *self.tuning.borrow();
         let per_query = (t.search_memory_mb > 0).then(|| u64::from(t.search_memory_mb) * 1024 * 1024);
+
         self.live(|l| WorkerReport {
             store: self.analytics.status(),
             usage: Usage {
@@ -153,6 +156,7 @@ impl Control {
         let engine = self.managed.as_ref().ok_or(WorkerError::NotManaged)?;
         self.live(|l| l.pending_restart = false);
         engine.request_restart();
+
         Ok(())
     }
 
@@ -161,19 +165,23 @@ impl Control {
         self.set_tuning(t);
         let has = |g: Group| settings.iter().any(|s| s.group() == g);
         let mut out = Vec::new();
+
         if has(Group::Retention) {
             out.extend(self.apply_retention(settings, &t).await);
         }
+
         if let Some(r) = self.duck_applied(settings, &t, Group::Process) {
             out.extend(r);
         } else if has(Group::Process) {
             out.extend(self.apply_process(settings, &t).await);
         }
+
         if let Some(r) = self.duck_applied(settings, &t, Group::EngineMemory) {
             out.extend(r);
         } else if has(Group::EngineMemory) {
             out.push(self.apply_memory_budget(&t).await);
         }
+
         for s in settings.iter().filter(|s| s.group() == Group::Forge) {
             out.push(SettingResult {
                 setting: *s,
@@ -182,6 +190,7 @@ impl Control {
                 message: None,
             });
         }
+
         out
     }
 
@@ -192,12 +201,15 @@ impl Control {
                 .map(|s| SettingResult { setting: *s, status, effective: None, message: message.clone() })
                 .collect()
         };
+
         let Ok(store) = self.analytics.usable() else {
             return all(ApplyStatus::Pending, Some("applied when the analytics database is reachable".into()));
         };
+
         if let Err(e) = store.apply_retention(t.retention()).await {
             return all(ApplyStatus::Failed, Some(format!("the analytics database refused the change: {e}")));
         }
+
         match store.effective_retention().await {
             Ok(r) => {
                 let got = Tuning {
@@ -228,11 +240,13 @@ impl Control {
     /// configuration; the thread pools are resized when it restarts.
     async fn apply_process(&self, settings: &[Setting], t: &Tuning) -> Vec<SettingResult> {
         let mine: Vec<Setting> = settings.iter().copied().filter(|s| s.group() == Group::Process).collect();
+
         let Some(engine) = self.managed.clone() else {
             // forge-server refuses these for an engine Forge does not run; a
             // reset of a stale override has nothing to apply.
             return Vec::new();
         };
+
         let tt = *t;
         let res = tokio::task::spawn_blocking(move || {
             let written = engine.write_config(&tt).map_err(|e| format!("{e:#}"));
@@ -240,17 +254,21 @@ impl Control {
             (written, pinned)
         })
         .await;
+
         let (written, pinned) = match res {
             Ok(r) => r,
             Err(e) => (Err(e.to_string()), Err(e.to_string())),
         };
+
         let want = cpu_cap(t.cpu_quota_vcpu);
         let result = |status, effective, message: Option<String>| -> Vec<SettingResult> {
             mine.iter().map(|s| SettingResult { setting: *s, status, effective, message: message.clone() }).collect()
         };
+
         if let Err(e) = written {
             return result(ApplyStatus::Failed, None, Some(e));
         }
+
         match pinned {
             Err(e) => result(ApplyStatus::Failed, None, Some(e)),
             Ok(None) => result(ApplyStatus::PendingRestart, None, Some("applied when the engine starts".into())),
@@ -259,6 +277,7 @@ impl Control {
                     l.allowed_cpus = Some(have);
                     l.pending_restart = true;
                 });
+
                 match want {
                     Some(w) if w != have => result(
                         ApplyStatus::Failed,
@@ -283,24 +302,29 @@ impl Control {
             effective: None,
             message: Some(message),
         };
+
         let Some(engine) = self.managed.clone() else {
             // Only a reset reaches here for an engine Forge does not run.
             return SettingResult { setting, status: ApplyStatus::Applied, effective: None, message: None };
         };
+
         let tt = *t;
         match tokio::task::spawn_blocking(move || engine.write_config(&tt)).await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => return failed(format!("{e:#}")),
             Err(e) => return failed(e.to_string()),
         }
+
         let want = Some(u64::from(t.memory_budget_mb) * 1024 * 1024);
         let deadline = Instant::now() + RELOAD_WAIT;
         let mut seen = None;
+
         while Instant::now() < deadline {
             if let Ok(store) = self.analytics.usable()
                 && let Ok(s) = store.engine_stats().await
             {
                 seen = s.server_memory_limit_bytes;
+
                 if seen == want {
                     self.live(|l| l.stats = Some(s));
                     return SettingResult {
@@ -311,9 +335,12 @@ impl Control {
                     };
                 }
             }
+
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
+
         self.live(|l| l.pending_restart = true);
+
         SettingResult {
             setting,
             status: ApplyStatus::PendingRestart,
@@ -333,6 +360,7 @@ impl Control {
             // the engine as unavailable.
             Err(_) => self.free_disk.store(FREE_DISK_UNKNOWN, Ordering::Relaxed),
         }
+
         let Some(engine) = self.managed.clone() else { return };
         let res = tokio::task::spawn_blocking(move || (engine.usage(), engine.allowed_cpus())).await;
         let Ok((usage, cpus)) = res else { return };
@@ -340,6 +368,7 @@ impl Control {
         self.live(|l| {
             l.allowed_cpus = cpus;
             l.process_memory = usage.map(|u| u.memory_bytes);
+
             match (usage, l.cpu_sample) {
                 (Some(u), Some((then, cpu))) if u.cpu_usec >= cpu => {
                     let secs = now.duration_since(then).as_secs_f64();
@@ -349,6 +378,7 @@ impl Control {
                 }
                 _ => l.cpu_vcpu = None,
             }
+
             l.cpu_sample = usage.map(|u| (now, u.cpu_usec));
         });
     }

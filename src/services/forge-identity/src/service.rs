@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::{oidc::OidcClaims, password, pkce, totp};
 
+/// Errors from identity operations.
 #[derive(Debug, thiserror::Error)]
 pub enum IdentityError {
     #[error("invalid credentials")]
@@ -61,6 +62,7 @@ fn loopback_match(allowed: &str, uri: &str) -> bool {
         && a.path() == u.path()
 }
 
+/// Settings for the identity service.
 #[derive(Debug, Clone)]
 pub struct IdentityConfig {
     pub issuer: String,
@@ -124,6 +126,7 @@ pub struct AuthenticatedSession {
 }
 
 impl AuthenticatedSession {
+    /// The principal this session acts as.
     #[must_use]
     pub fn principal(&self) -> Principal {
         Principal::User(self.user.id)
@@ -149,6 +152,7 @@ pub struct IdentityService {
 }
 
 impl IdentityService {
+    /// Creates the identity service.
     #[must_use]
     pub fn new(
         users: Arc<dyn UserRepository>,
@@ -169,6 +173,7 @@ impl IdentityService {
         }
     }
 
+    /// The identity configuration.
     #[must_use]
     pub fn config(&self) -> &IdentityConfig {
         &self.config
@@ -192,10 +197,12 @@ impl IdentityService {
     ) -> Result<User, IdentityError> {
         password::validate(pw).map_err(IdentityError::InvalidRequest)?;
         let (username, email) = sign_in_names(username, email)?;
+
         let display_name = match display_name.trim() {
             "" => username.clone().or_else(|| email.clone()).unwrap_or_default(),
             d => d.to_owned(),
         };
+
         let user = User {
             id: UserId::new(),
             username,
@@ -210,6 +217,7 @@ impl IdentityService {
             created_at: self.clock.now(),
         };
         self.users.create_user(&user).await.map_err(in_use)?;
+
         Ok(user)
     }
 
@@ -226,10 +234,12 @@ impl IdentityService {
         if display_name.is_empty() || display_name.chars().count() > 100 {
             return Err(IdentityError::InvalidRequest("the display name must be 1-100 characters".into()));
         }
+
         self.users
             .update_user_profile(user.id, username.as_deref(), email.as_deref(), display_name)
             .await
             .map_err(in_use)?;
+
         Ok(User { username, email, display_name: display_name.to_owned(), ..user.clone() })
     }
 
@@ -238,15 +248,20 @@ impl IdentityService {
         let Some(hash) = user.password_hash.as_deref() else {
             return Err(IdentityError::InvalidRequest("this account signs in through single sign-on".into()));
         };
+
         if !password::verify_blocking(current, hash).await {
             return Err(IdentityError::InvalidCredentials);
         }
+
         password::validate(new).map_err(IdentityError::InvalidRequest)?;
+
         if new == current {
             return Err(IdentityError::InvalidRequest("choose a password different from the current one".into()));
         }
+
         let hash = password::hash_blocking(new).await.map_err(|e| IdentityError::Store(DomainError::Internal(e)))?;
         self.users.set_password_hash(user.id, &hash).await?;
+
         Ok(())
     }
 
@@ -271,11 +286,13 @@ impl IdentityService {
         totp_code: Option<&str>,
     ) -> Result<LoginOutcome, IdentityError> {
         let user = self.find_by_login(login).await?;
+
         let Some(user) = user else {
             // Spend the same time as a real verification.
             let _ = password::verify_blocking(pw, password::dummy_hash()).await;
             return Err(IdentityError::InvalidCredentials);
         };
+
         // An account without a password (single sign-on) spends the same
         // time, so timing does not tell it apart.
         let hash = user.password_hash.as_deref().unwrap_or_else(|| password::dummy_hash());
@@ -283,9 +300,11 @@ impl IdentityService {
         if !ok {
             return Err(IdentityError::InvalidCredentials);
         }
+
         if user.disabled {
             return Err(IdentityError::Disabled);
         }
+
         let mfa = if user.mfa_enabled() {
             let code = totp_code.ok_or(IdentityError::MfaRequired)?;
             self.check_totp(&user, code)?;
@@ -293,6 +312,7 @@ impl IdentityService {
         } else {
             false
         };
+
         Ok(LoginOutcome::Authenticated { user, mfa })
     }
 
@@ -309,13 +329,16 @@ impl IdentityService {
             .open(sealed, &totp_aad(user.id))
             .map_err(|e| IdentityError::Store(DomainError::internal(e)))?;
         let step = totp::matched_step(&secret, code, self.clock.now().0 / 1000).ok_or(IdentityError::InvalidMfa)?;
+
         // Single use: a code (or an older one) that already signed in or
         // stepped up is refused, so a seen code cannot be replayed.
         let mut used = self.totp_used.lock().unwrap_or_else(PoisonError::into_inner);
         if used.get(&user.id).is_some_and(|last| step <= *last) {
             return Err(IdentityError::InvalidMfa);
         }
+
         used.insert(user.id, step);
+
         Ok(())
     }
 
@@ -333,20 +356,25 @@ impl IdentityService {
     pub async fn confirm_totp(&self, user: UserId, secret_b32: &str, code: &str) -> Result<(), IdentityError> {
         let secret =
             totp::base32_decode(secret_b32).ok_or_else(|| IdentityError::InvalidRequest("bad secret".into()))?;
+
         if secret.len() < 16 {
             return Err(IdentityError::InvalidRequest("secret too short".into()));
         }
+
         if !totp::verify(&secret, code, self.clock.now().0 / 1000) {
             return Err(IdentityError::InvalidMfa);
         }
+
         let sealed =
             self.envelope.seal(&secret, &totp_aad(user)).map_err(|e| IdentityError::Store(DomainError::internal(e)))?;
         self.users.set_totp_secret(user, Some(&sealed)).await?;
+
         Ok(())
     }
 
     // ------------------------------------------------------------ web sessions
 
+    /// Creates a web session for a user.
     pub async fn create_web_session(&self, user: UserId, mfa: bool) -> Result<WebSessionTokens, IdentityError> {
         let session_token = random_token::<32>();
         let csrf_token = random_token::<32>();
@@ -365,6 +393,7 @@ impl IdentityService {
                 connection_id: None,
             })
             .await?;
+
         Ok(WebSessionTokens { session_token, csrf_token, expires_at })
     }
 
@@ -379,19 +408,23 @@ impl IdentityService {
         if session.kind != kind {
             return Ok(None);
         }
+
         if session.expires_at <= self.clock.now() {
             self.sessions.delete_session(&hash).await?;
             return Ok(None);
         }
+
         let user = self.users.get_user(session.user_id).await?;
         if user.disabled {
             return Ok(None);
         }
+
         // A connector's token lives only as long as its connection, and
         // only while connectors are turned on.
         if session.connection_id.is_some() && !self.connectors_enabled {
             return Ok(None);
         }
+
         let connection = match &session.connection_id {
             Some(id) => match self.active_connection(id).await? {
                 Some(c) => Some(c),
@@ -402,6 +435,7 @@ impl IdentityService {
             },
             None => None,
         };
+
         Ok(Some(AuthenticatedSession { user, session, connection }))
     }
 
@@ -416,6 +450,7 @@ impl IdentityService {
         }
     }
 
+    /// Ends the session behind `token`.
     pub async fn logout(&self, token: &str) -> Result<(), IdentityError> {
         self.sessions.delete_session(&sha256_hex(token.as_bytes())).await?;
         Ok(())
@@ -444,9 +479,11 @@ impl IdentityService {
         if !client.allows_redirect(redirect_uri) {
             return Err(IdentityError::InvalidRequest("redirect_uri not registered".into()));
         }
+
         if code_challenge_method != "S256" || code_challenge.len() != 43 {
             return Err(IdentityError::InvalidRequest("PKCE S256 code_challenge required".into()));
         }
+
         let code = random_token::<32>();
         self.sessions
             .create_oauth_code(&OAuthCode {
@@ -460,6 +497,7 @@ impl IdentityService {
                 connection_id: None,
             })
             .await?;
+
         Ok(code)
     }
 
@@ -486,18 +524,23 @@ impl IdentityService {
         resource: Option<&str>,
     ) -> Result<TokenPair, IdentityError> {
         let grant = |m: &str| IdentityError::InvalidGrant(m.to_owned());
+
         // Single use: the code is deleted whatever the outcome.
         let stored =
             self.sessions.take_oauth_code(&sha256_hex(code.as_bytes())).await?.ok_or_else(|| grant("unknown code"))?;
+
         if stored.expires_at <= self.clock.now() {
             return Err(grant("code expired"));
         }
+
         if stored.client_id != client_id || stored.redirect_uri != redirect_uri {
             return Err(grant("client or redirect mismatch"));
         }
+
         if !pkce::verify(code_verifier, &stored.code_challenge) {
             return Err(grant("PKCE verification failed"));
         }
+
         match stored.connection_id {
             Some(_) if !self.connectors_enabled => Err(grant("AI connectors are turned off on this Forge")),
             Some(id) => {
@@ -530,27 +573,33 @@ impl IdentityService {
             .find_by_refresh(&hash)
             .await?
             .ok_or_else(|| IdentityError::InvalidGrant("unknown refresh token".into()))?;
+
         if old.connection_id.is_some() && !self.connectors_enabled {
             return Err(IdentityError::InvalidGrant("AI connectors are turned off on this Forge".into()));
         }
+
         self.sessions.delete_session(&old.id_hash).await?;
         let refresh_expiry = old.created_at.plus(self.config.refresh_token_ttl);
         if refresh_expiry <= self.clock.now() {
             return Err(IdentityError::InvalidGrant("refresh token expired".into()));
         }
+
         let user = self.users.get_user(old.user_id).await?;
         if user.disabled {
             return Err(IdentityError::Disabled);
         }
+
         match old.connection_id {
             Some(id) => {
                 let c = self
                     .active_connection(&id)
                     .await?
                     .ok_or_else(|| IdentityError::InvalidGrant("the connection was revoked".into()))?;
+
                 if client_id != Some(c.client_id.as_str()) {
                     return Err(IdentityError::InvalidGrant("client_id does not match the refresh token".into()));
                 }
+
                 check_resource(resource, &c)?;
                 self.issue_bearer(user.id, false, Some(id), old.created_at).await
             }
@@ -586,6 +635,7 @@ impl IdentityService {
                 connection_id,
             })
             .await?;
+
         Ok(TokenPair {
             access_token: access,
             token_type: "Bearer",
@@ -611,21 +661,27 @@ impl IdentityService {
         if let Some(u) = self.users.find_user_by_oidc_subject(&subject).await? {
             return if u.disabled { Err(IdentityError::Disabled) } else { Ok(u) };
         }
+
         let email = claims
             .email
             .as_deref()
             .filter(|_| claims.email_verified)
             .ok_or_else(|| IdentityError::Provider("provider did not return a verified email".into()))?;
+
         if let Some(u) = self.users.find_user_by_email(email).await? {
             if u.disabled {
                 return Err(IdentityError::Disabled);
             }
+
             self.users.set_oidc_subject(u.id, &subject).await?;
+
             return Ok(u);
         }
+
         if !self.config.oidc_auto_provision {
             return Err(IdentityError::InvalidCredentials);
         }
+
         let user = User {
             id: UserId::new(),
             username: None,
@@ -638,6 +694,7 @@ impl IdentityService {
             created_at: self.clock.now(),
         };
         self.users.create_user(&user).await?;
+
         Ok(user)
     }
 }
@@ -650,10 +707,12 @@ pub fn sign_in_names(
 ) -> Result<(Option<String>, Option<String>), IdentityError> {
     let username = username.map(str::trim).filter(|u| !u.is_empty()).map(str::to_lowercase);
     let email = email.map(str::trim).filter(|e| !e.is_empty()).map(str::to_lowercase);
+
     if let Some(u) = &username {
         let ok = (3..=64).contains(&u.len())
             && u.as_bytes()[0].is_ascii_alphanumeric()
             && u.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'.' | b'_' | b'-'));
+
         if !ok {
             return Err(IdentityError::InvalidRequest(
                 "a username is 3-64 characters: letters, digits, '.', '_' or '-', starting with a letter or digit"
@@ -661,17 +720,21 @@ pub fn sign_in_names(
             ));
         }
     }
+
     if let Some(e) = &email {
         let valid = e.len() <= 254
             && !e.chars().any(char::is_whitespace)
             && e.split_once('@').is_some_and(|(local, domain)| !local.is_empty() && !domain.is_empty());
+
         if !valid {
             return Err(IdentityError::InvalidRequest("invalid email".into()));
         }
     }
+
     if username.is_none() && email.is_none() {
         return Err(IdentityError::InvalidRequest("a username or an email is required".into()));
     }
+
     Ok((username, email))
 }
 

@@ -111,16 +111,20 @@ fn again() -> &'static Mutex<HashSet<ClusterId>> {
 /// schedules; the pass re-plans from stored state.
 pub async fn membership_changed(state: &AppState, clusters: &[ClusterId]) {
     let mut seen = HashSet::new();
+
     for &c in clusters {
         if !seen.insert(c) {
             continue;
         }
+
         let Ok(Some(mut rec)) = state.store.get_fabric(c).await else { continue };
         reset(&mut rec, None);
+
         if let Err(e) = state.store.put_fabric(&rec).await {
             tracing::warn!(error = %e, cluster = %c, "marking fabric members for resync failed");
             continue;
         }
+
         let s = state.clone();
         tokio::spawn(async move { reconcile_cluster(&s, c).await });
     }
@@ -145,10 +149,13 @@ async fn save_node(state: &AppState, cluster: ClusterId, node: &str, ns: &NodeSt
     if !rec.status.is_object() {
         rec.status = json!({});
     }
+
     if rec.status.get("nodes").is_none_or(|n| !n.is_object()) {
         rec.status["nodes"] = json!({});
     }
+
     rec.status["nodes"][node] = serde_json::to_value(ns).unwrap_or(Value::Null);
+
     if let Err(e) = state.store.put_fabric(&rec).await {
         tracing::warn!(error = %e, %cluster, "saving fabric node state failed");
     }
@@ -171,6 +178,7 @@ pub async fn reconcile_all(state: &AppState) {
         Ok(f) => f,
         Err(e) => return tracing::warn!(error = %e, "listing fabrics failed"),
     };
+
     for f in fabrics {
         reconcile_cluster(state, f.cluster_id).await;
     }
@@ -184,15 +192,18 @@ pub async fn reconcile_cluster(state: &AppState, cluster: ClusterId) {
             if let Ok(mut a) = again().lock() {
                 a.insert(cluster);
             }
+
             return;
         }
     }
+
     loop {
         for _ in 0..MAX_PASSES {
             if !pass(state, cluster).await {
                 break;
             }
         }
+
         // Take the re-run flag and release the slot under the same lock
         // order as a caller that sets it, so a request is never dropped.
         let Ok(mut r) = running().lock() else { return };
@@ -209,15 +220,19 @@ pub async fn reconcile_cluster(state: &AppState, cluster: ClusterId) {
 async fn pass(state: &AppState, cluster: ClusterId) -> bool {
     let Ok(Some(rec)) = state.store.get_fabric(cluster).await else { return false };
     let Ok(spec) = serde_json::from_value::<FabricSpec>(rec.spec.clone()) else { return false };
+
     let Some(by) = rec.status.get("applied_by").cloned().and_then(|v| serde_json::from_value::<AppliedBy>(v).ok())
     else {
         return false; // never applied: planning only
     };
+
     if spec.mode != FabricMode::Mesh {
         return false; // a stored routed network waits for the next Apply network
     }
+
     let leases: Vec<Lease> = serde_json::from_value(rec.leases.clone()).unwrap_or_default();
     let Ok(all) = state.store.list_servers(None).await else { return false };
+
     // A revoked node is no peer any more: the others drop it on this pass.
     let members: Vec<Server> =
         all.into_iter().filter(|s| s.cluster_id == Some(cluster) && s.status != AgentStatus::Revoked).collect();
@@ -228,14 +243,17 @@ async fn pass(state: &AppState, cluster: ClusterId) -> bool {
 
     for node in &members {
         let id = node.id.to_string();
+
         // Fresh state each time: earlier nodes may have reported keys.
         let Ok(Some(cur)) = state.store.get_fabric(cluster).await else { return learned };
         let states = node_states(&cur.status);
         let mut ns =
             states.get(&id).cloned().unwrap_or_else(|| NodeState { state: "pending".into(), ..NodeState::default() });
+
         if node.status != AgentStatus::Online || !due(&ns, &states, now) {
             continue;
         }
+
         let had_key = ns.public_key.is_some();
 
         let result = converge(state, &by, &spec, &iface, &leases, &members, &hosts, &states, node, &mut ns, now).await;
@@ -254,9 +272,11 @@ async fn pass(state: &AppState, cluster: ClusterId) -> bool {
                 tracing::info!(%cluster, node = %id, attempts = ns.attempts, "fabric step failed; will retry");
             }
         }
+
         learned |= !had_key && ns.public_key.is_some();
         save_node(state, cluster, &id, &ns).await;
     }
+
     learned
 }
 
@@ -275,6 +295,7 @@ async fn converge(
     _now: i64,
 ) -> Result<(), String> {
     let id = node.id.to_string();
+
     if ns.public_key.is_none() {
         ns.step = Some("install".into());
         exec(state, by, node, FabricOp::Install).await?;
@@ -289,6 +310,7 @@ async fn converge(
     let lease =
         |kind: LeaseKind, owner: &str| leases.iter().find(|l| l.kind == kind && l.owner == owner).map(|l| l.cidr);
     let mut mesh = Vec::new();
+
     for m in members {
         let mid = m.id.to_string();
         let (Some(ip), Some(block)) = (lease(LeaseKind::Node, &mid), lease(LeaseKind::Block, &mid)) else { continue };
@@ -304,6 +326,7 @@ async fn converge(
             can_relay: !m.os.to_lowercase().starts_with("win"),
         });
     }
+
     let missing_keys = mesh.iter().filter(|m| m.id != id && m.public_key.is_none()).map(|m| m.id.clone()).collect();
     let (mut config, unreachable) = plan_mesh(spec, iface, &mesh, &id)?;
     config.hosts = hosts.to_vec();
@@ -316,6 +339,7 @@ async fn converge(
     ns.state = if unreachable.is_empty() { "ok".into() } else { "waiting".into() };
     ns.unreachable = unreachable;
     ns.missing_keys = missing_keys;
+
     Ok(())
 }
 
@@ -336,6 +360,7 @@ async fn cluster_hosts(
     members: &[Server],
 ) -> Vec<HostEntry> {
     let ip_of = |id: &str| leases.iter().find(|l| l.kind == LeaseKind::Node && l.owner == id).map(|l| l.cidr.first());
+
     // The same labels as the fleet's names (D-084), so a rename applies here too.
     let labels = match members.first() {
         Some(m) => {
@@ -346,19 +371,25 @@ async fn cluster_hosts(
         }
         None => HashMap::new(),
     };
+
     let mut out = Vec::new();
+
     for m in members {
         if let (Some(ip), Some(l)) = (ip_of(&m.id.to_string()), labels.get(&m.id)) {
             out.push(HostEntry { name: format!("{}.{}", l.label, spec.domain), ip });
         }
     }
+
     let Ok(instances) = state.store.list_all_instances(None).await else { return out };
     let mut apps: HashMap<ServiceId, Option<String>> = HashMap::new();
+
     for i in instances.iter().filter(|i| i.role != "standby") {
         let Some(ip) = ip_of(&i.server_id.to_string()) else { continue };
+
         if !members.iter().any(|m| m.id == i.server_id) {
             continue;
         }
+
         let name = match apps.get(&i.service_id) {
             Some(n) => n.clone(),
             None => {
@@ -373,19 +404,23 @@ async fn cluster_hosts(
                 n
             }
         };
+
         if let Some(n) = name {
             out.push(HostEntry { name: n, ip });
         }
     }
+
     out.retain(|h| forge_catalog::fabric::valid_hostname(&h.name));
     out.sort_by(|a, b| a.name.cmp(&b.name).then(a.ip.cmp(&b.ip)));
     out.dedup();
+
     out
 }
 
 /// Background loop: a pass over every fabric every 20 seconds.
 pub(crate) async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
     let mut tick = tokio::time::interval(TICK);
+
     loop {
         tokio::select! {
             _ = tick.tick() => {}
@@ -398,18 +433,22 @@ pub(crate) async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
 /// Mark nodes for an immediate retry (all, or one).
 pub fn reset(rec: &mut FabricRecord, only: Option<&str>) {
     let mut states = node_states(&rec.status);
+
     for (id, s) in &mut states {
         if only.is_none_or(|o| o == id) {
             s.next_at = 0;
             s.attempts = 0;
+
             if s.state == "failed" {
                 s.state = "retrying".into();
             }
         }
     }
+
     if !rec.status.is_object() {
         rec.status = json!({});
     }
+
     rec.status["nodes"] = serde_json::to_value(states).unwrap_or(json!({}));
 }
 
@@ -443,15 +482,18 @@ mod tests {
     fn a_node_planned_without_a_peer_key_is_due_once_the_key_appears() {
         let now = 1_000;
         let later = now + RECHECK_MS;
+
         // After b's step: b waits for c, c has not run yet.
         let mut states =
             BTreeMap::from([("b".to_owned(), node(later, Some("KB"), &["c"])), ("c".to_owned(), node(0, None, &[]))]);
         assert!(!due(&states["b"], &states, now), "nothing new for b yet");
         assert!(due(&states["c"], &states, now));
+
         // c's step reports its key (and c was planned with b's).
         states.insert("c".to_owned(), node(later, Some("KC"), &[]));
         assert!(due(&states["b"], &states, now), "c's key arrived: b is due now");
         assert!(!due(&states["c"], &states, now), "c had every key");
+
         // b re-planned with c's key: both settle until the recheck.
         states.insert("b".to_owned(), node(later, Some("KB"), &[]));
         assert!(!due(&states["b"], &states, now) && !due(&states["c"], &states, now));

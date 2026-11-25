@@ -32,7 +32,9 @@ pub fn due(server: ServerId, now: Timestamp) -> bool {
     if m.get(&server).is_some_and(|t| now.0 - t < MIN_INTERVAL_MS) {
         return false;
     }
+
     m.insert(server, now.0);
+
     true
 }
 
@@ -41,7 +43,9 @@ fn percent_milli(used: u64, total: u64) -> Option<i64> {
     if total == 0 {
         return None;
     }
+
     let p = u128::from(used.min(total)) * 100_000 / u128::from(total);
+
     i64::try_from(p).ok()
 }
 
@@ -106,6 +110,7 @@ fn load_per_cpu_milli(m: &NodeMetrics) -> Option<i64> {
     if m.cpu_count == 0 || !m.load1.is_finite() || m.load1 < 0.0 {
         return None;
     }
+
     #[allow(clippy::cast_possible_truncation)] // reason: a load is far below i64::MAX
     let v = (f64::from(m.load1) / f64::from(m.cpu_count) * 1000.0).round() as i64;
     Some(v)
@@ -141,6 +146,7 @@ pub fn from_metrics(server: ServerId, m: &NodeMetrics, now: Timestamp, fresh_ms:
         ("node.load.per_cpu", load_per_cpu_milli(m), Unit::Ratio, None),
         ("node.uptime.seconds", uptime_milli(m), Unit::Seconds, None),
     ];
+
     values
         .into_iter()
         .filter_map(|(subject, milli, unit, detail)| {
@@ -216,6 +222,7 @@ mod tests {
         let max = o.iter().find(|o| o.key.subject.as_str() == "node.disk.max_used_percent").unwrap();
         assert_eq!(max.detail.as_deref(), Some("/data"), "the mount is in the detail");
         assert!(o.iter().all(|o| o.fresh_for_ms == 75_000 && o.observed_at == Timestamp(5)));
+
         // Unknown totals give unknown values, never zero; a node without
         // swap uses none.
         let empty = from_metrics(
@@ -224,6 +231,7 @@ mod tests {
             Timestamp(5),
             1,
         );
+
         for o in &empty {
             if o.key.subject.as_str() == "node.swap.used_percent" {
                 assert_eq!(o.value, p(Some(0)));

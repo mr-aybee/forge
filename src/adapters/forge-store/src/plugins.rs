@@ -51,6 +51,7 @@ impl PluginRepository for Store {
         .execute(self.pool())
         .await
         .map_err(db_err)?;
+
         Ok(())
     }
 

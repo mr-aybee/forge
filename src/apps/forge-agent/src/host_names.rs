@@ -59,6 +59,7 @@ pub fn check_list(suffix: &str, entries: &[NameEntry]) -> Result<(), String> {
     if let Some(e) = entries.iter().find(|e| !e.name.ends_with(&tail)) {
         return Err(format!("`{}` does not end in `{tail}`", e.name));
     }
+
     Ok(())
 }
 
@@ -67,14 +68,17 @@ pub fn check_list(suffix: &str, entries: &[NameEntry]) -> Result<(), String> {
 pub async fn apply(suffix: String, entries: Vec<NameEntry>, containers: bool) -> Result<Value, String> {
     check_list(&suffix, &entries)?;
     let list = entries.clone();
+
     let changed =
         tokio::task::spawn_blocking(move || write_block(BLOCK_TAG, &list)).await.map_err(|e| e.to_string())??;
+
     #[cfg_attr(not(unix), allow(unused_mut))]
     let mut report = json!({ "names": entries.len(), "changed": changed });
     #[cfg(unix)]
     if containers {
         let (updated, errors) = containers::apply(&entries).await;
         report["containers"] = json!(updated);
+
         if !errors.is_empty() {
             report["container_errors"] = json!(errors);
         }
@@ -107,8 +111,10 @@ fn open_nofollow(path: &Path) -> Result<std::fs::File, OpenError> {
     if !meta.file_type().is_file() {
         return Err(OpenError::Final(format!("{} is not a regular file (a link?); not touching it", path.display())));
     }
+
     let mut opts = std::fs::OpenOptions::new();
     opts.read(true).write(true);
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -128,22 +134,28 @@ fn rewrite_in_place(path: &Path, tag: &str, entries: &[NameEntry], max: u64) -> 
     if len > max {
         return Err(format!("{} is {len} bytes, over the {max}-byte limit; not touching it", path.display()));
     }
+
     let mut raw = Vec::new();
+
     // One byte past the cap tells a file that grew since the check.
     std::io::Read::by_ref(&mut f).take(max + 1).read_to_end(&mut raw).map_err(shown)?;
+
     if raw.len() as u64 > max {
         return Err(format!("{} is over the {max}-byte limit; not touching it", path.display()));
     }
+
     let current =
         String::from_utf8(raw).map_err(|_| format!("{} is not UTF-8 text; not touching it", path.display()))?;
     let next = render_block(&current, tag, entries)?;
     if next == current {
         return Ok(false);
     }
+
     f.rewind().map_err(shown)?;
     f.set_len(0).map_err(shown)?;
     f.write_all(next.as_bytes()).map_err(shown)?;
     f.sync_all().map_err(shown)?;
+
     Ok(true)
 }
 
@@ -153,17 +165,21 @@ fn rewrite_in_place(path: &Path, tag: &str, entries: &[NameEntry], max: u64) -> 
 fn open_with_retry(path: &Path) -> Result<std::fs::File, String> {
     let tries = if cfg!(windows) { 5 } else { 1 };
     let mut last = String::new();
+
     for attempt in 0..tries {
         if attempt > 0 {
             std::thread::sleep(std::time::Duration::from_millis(400));
         }
+
         match open_nofollow(path) {
             Ok(f) => return Ok(f),
             Err(OpenError::Final(e)) => return Err(e),
             Err(OpenError::Busy(e)) => last = e,
         }
     }
+
     last.push_str(" (another program, such as antivirus, may hold the file)");
+
     Err(last)
 }
 
@@ -182,6 +198,7 @@ mod containers {
         let ok_id = id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit());
         let p = Path::new(path);
         let parent = p.parent()?;
+
         (ok_id
             && p.is_absolute()
             && !path.contains("/../")
@@ -200,25 +217,32 @@ mod containers {
             // No Docker on this node: nothing to do.
             Ok(None) | Err(_) => return (0, Vec::new()),
         };
+
         let mut updated = 0;
         let mut errors = Vec::new();
+
         for c in list.as_array().into_iter().flatten() {
             let Some(id) = c.get("Id").and_then(serde_json::Value::as_str) else { continue };
             let short = &id[..12.min(id.len())];
+
             let info = match crate::docker::api("GET", &format!("/containers/{id}/json"), None, T).await {
                 Ok(Some(v)) => v,
                 _ => continue,
             };
+
             let reported = info.get("HostsPath").and_then(serde_json::Value::as_str).unwrap_or_default();
+
             let Some(path) = checked_hosts_path(id, reported) else {
                 errors.push(format!("{short}: unexpected hosts path"));
                 continue;
             };
+
             let list = entries.to_vec();
             let r = tokio::task::spawn_blocking(move || {
                 super::rewrite_in_place(Path::new(&path), BLOCK_TAG, &list, super::MAX_CONTAINER_HOSTS)
             })
             .await;
+
             match r {
                 Ok(Ok(true)) => updated += 1,
                 Ok(Ok(false)) => {}
@@ -226,6 +250,7 @@ mod containers {
                 Err(e) => errors.push(e.to_string()),
             }
         }
+
         (updated, errors)
     }
 
@@ -239,6 +264,7 @@ mod containers {
             let good = format!("/var/lib/docker/containers/{id}/hosts");
             assert_eq!(checked_hosts_path(&id, &good), Some(good.clone()));
             assert!(checked_hosts_path(&id, &format!("/srv/docker/containers/{id}/hosts")).is_some(), "other root");
+
             for bad in [
                 "/etc/hosts".to_owned(),
                 format!("/var/lib/docker/containers/{id}/../../../../etc/hosts"),
@@ -249,6 +275,7 @@ mod containers {
             ] {
                 assert_eq!(checked_hosts_path(&id, &bad), None, "{bad}");
             }
+
             assert_eq!(checked_hosts_path("abc", "/var/lib/docker/containers/abc/hosts"), None);
         }
     }

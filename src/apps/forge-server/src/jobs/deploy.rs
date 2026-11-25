@@ -150,6 +150,7 @@ impl DeployJob {
             server_id: server,
             message,
         };
+
         if let Err(err) = self.deploys.add_event(&e).await {
             tracing::warn!(deployment = %id, error = %err, "recording a deployment event failed");
         }
@@ -158,6 +159,7 @@ impl DeployJob {
     pub(super) async fn save(&self, d: &mut Deployment) -> Done {
         d.updated_at = self.clock.now();
         self.deploys.put_deployment(d).await?;
+
         Ok(())
     }
 
@@ -170,6 +172,7 @@ impl DeployJob {
         )
         .in_org(Some(d.workspace_id))
         .with_details(details);
+
         if let Err(e) = self.audit.record(ev).await {
             tracing::error!(error = %e, "audit write failed");
         }
@@ -191,11 +194,13 @@ impl DeployJob {
                 }
                 Some(DeploymentRequest::Resume) => {
                     self.deploys.clear_request(d.id).await?;
+
                     if d.state == DeploymentState::Paused {
                         d.state = DeploymentState::Running;
                         self.save(d).await?;
                         self.event(d.id, "info", None, "resumed".into()).await;
                     }
+
                     return Ok(());
                 }
                 Some(DeploymentRequest::Pause) => {}
@@ -206,6 +211,7 @@ impl DeployJob {
                 None if d.state == DeploymentState::Paused => {}
                 None => return Ok(()),
             }
+
             tokio::time::sleep(self.tick).await;
         }
     }
@@ -217,6 +223,7 @@ impl DeployJob {
             self.deploys.clear_request(id).await?;
             return Err(Stop::Aborted("aborted on request".into()));
         }
+
         Ok(())
     }
 
@@ -230,18 +237,22 @@ impl DeployJob {
         let release = self.fresh_release(r).await?;
         let mut spec = self.runner.resolved_spec(&release_app(&r.app, &release)).await?;
         spec.release = release.number.to_string();
+
         match serde_json::from_value::<ArtifactRef>(release.artifact.clone()) {
             Ok(a) if a.staged() => {
                 // Code fetched into `<home>/releases/<n>`, run from there
                 // (each slot from its own release).
                 let base = spec.release_dir();
+
                 let sub = match &a {
                     ArtifactRef::Git { path, .. } if !path.is_empty() => format!("/{path}"),
                     _ => String::new(),
                 };
+
                 if spec.working_dir.is_empty() {
                     spec.working_dir = format!("{base}{sub}");
                 }
+
                 spec.artifact = Some(a);
             }
             Ok(a) => {
@@ -251,10 +262,12 @@ impl DeployJob {
             }
             Err(_) => {}
         }
+
         let map = match t.slot {
             Some(s) => self.runner.into_slot(&mut spec, r.app.id, s).await?,
             None => in_place_ports(&spec),
         };
+
         Ok((spec, map))
     }
 
@@ -272,9 +285,11 @@ impl DeployJob {
         let Some(mut i) = self.apps.list_instances(app).await?.into_iter().find(|i| i.server_id == server) else {
             return Ok(());
         };
+
         f(&mut i);
         i.updated_at = self.clock.now();
         self.apps.put_instance(&i).await?;
+
         Ok(())
     }
 
@@ -283,6 +298,7 @@ impl DeployJob {
         let (spec, map) = self.copy_spec(r, t).await?;
         self.runner.runtimes_ready(&spec, server).await?;
         let roots = crate::stacks::bind_roots(self.runner.files.as_ref(), server).await;
+
         if let Some(v) =
             super::app::privileged_mounts(&spec, &roots).into_iter().find(|v| !r.payload.privileged_mounts.contains(v))
         {
@@ -291,6 +307,7 @@ impl DeployJob {
                  (an administrator with MFA): deploy again as one"
             )));
         }
+
         // A new side-by-side slot takes no traffic until a route step moves
         // it there; a copy replaced in place keeps what it had, and one that
         // never ran (a first release) serves at once.
@@ -299,6 +316,7 @@ impl DeployJob {
             None if t.slot.is_none() => 100,
             None => 0,
         };
+
         let mut row = SlotRecord {
             service_id: r.app.id,
             server_id: server,
@@ -316,12 +334,14 @@ impl DeployJob {
         })
         .await?;
         self.event(d.id, "info", Some(server), format!("starting release {} on {}", r.release.number, r.copy(t))).await;
+
         let out = match self.runner.send(&r.principal, server, "deploy", &spec, DEPLOY_WAIT).await {
             Ok(o) => o,
             Err(e) => {
                 let msg = match &e {
                     StepError::Retryable(m) | StepError::Fatal(m) => m.clone(),
                 };
+
                 row.state = "failed".into();
                 self.deploys.put_slot(&row).await?;
                 self.set_instance(r.app.id, server, |i| {
@@ -329,9 +349,11 @@ impl DeployJob {
                     i.last_error = Some(msg.clone());
                 })
                 .await?;
+
                 return Err(e.into());
             }
         };
+
         // A tag resolves to a digest on the first node; the rest pull that.
         if let Ok(ArtifactRef::Image { image, digest: None }) =
             serde_json::from_value::<ArtifactRef>(self.fresh_release(r).await?.artifact)
@@ -346,18 +368,21 @@ impl DeployJob {
                 .await?;
             self.event(d.id, "info", Some(server), format!("pinned the image to {dg}")).await;
         }
+
         row.state = "started".into();
         row.updated_at = self.clock.now();
         self.deploys.put_slot(&row).await?;
         let state = out.get("state").and_then(Value::as_str).map(str::to_owned);
         self.set_instance(r.app.id, server, |i| {
             i.status = "deployed".into();
+
             if state.is_some() {
                 i.state = state;
             }
         })
         .await?;
         self.runner.ensure_app_root(&r.principal, &release_app(&r.app, &r.release), server).await?;
+
         Ok(())
     }
 
@@ -371,8 +396,10 @@ impl DeployJob {
         let stable_for = Duration::from_secs(r.policy.stabilization_secs);
         let mut ready_since: Option<tokio::time::Instant> = None;
         let mut why = String::from("no answer yet");
+
         loop {
             self.aborted(d.id).await?;
+
             match self.runner.send(&r.principal, server, "probe", &spec, PROBE_WAIT).await {
                 Ok(out) if out["ready"] == true => {
                     let since = *ready_since.get_or_insert_with(tokio::time::Instant::now);
@@ -396,31 +423,38 @@ impl DeployJob {
                     why = m;
                 }
             }
+
             if tokio::time::Instant::now() >= deadline {
                 if let Some(mut row) = self.slot_row(r.app.id, server, t.slot).await? {
                     row.state = "failed".into();
                     row.updated_at = self.clock.now();
                     self.deploys.put_slot(&row).await?;
                 }
+
                 return Err(Stop::Failed(format!(
                     "{} did not become ready and stable within {}s: {why}",
                     r.copy(t),
                     r.policy.startup_timeout_secs
                 )));
             }
+
             tokio::time::sleep(self.tick).await;
         }
+
         if let Some(mut row) = self.slot_row(r.app.id, server, t.slot).await? {
             row.state = "ready".into();
             row.updated_at = self.clock.now();
             self.deploys.put_slot(&row).await?;
         }
+
         self.event(d.id, "info", Some(server), format!("{} is ready", r.copy(t))).await;
+
         Ok(())
     }
 
     async fn route(&self, d: &Deployment, r: &Run<'_>, weights: &[Weight]) -> Done {
         let before = self.deploys.list_slots(r.app.id).await?;
+
         for w in weights {
             let server = server_of(&w.server_id)?;
             let name = Slot::name(w.slot);
@@ -440,14 +474,17 @@ impl DeployJob {
                 },
                 None => continue,
             };
+
             row.weight = w.weight;
             row.updated_at = self.clock.now();
             self.deploys.put_slot(&row).await?;
         }
+
         let applied = self.effects()?.reapply_endpoints(r.app.id).await.map_err(|e| Stop::Failed(e.to_string()))?;
         let after = self.deploys.list_slots(r.app.id).await?;
         let mut nodes: Vec<ServerId> = weights.iter().filter_map(|w| w.server_id.parse().ok()).collect();
         nodes.dedup();
+
         for n in nodes {
             let was = crate::deploy::serving(&before, n).map(|s| s.slot.clone());
             let now = crate::deploy::serving(&after, n).map(|s| s.slot.clone());
@@ -455,10 +492,12 @@ impl DeployJob {
                 self.effects()?.push_health(r.app.id, n).await;
             }
         }
+
         let names: BTreeMap<String, String> = r.payload.names.clone();
         let line = Step::Route { weights: weights.to_vec() }.describe(&names);
         let via = if applied.is_empty() { String::new() } else { format!(" (endpoints: {})", applied.join(", ")) };
         self.event(d.id, "info", None, format!("{line}{via}")).await;
+
         Ok(())
     }
 
@@ -475,16 +514,19 @@ impl DeployJob {
         let since = self.clock.now();
         let end = tokio::time::Instant::now() + Duration::from_secs(secs);
         let mut next_look = tokio::time::Instant::now() + ANALYSIS_EVERY;
+
         loop {
             self.aborted(d.id).await?;
             let now = tokio::time::Instant::now();
             let last = now >= end;
+
             if let Some(a) = analysis
                 && (now >= next_look || last)
             {
                 next_look = now + ANALYSIS_EVERY;
                 let sample =
                     self.effects()?.traffic(r.app.id, new, since).await.map_err(|e| Stop::Retry(e.to_string()))?;
+
                 match judge(a, &sample) {
                     Verdict::Fail(m) => return Err(Stop::Failed(format!("{why}: {m}"))),
                     Verdict::TooLittle if last => {
@@ -507,9 +549,11 @@ impl DeployJob {
                     _ => {}
                 }
             }
+
             if last {
                 return Ok(());
             }
+
             tokio::time::sleep(self.tick.min(end.saturating_duration_since(now)).max(Duration::from_millis(10))).await;
         }
     }
@@ -519,6 +563,7 @@ impl DeployJob {
         self.save(d).await?;
         self.event(d.id, "info", None, format!("waiting for approval: {reason}")).await;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(r.policy.approval_timeout_secs);
+
         loop {
             let cur = self.deploys.get_deployment(d.id).await?.ok_or_else(|| Stop::Failed("deployment gone".into()))?;
             match cur.request {
@@ -526,6 +571,7 @@ impl DeployJob {
                     self.deploys.clear_request(d.id).await?;
                     d.state = DeploymentState::Running;
                     self.save(d).await?;
+
                     return Ok(());
                 }
                 Some(DeploymentRequest::Reject) => {
@@ -538,12 +584,14 @@ impl DeployJob {
                 }
                 _ => {}
             }
+
             if tokio::time::Instant::now() >= deadline {
                 return Err(Stop::Failed(format!(
                     "nobody approved within {}s ({reason})",
                     r.policy.approval_timeout_secs
                 )));
             }
+
             tokio::time::sleep(self.tick).await;
         }
     }
@@ -554,6 +602,7 @@ impl DeployJob {
         self.runner.send(&r.principal, server, "retire", &spec, RETIRE_WAIT).await?;
         self.deploys.delete_slot(r.app.id, server, Slot::name(t.slot)).await?;
         self.event(d.id, "info", Some(server), format!("stopped {}", r.copy(t))).await;
+
         Ok(())
     }
 
@@ -575,6 +624,7 @@ impl DeployJob {
                 futures::future::try_join_all(targets.iter().map(|t| self.stop_one(d, r, t))).await?;
             }
         }
+
         Ok(())
     }
 
@@ -601,6 +651,7 @@ impl DeployJob {
         let plan = d.plan.clone();
         let policy: RolloutPolicy =
             serde_json::from_value(release.policy.clone()).map_err(|e| StepError::Fatal(format!("bad policy: {e}")))?;
+
         Ok((d, app, release, plan, policy))
     }
 
@@ -611,11 +662,15 @@ impl DeployJob {
         if !d.state.active() {
             return Ok(());
         }
+
         let r = Run { principal: ctx.job.principal.to_string(), app, release, policy, payload: &p };
+
         if let Some(cluster) = p.swarm_cluster {
             return self.swarm_rollout(ctx, &mut d, &r, cluster, plan).await;
         }
+
         let plan: Plan = serde_json::from_value(plan).map_err(|e| StepError::Fatal(format!("bad plan: {e}")))?;
+
         if d.state == DeploymentState::Pending {
             d.state = DeploymentState::Running;
             self.save(&mut d).await.map_err(stop_error)?;
@@ -627,22 +682,28 @@ impl DeployJob {
             )
             .await;
         }
+
         let mut outcome = Ok(());
+
         for (i, step) in plan.steps.iter().enumerate().skip(usize::try_from(d.step).unwrap_or(0)) {
             if let Err(e) = self.checkpoint(&mut d).await {
                 outcome = Err(e);
                 break;
             }
+
             if let Err(e) = self.step(&mut d, &r, &plan, step).await {
                 outcome = Err(e);
                 break;
             }
+
             d.step = i64::try_from(i + 1).unwrap_or(i64::MAX);
+
             if let Err(e) = self.save(&mut d).await {
                 outcome = Err(e);
                 break;
             }
         }
+
         match outcome {
             Ok(()) => Ok(()),
             // Again later, unless this was the last attempt.
@@ -670,6 +731,7 @@ impl DeployJob {
         let started: Vec<&Target> =
             plan.steps.iter().take(usize::try_from(d.step + 1).unwrap_or(0)).flat_map(Step::started).collect();
         let mut switched = false;
+
         for t in started {
             let Ok(server) = server_of(&t.server_id) else { continue };
             let name = Slot::name(t.slot);
@@ -679,6 +741,7 @@ impl DeployJob {
                 switched |= row.is_none_or(|s| s.release_number == d.release_number);
                 continue;
             }
+
             match self.stop_one(d, r, t).await {
                 Ok(()) => {}
                 Err(Stop::Retry(m) | Stop::Failed(m) | Stop::Aborted(m)) => {
@@ -686,15 +749,18 @@ impl DeployJob {
                 }
             }
         }
+
         let rollback =
             !aborted && r.policy.auto_rollback && d.kind == DeploymentKind::Apply && d.from_release > 0 && switched;
         d.state = if aborted { DeploymentState::Aborted } else { DeploymentState::Failed };
         d.error = Some(why.to_owned());
         d.finished_at = Some(self.clock.now());
+
         if let Err(e) = self.save(d).await {
             tracing::error!(deployment = %d.id, error = ?e, "could not record the failed deployment");
             return;
         }
+
         let action = if aborted { "deployment.aborted" } else { "deployment.failed" };
         self.audit(
             &r.principal,
@@ -704,9 +770,11 @@ impl DeployJob {
             json!({ "service": r.app.name, "release": d.release_number, "error": why }),
         )
         .await;
+
         if !rollback {
             return;
         }
+
         let Some(engine) = self.engine.get() else { return };
         let started = async {
             let prepared = self.service.prepare_release(&r.app, d.from_release).await?;
@@ -717,6 +785,7 @@ impl DeployJob {
             };
             self.service.start(prepared, DeploymentKind::AutoRollback, &who, engine).await
         };
+
         match started.await {
             Ok(back) => {
                 d.state = DeploymentState::RolledBack;
@@ -748,7 +817,9 @@ impl DeployJob {
         if !d.state.active() {
             return Ok(());
         }
+
         let retry = |e: forge_core::DomainError| StepError::Retryable(e.to_string());
+
         // The service now is the release.
         let live = release_app(&app, &release);
         app.spec = live.spec;
@@ -756,6 +827,7 @@ impl DeployJob {
         app.runtime = live.runtime;
         app.updated_at = self.clock.now();
         self.apps.put_service(&app).await.map_err(retry)?;
+
         if let Some(engine) = self.engine.get() {
             for server in &p.remove {
                 let job = engine
@@ -770,6 +842,7 @@ impl DeployJob {
                         max_attempts: 2,
                     })
                     .await;
+
                 let line = match job {
                     Ok(j) => format!(
                         "removing the service from {} (job {})",
@@ -778,14 +851,17 @@ impl DeployJob {
                     ),
                     Err(e) => format!("could not remove the service from {server}: {e}"),
                 };
+
                 self.event(d.id, "info", Some(*server), line).await;
             }
         }
+
         let pruned = self
             .releases
             .prune_releases(app.id, policy.retain_releases, &[release.number, d.from_release])
             .await
             .map_err(retry)?;
+
         if pruned > 0 {
             self.event(
                 d.id,
@@ -795,6 +871,7 @@ impl DeployJob {
             )
             .await;
         }
+
         d.state = DeploymentState::Succeeded;
         d.finished_at = Some(self.clock.now());
         self.save(&mut d).await.map_err(stop_error)?;
@@ -808,6 +885,7 @@ impl DeployJob {
             json!({ "service": app.name, "release": d.release_number, "from": d.from_release }),
         )
         .await;
+
         if let (Some(fx), Ok(plan)) = (self.effects.get(), serde_json::from_value::<Plan>(plan)) {
             for t in &plan.targets {
                 if let Ok(server) = t.server_id.parse() {
@@ -815,6 +893,7 @@ impl DeployJob {
                 }
             }
         }
+
         Ok(())
     }
 }
@@ -832,6 +911,7 @@ fn in_place_ports(spec: &AppSpec) -> BTreeMap<u16, u16> {
         forge_catalog::Runtime::Container => cat::published_host_ports(&spec.ports),
         _ => spec.listen_port.into_iter().collect(),
     };
+
     ports.into_iter().map(|p| (p, p)).collect()
 }
 
@@ -866,17 +946,20 @@ fn judge(a: &cat::Analysis, s: &crate::deploy::TrafficSample) -> Verdict {
     if s.requests < u64::from(a.min_requests) {
         return Verdict::TooLittle;
     }
+
     if let Some(max) = a.max_error_rate {
         let pct = s.errors * 100 / s.requests.max(1);
         if pct > u64::from(max) {
             return Verdict::Fail(format!("{pct}% of {} requests failed (at most {max}%)", s.requests));
         }
     }
+
     if let (Some(max), Some(p95)) = (a.max_p95_ms, s.p95_ms)
         && p95 > u64::from(max)
     {
         return Verdict::Fail(format!("p95 {p95} ms (at most {max} ms)"));
     }
+
     Verdict::Pass
 }
 
@@ -894,6 +977,7 @@ impl JobHandler for DeployJob {
         if payload.get("privileged_mounts").and_then(Value::as_array).is_some_and(|m| !m.is_empty()) {
             return Action::StackPrivileged;
         }
+
         Action::Deploy
     }
 

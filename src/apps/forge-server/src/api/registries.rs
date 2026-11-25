@@ -69,6 +69,7 @@ pub async fn create(
     caller.authorize(Action::RegistryManage, ws_ref(ws)).await?;
     let r = state.registries.create(ws, &caller.principal(), body.into()).await?;
     caller.audit(AUDIT_CREATE, &ws_ref(ws), Some(ws), json!({ "id": r.id, "name": r.name, "host": r.host })).await;
+
     Ok((StatusCode::CREATED, Json(r)))
 }
 
@@ -90,6 +91,7 @@ pub async fn update(
             json!({ "id": r.id, "name": r.name, "host": r.host, "secret_changed": secret_changed }),
         )
         .await;
+
     Ok(Json(r))
 }
 
@@ -109,5 +111,6 @@ pub async fn delete(
             json!({ "id": id, "name": r.name, "host": r.host }),
         )
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }

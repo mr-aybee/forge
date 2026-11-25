@@ -52,6 +52,7 @@ pub struct Attribution {
 pub fn attribute(labels: Option<&ContainerLabels>, services: Option<&HashMap<String, ServiceId>>) -> Attribution {
     let Some(l) = labels else { return Attribution { service_id: None, stack: None } };
     let some = |s: &str| (!s.is_empty()).then(|| clip(s, MAX_CONTAINER_FIELD_BYTES).to_owned());
+
     Attribution {
         service_id: (!l.forge_app.is_empty()).then(|| services.and_then(|m| m.get(&l.forge_app).copied())).flatten(),
         stack: some(&l.forge_stack).or_else(|| some(&l.compose_project)),
@@ -64,10 +65,13 @@ pub fn clip(s: &str, max: usize) -> &str {
     if s.len() <= max {
         return s;
     }
+
     let mut cut = max;
+
     while !s.is_char_boundary(cut) {
         cut -= 1;
     }
+
     &s[..cut]
 }
 

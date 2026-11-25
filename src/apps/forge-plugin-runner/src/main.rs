@@ -12,6 +12,7 @@ fn send(msg: &RunnerMessage) -> std::io::Result<()> {
     let mut out = std::io::stdout().lock();
     out.write_all(line.as_bytes())?;
     out.write_all(b"\n")?;
+
     out.flush()
 }
 
@@ -32,6 +33,7 @@ impl HostChannel for StdioChannel {
         if reply.id != id {
             return Err("host reply out of order".into());
         }
+
         match reply.error {
             Some(err) => Err(err),
             None => Ok(reply.result.unwrap_or(Value::Null)),
@@ -46,6 +48,7 @@ fn run() -> Result<RunnerMessage, String> {
     let req: RunRequest = serde_json::from_str(&first).map_err(|e| format!("bad request: {e}"))?;
     let bytes = std::fs::read(&req.artifact_path).map_err(|e| format!("cannot read artifact: {e}"))?;
     req.verify_artifact(&bytes)?;
+
     Ok(execute(&req, &bytes, Box::new(StdioChannel { reader, next_id: 0 })))
 }
 

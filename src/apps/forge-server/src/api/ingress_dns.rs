@@ -95,17 +95,20 @@ pub async fn publish(
     let cid = cluster.to_string();
     let mut records = Vec::new();
     let sites = state.store.list_sites().await.unwrap_or_default();
+
     for site in sites.iter().filter(|s| s.config["cluster_id"].as_str() == Some(cid.as_str())) {
         for domain in site.config["spec"]["domains"].as_array().into_iter().flatten().filter_map(Value::as_str) {
             let Some(zone) = zone_for(domain, &zones) else {
                 records.push(json!({ "name": domain, "status": "failed", "error": "no zone for this domain on the DNS node (create it on the DNS page)" }));
                 continue;
             };
+
             for (rtype, v6) in [("A", false), ("AAAA", true)] {
                 let contents: Vec<&String> = addresses.iter().filter(|a| a.contains(':') == v6).collect();
                 if contents.is_empty() {
                     continue;
                 }
+
                 let op = json!({ "op": "set_records", "zone": zone, "name": format!("{}.", domain.trim_end_matches('.')), "rtype": rtype, "ttl": dns.ttl, "contents": contents });
                 let r = run_as(state, by.principal.clone(), by.context, node, json!({ "type": "dns", "op": op }), WAIT)
                     .await;
@@ -116,6 +119,7 @@ pub async fn publish(
             }
         }
     }
+
     json!({ "addresses": addresses, "published_at": at, "records": records })
 }
 
@@ -127,9 +131,11 @@ async fn probe(state: &AppState, server_id: &str, public_ip: Option<&str>) -> (b
         Ok(s) => return (false, Some(format!("agent {:?}", s.status).to_lowercase())),
         Err(e) => return (false, Some(e.to_string())),
     }
+
     let Some(ip) = public_ip.and_then(|i| i.parse::<std::net::IpAddr>().ok()) else {
         return (false, Some("no public IP".into()));
     };
+
     // A real HTTP exchange, not just a TCP connect: the kernel of a frozen or
     // hung host still completes the handshake, but nothing answers.
     let exchange = async {
@@ -142,6 +148,7 @@ async fn probe(state: &AppState, server_id: &str, public_ip: Option<&str>) -> (b
         let n = s.read(&mut buf).await.map_err(|e| format!("port 80: {e}"))?;
         if buf[..n].starts_with(b"HTTP/") { Ok(()) } else { Err("port 80: no HTTP answer".to_owned()) }
     };
+
     match tokio::time::timeout(PROBE_TIMEOUT, exchange).await {
         Ok(Ok(())) => (true, None),
         Ok(Err(e)) => (false, Some(e)),
@@ -154,18 +161,22 @@ async fn check_cluster(state: &AppState, cluster: ClusterId) -> Result<(), Strin
     let Some((profile, mut status)) = super::ingress::load_profile(state, cluster).await.map_err(|e| e.message)? else {
         return Ok(());
     };
+
     let Some(ingress) = &profile.ingress else { return Ok(()) };
     let Some(dns) = &ingress.dns else { return Ok(()) };
     if !dns.auto_failover || ingress.mode == IngressMode::Standalone {
         return Ok(());
     }
+
     let Some(by) = status.get("applied_by").cloned().and_then(|v| serde_json::from_value::<AppliedBy>(v).ok()) else {
         return Ok(()); // never applied
     };
+
     let now = state.clock.now().0;
     let mut health = health_of(&status);
     health.retain(|id, _| ingress.edges.iter().any(|e| &e.server_id == id));
     let mut flipped = Vec::new();
+
     for e in &ingress.edges {
         let (ok, err) = probe(state, &e.server_id, e.public_ip.as_deref()).await;
         let h = health.entry(e.server_id.clone()).or_default();
@@ -173,10 +184,12 @@ async fn check_cluster(state: &AppState, cluster: ClusterId) -> Result<(), Strin
             flipped.push(json!({ "edge": e.server_id, "healthy": h.healthy, "error": err }));
         }
     }
+
     status["health"] = serde_json::to_value(&health).map_err(|e| e.to_string())?;
     let wanted = ingress.dns_addresses(|id| health.get(id).is_none_or(|h| h.healthy));
     let published: Vec<String> =
         serde_json::from_value(status.pointer("/dns/addresses").cloned().unwrap_or(Value::Null)).unwrap_or_default();
+
     if wanted != published {
         let result = publish(state, cluster, &profile, &status, &by).await;
         let ok = result.get("error").is_none()
@@ -193,33 +206,40 @@ async fn check_cluster(state: &AppState, cluster: ClusterId) -> Result<(), Strin
         .with_details(
             json!({ "from": published, "to": wanted, "changes": flipped, "on_behalf_of": by.principal.to_string() }),
         );
+
         if let Err(e) = state.audit.append(ev).await {
             tracing::error!(error = %e, "audit write failed");
         }
+
         if ok {
             tracing::info!(cluster = %cluster, from = ?published, to = ?wanted, "ingress DNS moved");
         } else {
             tracing::warn!(cluster = %cluster, "ingress DNS update failed; retrying next pass");
         }
     }
+
     super::ingress::save_status(state, cluster, &profile, status).await.map_err(|e| e.message)
 }
 
 /// Background loop.
 pub(crate) async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
     let mut tick = tokio::time::interval(TICK);
+
     loop {
         tokio::select! {
             _ = tick.tick() => {}
             _ = shutdown.changed() => break,
         }
         let Ok(all) = state.store.list_cluster_profiles().await else { continue };
+
         for rec in all {
             let wants = rec.profile.pointer("/ingress/dns/auto_failover").and_then(Value::as_bool).unwrap_or(false)
                 && rec.profile.pointer("/ingress/mode").and_then(Value::as_str) != Some("standalone");
+
             if !wants {
                 continue;
             }
+
             if let Err(e) = check_cluster(&state, rec.cluster_id).await {
                 tracing::warn!(cluster = %rec.cluster_id, error = %e, "ingress health check failed");
             }

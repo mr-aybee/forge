@@ -130,9 +130,11 @@ impl ObjectStoreRepository for Store {
             }
         }
         .map_err(db_err)?;
+
         if done.rows_affected() == 0 {
             return Err(DomainError::NotFound("object store or environment not found".into()));
         }
+
         Ok(())
     }
 
@@ -156,11 +158,13 @@ impl ObjectStoreRepository for Store {
             None => sqlx::query("SELECT * FROM object_stores ORDER BY name").fetch_all(self.pool()).await,
         }
         .map_err(db_err)?;
+
         rows.iter().map(store_row).collect()
     }
 
     async fn delete_object_store(&self, id: ObjectStoreId) -> DomainResult<()> {
         let mut tx = self.pool().begin().await.map_err(db_err)?;
+
         // Grants name the store by id: they go first, and with it (D-108).
         sqlx::query("DELETE FROM bucket_grants WHERE store_id = $1")
             .bind(id.to_string())
@@ -177,6 +181,7 @@ impl ObjectStoreRepository for Store {
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
+
         tx.commit().await.map_err(db_err)
     }
 

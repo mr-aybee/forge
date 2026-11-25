@@ -17,12 +17,16 @@ pub use features::{
     ProxyOptions, RedirectRule, RedirectTo, RouteRule, RuleKind, StaticRoot, valid_crypt_hash, valid_dir, valid_url,
 };
 
+/// Managed site configs on the edges.
 pub const SITES_DIR: &str = "/etc/nginx/forge/sites";
+/// Operator-edited custom config snippets on the edges.
 pub const CUSTOM_DIR: &str = "/etc/nginx/forge/custom";
+/// Webroot for ACME HTTP-01 challenges.
 pub const ACME_ROOT: &str = "/var/www/forge-acme";
 /// Uploaded certificates on the edges (root only, files 0600).
 pub const TLS_DIR: &str = "/etc/nginx/forge/tls";
 
+/// How requests are spread over upstreams.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Balance {
@@ -32,6 +36,7 @@ pub enum Balance {
     IpHash,
 }
 
+/// How an endpoint serves TLS.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Tls {
@@ -65,6 +70,7 @@ impl std::fmt::Debug for CertMaterial {
     }
 }
 
+/// One endpoint (Nginx site) as configured on its edges.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SiteSpec {
@@ -421,6 +427,7 @@ fn statements(text: &str) -> Result<Vec<Stmt>, CustomError> {
     fn unescape(raw: &[char]) -> String {
         let mut out = String::new();
         let mut i = 0;
+
         while i < raw.len() {
             if raw[i] == '\\' && i + 1 < raw.len() {
                 let mapped = match raw[i + 1] {
@@ -430,58 +437,75 @@ fn statements(text: &str) -> Result<Vec<Stmt>, CustomError> {
                     'n' => Some('\n'),
                     _ => None,
                 };
+
                 if let Some(c) = mapped {
                     out.push(c);
                     i += 2;
+
                     continue;
                 }
             }
+
             out.push(raw[i]);
             i += 1;
         }
+
         out
     }
+
     let chars: Vec<char> = text.chars().collect();
     let mut line_of = Vec::with_capacity(chars.len());
     let mut line = 1usize;
+
     for &c in &chars {
         line_of.push(line);
+
         if c == '\n' {
             line += 1;
         }
     }
+
     let at = |pos: usize| line_of.get(pos).copied().unwrap_or(line);
     let mut stmts: Vec<Stmt> = Vec::new();
     let mut words = 0usize; // words of the current statement
+
     // Open blocks (their directive names); `cur` names the current statement.
     let mut stack: Vec<String> = Vec::new();
     let mut cur = String::new();
     let (mut last_space, mut need_space, mut sharp, mut quoted) = (true, false, false, false);
     let (mut d_quoted, mut s_quoted, mut variable) = (false, false, false);
     let mut start = 0usize;
+
     for (pos, &ch) in chars.iter().enumerate() {
         if ch == '\n' && sharp {
             sharp = false;
         }
+
         if sharp {
             continue;
         }
+
         if quoted {
             quoted = false;
             continue;
         }
+
         let space = matches!(ch, ' ' | '\t' | '\r' | '\n');
+
         if need_space {
             if space {
                 last_space = true;
                 need_space = false;
+
                 continue;
             }
+
             match ch {
                 ';' => {
                     words = 0;
                     last_space = true;
                     need_space = false;
+
                     continue;
                 }
                 '{' => {
@@ -489,6 +513,7 @@ fn statements(text: &str) -> Result<Vec<Stmt>, CustomError> {
                     stack.push(std::mem::take(&mut cur));
                     last_space = true;
                     need_space = false;
+
                     continue;
                 }
                 ')' => {
@@ -498,29 +523,37 @@ fn statements(text: &str) -> Result<Vec<Stmt>, CustomError> {
                 _ => return Err(CustomError::at(at(pos), format!("unexpected `{ch}`"))),
             }
         }
+
         if last_space {
             start = pos;
+
             if space {
                 continue;
             }
+
             match ch {
                 ';' | '{' => {
                     if words == 0 {
                         return Err(CustomError::at(at(pos), format!("unexpected `{ch}`")));
                     }
+
                     words = 0;
+
                     if ch == '{' {
                         stack.push(std::mem::take(&mut cur));
                     }
+
                     continue;
                 }
                 '}' => {
                     if words != 0 {
                         return Err(CustomError::at(at(pos), "unexpected `}` (missing `;`?)"));
                     }
+
                     if stack.pop().is_none() {
                         return Err(CustomError::at(at(pos), "unbalanced `}`"));
                     }
+
                     continue;
                 }
                 '#' => {
@@ -530,23 +563,27 @@ fn statements(text: &str) -> Result<Vec<Stmt>, CustomError> {
                 '\\' => {
                     quoted = true;
                     last_space = false;
+
                     continue;
                 }
                 '"' => {
                     start = pos + 1;
                     d_quoted = true;
                     last_space = false;
+
                     continue;
                 }
                 '\'' => {
                     start = pos + 1;
                     s_quoted = true;
                     last_space = false;
+
                     continue;
                 }
                 '$' => {
                     variable = true;
                     last_space = false;
+
                     continue;
                 }
                 _ => {
@@ -555,20 +592,26 @@ fn statements(text: &str) -> Result<Vec<Stmt>, CustomError> {
                 }
             }
         }
+
         // Inside a word.
         if ch == '{' && variable {
             continue;
         }
+
         variable = false;
+
         if ch == '\\' {
             quoted = true;
             continue;
         }
+
         if ch == '$' {
             variable = true;
             continue;
         }
+
         let mut found = false;
+
         if d_quoted {
             if ch == '"' {
                 d_quoted = false;
@@ -585,15 +628,19 @@ fn statements(text: &str) -> Result<Vec<Stmt>, CustomError> {
             last_space = true;
             found = true;
         }
+
         if found {
             let word = unescape(&chars[start..pos]);
+
             if words == 0 {
                 stmts.push(Stmt { words: vec![word.clone()], parent: stack.last().cloned(), line: at(start) });
                 cur = word;
             } else if let Some(s) = stmts.last_mut() {
                 s.words.push(word);
             }
+
             words += 1;
+
             if ch == ';' {
                 words = 0;
             } else if ch == '{' {
@@ -602,12 +649,15 @@ fn statements(text: &str) -> Result<Vec<Stmt>, CustomError> {
             }
         }
     }
+
     if !last_space || need_space || words != 0 || d_quoted || s_quoted {
         return Err(CustomError::at(line, "the file ends in the middle of a directive (missing `;`?)"));
     }
+
     if !stack.is_empty() {
         return Err(CustomError::at(line, "unbalanced `{`"));
     }
+
     Ok(stmts)
 }
 
@@ -625,12 +675,15 @@ fn check_custom(text: &str, site: Option<&SiteSpec>) -> Result<(), CustomError> 
     if text.len() > 64 * 1024 || text.contains('\0') {
         return Err(CustomError::at(1, "the custom configuration is too large (64 KiB at most)"));
     }
+
     if let Some(i) = text.to_ascii_lowercase().find("unix:") {
         let line = text[..i].matches('\n').count() + 1;
         return Err(CustomError::at(line, "Unix sockets are not allowed"));
     }
+
     for s in statements(text)? {
         let name = s.words.first().cloned().unwrap_or_default();
+
         let ok = if s.parent.as_deref().is_some_and(|p| DATA_BLOCKS.contains(&p)) {
             name != "include"
         } else {
@@ -638,6 +691,7 @@ fn check_custom(text: &str, site: Option<&SiteSpec>) -> Result<(), CustomError> 
                 || ALLOWED_EXTRA.contains(&name.as_str())
                 || site.is_some_and(|spec| spec.managed_file_ok(&s.words))
         };
+
         if !ok {
             return Err(CustomError {
                 line: s.line,
@@ -646,6 +700,7 @@ fn check_custom(text: &str, site: Option<&SiteSpec>) -> Result<(), CustomError> 
             });
         }
     }
+
     Ok(())
 }
 
@@ -666,6 +721,7 @@ pub(crate) fn valid_domain(d: &str) -> bool {
 fn valid_upstream(u: &str) -> bool {
     let Some((host, port)) = u.rsplit_once(':') else { return false };
     let host = host.trim_start_matches('[').trim_end_matches(']');
+
     port.parse::<u16>().is_ok_and(|p| p > 0)
         && !host.is_empty()
         && host.len() <= 253
@@ -681,18 +737,22 @@ fn upstream_block(
     balance: Balance,
 ) -> String {
     let mut servers = String::new();
+
     for u in upstreams {
         let weight = weights.get(u).filter(|w| **w != 100).map(|w| format!(" weight={w}")).unwrap_or_default();
         servers.push_str(&format!("    server {u}{weight} max_fails=3 fail_timeout=10s;\n"));
     }
+
     for u in standby {
         servers.push_str(&format!("    server {u} backup;\n"));
     }
+
     let balance = match balance {
         Balance::RoundRobin => "",
         Balance::LeastConn => "    least_conn;\n",
         Balance::IpHash => "    ip_hash;\n",
     };
+
     format!("upstream {name} {{\n{balance}{servers}    keepalive 16;\n}}\n\n")
 }
 
@@ -708,19 +768,24 @@ struct Route<'a> {
 }
 
 impl SiteSpec {
+    /// Checks the spec before it is rendered.
     pub fn validate(&self) -> Result<(), String> {
         if !crate::apps::valid_slug(&self.name, 60) {
             return Err("site name: lowercase letters, digits and dashes".into());
         }
+
         if self.domains.is_empty() || self.domains.len() > 50 {
             return Err("between 1 and 50 domains".into());
         }
+
         if let Some(d) = self.domains.iter().find(|d| !valid_domain(d)) {
             return Err(format!("invalid domain `{d}`"));
         }
+
         if self.http_port == 0 || self.https_port == 0 || self.http_port == self.https_port {
             return Err("HTTP and HTTPS ports: two different ports 1–65535".into());
         }
+
         features::check_kind(
             self.kind,
             &self.upstreams,
@@ -728,45 +793,60 @@ impl SiteSpec {
             self.redirect.as_ref(),
             self.static_root.as_ref(),
         )?;
+
         if !self.kind.proxies() && (!self.upstreams.is_empty() || !self.standby.is_empty()) {
             return Err("a redirect or static site has no upstreams".into());
         }
+
         self.proxy.validate_default()?;
+
         for (u, w) in &self.weights {
             if !self.upstreams.contains(u) {
                 return Err(format!("weight for `{u}`, which is not an active upstream"));
             }
+
             if *w == 0 || *w > 1000 {
                 return Err(format!("the weight of `{u}` must be 1–1000"));
             }
         }
+
         if self.rules.len() > 50 {
             return Err("at most 50 path rules".into());
         }
+
         let mut paths = std::collections::BTreeSet::new();
+
         for r in &self.rules {
             r.validate()?;
+
             if !paths.insert((r.match_kind as u8, r.path.as_str())) {
                 return Err(format!("two rules for `{}`", r.path));
             }
         }
+
         if self.redirects.len() > 100 {
             return Err("at most 100 redirects".into());
         }
+
         for r in &self.redirects {
             r.validate(&self.domains)?;
+
             if r.is_path() && !paths.insert((MatchKind::Exact as u8, r.from.as_str())) {
                 return Err(format!("`{}` is both a redirect and an exact rule", r.from));
             }
         }
+
         features::validate_features(self.cache.as_ref(), self.gzip.as_ref(), &self.access)?;
+
         if self.tls == Tls::Acme {
             if self.domains.iter().any(|d| d.starts_with("*.")) {
                 return Err("wildcard domains need DNS-01; use TLS off or explicit names".into());
             }
+
             if self.http_port != 80 {
                 return Err("Let's Encrypt validates on port 80: keep the HTTP port at 80".into());
             }
+
             if !self.acme_email.contains('@')
                 || self.acme_email.len() > 254
                 || self.acme_email.contains([' ', '\n', ';', '\'', '"'])
@@ -774,12 +854,15 @@ impl SiteSpec {
                 return Err("a contact email is required for Let's Encrypt".into());
             }
         }
+
         if self.tls == Tls::Uploaded && self.cert_id.is_empty() {
             return Err("choose an uploaded certificate".into());
         }
+
         if self.tls != Tls::Uploaded && self.material.is_some() {
             return Err("certificate material without an uploaded certificate".into());
         }
+
         if let Some(m) = &self.material
             && (!m.chain_pem.contains("BEGIN CERTIFICATE")
                 || !m.key_pem.contains("PRIVATE KEY")
@@ -788,18 +871,23 @@ impl SiteSpec {
         {
             return Err("invalid certificate material".into());
         }
+
         if self.acme_peers.len() > 16 || self.acme_peers.iter().any(|p| !valid_upstream(p) && !valid_domain(p)) {
             return Err("invalid ACME peers".into());
         }
+
         if self.max_body_mb == 0 || self.max_body_mb > 10_240 {
             return Err("max body size: 1–10240 MB".into());
         }
+
         if self.rate_burst > 100_000 {
             return Err("burst: 0–100000 requests".into());
         }
+
         if !matches!(self.access_log.as_str(), "" | "combined" | "json" | "off") {
             return Err("access_log must be combined, json or off".into());
         }
+
         self.check_custom().map_err(|e| format!("custom configuration, {e}"))
     }
 
@@ -814,6 +902,7 @@ impl SiteSpec {
     /// `error_log` at its log files.
     fn managed_file_ok(&self, words: &[String]) -> bool {
         let up = self.upstream_name();
+
         match words {
             [d, path] if d == "auth_basic_user_file" => *path == self.htpasswd_path(),
             [d, path] if d == "access_log" => *path == self.access_log_path(),
@@ -836,9 +925,11 @@ impl SiteSpec {
     fn log_formats(&self) -> String {
         let up = self.upstream_name();
         let mut o = format!("log_format {up}_traffic {};\n", crate::ingress::TRAFFIC_LOG_FORMAT);
+
         if self.access_log == "json" {
             o.push_str(&format!("log_format {up}_json escape=json {};\n", crate::ingress::JSON_LOG_FORMAT));
         }
+
         o
     }
 
@@ -850,20 +941,25 @@ impl SiteSpec {
         let up = self.upstream_name();
         let mut o = format!("    access_log {} {up}_traffic;\n", crate::ingress::TRAFFIC_LOG);
         let own = self.access_log_path();
+
         match self.access_log.as_str() {
             "off" => {}
             "json" => o.push_str(&format!("    access_log {own} {up}_json;\n")),
             _ => o.push_str(&format!("    access_log {own} combined;\n")),
         }
+
         o.push_str(&format!("    error_log {};\n", self.error_log_path()));
+
         o
     }
 
+    /// The managed site config file.
     #[must_use]
     pub fn site_path(&self) -> String {
         format!("{SITES_DIR}/{}.conf", self.name)
     }
 
+    /// The custom config snippet file.
     #[must_use]
     pub fn custom_path(&self) -> String {
         format!("{CUSTOM_DIR}/{}.conf", self.name)
@@ -881,16 +977,19 @@ impl SiteSpec {
         format!("{CACHE_DIR}/{}", self.name)
     }
 
+    /// The endpoint's access log.
     #[must_use]
     pub fn access_log_path(&self) -> String {
         format!("{LOG_DIR}/{}.access.log", self.name)
     }
 
+    /// The endpoint's error log.
     #[must_use]
     pub fn error_log_path(&self) -> String {
         format!("{LOG_DIR}/{}.error.log", self.name)
     }
 
+    /// The Let's Encrypt directory of the endpoint's first domain.
     #[must_use]
     pub fn cert_dir(&self) -> String {
         format!("/etc/letsencrypt/live/{}", self.domains[0].trim_start_matches("*."))
@@ -927,6 +1026,7 @@ impl SiteSpec {
     /// One `location`, by the route's kind.
     fn location(&self, r: &Route<'_>) -> String {
         let up = self.upstream_name();
+
         match r.kind {
             RuleKind::Redirect => match r.redirect {
                 Some(to) => format!("    {} {{\n        {}\n    }}\n", r.open, features::redirect_return(to)),
@@ -951,33 +1051,40 @@ impl SiteSpec {
                 } else {
                     String::new()
                 };
+
                 let limit = if self.rate_limit > 0 {
                     let burst = if self.rate_burst > 0 { self.rate_burst } else { self.rate_limit * 2 };
                     format!("        limit_req zone={up}_rl burst={burst} nodelay;\n")
                 } else {
                     String::new()
                 };
+
                 let o = r.proxy;
                 let host = if o.preserve_host { "$host" } else { "$proxy_host" };
                 let strip = if o.strip_prefix { "/" } else { "" };
                 let mut extra = String::new();
+
                 if !o.buffering {
                     extra.push_str("        proxy_buffering off;\n");
                 }
+
                 if let Some(c) = &self.cache {
                     extra.push_str(&format!(
                         "        proxy_cache {up}_cache;\n        proxy_cache_key \"{}\";\n        proxy_cache_valid 200 301 302 {}m;\n",
                         c.key, c.ttl_minutes
                     ));
+
                     if c.ignore_headers {
                         extra.push_str("        proxy_ignore_headers Cache-Control Expires Set-Cookie;\n");
                     }
+
                     if !c.extensions.is_empty() {
                         extra.push_str(&format!(
                             "        proxy_no_cache ${up}_nocache;\n        proxy_cache_bypass ${up}_nocache;\n"
                         ));
                     }
                 }
+
                 format!(
                     "    {open} {{\n{limit}        proxy_pass http://{upstream}{strip};\n        proxy_http_version 1.1;\n{ws}\
                      \x20       proxy_set_header Host {host};\n        proxy_set_header X-Real-IP $remote_addr;\n\
@@ -999,9 +1106,11 @@ impl SiteSpec {
     fn locations(&self) -> String {
         let up = self.upstream_name();
         let mut o = String::new();
+
         for r in self.redirects.iter().filter(|r| r.is_path()) {
             o.push_str(&format!("    location = {} {{\n        {}\n    }}\n", r.from, r.ret()));
         }
+
         for (i, r) in self.rules.iter().enumerate() {
             o.push_str(&self.location(&Route {
                 open: r.location(),
@@ -1013,6 +1122,7 @@ impl SiteSpec {
                 static_root: r.static_root.as_ref(),
             }));
         }
+
         o.push_str(&self.location(&Route {
             open: "location /".into(),
             kind: self.kind,
@@ -1022,6 +1132,7 @@ impl SiteSpec {
             redirect: self.redirect.as_ref(),
             static_root: self.static_root.as_ref(),
         }));
+
         o
     }
 
@@ -1029,9 +1140,11 @@ impl SiteSpec {
     fn http_level(&self) -> String {
         let up = self.upstream_name();
         let mut o = String::new();
+
         if self.rate_limit > 0 {
             o.push_str(&format!("limit_req_zone $binary_remote_addr zone={up}_rl:10m rate={}r/s;\n", self.rate_limit));
         }
+
         if let Some(c) = &self.cache {
             o.push_str(&format!(
                 "proxy_cache_path {} levels=1:2 keys_zone={up}_cache:10m max_size={}m inactive={}m use_temp_path=off;\n",
@@ -1039,6 +1152,7 @@ impl SiteSpec {
                 c.max_size_mb,
                 c.ttl_minutes.max(10),
             ));
+
             if !c.extensions.is_empty() {
                 o.push_str(&format!(
                     "map $uri ${up}_nocache {{\n    default 1;\n    \"~*\\.{}$\" 0;\n}}\n",
@@ -1046,17 +1160,20 @@ impl SiteSpec {
                 ));
             }
         }
+
         if let Some(h) = &self.access.hotlink {
             o.push_str(&format!(
                 "map $uri ${up}_hotlink {{\n    default 0;\n    \"~*\\.{}$\" 1;\n}}\n",
                 features::ext_group(&h.extensions)
             ));
         }
+
         if self.kind.proxies() {
             o.push_str(&upstream_block(&up, &self.upstreams, &self.standby, &self.weights, self.balance));
         } else {
             o.push('\n');
         }
+
         for (i, r) in self.rules.iter().enumerate().filter(|(_, r)| r.kind.proxies()) {
             o.push_str(&upstream_block(
                 &format!("{up}_r{}", i + 1),
@@ -1066,6 +1183,7 @@ impl SiteSpec {
                 r.balance,
             ));
         }
+
         o
     }
 
@@ -1075,15 +1193,19 @@ impl SiteSpec {
         let up = self.upstream_name();
         let mut o = String::new();
         let a = &self.access;
+
         for d in &a.deny {
             o.push_str(&format!("    deny {d};\n"));
         }
+
         for d in &a.allow {
             o.push_str(&format!("    allow {d};\n"));
         }
+
         if !a.allow.is_empty() {
             o.push_str("    deny all;\n");
         }
+
         if let Some(b) = &a.basic_auth {
             o.push_str(&format!(
                 "    auth_basic \"{}\";\n    auth_basic_user_file {};\n",
@@ -1091,6 +1213,7 @@ impl SiteSpec {
                 self.htpasswd_path()
             ));
         }
+
         if let Some(h) = &a.hotlink {
             let refs: String = h.referers.iter().map(|r| format!(" {r}")).collect();
             o.push_str(&format!(
@@ -1098,6 +1221,7 @@ impl SiteSpec {
                  \x20   if (${up}_hl = 11) {{\n        return 403;\n    }}\n"
             ));
         }
+
         if let Some(g) = &self.gzip {
             o.push_str(&format!(
                 "    gzip on;\n    gzip_comp_level {};\n    gzip_types {};\n    gzip_proxied any;\n    gzip_vary on;\n",
@@ -1105,9 +1229,11 @@ impl SiteSpec {
                 if g.types.is_empty() { "text/plain".into() } else { g.types.join(" ") },
             ));
         }
+
         for r in self.redirects.iter().filter(|r| !r.is_path()) {
             o.push_str(&format!("    if ($host = {}) {{\n        {}\n    }}\n", r.from, r.ret()));
         }
+
         o
     }
 
@@ -1115,6 +1241,7 @@ impl SiteSpec {
     fn acme_locations(&self) -> String {
         let up = self.upstream_name();
         let open = if self.access.restricts() { "        allow all;\n        auth_basic off;\n" } else { "" };
+
         if self.tls == Tls::Acme && !self.acme_peers.is_empty() {
             // Not here: ask the peers once (the hop header stops loops); a
             // peer answering 404 passes to the next one.
@@ -1143,12 +1270,14 @@ impl SiteSpec {
             self.custom_path()
         );
         let acme = self.acme_locations();
+
         let http_body = if with_tls && self.force_https {
             let port = if self.https_port == 443 { String::new() } else { format!(":{}", self.https_port) };
             format!("    location / {{\n        return 301 https://$host{port}$request_uri;\n    }}\n")
         } else {
             format!("{common}{}", self.locations())
         };
+
         let mut out = format!(
             "# Managed by Orbyn Forge — endpoint `{name}`. Forge rewrites this file on every apply; put your own directives in {custom}.\n\
              map $http_upgrade ${up}_upgrade {{\n    default upgrade;\n    ''      close;\n}}\n",
@@ -1158,6 +1287,7 @@ impl SiteSpec {
         out.push_str(&self.log_formats());
         let logs = self.log_lines();
         out.push_str(&self.http_level());
+
         if self.tls == Tls::Acme && !self.acme_peers.is_empty() {
             let peers: String = self
                 .acme_peers
@@ -1166,15 +1296,18 @@ impl SiteSpec {
                 .collect();
             out.push_str(&format!("upstream {up}_acme {{\n{peers}}}\n\n"));
         }
+
         let hp = self.http_port;
         out.push_str(&format!(
             "server {{\n    listen {hp};\n    listen [::]:{hp};\n    server_name {names};\n{logs}{acme}{http_body}}}\n"
         ));
+
         if with_tls {
             let (crt, key) = self.cert_files();
             let sp = self.https_port;
             let hsts =
                 if self.hsts { "    add_header Strict-Transport-Security \"max-age=31536000\" always;\n" } else { "" };
+
             // HTTP/2 uses the `listen ... ssl http2` form, not `http2 on;`:
             // the App Store installs the distro package (1.18 on Debian 11 /
             // Ubuntu 22.04, 1.20 on RHEL 9, 1.22 on Debian 12, 1.24 on
@@ -1189,6 +1322,7 @@ impl SiteSpec {
                 loc = self.locations(),
             ));
         }
+
         out
     }
 
@@ -1209,6 +1343,7 @@ impl ProxyOptions {
         if self.strip_prefix {
             return Err("the default rule has no prefix to strip".into());
         }
+
         self.validate()
     }
 }
@@ -1281,6 +1416,7 @@ mod tests {
         assert!(s.validate().is_err(), "a weight for an upstream that is not there");
         s.weights = std::collections::BTreeMap::from([("10.0.0.11:21000".into(), 0)]);
         assert!(s.validate().is_err());
+
         // An agent that does not know weights still reads a site without them.
         assert!(!serde_json::to_string(&site()).unwrap().contains("weights"));
     }
@@ -1348,17 +1484,21 @@ server {\n    listen 80;\n    listen [::]:80;\n    server_name shop.example.com 
     fn traffic_log_in_every_server_block_and_never_the_profile_format() {
         let s = SiteSpec { tls: Tls::Acme, acme_email: "ops@example.com".into(), ..site() };
         let c = s.render(true);
+
         // One definition, used by the HTTP and the HTTPS server.
         assert_eq!(c.matches("log_format forge_shop_traffic ").count(), 1);
         assert_eq!(c.matches("access_log /var/log/nginx/forge-traffic.log forge_shop_traffic;").count(), 2);
+
         // The profile's global config owns `forge_traffic`: never redefined here.
         assert!(!c.contains("log_format forge_traffic "));
+
         // Every log_format name in the file is unique (nginx -t would refuse).
         let names: Vec<&str> =
             c.lines().filter_map(|l| l.strip_prefix("log_format ")).filter_map(|l| l.split(' ').next()).collect();
         let mut dedup = names.clone();
         dedup.dedup();
         assert_eq!(names, dedup);
+
         // Formats sit at http level (before the first server block).
         assert!(c.find("log_format").unwrap() < c.find("server {").unwrap());
     }
@@ -1375,6 +1515,7 @@ server {\n    listen 80;\n    listen [::]:80;\n    server_name shop.example.com 
         assert!(!c.contains("/var/log/nginx/forge/shop.access.log"));
         assert!(c.contains("forge-traffic.log forge_shop_traffic;"), "the traffic log stays on");
         assert!(SiteSpec { access_log: "x; evil".into(), ..site() }.validate().is_err());
+
         // Old stored specs (no field) still deserialize; empty is not serialized.
         let v = serde_json::to_value(site()).unwrap();
         assert!(v.get("access_log").is_none());
@@ -1423,6 +1564,7 @@ server {\n    listen 80;\n    listen [::]:80;\n    server_name shop.example.com 
         ] {
             assert!(check_custom_block(bad).is_err(), "{bad}");
         }
+
         for ok in [
             "",
             "# just a comment",
@@ -1462,8 +1604,10 @@ server {\n    listen 80;\n    listen [::]:80;\n    server_name shop.example.com 
                 b.insert(k.clone(), x.clone());
             }
         }
+
         let s: SiteSpec = serde_json::from_value(base).unwrap();
         s.validate().unwrap_or_else(|e| panic!("{e}"));
+
         s
     }
 
@@ -1478,6 +1622,7 @@ server {\n    listen 80;\n    listen [::]:80;\n    server_name shop.example.com 
         let s = spec(serde_json::json!({ "upstreams": ["10.0.0.11:8000"] }));
         assert_eq!(s.kind, RuleKind::Proxy);
         let v = serde_json::to_value(&s).unwrap();
+
         for k in ["kind", "rules", "cache", "gzip", "access", "redirects", "http_port", "https_port", "hsts", "proxy"] {
             assert!(v.get(k).is_none(), "{k} serialized");
         }
@@ -1494,11 +1639,13 @@ server {\n    listen 80;\n    listen [::]:80;\n    server_name shop.example.com 
             serde_json::json!({ "kind": "redirect", "redirect": { "to": "https://example.com/x", "keep_path": false } }),
         );
         assert!(no_path.render(false).contains("return 301 https://example.com/x;"));
+
         for bad in ["javascript:alert(1)", "https://x.com/$host", "https://x.com/a;b"] {
             let mut s = s.clone();
             s.redirect = Some(RedirectTo { to: bad.into(), code: 301, keep_path: true });
             assert!(s.validate().is_err(), "{bad}");
         }
+
         let mut s2 = s.clone();
         s2.redirect = Some(RedirectTo { to: "https://example.com".into(), code: 200, keep_path: true });
         assert!(s2.validate().is_err(), "code");
@@ -1546,9 +1693,11 @@ server {\n    listen 80;\n    listen [::]:80;\n    server_name shop.example.com 
             c.contains("    location = /health {\n        return 301 https://status.example.com$request_uri;\n    }\n")
         );
         assert!(c.contains("    location ~ \"\\.(png|jpg)$\" {\n        root /srv/img;\n"));
+
         // Rules come before the default route.
         assert!(c.find("location /api/").unwrap() < c.find("location / {").unwrap());
         assert_eq!(s.static_roots(), vec!["/srv/img"]);
+
         // A rule for `/`, a strip on an exact rule and duplicate rules are refused.
         let mut bad = s.clone();
         bad.rules[0].path = "/".into();
@@ -1609,11 +1758,13 @@ server {\n    listen 80;\n    listen [::]:80;\n    server_name shop.example.com 
         assert!(c.contains("map $uri $forge_shop_hotlink {\n    default 0;\n    \"~*\\.(png|jpg)$\" 1;\n}\n"));
         assert!(c.contains("    valid_referers none blocked server_names partner.example.org;\n    set $forge_shop_hl \"${forge_shop_hotlink}${invalid_referer}\";\n    if ($forge_shop_hl = 11) {\n        return 403;\n    }\n"));
         assert!(c.contains("limit_req zone=forge_shop_rl burst=20 nodelay;"));
+
         // Let's Encrypt still reaches the challenge.
         assert!(
             c.contains("    location ^~ /.well-known/acme-challenge/ {\n        allow all;\n        auth_basic off;\n")
         );
         assert_eq!(s.access.htpasswd().unwrap(), format!("ops:{}\n", hash()));
+
         for bad in [
             serde_json::json!({ "allow": ["all"] }),
             serde_json::json!({ "deny": ["10.0.0.0/40"] }),
@@ -1676,6 +1827,7 @@ server {\n    listen 80;\n    listen [::]:80;\n    server_name shop.example.com 
     fn custom_config_may_point_only_at_its_own_managed_files() {
         let s = spec(serde_json::json!({ "upstreams": ["10.0.0.11:8000"] }));
         let with = |custom: &str| SiteSpec { custom: custom.into(), ..s.clone() };
+
         for ok in [
             "auth_basic \"x\";\nauth_basic_user_file /etc/nginx/forge/htpasswd/shop;",
             "location /x/ { access_log /var/log/nginx/forge/shop.access.log combined; }",
@@ -1684,6 +1836,7 @@ server {\n    listen 80;\n    listen [::]:80;\n    server_name shop.example.com 
         ] {
             with(ok).validate().unwrap_or_else(|e| panic!("{ok}: {e}"));
         }
+
         for bad in [
             "auth_basic_user_file /etc/shadow;",
             "auth_basic_user_file /etc/nginx/forge/htpasswd/other;",
@@ -1694,6 +1847,7 @@ server {\n    listen 80;\n    listen [::]:80;\n    server_name shop.example.com 
         ] {
             assert!(with(bad).validate().is_err(), "{bad}");
         }
+
         // The profile's global block knows no endpoint files.
         assert!(check_custom_block("auth_basic_user_file /etc/nginx/forge/htpasswd/shop;").is_err());
     }

@@ -26,5 +26,6 @@ pub async fn capabilities(
 ) -> ApiResult<Json<MyCapabilities>> {
     let access = ConsoleAccess { bindings: &state.store, policy: &state.policy, authz: state.authz.as_ref() };
     let capabilities = access.for_user(caller.session.user.id, ws).await?;
+
     Ok(Json(MyCapabilities { capabilities }))
 }

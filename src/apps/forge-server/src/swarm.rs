@@ -62,6 +62,7 @@ pub struct Quorum {
 #[must_use]
 pub fn quorum(managers: usize) -> Quorum {
     let tolerates = managers.saturating_sub(1) / 2;
+
     let status = if managers <= 1 {
         "single"
     } else if managers.is_multiple_of(2) {
@@ -69,6 +70,7 @@ pub fn quorum(managers: usize) -> Quorum {
     } else {
         "ok"
     };
+
     Quorum { managers, tolerates, status }
 }
 
@@ -113,6 +115,7 @@ impl SwarmService {
         if c.mode != ClusterMode::Swarm {
             return Err(invalid("this cluster is not a Docker Swarm cluster"));
         }
+
         Ok(c)
     }
 
@@ -125,14 +128,17 @@ impl SwarmService {
         {
             return nodes.clone();
         }
+
         let fresh = match self.on_manager(cluster, principal, &SwarmOp::Nodes {}).await {
             Ok(v) => serde_json::from_value(v).map_err(|e| e.to_string()),
             Err(e) => Err(e.to_string()),
         };
+
         if let Ok(mut cache) = self.node_cache.lock() {
             cache.retain(|_, (at, _)| at.elapsed() < NODE_CACHE);
             cache.insert(cluster, (std::time::Instant::now(), fresh.clone()));
         }
+
         fresh
     }
 
@@ -140,6 +146,7 @@ impl SwarmService {
     pub async fn swarm_of_environment(&self, env: EnvironmentId) -> DomainResult<Option<ClusterId>> {
         let Some(cluster) = self.tenancy.get_environment(env).await?.cluster_id else { return Ok(None) };
         let c = self.clusters.get_cluster(cluster).await?;
+
         Ok((c.mode == ClusterMode::Swarm).then_some(c.id))
     }
 
@@ -148,6 +155,7 @@ impl SwarmService {
         if runtime != "container" && self.swarm_of_environment(env).await?.is_some() {
             return Err(invalid("this environment is in a Docker Swarm cluster, which runs container services only"));
         }
+
         Ok(())
     }
 
@@ -158,11 +166,14 @@ impl SwarmService {
         if sources.is_empty() {
             return Ok(Vec::new());
         }
+
         let members = self.swarms.list_members(cluster).await?;
         let mut per_node = Vec::new();
+
         for m in &members {
             per_node.push(crate::stacks::bind_roots(self.files.as_ref(), m.server_id).await);
         }
+
         Ok(sources
             .iter()
             .filter(|src| {
@@ -218,6 +229,7 @@ impl SwarmService {
     pub async fn view(&self, cluster: ClusterId, principal: &str) -> DomainResult<SwarmView> {
         let c = self.clusters.get_cluster(cluster).await?;
         let mut members = Vec::new();
+
         for m in self.swarms.list_members(cluster).await? {
             let hostname = match self.servers.get_server(m.server_id).await {
                 Ok(s) => s.display_name.unwrap_or(s.hostname),
@@ -226,12 +238,15 @@ impl SwarmService {
                 Err(DomainError::NotFound(_)) => String::new(),
                 Err(e) => return Err(e),
             };
+
             members.push(MemberView { member: m, hostname });
         }
+
         let managers = members
             .iter()
             .filter(|m| m.member.role == MemberRole::Manager && m.member.state == MemberState::Joined)
             .count();
+
         let (nodes, nodes_error) = if c.mode == ClusterMode::Swarm && managers > 0 {
             match self.live_nodes(cluster, principal).await {
                 Ok(n) => (Some(n), None),
@@ -240,6 +255,7 @@ impl SwarmService {
         } else {
             (None, None)
         };
+
         Ok(SwarmView {
             cluster_id: cluster,
             mode: c.mode,
@@ -261,6 +277,7 @@ impl SwarmService {
                 "another node is joining or leaving the swarm; try again when it is done".into(),
             ));
         }
+
         Ok(all)
     }
 
@@ -280,9 +297,11 @@ impl SwarmService {
         if s.cluster_id != Some(cluster) {
             return Err(invalid("the node is not in this cluster; assign it to the cluster first"));
         }
+
         if s.os != "linux" {
             return Err(invalid("Docker Swarm nodes must run Linux"));
         }
+
         if let Some(m) = self.swarms.get_member(server).await?
             && m.state != MemberState::Failed
         {
@@ -295,6 +314,7 @@ impl SwarmService {
                 }
             )));
         }
+
         self.one_change_at_a_time(cluster, server).await?;
         let claim = ClusterSwarm {
             cluster_id: cluster,
@@ -306,6 +326,7 @@ impl SwarmService {
             founder: Some(server),
             updated_at: self.clock.now(),
         };
+
         let founding = if self.swarms.claim_swarm(&claim).await? {
             true
         } else {
@@ -320,12 +341,15 @@ impl SwarmService {
                 _ => false,
             }
         };
+
         if founding && role != MemberRole::Manager {
             if self.swarms.get_swarm(cluster).await?.is_some_and(|c| c.pending() && c.founder == Some(server)) {
                 self.swarms.delete_swarm(cluster).await?;
             }
+
             return Err(invalid("the first node of a swarm must be a manager"));
         }
+
         self.swarms
             .put_member(&SwarmMember {
                 server_id: server,
@@ -351,9 +375,11 @@ impl SwarmService {
         if matches!(m.state, MemberState::Leaving | MemberState::Joining) {
             return Err(DomainError::Conflict(format!("the node is already {}", m.state.as_str())));
         }
+
         if force && m.state != MemberState::Failed {
             return Err(invalid("force is only for a node whose join or leave failed; leave it normally"));
         }
+
         let all = self.one_change_at_a_time(cluster, server).await?;
         let other_managers = all
             .iter()
@@ -365,6 +391,7 @@ impl SwarmService {
                 "this is the last manager: promote another node first, or remove the workers".into(),
             ));
         }
+
         Ok(m)
     }
 
@@ -380,13 +407,16 @@ impl SwarmService {
         if swarm.get("mode").and_then(serde_json::Value::as_str) == Some("global") {
             return Err(invalid("a global service runs one task per node and cannot be scaled"));
         }
+
         match swarm.as_object_mut() {
             Some(o) => {
                 o.insert("replicas".into(), replicas.into());
             }
             None => *swarm = serde_json::json!({ "replicas": replicas }),
         }
+
         app.updated_at = self.clock.now();
+
         self.services.put_service(&app).await
     }
 
@@ -404,6 +434,7 @@ impl SwarmService {
             .await?
             .filter(|m| m.cluster_id == cluster && m.state == MemberState::Joined && !m.node_id.is_empty())
             .ok_or_else(|| DomainError::NotFound("the node is not in this swarm".into()))?;
+
         if change.role == Some(MemberRole::Worker) && m.role == MemberRole::Manager {
             let managers = self
                 .swarms
@@ -412,10 +443,12 @@ impl SwarmService {
                 .iter()
                 .filter(|x| x.role == MemberRole::Manager && x.state == MemberState::Joined)
                 .count();
+
             if managers <= 1 {
                 return Err(DomainError::Conflict("the swarm needs at least one manager".into()));
             }
         }
+
         let op = SwarmOp::NodeUpdate {
             node_id: m.node_id.clone(),
             role: change.role.map(|r| match r {
@@ -426,20 +459,25 @@ impl SwarmService {
             labels: change.labels,
         };
         op.validate().map_err(invalid)?;
+
         // A demoted manager answers no more; use another manager when there is one.
         let node: SwarmNode =
             serde_json::from_value(self.on_manager_except(cluster, principal, &op, Some(server)).await?)
                 .map_err(DomainError::internal)?;
+
         if let Some(r) = change.role {
             m.role = r;
+
             if r == MemberRole::Worker {
                 m.manager_addr.clear();
             } else if m.manager_addr.is_empty() && !node.addr.is_empty() {
                 m.manager_addr = format!("{}:{}", node.addr, forge_catalog::swarm::DEFAULT_PORT);
             }
+
             m.updated_at = self.clock.now();
             self.swarms.put_member(&m).await?;
         }
+
         Ok(node)
     }
 
@@ -458,6 +496,7 @@ impl SwarmService {
         op.validate().map_err(invalid)?;
         let tokens: JoinTokens =
             serde_json::from_value(self.on_manager(cluster, principal, &op).await?).map_err(DomainError::internal)?;
+
         // Not atomic: the manager has rotated already. If storing fails, the
         // current tokens are read again and stored, so Forge never keeps the
         // old (now invalid) ones; if that fails too, the error says so.
@@ -468,6 +507,7 @@ impl SwarmService {
                     .map_err(DomainError::internal)?;
             self.store_tokens(&mut s, &current).await?;
         }
+
         Ok(())
     }
 
@@ -475,6 +515,7 @@ impl SwarmService {
         let raw = serde_json::to_vec(tokens).map_err(DomainError::internal)?;
         s.tokens_sealed = Some(self.envelope.seal(&raw, &tokens_aad(s.cluster_id)).map_err(DomainError::internal)?);
         s.updated_at = self.clock.now();
+
         self.swarms.put_swarm(s).await
     }
 
@@ -498,10 +539,13 @@ impl SwarmService {
             .into_iter()
             .filter(|m| m.role == MemberRole::Manager && m.state == MemberState::Joined)
             .collect();
+
         if managers.len() > 1 {
             managers.retain(|m| Some(m.server_id) != except);
         }
+
         let mut last = String::from("no manager of this swarm is in Forge");
+
         for m in managers {
             match self.rpc(m.server_id, principal, op).await {
                 Ok(v) => return Ok(v),
@@ -511,6 +555,7 @@ impl SwarmService {
                 Err(e) => return Err(e.into()),
             }
         }
+
         Err(DomainError::Conflict(format!("no swarm manager answered: {last}")))
     }
 

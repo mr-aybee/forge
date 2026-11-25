@@ -1,9 +1,10 @@
 //! `GET /me/capabilities`: console navigation gates per role and scope.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 const FIELDS: [&str; 17] = [
     "fleet_view",
@@ -30,12 +31,14 @@ fn only(on: &[&str]) -> Value {
     for f in on {
         assert!(FIELDS.contains(f), "unknown field {f}");
     }
+
     Value::Object(FIELDS.iter().map(|f| ((*f).to_owned(), json!(on.contains(f)))).collect())
 }
 
 async fn caps(c: &Client) -> Value {
     let (s, v) = c.get("/api/v1/me/capabilities").await;
     assert_eq!(s, StatusCode::OK, "{v}");
+
     v
 }
 
@@ -96,6 +99,7 @@ async fn capabilities_follow_each_role_and_scope() {
 
     // The gates match the endpoints: what is hidden is refused.
     assert_eq!(dev.get("/api/v1/audit/page").await.0, StatusCode::FORBIDDEN);
+
     // The console reads the whole log (platform scope), so a workspace
     // auditor does not get the entry.
     assert_eq!(auditor.get("/api/v1/audit/page").await.0, StatusCode::FORBIDDEN);
@@ -108,9 +112,11 @@ async fn capabilities_follow_each_role_and_scope() {
     for c in [&op, &dev, &customer, &auditor] {
         assert_eq!(c.get("/api/v1/workspace").await.0, StatusCode::OK);
     }
+
     let (s, clusters) = op.get("/api/v1/clusters").await;
     assert_eq!(s, StatusCode::OK, "{clusters}");
     assert!(clusters.to_string().contains(&cluster.trim_start_matches("cluster:").to_owned()), "{clusters}");
+
     // Signed out: no capabilities at all.
     assert_eq!(Client::anonymous(&h.base).get("/api/v1/me/capabilities").await.0, StatusCode::UNAUTHORIZED);
 }
@@ -128,6 +134,7 @@ async fn scoped_members_see_only_their_rows() {
     let (s, ag) = admin.post("/api/v1/projects", json!({ "name": "shop" })).await;
     assert_eq!(s, StatusCode::CREATED, "{ag}");
     let mut ids = Vec::new();
+
     for name in ["lab", "other"] {
         let (s, cl) = admin.post("/api/v1/clusters", json!({ "name": name })).await;
         assert_eq!(s, StatusCode::CREATED, "{cl}");
@@ -136,8 +143,10 @@ async fn scoped_members_see_only_their_rows() {
         assert_eq!(s, StatusCode::CREATED, "{ns}");
         ids.push((cl["id"].as_str().unwrap().to_owned(), ns["id"].as_str().unwrap().to_owned()));
     }
+
     let now = state.clock.now();
     let mut certs = Vec::new();
+
     for (i, (cluster, _)) in ids.iter().enumerate() {
         let cert = TlsCertificate {
             id: forge_core::CertificateId::new(),
@@ -167,9 +176,11 @@ async fn scoped_members_see_only_their_rows() {
         state.store.put_site(&site).await.unwrap();
         certs.push(cert.id.to_string());
     }
+
     let op = user_with_role(&h, &admin, "op@example.com", "operator", &format!("cluster:{}", ids[0].0)).await;
     let dev = user_with_role(&h, &admin, "dev@example.com", "developer", &format!("environment:{}", ids[0].1)).await;
     let cust = user_with_role(&h, &admin, "cust@example.com", "customer", &format!("environment:{}", ids[1].1)).await;
+
     // A user with no role in the workspace at all.
     let outsider = {
         state.identity.create_account(None, Some("out@example.com"), "Out", PASSWORD).await.unwrap();
@@ -179,6 +190,7 @@ async fn scoped_members_see_only_their_rows() {
     let names = |v: &Value| -> Vec<String> {
         v.as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap().to_owned()).collect()
     };
+
     // Admin sees both.
     assert_eq!(names(&admin.get("/api/v1/sites").await.1), ["site-0", "site-1"]);
     assert_eq!(admin.get("/api/v1/certificates").await.1.as_array().unwrap().len(), 2);
@@ -201,6 +213,7 @@ async fn scoped_members_see_only_their_rows() {
             assert_eq!(s, StatusCode::OK, "{path}: {v}");
             assert!(v.as_array().unwrap().is_empty(), "{path}: {v}");
         }
+
         assert_eq!(c.get("/api/v1/sites/site-0").await.0, StatusCode::FORBIDDEN);
     }
 

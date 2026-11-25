@@ -73,12 +73,14 @@ async fn guard(caller: &Caller, action: &str) -> ApiResult<EntityRef> {
     let platform = EntityRef::platform();
     caller.authorize(Action::AnalyticsConfigure, platform.clone()).await?;
     caller.require_mfa(action, &platform).await?;
+
     Ok(platform)
 }
 
 /// `PUT /api/v1/analytics/settings`
 pub async fn put(State(state): State<AppState>, caller: Caller, Json(req): Json<UpdateRequest>) -> ApiResult<Response> {
     let platform = guard(&caller, AUDIT_SETTINGS_UPDATE).await?;
+
     match state.analytics_control.update(&req.settings, req.confirm).await {
         Ok((changes, report)) => {
             let details = serde_json::to_value(ChangeAudit { changes: &changes, report: &report })
@@ -145,9 +147,12 @@ pub async fn restart(
 /// `DELETE /api/v1/analytics/restart`
 pub async fn cancel_restart(State(state): State<AppState>, caller: Caller) -> ApiResult<StatusCode> {
     let platform = guard(&caller, AUDIT_RESTART_CANCEL).await?;
+
     if !state.analytics_control.cancel_restart() {
         return Err(ApiError::not_found("no analytics restart is scheduled"));
     }
+
     caller.audit(AUDIT_RESTART_CANCEL, &platform, None, serde_json::Value::Null).await;
+
     Ok(StatusCode::NO_CONTENT)
 }

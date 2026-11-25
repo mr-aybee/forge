@@ -1,11 +1,12 @@
 //! Passkeys end to end over the API, with a software authenticator (P-256).
 #![allow(clippy::unwrap_used)]
 
-use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 use reqwest::{Method, StatusCode};
 use ring::rand::SystemRandom;
 use ring::signature::{ECDSA_P256_SHA256_ASN1_SIGNING, EcdsaKeyPair, KeyPair};
 use serde_json::{Value, json};
+
+use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 
 fn b64(d: &[u8]) -> String {
     forge_secrets::crypto::b64url(d)
@@ -23,11 +24,13 @@ fn head(major: u8, n: usize) -> Vec<u8> {
 fn bstr(b: &[u8]) -> Vec<u8> {
     let mut v = head(2, b.len());
     v.extend(b);
+
     v
 }
 fn tstr(s: &str) -> Vec<u8> {
     let mut v = head(3, s.len());
     v.extend(s.as_bytes());
+
     v
 }
 fn int(i: i64) -> Vec<u8> {
@@ -48,6 +51,7 @@ impl Authenticator {
         let rng = SystemRandom::new();
         let pk8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &rng).unwrap();
         let u = url::Url::parse(base).unwrap();
+
         Self {
             key: EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, pk8.as_ref(), &rng).unwrap(),
             id: b"software-credential-1".to_vec(),
@@ -67,18 +71,22 @@ impl Authenticator {
         let mut d = sha(self.rp_id.as_bytes());
         d.push(flags);
         d.extend(self.count.to_be_bytes());
+
         if with_key {
             let p = self.key.public_key().as_ref();
             d.extend([0u8; 16]);
             d.extend(u16::try_from(self.id.len()).unwrap().to_be_bytes());
             d.extend(&self.id);
             let mut m = head(5, 5);
+
             for (k, v) in [(1, int(2)), (3, int(-7)), (-1, int(1)), (-2, bstr(&p[1..33])), (-3, bstr(&p[33..65]))] {
                 m.extend(int(k));
                 m.extend(v);
             }
+
             d.extend(m);
         }
+
         d
     }
 
@@ -91,6 +99,7 @@ impl Authenticator {
         att.extend(head(5, 0));
         att.extend(tstr("authData"));
         att.extend(bstr(&self.auth_data(0x45, true)));
+
         json!({ "client_data_json": b64(&cd), "attestation_object": b64(&att), "name": "Test key" })
     }
 
@@ -101,6 +110,7 @@ impl Authenticator {
         let mut msg = auth.clone();
         msg.extend(sha(&cd));
         let sig = self.key.sign(&SystemRandom::new(), &msg).unwrap();
+
         json!({
             "credential_id": b64(&self.id),
             "client_data_json": b64(&cd),
@@ -181,6 +191,7 @@ async fn passkeys_register_sign_in_and_step_up() {
     let (_, list) = admin.get("/api/v1/me/passkeys").await;
     assert_eq!(list.as_array().unwrap().len(), 1);
     let me_id = me["id"].as_str().or_else(|| me["user"]["id"].as_str()).unwrap().to_owned();
+
     // A workspace admin cannot strip another user's passkeys.
     let wsa =
         user_with_role(&h, &admin, "wsa@example.com", "workspace_admin", &format!("workspace:{}", h.default_org)).await;
@@ -190,6 +201,7 @@ async fn passkeys_register_sign_in_and_step_up() {
     let (s, r) = admin.call(Method::DELETE, &format!("/api/v1/users/{me_id}/passkeys"), None).await;
     assert_eq!(s, StatusCode::OK, "{r}");
     assert_eq!(r["removed"], 1);
+
     // Recovery also signed that user out everywhere (this session included).
     let (s, _) = admin.get("/api/v1/me/passkeys").await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);

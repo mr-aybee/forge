@@ -30,6 +30,7 @@ async fn seed() -> (Store, tempfile::TempDir, WorkspaceId, ServerId) {
         created_at: Timestamp(1),
     };
     s.create_server(&server).await.unwrap();
+
     (s, dir, org.id, server.id)
 }
 
@@ -106,6 +107,7 @@ async fn grants_round_trip_and_count_usage() {
     store.add_grant_usage(&g.id, 200, Timestamp(6)).await.unwrap();
     let got = store.get_grant(&g.id).await.unwrap().unwrap();
     assert_eq!((got.bytes_transferred, got.last_used_at), (500, Some(Timestamp(6))));
+
     // Re-put updates the settings and revocation, never the usage counters
     // (the gateway adds to them concurrently) or the creation fields.
     let mut revoked = got.clone();

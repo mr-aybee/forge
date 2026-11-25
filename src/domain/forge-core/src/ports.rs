@@ -29,9 +29,11 @@ pub trait Authorizer: Send + Sync + std::fmt::Debug {
     /// calling [`Authorizer::is_allowed`] for each.
     async fn is_allowed_many(&self, requests: &[AccessRequest]) -> Vec<bool> {
         let mut out = Vec::with_capacity(requests.len());
+
         for r in requests {
             out.push(self.is_allowed(r).await);
         }
+
         out
     }
 
@@ -55,9 +57,11 @@ pub trait ResourceResolver: Send + Sync + std::fmt::Debug {
     /// Resolves many entities; implementations may share lookups between them.
     async fn resolve_many(&self, entities: &[EntityRef]) -> Vec<DomainResult<ResourceRef>> {
         let mut out = Vec::with_capacity(entities.len());
+
         for e in entities {
             out.push(self.resolve(e).await);
         }
+
         out
     }
 }

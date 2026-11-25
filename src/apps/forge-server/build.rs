@@ -17,6 +17,7 @@ fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, PathBuf)>) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     let mut entries: Vec<_> = entries.flatten().collect();
     entries.sort_by_key(std::fs::DirEntry::path);
+
     for e in entries {
         let p = e.path();
         if p.is_dir() {
@@ -56,16 +57,20 @@ fn main() {
     println!("cargo:rerun-if-changed={}", index.display());
 
     let mut files = Vec::new();
+
     if index.is_file() {
         walk(&dist, &dist, &mut files);
     }
+
     let mut code = String::from(
         "/// Embedded web console: (path, content type, bytes).\npub static UI_FILES: &[(&str, &str, &[u8])] = &[\n",
     );
+
     for (key, path) in &files {
         let abs = path.canonicalize().unwrap_or_else(|_| path.clone());
         let _ = writeln!(code, "    ({key:?}, {:?}, include_bytes!({:?})),", mime(key), abs.to_string_lossy());
     }
+
     code.push_str("];\n");
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap_or_default());
     let _ = std::fs::write(out_dir.join("ui_files.rs"), code);
@@ -73,11 +78,13 @@ fn main() {
     // API route inventory for /api/openapi.json (issue #5, phase 0).
     let api = manifest.join("src/api");
     println!("cargo:rerun-if-changed={}", api.display());
+
     if let Ok(rd) = std::fs::read_dir(&api) {
         for e in rd.flatten() {
             println!("cargo:rerun-if-changed={}", e.path().display());
         }
     }
+
     println!("cargo:rerun-if-changed=build_routes.rs");
     let _ = std::fs::write(out_dir.join("routes.rs"), build_routes::render(&build_routes::scan(&api)));
 }

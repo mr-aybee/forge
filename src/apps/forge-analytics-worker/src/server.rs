@@ -40,18 +40,22 @@ impl Listener {
             #[cfg(unix)]
             Endpoint::Unix { path } => {
                 use std::os::unix::fs::PermissionsExt;
+
                 if let Some(dir) = path.parent() {
                     tokio::fs::create_dir_all(dir).await?;
                     tokio::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).await?;
                 }
+
                 match tokio::fs::remove_file(path).await {
                     Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
                     _ => {}
                 }
+
                 let listener = {
                     let short = forge_analytics_proto::socket_path::short(path)?;
                     tokio::net::UnixListener::bind(short.path())?
                 };
+
                 tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).await?;
                 Ok(Self::Unix { listener, path: path.clone() })
             }
@@ -84,23 +88,28 @@ impl Listener {
 /// Accepts connections until shutdown.
 pub async fn serve(listener: &Listener, worker: Arc<Worker>, secret: Arc<String>, mut shutdown: watch::Receiver<bool>) {
     let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+
     loop {
         let accepted = tokio::select! {
             a = accept(listener) => a,
             _ = shutdown.changed() => return,
         };
+
         let conn = match accepted {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!(error = %e, "accepting a control connection failed");
                 tokio::time::sleep(Duration::from_millis(100)).await;
+
                 continue;
             }
         };
+
         let Ok(slot) = slots.clone().try_acquire_owned() else {
             tracing::warn!("too many control connections; closing one");
             continue;
         };
+
         let (worker, secret) = (worker.clone(), secret.clone());
         tokio::spawn(async move {
             match conn {
@@ -108,6 +117,7 @@ pub async fn serve(listener: &Listener, worker: Arc<Worker>, secret: Arc<String>
                 Conn::Unix(s) => connection(s, &worker, &secret).await,
                 Conn::Tcp(s) => connection(s, &worker, &secret).await,
             }
+
             drop(slot);
         });
     }
@@ -134,9 +144,11 @@ fn authenticate(req: &Request, secret: &str) -> Result<(), WorkerError> {
             if !forge_secrets::crypto::constant_time_eq(s.as_bytes(), secret.as_bytes()) {
                 return Err(WorkerError::Unauthorized);
             }
+
             if *protocol != PROTOCOL {
                 return Err(WorkerError::ProtocolMismatch { expected: PROTOCOL, got: *protocol });
             }
+
             Ok(())
         }
         _ => Err(WorkerError::Unauthorized),
@@ -156,8 +168,10 @@ where
         if !ok {
             tracing::warn!("refused a control connection that failed to authenticate");
         }
+
         return;
     }
+
     loop {
         let (req, blob) = match read_message::<_, Request>(&mut rd, REQUEST_LIMITS).await {
             Ok(m) => m,
@@ -167,6 +181,7 @@ where
                 return;
             }
         };
+
         // While the request runs, nothing else may arrive: a read that ends
         // means forge-server gave up, and the request is dropped with it.
         let mut probe = [0u8; 1];
@@ -174,6 +189,7 @@ where
             r = worker.handle(req, blob) => r,
             _ = rd.read(&mut probe) => return,
         };
+
         if write_message(&mut wr, &response, &[]).await.is_err() {
             return;
         }
@@ -183,8 +199,9 @@ where
 #[cfg(all(test, unix))]
 #[allow(clippy::unwrap_used)] // reason: tests
 mod tests {
-    use super::*;
     use forge_analytics_proto::{RESPONSE_LIMITS, Reply};
+
+    use super::*;
 
     #[tokio::test]
     async fn only_the_secret_holder_with_this_protocol_is_served() {
@@ -198,16 +215,19 @@ mod tests {
         };
         let worker = Arc::new(Worker::build(&config, None, Arc::new(forge_core::SystemClock)).await.unwrap());
         let listener = Listener::bind(&config.endpoint).await.unwrap();
+
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "the socket is owner-only");
         }
+
         let (tx, rx) = watch::channel(false);
         let server = tokio::spawn(async move {
             serve(&listener, worker, Arc::new("s3cret".into()), rx).await;
         });
         let hello = |secret: &str, protocol| Request::Hello { secret: secret.into(), protocol };
+
         for (h, want) in [
             (hello("wrong", PROTOCOL), Err(WorkerError::Unauthorized)),
             (
@@ -220,10 +240,12 @@ mod tests {
             write_message(&mut s, &h, &[]).await.unwrap();
             let (r, _): (Response, _) = read_message(&mut s, RESPONSE_LIMITS).await.unwrap();
             assert_eq!(r, want);
+
             // The connection is closed after a refusal.
             write_message(&mut s, &Request::Ping, &[]).await.ok();
             assert!(read_message::<_, Response>(&mut s, RESPONSE_LIMITS).await.is_err());
         }
+
         let mut s = tokio::net::UnixStream::connect(&path).await.unwrap();
         write_message(&mut s, &hello("s3cret", PROTOCOL), &[]).await.unwrap();
         let (r, _): (Response, _) = read_message(&mut s, RESPONSE_LIMITS).await.unwrap();

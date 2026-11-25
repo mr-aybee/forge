@@ -6,13 +6,14 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode as AxStatus};
 use axum::routing::get;
 use reqwest::{Method, StatusCode};
 use serde_json::json;
+
+use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start, user_with_role};
 
 async fn step_up(admin: &mut Client) {
     use forge_identity::totp;
@@ -25,6 +26,7 @@ async fn step_up(admin: &mut Client) {
         .post("/api/v1/auth/totp/confirm", json!({"password": PASSWORD, "secret": t["secret"], "code": code}))
         .await;
     assert_eq!(s, StatusCode::NO_CONTENT);
+
     // A code is accepted once: use the next step for the step-up.
     let code = format!("{:06}", totp::code_at(&secret, now + 30));
     let (s, r) = admin.post("/api/v1/auth/step-up", json!({"code": code})).await;
@@ -61,6 +63,7 @@ async fn node_in(
         created_at: forge_core::Timestamp(0),
     };
     forge_core::ports::ServerRepository::create_server(&h.app.state.store, &server).await.unwrap();
+
     id
 }
 
@@ -77,10 +80,12 @@ async fn managed_install_is_guarded_validated_and_keeps_the_key_in_the_vault() {
     assert_eq!(list.as_array().unwrap().len(), 0, "nothing recorded for a refused request");
 
     step_up(&mut admin).await;
+
     for bad in ["/", "/etc/rustfs", "/srv/../etc", "relative"] {
         let (s, r) = admin.post("/api/v1/object-stores", body("media", bad, 9000)).await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}: {r}");
     }
+
     let (s, r) = admin.post("/api/v1/object-stores", body("Bad Name", "/srv/objstore/x", 9000)).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "{r}");
 
@@ -147,6 +152,7 @@ async fn fake_root(State(s): State<FakeS3>, h: HeaderMap) -> (AxStatus, String) 
     if !signed(&h) {
         return (AxStatus::FORBIDDEN, "<Error><Code>AccessDenied</Code><Message>unsigned</Message></Error>".into());
     }
+
     let names: String = s
         .buckets
         .lock()
@@ -154,6 +160,7 @@ async fn fake_root(State(s): State<FakeS3>, h: HeaderMap) -> (AxStatus, String) 
         .keys()
         .map(|b| format!("<Bucket><Name>{b}</Name><CreationDate>2026-01-01T00:00:00.000Z</CreationDate></Bucket>"))
         .collect();
+
     (AxStatus::OK, format!("<ListAllMyBucketsResult><Buckets>{names}</Buckets></ListAllMyBucketsResult>"))
 }
 
@@ -164,6 +171,7 @@ async fn fake_bucket(
     method: axum::http::Method,
 ) -> (AxStatus, String) {
     let mut all = s.buckets.lock().unwrap();
+
     match method.as_str() {
         "PUT" => {
             all.entry(bucket).or_default();
@@ -182,9 +190,11 @@ async fn fake_bucket(
             let Some(objs) = all.get(&bucket) else {
                 return (AxStatus::NOT_FOUND, "<Error><Code>NoSuchBucket</Code><Message>no</Message></Error>".into());
             };
+
             let prefix = q.get("prefix").cloned().unwrap_or_default();
             let mut contents = String::new();
             let mut prefixes = std::collections::BTreeSet::new();
+
             for (k, v) in objs.iter().filter(|(k, _)| k.starts_with(&prefix)) {
                 match k[prefix.len()..].find('/') {
                     Some(i) => {
@@ -193,6 +203,7 @@ async fn fake_bucket(
                     None => contents.push_str(&format!("<Contents><Key>{k}</Key><Size>{}</Size></Contents>", v.len())),
                 }
             }
+
             let cp: String =
                 prefixes.iter().map(|p| format!("<CommonPrefixes><Prefix>{p}</Prefix></CommonPrefixes>")).collect();
             (
@@ -213,8 +224,10 @@ async fn fake_object(
     if !signed(&h) {
         return (AxStatus::FORBIDDEN, Vec::new());
     }
+
     let mut all = s.buckets.lock().unwrap();
     let Some(b) = all.get_mut(&bucket) else { return (AxStatus::NOT_FOUND, Vec::new()) };
+
     match method.as_str() {
         "PUT" => {
             b.insert(key, body.to_vec());
@@ -232,11 +245,13 @@ async fn fake_add_account(State(s): State<FakeS3>, h: HeaderMap, body: Bytes) ->
     if !signed(&h) {
         return (AxStatus::FORBIDDEN, String::new());
     }
+
     let req: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
     assert!(req["policy"]["Statement"].is_array(), "a scoped policy is sent");
     let mut accts = s.accounts.lock().unwrap();
     let ak = format!("SVC{:05}", accts.len() + 1);
     accts.insert(ak.clone(), req["name"].as_str().unwrap_or_default().to_owned());
+
     (AxStatus::OK, json!({"credentials": {"accessKey": ak, "secretKey": "svcsecret-value-1"}}).to_string())
 }
 
@@ -244,9 +259,11 @@ async fn fake_list_accounts(State(s): State<FakeS3>, h: HeaderMap) -> (AxStatus,
     if !signed(&h) {
         return (AxStatus::FORBIDDEN, String::new());
     }
+
     let accts = s.accounts.lock().unwrap();
     let list: Vec<serde_json::Value> =
         accts.iter().map(|(k, n)| json!({"accessKey": k, "name": n, "accountStatus": "on"})).collect();
+
     (AxStatus::OK, json!({"accounts": list}).to_string())
 }
 
@@ -254,6 +271,7 @@ async fn fake_delete_account(State(s): State<FakeS3>, h: HeaderMap, q: Query<BTr
     if !signed(&h) {
         return AxStatus::FORBIDDEN;
     }
+
     match s.accounts.lock().unwrap().remove(q.get("accessKey").map_or("", String::as_str)) {
         Some(_) => AxStatus::NO_CONTENT,
         None => AxStatus::NOT_FOUND,
@@ -272,6 +290,7 @@ async fn start_fake_s3() -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.ok() });
+
     format!("http://{addr}")
 }
 
@@ -308,10 +327,12 @@ async fn distributed_store_spans_nodes_with_one_layout() {
     assert_eq!(r["store"]["topology"], "distributed");
     assert_eq!(r["store"]["members"].as_array().unwrap().len(), 2);
     assert_eq!(r["jobs"].as_array().unwrap().len(), 2, "one install job per member");
+
     for j in r["jobs"].as_array().unwrap() {
         let (_, job) = admin.get(&format!("/api/v1/jobs/{}", j["id"].as_str().unwrap())).await;
         assert!(!job["payload"].to_string().contains("secret"), "{job}");
     }
+
     // The layout is the same on every member: all drives of all members.
     let store_id: forge_core::ObjectStoreId = r["store"]["id"].as_str().unwrap().parse().unwrap();
     let st = &h.app.state.store;
@@ -329,6 +350,7 @@ async fn distributed_store_spans_nodes_with_one_layout() {
             "http://s3-b:9000/srv/rustfs/d1"
         ]
     );
+
     // The same drives on a member node are taken now.
     let (s, _) = admin
         .post(
@@ -504,6 +526,7 @@ async fn managed_store_on(
         })
         .await
         .unwrap();
+
     id
 }
 
@@ -567,9 +590,11 @@ async fn app_keys_are_bucket_scoped_and_live_in_the_vault() {
 
     let (_, audit) = admin.get("/api/v1/audit?limit=200").await;
     let text = audit.to_string();
+
     for a in ["storage.key.create", "storage.key.rotate", "storage.key.revoke"] {
         assert!(text.contains(a), "{a} audited");
     }
+
     assert!(!text.contains("svcsecret"));
 }
 
@@ -611,6 +636,7 @@ async fn adopting_the_app_store_container_keeps_it_in_place() {
     assert_eq!(r["job"]["payload"]["action"], "adopt");
     let (s, _) = admin.post("/api/v1/object-stores/adopt", json!({"name": "Again", "server_id": srv})).await;
     assert_eq!(s, StatusCode::CONFLICT, "adopted once");
+
     // While adopting, other actions wait.
     let id = r["store"]["id"].as_str().unwrap();
     let (s, _) = admin.post(&format!("/api/v1/object-stores/{id}/actions"), json!({"action": "restart"})).await;
@@ -633,15 +659,19 @@ async fn answer_with(
     use forge_proto::messages::{CommandBody, CommandResult, command_body::Command};
     use prost::Message;
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+
     let cmd = loop {
         if let Some(c) = h.app.state.hub.take(server, 1).pop() {
             break c;
         }
+
         assert!(tokio::time::Instant::now() < deadline, "no command for the node");
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     };
+
     let body = CommandBody::decode(cmd.body.as_slice()).unwrap();
     let Some(Command::StorageAction(a)) = body.command else { panic!("not a storage command") };
+
     let result = if ok {
         let out = json!({"output": "forge: done", "report": {"state": state, "version": "1.0.5"}});
         CommandResult { operation_id: body.operation_id, ok: true, output: out.to_string(), ..Default::default() }
@@ -649,7 +679,9 @@ async fn answer_with(
         let err = json!({"error": error, "output": "forge: error: boom"});
         CommandResult { operation_id: body.operation_id, ok: false, error: err.to_string(), ..Default::default() }
     };
+
     assert!(h.app.state.hub.resolve(server, result));
+
     a.op_json
 }
 
@@ -660,11 +692,13 @@ async fn store_status(admin: &Client, id: forge_core::ObjectStoreId) -> Option<S
 
 async fn wait_status(admin: &Client, id: forge_core::ObjectStoreId, want: Option<&str>) {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+
     loop {
         let now = store_status(admin, id).await;
         if now.as_deref() == want {
             return;
         }
+
         assert!(tokio::time::Instant::now() < deadline, "store status {now:?}, want {want:?}");
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
@@ -686,6 +720,7 @@ async fn a_failed_first_install_leaves_no_store_behind() {
     let id: forge_core::ObjectStoreId = r["store"]["id"].as_str().unwrap().parse().unwrap();
     let cred: forge_core::VaultItemId = r["store"]["credential_id"].as_str().unwrap().parse().unwrap();
     assert!(answer(&h, srv, false, "").await.contains("\"install\""));
+
     // The rollback cleans the node up, then the record goes.
     assert!(answer(&h, srv, true, "not-installed").await.contains("\"uninstall\""));
     wait_status(&admin, id, None).await;
@@ -816,6 +851,7 @@ async fn a_bucket_attached_to_an_service_reaches_it_as_environment() {
     let (s, v) = admin.post(&url, with("ASSETS")).await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
     assert_eq!(v["attachments"].as_array().unwrap().len(), 2, "{v}");
+
     // A bucket that doesn't exist is refused unless it is to be created.
     let missing = json!({ "store_id": store, "bucket": "nope", "prefix": "OTHER" });
     assert_eq!(admin.post(&url, missing).await.0, StatusCode::NOT_FOUND);
@@ -837,11 +873,13 @@ async fn a_bucket_attached_to_an_service_reaches_it_as_environment() {
         })
         .await
         .unwrap();
+
     // The test plays the agent while the action waits for its answer.
     let action_url = format!("/api/v1/services/{service_id}/instances/{srv}/actions");
     let action = admin.post(&action_url, json!({ "action": "status" }));
     let agent = async {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+
         loop {
             let found = h.app.state.hub.take(srv, 8).into_iter().find_map(|c| {
                 let body = CommandBody::decode(c.body.as_slice()).ok()?;
@@ -850,6 +888,7 @@ async fn a_bucket_attached_to_an_service_reaches_it_as_environment() {
                     _ => None,
                 }
             });
+
             if let Some((operation_id, spec)) = found {
                 let done = forge_proto::messages::CommandResult {
                     operation_id,
@@ -858,8 +897,10 @@ async fn a_bucket_attached_to_an_service_reaches_it_as_environment() {
                     ..Default::default()
                 };
                 assert!(h.app.state.hub.resolve(srv, done));
+
                 break spec;
             }
+
             assert!(tokio::time::Instant::now() < deadline, "no service command for the node");
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
@@ -907,6 +948,7 @@ async fn two_environments(admin: &Client) -> (String, String, String, String) {
     let (_, cl) = admin.post("/api/v1/clusters", json!({ "name": "shop" })).await;
     let (_, group) = admin.post("/api/v1/projects", json!({ "name": "web" })).await;
     let mut ids = Vec::new();
+
     for name in ["uat", "prod"] {
         let (s, ns) = admin
             .post("/api/v1/environments", json!({ "name": name, "cluster_id": cl["id"], "project_id": group["id"] }))
@@ -921,6 +963,7 @@ async fn two_environments(admin: &Client) -> (String, String, String, String) {
         assert_eq!(s, StatusCode::CREATED, "{app}");
         ids.push((ns["id"].as_str().unwrap().to_owned(), app["id"].as_str().unwrap().to_owned()));
     }
+
     (ids[0].0.clone(), ids[1].0.clone(), ids[0].1.clone(), ids[1].1.clone())
 }
 
@@ -946,9 +989,11 @@ async fn an_owned_store_is_open_to_the_roles_of_its_environment_only() {
     // Without an owner nothing changes: a role on an environment reaches no store.
     let (_, list) = dev.get("/api/v1/object-stores").await;
     assert_eq!(list.as_array().unwrap().len(), 0, "{list}");
+
     for path in ["", "/buckets", "/keys"] {
         assert_eq!(dev.get(&store_url(owned, path)).await.0, StatusCode::FORBIDDEN, "unowned: {path}");
     }
+
     assert_eq!(dev.post(&attach_url(&uat_app), attach(owned, "S3")).await.0, StatusCode::FORBIDDEN);
 
     step_up(&mut admin).await;
@@ -1007,6 +1052,7 @@ async fn an_owned_store_is_open_to_the_roles_of_its_environment_only() {
         assert_eq!(dev.get(&store_url(shared, path)).await.0, StatusCode::FORBIDDEN, "shared: {path}");
         assert_eq!(prod_dev.get(&store_url(owned, path)).await.0, StatusCode::FORBIDDEN, "other environment: {path}");
     }
+
     let (_, list) = prod_dev.get("/api/v1/object-stores").await;
     assert_eq!(list.as_array().unwrap().len(), 0, "{list}");
 
@@ -1027,6 +1073,7 @@ async fn an_owned_store_is_open_to_the_roles_of_its_environment_only() {
     let prod_key = v["attachments"][0]["access_key"].as_str().unwrap().to_owned();
     let (s, v) = dev.call(Method::DELETE, &format!("{}/{access_key}", attach_url(&uat_app)), None).await;
     assert_eq!(s, StatusCode::OK, "{v}");
+
     // `deploy` on the service's own environment is enough to detach, even
     // from a store another environment owns.
     let detach_prod = format!("{}/{prod_key}", attach_url(&prod_app));
@@ -1066,6 +1113,7 @@ async fn assigning_an_owner_is_guarded_audited_and_blocks_deleting_the_environme
         user_with_role(&h, &admin, "op-infra@example.com", "operator", &format!("cluster:{infra_id}")).await;
     step_up(&mut node_op).await;
     assert_eq!(node_op.put(&owner_url, to_uat.clone()).await.0, StatusCode::FORBIDDEN, "no deploy on uat");
+
     // `deploy` on the environment, but no storage.manage on the store.
     let mut dev = user_with_role(&h, &admin, "dev-uat@example.com", "developer", &format!("environment:{uat}")).await;
     step_up(&mut dev).await;
@@ -1083,6 +1131,7 @@ async fn assigning_an_owner_is_guarded_audited_and_blocks_deleting_the_environme
 
     let (s, v) = admin.put(&owner_url, to_uat).await;
     assert_eq!(s, StatusCode::OK, "{v}");
+
     // Clearing needs storage.manage only.
     let (s, v) = node_op.put(&owner_url, json!({ "environment_id": null })).await;
     assert_eq!(s, StatusCode::OK, "{v}");
@@ -1165,6 +1214,7 @@ async fn ownership_does_not_quietly_open_buckets_of_other_environments() {
     assert_eq!(e["title"], "bucket_attached_elsewhere", "{e}");
     let (s, v) = dev.post(&attach_url(&uat_app), attach("uat-data", "DATA")).await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
+
     // With storage.manage the shared bucket can still be attached.
     let (s, v) = admin.post(&attach_url(&uat_app), attach("media", "S3")).await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
@@ -1208,16 +1258,20 @@ async fn the_owner_path_sees_a_reduced_store_and_only_its_own_keys() {
     let (s, one) = auditor.get(&base).await;
     assert_eq!(s, StatusCode::OK, "{one}");
     let (_, list) = auditor.get("/api/v1/object-stores").await;
+
     for v in [&one, &list[0]] {
         assert_eq!(v["limited"], true, "{v}");
         assert_eq!((&v["name"], &v["environment_id"]), (&json!("Media"), &json!(uat)), "{v}");
         assert_eq!(v["members"], json!([{ "hostname": "store-1", "status": "running" }]), "{v}");
         let fields = v.as_object().unwrap();
+
         for hidden in ["credential_id", "s3_port", "console_port", "last_error", "last_job_id", "version", "runtime"] {
             assert!(!fields.contains_key(hidden), "{hidden} is not for the owner path: {v}");
         }
     }
+
     assert!(!one.to_string().contains("/srv/objstore"), "no data paths: {one}");
+
     // On the node or workspace rule the view is complete.
     let (_, full) = admin.get(&base).await;
     assert_eq!(full["limited"], false, "{full}");
@@ -1269,6 +1323,7 @@ async fn a_store_is_addressed_by_the_nodes_address_not_its_host_name() {
     let hosts: Vec<&str> =
         v["store"]["members"].as_array().unwrap().iter().map(|m| m["endpoint_host"].as_str().unwrap()).collect();
     assert_eq!(hosts, ["10.20.0.11", "storage-b.example.com"], "{v}");
+
     // A node that never connected has no address: its host name is the fallback.
     let c = node(&h, "store-c", "linux").await;
     let (s, v) = admin
@@ -1284,21 +1339,26 @@ async fn a_store_is_addressed_by_the_nodes_address_not_its_host_name() {
 /// Uploads a small object as `c`; the status of the answer.
 async fn put_object(c: &Client, base: &str, path: &str) -> StatusCode {
     let mut req = c.http.put(format!("{base}{path}")).header("content-type", "text/plain").body("hello");
+
     if let Some(csrf) = &c.csrf {
         req = req.header("x-csrf-token", csrf);
     }
+
     if let Some(b) = &c.bearer {
         req = req.bearer_auth(b);
     }
+
     req.send().await.unwrap().status()
 }
 
 /// What a person without a role and without a live grant gets: nothing.
 async fn assert_closed(c: &Client, base: &str, store: forge_core::ObjectStoreId) {
     let url = |rest: &str| format!("/api/v1/object-stores/{store}{rest}");
+
     for p in ["", "/buckets", "/buckets/media/objects", "/keys", "/grants"].map(url) {
         assert_eq!(c.get(&p).await.0, StatusCode::FORBIDDEN, "GET {p}");
     }
+
     let (object, bucket) = (url("/buckets/media/object?key=a.txt"), url("/buckets/media"));
     assert_eq!(c.get(&object).await.0, StatusCode::FORBIDDEN, "download");
     assert_eq!(put_object(c, base, &object).await, StatusCode::FORBIDDEN, "upload");
@@ -1333,6 +1393,7 @@ async fn a_bucket_grant_opens_one_bucket_to_one_person_and_nothing_else() {
         let object = url(&format!("/buckets/{bucket}/object?key=a.txt"));
         assert_eq!(put_object(&admin, &h.base, &object).await, StatusCode::CREATED);
     }
+
     let (s, r) = admin.post(&format!("/api/v1/object-stores/{other_store}/buckets"), json!({ "name": "media" })).await;
     assert_eq!(s, StatusCode::CREATED, "{r}");
     assert_closed(&guest, &h.base, store).await;
@@ -1383,6 +1444,7 @@ async fn a_bucket_grant_opens_one_bucket_to_one_person_and_nothing_else() {
     assert_eq!(rows.len(), 1, "the other store stays hidden: {list}");
     let (s, one) = guest.get(&url("")).await;
     assert_eq!(s, StatusCode::OK, "{one}");
+
     for v in [&rows[0], &one] {
         assert_eq!((&v["limited"], &v["by_grant"], &v["name"]), (&json!(true), &json!(true), &json!("Media")), "{v}");
         assert_eq!(
@@ -1390,13 +1452,16 @@ async fn a_bucket_grant_opens_one_bucket_to_one_person_and_nothing_else() {
             (&json!(""), &json!([]), &json!(null)),
             "{v}"
         );
+
         for hidden in ["credential_id", "s3_port", "region", "last_job_id", "version"] {
             assert!(v.get(hidden).is_none(), "{hidden} is not shown: {v}");
         }
     }
+
     let (s, b) = guest.get(&url("/buckets")).await;
     assert_eq!(s, StatusCode::OK, "{b}");
     assert_eq!(b.as_array().unwrap().iter().map(|x| &x["name"]).collect::<Vec<_>>(), [&json!("media")], "{b}");
+
     // The holder's own list: what opens and until when, not who gave it or why.
     let (s, mine) = guest.get("/api/v1/object-stores/grants/mine").await;
     assert_eq!(s, StatusCode::OK, "{mine}");
@@ -1520,6 +1585,7 @@ async fn a_bucket_grant_opens_one_bucket_to_one_person_and_nothing_else() {
     assert_eq!(revoked[0]["details"]["grant_id"], read["id"]);
     let denied_manage = of("storage.manage").into_iter().filter(|e| e["outcome"] == "denied").count();
     assert!(denied_manage >= 4, "refused attempts to grant are audited: {denied_manage}");
+
     // A grant that was allowed but could not be issued is on record too,
     // with the person and the bucket that were named.
     let failed: Vec<_> = of("storage.grant.create").into_iter().filter(|e| e["outcome"] == "failure").collect();
@@ -1588,10 +1654,12 @@ async fn deleting_a_bucket_revokes_its_grants_and_a_new_bucket_of_that_name_star
     h.app.state.identity.create_account(None, Some("guest@example.com"), "Guest", PASSWORD).await.unwrap();
     let guest = Client::login(&h.base, "guest@example.com", PASSWORD).await;
     let grant = |bucket: &str| json!({ "user": "guest@example.com", "bucket": bucket, "access": "readwrite" });
+
     for bucket in ["media", "logs"] {
         assert_eq!(admin.post(&url("/buckets"), json!({ "name": bucket })).await.0, StatusCode::CREATED);
         assert_eq!(admin.post(&url("/grants"), grant(bucket)).await.0, StatusCode::CREATED);
     }
+
     // The holder's API key works like their session (and stops like it).
     let (_, key) = guest.post("/api/v1/api-keys", json!({ "name": "script" })).await;
     let mut with_key = Client::anonymous(&h.base);
@@ -1610,6 +1678,7 @@ async fn deleting_a_bucket_revokes_its_grants_and_a_new_bucket_of_that_name_star
     assert_eq!(live, ["logs"], "the other bucket keeps its grant: {listed}");
     let (_, mine) = guest.get("/api/v1/object-stores/grants/mine").await;
     assert_eq!(mine["grants"].as_array().unwrap().len(), 1, "{mine}");
+
     // The same name again is a new bucket: closed to the old holder.
     assert_eq!(admin.post(&url("/buckets"), json!({ "name": "media" })).await.0, StatusCode::CREATED);
     assert_eq!(guest.get(&url("/buckets/media/objects")).await.0, StatusCode::FORBIDDEN);
@@ -1617,6 +1686,7 @@ async fn deleting_a_bucket_revokes_its_grants_and_a_new_bucket_of_that_name_star
     assert_eq!(put_object(&guest, &h.base, &url("/buckets/media/object?key=a.txt")).await, StatusCode::FORBIDDEN);
     let (_, b) = guest.get(&url("/buckets")).await;
     assert_eq!(b.as_array().unwrap().iter().map(|x| &x["name"]).collect::<Vec<_>>(), [&json!("logs")], "{b}");
+
     // Granting again is a new decision, and nothing stands in its way.
     assert_eq!(admin.post(&url("/grants"), grant("media")).await.0, StatusCode::CREATED);
     assert_eq!(guest.get(&url("/buckets/media/objects")).await.0, StatusCode::OK);
@@ -1632,6 +1702,7 @@ async fn deleting_a_bucket_revokes_its_grants_and_a_new_bucket_of_that_name_star
     assert!(gone.status().is_success(), "{}", gone.status());
     assert_eq!(admin.post(&url("/buckets"), json!({ "name": "logs" })).await.0, StatusCode::CREATED);
     assert_eq!(guest.get(&url("/buckets/logs/objects")).await.0, StatusCode::FORBIDDEN);
+
     // Creating a bucket that is already there revokes nothing.
     let (s, _) = admin.post(&url("/buckets"), json!({ "name": "media" })).await;
     assert!(s == StatusCode::CREATED || s == StatusCode::CONFLICT, "{s}");

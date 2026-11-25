@@ -18,6 +18,7 @@ fn write_or_remove(path: &str, content: Option<&str>) -> Result<(), String> {
             if let Some(dir) = Path::new(path).parent() {
                 std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
             }
+
             std::fs::write(path, c).map_err(|e| format!("{path}: {e}"))
         }
         None => match std::fs::remove_file(path) {
@@ -45,6 +46,7 @@ async fn service(action: &str, name: &str) -> Result<(), String> {
 async fn apply(nginx_cfg: &NginxSettings, keepalived: Option<String>) -> Result<Value, String> {
     let nginx = nginx_bin()?;
     let previous = std::fs::read_to_string(GLOBAL_CONF).ok();
+
     // Directives the distribution already sets in nginx.conf are taken over
     // (commented with a marker) so ours apply and nginx sees no duplicates.
     let main_before = std::fs::read_to_string(MAIN_CONF).ok();
@@ -54,44 +56,56 @@ async fn apply(nginx_cfg: &NginxSettings, keepalived: Option<String>) -> Result<
             write_or_remove(MAIN_CONF, Some(&taken))?;
         }
     }
+
     write_or_remove(GLOBAL_CONF, Some(&nginx_cfg.render()))?;
+
     if let Err(e) = run(nginx, &["-t"]).await {
         write_or_remove(GLOBAL_CONF, previous.as_deref())?;
+
         if let Some(m) = &main_before {
             write_or_remove(MAIN_CONF, Some(m))?;
         }
+
         return Err(format!("nginx -t failed; previous configuration restored:\n{e}"));
     }
+
     reload(nginx).await?;
     let mut ka = Value::Null;
+
     if let Some(conf) = keepalived {
         if !Path::new("/usr/sbin/keepalived").exists() {
             return Err("keepalived is not installed on this node (App Store → Keepalived)".into());
         }
+
         write_or_remove(KEEPALIVED_CONF, Some(&conf))?;
         service("enable", "keepalived").await.ok();
         service("restart", "keepalived").await?;
         ka = json!("configured");
     }
+
     Ok(json!({ "nginx": "applied", "keepalived": ka }))
 }
 
 async fn remove() -> Result<Value, String> {
     write_or_remove(GLOBAL_CONF, None)?;
+
     if let Ok(main) = std::fs::read_to_string(MAIN_CONF)
         && main.contains(TAKEN_OVER)
     {
         write_or_remove(MAIN_CONF, Some(&give_back(&main)))?;
     }
+
     if let Ok(nginx) = nginx_bin() {
         reload(nginx).await.ok();
     }
+
     if Path::new(KEEPALIVED_CONF).exists()
         && std::fs::read_to_string(KEEPALIVED_CONF).is_ok_and(|c| c.contains("Managed by Orbyn Forge"))
     {
         service("stop", "keepalived").await.ok();
         write_or_remove(KEEPALIVED_CONF, None)?;
     }
+
     Ok(json!({ "removed": true }))
 }
 
@@ -107,6 +121,7 @@ async fn status(vips: &[String]) -> Value {
             addrs.split_whitespace().any(|w| w.split('/').next() == Some(ip))
         })
         .collect();
+
     json!({
         "nginx": if nginx_running { "running" } else if nginx_installed { "stopped" } else { "not-installed" },
         "global_config": Path::new(GLOBAL_CONF).exists(),
@@ -127,22 +142,27 @@ pub fn traffic_snapshot() -> Option<std::collections::BTreeMap<String, forge_cat
     let mut f = std::fs::File::open(forge_catalog::ingress::TRAFFIC_LOG).ok()?;
     let meta = f.metadata().ok()?;
     let len = meta.len();
+
     // Skip the read when nothing was logged recently.
     if meta.modified().ok().and_then(|m| m.elapsed().ok()).is_some_and(|age| age.as_secs() > 600) {
         return Some(std::collections::BTreeMap::new());
     }
+
     f.seek(SeekFrom::Start(len.saturating_sub(MAX))).ok()?;
     let mut buf = Vec::new();
     f.take(MAX).read_to_end(&mut buf).ok()?;
     let text = String::from_utf8_lossy(&buf);
+
     // Skip a partial first line when we started mid-file.
     let text = if len > MAX { text.split_once('\n').map_or("", |(_, r)| r) } else { &text };
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+
     Some(forge_catalog::ingress::traffic(text, now, WINDOW))
 }
 
 pub async fn run_op(op: &IngressOp) -> Result<Value, String> {
     op.validate()?;
+
     match op {
         IngressOp::Apply { nginx, keepalived } => {
             let ka = keepalived.as_ref().and_then(|k| k.spec.render_keepalived(k.index, &k.auth));

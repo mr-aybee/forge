@@ -77,22 +77,28 @@ async fn submit_rollout(
     if ids.is_empty() {
         return Err(ApiError::conflict("no outdated online Linux node to update"));
     }
+
     if ids.len() > 500 {
         return Err(ApiError::bad_request("at most 500 nodes per rollout"));
     }
+
     if batch == 0 || batch > crate::jobs::agent_rollout::MAX_BATCH {
         return Err(ApiError::bad_request("batch: 1 to 100 nodes"));
     }
+
     if state.config.jobs.concurrency < 2 {
         return Err(ApiError::conflict("rollouts need [jobs] concurrency of at least 2"));
     }
+
     let mut refused: Option<(forge_core::DomainError, Vec<ServerId>)> = None;
+
     for id in &ids {
         let req = forge_core::AccessRequest::new(principal.clone(), Action::ServerCommand, server_ref(*id), ctx);
         if let Err(e) = state.authz.authorize(&req).await {
             refused.get_or_insert_with(|| (e, Vec::new())).1.push(*id);
         }
     }
+
     if let Some((e, nodes)) = refused {
         if origin == "auto" {
             for id in &nodes {
@@ -105,10 +111,13 @@ async fn submit_rollout(
                     .await;
             }
         }
+
         let mut err = ApiError::from(e);
         err.message = format!("{} ({} of {} nodes refused)", err.message, nodes.len(), ids.len());
+
         return Err(err);
     }
+
     // Each child job is filed under its node's own workspace.
     let workspaces: serde_json::Map<String, Value> = state
         .store
@@ -119,12 +128,14 @@ async fn submit_rollout(
         .map(|s| (s.id.to_string(), json!(s.workspace_id)))
         .collect();
     let _guard = SUBMIT_LOCK.lock().await;
+
     if let Some(j) = active_jobs(&state.store, "agent.rollout").await?.first() {
         return Err(ApiError::conflict(format!(
             "rollout {} is still queued or running: wait for it to finish or cancel it",
             j.id
         )));
     }
+
     // On the platform, not a workspace: the rollout lists nodes (and their
     // errors) from every workspace, so only platform-wide roles see or
     // cancel it.
@@ -156,6 +167,7 @@ pub async fn rollout(
     let ids = if req.server_ids.is_empty() { outdated_ids(&state).await? } else { req.server_ids };
     let batches = ids.len().div_ceil(req.batch.max(1));
     let n = ids.len();
+
     let job = match submit_rollout(&state, ids, req.batch, caller.principal(), caller.ctx(), "manual").await {
         Ok(j) => j,
         Err(e) => {
@@ -163,6 +175,7 @@ pub async fn rollout(
             return Err(e);
         }
     };
+
     caller
         .audit(
             "agent.rollout",
@@ -171,6 +184,7 @@ pub async fn rollout(
             json!({ "nodes": n, "batch": req.batch, "batches": batches, "target": target_version(&state) }),
         )
         .await;
+
     Ok((
         StatusCode::ACCEPTED,
         Json(json!({ "job": job, "target": target_version(&state), "nodes": n, "batches": batches })),
@@ -190,16 +204,21 @@ const FOLLOW_UP_POLL: std::time::Duration = std::time::Duration::from_secs(15);
 /// `system.update.agents` with the outcome.
 pub(crate) async fn update_follow_up(state: AppState, f: crate::update::AgentFollowUp) {
     use forge_core::model::AuditOutcome;
+
     if f.mode != "rollout" {
         return;
     }
+
     let who = f.principal.to_string();
+
     // Wait until the reconnecting fleet settles: the same outdated set on two
     // polls in a row, or the deadline.
     let deadline = tokio::time::Instant::now() + FOLLOW_UP_WAIT;
     let mut last: Option<Vec<ServerId>> = None;
+
     let ids = loop {
         tokio::time::sleep(FOLLOW_UP_POLL).await;
+
         let now = match outdated_ids(&state).await {
             Ok(ids) => ids,
             Err(e) => {
@@ -207,11 +226,14 @@ pub(crate) async fn update_follow_up(state: AppState, f: crate::update::AgentFol
                 Vec::new()
             }
         };
+
         if (!now.is_empty() && last.as_ref() == Some(&now)) || tokio::time::Instant::now() >= deadline {
             break now;
         }
+
         last = Some(now);
     };
+
     if ids.is_empty() {
         state
             .audit_system(
@@ -221,7 +243,9 @@ pub(crate) async fn update_follow_up(state: AppState, f: crate::update::AgentFol
             .await;
         return;
     }
+
     let n = ids.len();
+
     match submit_rollout(&state, ids, f.batch, f.principal, f.context, "update").await {
         Ok(job) => {
             state
@@ -237,6 +261,7 @@ pub(crate) async fn update_follow_up(state: AppState, f: crate::update::AgentFol
             } else {
                 AuditOutcome::Failure
             };
+
             tracing::warn!(error = %e.message, "agent follow-up of the update was not started");
             state
                 .audit_system_outcome(
@@ -295,6 +320,7 @@ const fn default_batch() -> usize {
 fn minutes(hhmm: &str) -> Option<u32> {
     let (h, m) = hhmm.split_once(':')?;
     let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
+
     (h < 24 && m < 60 && hhmm.len() == 5).then_some(h * 60 + m)
 }
 
@@ -303,15 +329,19 @@ impl AutoUpdate {
         let (Some(s), Some(e)) = (minutes(&self.start), minutes(&self.end)) else {
             return Err("start and end: HH:MM (UTC)".into());
         };
+
         if s == e {
             return Err("the window needs a length: start and end differ".into());
         }
+
         if let Some(d) = self.days.iter().find(|d| !DAYS.contains(&d.as_str())) {
             return Err(format!("unknown day `{d}`: mon, tue, wed, thu, fri, sat or sun"));
         }
+
         if self.batch == 0 || self.batch > crate::jobs::agent_rollout::MAX_BATCH {
             return Err("batch: 1 to 100 nodes".into());
         }
+
         Ok(())
     }
 
@@ -321,6 +351,7 @@ impl AutoUpdate {
         let (Some(s), Some(e)) = (minutes(&self.start), minutes(&self.end)) else { return false };
         let mins_of_week = |ms: i64| {
             let days = ms.div_euclid(86_400_000);
+
             // 1970-01-01 was a Thursday (index 3 from Monday).
             let weekday = usize::try_from((days + 3).rem_euclid(7)).unwrap_or(0);
             let m = u32::try_from(ms.rem_euclid(86_400_000) / 60_000).unwrap_or(0);
@@ -328,6 +359,7 @@ impl AutoUpdate {
         };
         let (wd, m) = mins_of_week(now_ms);
         let day_ok = |d: usize| self.days.is_empty() || self.days.iter().any(|x| x == DAYS[d]);
+
         if s < e {
             day_ok(wd) && (s..e).contains(&m)
         } else {
@@ -353,6 +385,7 @@ async fn save_auto(state: &AppState, a: &AutoUpdate) -> ApiResult<()> {
     use forge_core::ports::SettingsRepository;
     let v = serde_json::to_string(a).map_err(forge_core::DomainError::internal)?;
     state.store.put_setting(AUTO_KEY, &v, state.clock.now()).await?;
+
     Ok(())
 }
 
@@ -404,6 +437,7 @@ pub async fn auto_put(
     Json(req): Json<AutoUpdateInput>,
 ) -> ApiResult<Json<Value>> {
     let platform = EntityRef::platform();
+
     if state.config.mfa_required() && !caller.ctx().mfa {
         caller.audit_denied("agent.auto_update.update", &platform, None, "MFA required").await;
         return Err(ApiError::new(
@@ -412,6 +446,7 @@ pub async fn auto_put(
             "changing automatic agent updates needs an MFA-verified session",
         ));
     }
+
     caller.authorize(Action::SystemUpdate, platform.clone()).await?;
     let mut a = load_auto(&state).await?;
     a.enabled = req.enabled;
@@ -425,10 +460,12 @@ pub async fn auto_put(
         context: caller.ctx(),
         at: state.clock.now(),
     });
+
     // Saving again (with fresh MFA) clears the last refusal.
     if a.enabled {
         a.last_error = None;
     }
+
     save_auto(&state, &a).await?;
     caller
         .audit(
@@ -438,6 +475,7 @@ pub async fn auto_put(
             json!({ "enabled": a.enabled, "days": a.days, "start": a.start, "end": a.end, "batch": a.batch }),
         )
         .await;
+
     Ok(Json(auto_view(&a)))
 }
 
@@ -449,11 +487,13 @@ pub async fn auto_put(
 /// person is enabled and their MFA is at most 90 days old.
 pub(crate) async fn auto_run(state: AppState, mut shutdown: tokio::sync::watch::Receiver<bool>) {
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
+
     loop {
         tokio::select! {
             _ = tick.tick() => {}
             _ = shutdown.changed() => return,
         }
+
         if let Err(e) = auto_tick(&state).await {
             tracing::warn!(error = %e.message, "automatic agent update");
         }
@@ -487,18 +527,22 @@ async fn auto_tick(state: &AppState) -> ApiResult<()> {
     if !a.enabled || a.last_target.as_deref() == Some(target) || !a.in_window(now.0) {
         return Ok(());
     }
+
     let Some(by) = a.enabled_by.clone() else { return Ok(()) };
     let ids = outdated_ids(state).await?;
     if ids.is_empty() || !active_jobs(&state.store, "agent.rollout").await?.is_empty() {
         return Ok(());
     }
+
     let who = by.principal.to_string();
     let forge_core::Principal::User(uid) = &by.principal;
+
     let user = match state.store.get_user(*uid).await {
         Ok(u) => Some(u),
         Err(forge_core::DomainError::NotFound(_)) => None,
         Err(e) => return Err(e.into()),
     };
+
     let (last_target, last_job, last_error) = if let Some(why) = auto_refusal(user.as_ref(), &by, now) {
         state
             .audit_system_outcome(
@@ -517,6 +561,7 @@ async fn auto_tick(state: &AppState) -> ApiResult<()> {
                         json!({ "as": who, "job": job.id, "nodes": ids.len(), "batch": a.batch, "target": target }),
                     )
                     .await;
+
                 // One rollout per version: after it, a person looks before the next try.
                 (Some(target.to_owned()), Some(job.id.to_string()), None)
             }
@@ -526,6 +571,7 @@ async fn auto_tick(state: &AppState) -> ApiResult<()> {
                 } else {
                     AuditOutcome::Failure
                 };
+
                 state
                     .audit_system_outcome(
                         "agent.auto_update.failed",
@@ -533,18 +579,22 @@ async fn auto_tick(state: &AppState) -> ApiResult<()> {
                         json!({ "as": who, "target": target, "error": e.message }),
                     )
                     .await;
+
                 // Not recorded as tried: the next tick in the window tries again.
                 (a.last_target.clone(), a.last_job.clone(), Some(e.message))
             }
         }
     };
+
     // Re-read so a setting saved meanwhile is kept; only the outcome is ours.
     let mut fresh = load_auto(state).await?;
     fresh.last_target = last_target;
     fresh.last_job = last_job;
+
     if fresh.enabled_by.as_ref().map(|b| b.at) == Some(by.at) {
         fresh.last_error = last_error;
     }
+
     save_auto(state, &fresh).await
 }
 
@@ -625,6 +675,7 @@ mod tests {
     fn window_now(now_ms: i64) -> (String, String) {
         let m = now_ms.rem_euclid(86_400_000) / 60_000;
         let f = |m: i64| format!("{:02}:{:02}", m.rem_euclid(1440) / 60, m.rem_euclid(1440) % 60);
+
         (f(m - 60), f(m + 60))
     }
 
@@ -637,12 +688,15 @@ mod tests {
     async fn auto_tick_refuses_and_audits_as_the_person_and_retries_a_failed_submit() {
         use forge_core::ports::{ServerRepository, UserRepository};
         let dir = tempfile::tempdir().unwrap();
+
         // Agent builds to hand out: without them no node is eligible.
         let dist = dir.path().join("dist");
         std::fs::create_dir_all(&dist).unwrap();
+
         for bin in ["forge-agent-linux-x86_64", "forge-agent-helper-linux-x86_64"] {
             std::fs::write(dist.join(bin), bin).unwrap();
         }
+
         let config = crate::config::ServerConfig {
             data_dir: dir.path().to_path_buf(),
             agent_dist_dir: Some(dist),
@@ -662,6 +716,7 @@ mod tests {
         .await
         .unwrap();
         let now = state.clock.now();
+
         // One outdated, online Linux node.
         let node = forge_core::model::Server {
             id: ServerId::new(),
@@ -802,6 +857,7 @@ pub async fn versions(State(state): State<AppState>, caller: Caller) -> ApiResul
         })
         .collect();
     let outdated = nodes.iter().filter(|n| n.outdated).count();
+
     Ok(Json(VersionsView { target, server: crate::VERSION, outdated, nodes }))
 }
 
@@ -813,6 +869,7 @@ pub async fn versions(State(state): State<AppState>, caller: Caller) -> ApiResul
 async fn update_key(state: &AppState, id: ServerId) -> ApiResult<String> {
     use forge_core::model::JobStatus;
     let base = format!("agent.update:{id}:{}", target_version(state));
+
     for n in 0..MAX_UPDATE_ATTEMPTS {
         let key = if n == 0 { base.clone() } else { format!("{base}:r{n}") };
         match state.store.find_job_by_key("agent.update", &key).await? {
@@ -821,6 +878,7 @@ async fn update_key(state: &AppState, id: ServerId) -> ApiResult<String> {
             _ => return Ok(key),
         }
     }
+
     Err(ApiError::conflict(format!(
         "this node's update to {} failed {MAX_UPDATE_ATTEMPTS} times; fix the node before trying again",
         target_version(state)
@@ -836,17 +894,21 @@ async fn submit(state: &AppState, caller: &Caller, id: ServerId) -> ApiResult<Jo
     if node.status == AgentStatus::Revoked {
         return Err(ApiError::conflict("the node is revoked"));
     }
+
     // One update per node at a time: a rollout's update (or another key)
     // already in flight is not doubled. A double submit still finds its job.
     let _guard = SUBMIT_LOCK.lock().await;
     let key = update_key(state, id).await?;
+
     if let Some(other) = active_update(&state.store, id).await?
         && other.idempotency_key.as_deref() != Some(key.as_str())
     {
         let why = format!("another update of this node is queued or running (job {})", other.id);
         caller.audit_denied("agent.update", &server_ref(id), Some(node.workspace_id), &why).await;
+
         return Err(ApiError::conflict(why));
     }
+
     Ok(state
         .jobs
         .submit(NewJob {
@@ -890,13 +952,16 @@ pub async fn update_many(
     if ids.len() > 500 {
         return Err(ApiError::bad_request("at most 500 nodes per request"));
     }
+
     let mut jobs = Vec::new();
     let mut refused = Vec::new();
+
     for id in ids {
         match submit(&state, &caller, id).await {
             Ok(j) => jobs.push(json!({ "server_id": id, "job_id": j.id })),
             Err(e) => refused.push(json!({ "server_id": id, "error": e.message })),
         }
     }
+
     Ok((StatusCode::ACCEPTED, Json(json!({ "target": target_version(&state), "jobs": jobs, "refused": refused }))))
 }

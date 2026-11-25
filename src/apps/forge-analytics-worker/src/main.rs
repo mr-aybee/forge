@@ -27,15 +27,18 @@ const STOP_WAIT: Duration = Duration::from_secs(20);
 
 fn config_path() -> anyhow::Result<PathBuf> {
     let mut args = std::env::args_os().skip(1);
+
     while let Some(a) = args.next() {
         if a == "--version" {
             println!("forge-analytics-worker {}", env!("CARGO_PKG_VERSION"));
             std::process::exit(0);
         }
+
         if a == "--config" {
             return args.next().map(PathBuf::from).context("--config needs a path");
         }
     }
+
     anyhow::bail!("usage: forge-analytics-worker --config <file> (started by forge-server)")
 }
 
@@ -49,6 +52,7 @@ fn main() -> anyhow::Result<()> {
         .init();
     let path = config_path()?;
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+
     runtime.block_on(run(path))
 }
 
@@ -61,6 +65,7 @@ async fn run(path: PathBuf) -> anyhow::Result<()> {
     let secret = secret.trim().to_owned();
     anyhow::ensure!(secret.len() >= 32, "the control secret on stdin is too short");
     let password = std::env::var(PASSWORD_ENV).ok();
+
     // The agent listener's identity follows on the next line (D-142).
     let agent_tls = match &config.agent_listener {
         Some(_) => {
@@ -76,6 +81,7 @@ async fn run(path: PathBuf) -> anyhow::Result<()> {
     let worker = Arc::new(Worker::build(&config, password.as_deref(), Arc::new(forge_core::SystemClock)).await?);
     let (stop, stopped) = watch::channel(false);
     let loops = worker.start(&stopped);
+
     if let (Some(l), Some(id)) = (&config.agent_listener, &agent_tls) {
         let tls = worker.listener_tls(&l.ca_pem, id).context("agent listener TLS")?;
         let uploads = worker
@@ -86,6 +92,7 @@ async fn run(path: PathBuf) -> anyhow::Result<()> {
             .with_context(|| format!("binding the agent listener on {}", l.listen))?;
         tokio::spawn(forge_analytics_worker::ingest::upload::serve(tcp, tls, uploads, stopped.clone()));
     }
+
     drop(agent_tls);
     let listener = Listener::bind(&config.endpoint).await.context("binding the control socket")?;
     let mut out = tokio::io::stdout();
@@ -97,13 +104,16 @@ async fn run(path: PathBuf) -> anyhow::Result<()> {
     let stop_on_eof = stop.clone();
     tokio::spawn(async move {
         let mut line = String::new();
+
         loop {
             line.clear();
+
             match stdin.read_line(&mut line).await {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {}
             }
         }
+
         stop_on_eof.send_replace(true);
     });
     let stop_on_signal = stop.clone();
@@ -114,13 +124,16 @@ async fn run(path: PathBuf) -> anyhow::Result<()> {
 
     serve(&listener, worker, Arc::new(secret), stopped).await;
     tracing::info!("analytics worker stopping");
+
     for t in loops {
         if tokio::time::timeout(STOP_WAIT, t).await.is_err() {
             tracing::warn!("an analytics loop did not stop in time");
         }
     }
+
     listener.cleanup().await;
     drop(stop);
+
     Ok(())
 }
 

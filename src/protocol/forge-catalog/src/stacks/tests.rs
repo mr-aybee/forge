@@ -17,6 +17,7 @@ fn svc(extra: Value) -> Value {
     if let (Some(m), Value::Object(e)) = (s.as_object_mut(), extra) {
         m.extend(e);
     }
+
     json!({ "services": { "web": s } })
 }
 
@@ -83,6 +84,7 @@ fn some_things_are_never_allowed() {
         let r = check(&svc(extra.clone()), &policy());
         assert!(!r.blocking(true).is_empty(), "{extra} must be blocked even with stack.privileged");
     }
+
     let r = check(&json!({ "include": ["a.yml"], "services": { "a": { "image": "x" } } }), &policy());
     assert!(!r.blocking(true).is_empty());
     assert!(!blocked(&json!({ "services": { "a": {} } })).is_empty(), "image required");
@@ -118,6 +120,7 @@ fn approved_roots_respect_component_boundaries() {
     assert_eq!(normalize_abs("a/b"), None);
     let t = svc(json!({ "volumes": ["/srv/database:/x"] }));
     assert!(check(&t, &policy()).privileged);
+
     // The stack's own folder is fine for relative binds.
     let t = svc(json!({ "volumes": ["./data:/x", ".:/y:ro"] }));
     assert!(check(&t, &policy()).findings.is_empty());
@@ -135,6 +138,7 @@ fn host_paths_are_listed_for_the_node_recheck() {
         host_paths(&t, dir),
         vec![format!("{dir}/d"), "/srv/data/x".into(), "/srv/y".into(), "/srv/data/v".into(), format!("{dir}/s.txt")]
     );
+
     // A symlink inside an approved root that points at /etc is caught.
     assert!(check_path("/etc", &policy()).privileged);
     assert!(check_path("/srv/data/ok", &policy()).findings.is_empty());
@@ -166,6 +170,7 @@ fn interpolation_follows_compose() {
     assert_eq!(i("${E?needed}").unwrap(), "");
     assert!(i("${A").is_err());
     assert_eq!(i("cost $5 é").unwrap(), "cost $5 é");
+
     // A variable cannot smuggle a host path past the check.
     let env = BTreeMap::from([("D".to_owned(), "/".to_owned())]);
     let t = interpolate(&svc(json!({ "volumes": ["${D}:/host"] })), &env).unwrap();
@@ -240,6 +245,7 @@ fn split_keeps_only_what_each_node_needs() {
     assert!(a.get("secrets").is_none());
     let b = part_for(&t, &BTreeSet::from(["db".to_owned()]), "ns/shop").unwrap();
     assert_eq!(b["secrets"], json!({ "pw": { "environment": "PW" } }));
+
     // web depends on api: splitting them apart is an error.
     assert!(part_for(&t, &BTreeSet::from(["web".to_owned()]), "ns/shop").is_err());
     assert_eq!(with_dependencies(&t, &["web".to_owned()]), BTreeSet::from(["web".to_owned(), "api".to_owned()]));
@@ -285,6 +291,7 @@ fn yaml_output_round_trips_through_json_rules() {
     assert!(y.contains("\"on\": \"yes\"\n"), "{y}");
     assert!(y.contains("\"1\": 2\n"), "{y}");
     assert!(y.contains("      - \"sh\"\n"), "{y}");
+
     // Key order depends on serde_json's `preserve_order` (feature unification).
     assert!(
         y.contains("      - host_ip: \"::1\"\n        target: 1\n")
@@ -319,6 +326,7 @@ fn parts_are_rechecked_and_literal_on_the_node() {
     p.policy.allow_privileged = true;
     assert!(p.prepare().is_ok());
     assert!(part(svc(json!({})), &[("COMPOSE_FILE", "x")], dir).prepare().is_err());
+
     // Folder: the default, or inside an approved root, and matching the policy.
     assert!(part(svc(json!({})), &[], "/srv/data/shop").prepare().is_ok());
     assert!(part(svc(json!({})), &[], "/etc/shop").prepare().is_err());
@@ -402,12 +410,14 @@ fn binds_through_a_writable_bind_are_refused() {
     }});
     let r = check(&t, &policy());
     assert!(!r.blocking(true).is_empty(), "{:?}", r.findings);
+
     // Long syntax and approved roots alike.
     let t = json!({ "services": {
         "a": { "image": "x", "volumes": [{ "type": "bind", "source": "/srv/data", "target": "/d" }] },
         "b": { "image": "x", "volumes": ["/srv/data/site:/s"] }
     }});
     assert!(!check(&t, &policy()).blocking(true).is_empty());
+
     // Files Compose reads may not lie in a writable bind either.
     for extra in [
         json!({ "volumes": ["./data:/data"], "env_file": ["./data/app.env"] }),
@@ -415,10 +425,13 @@ fn binds_through_a_writable_bind_are_refused() {
     ] {
         assert!(!check(&svc(extra.clone()), &policy()).blocking(true).is_empty(), "{extra}");
     }
+
     let t = json!({ "services": { "a": { "image": "x", "volumes": ["./data:/data"] } }, "configs": { "c": { "file": "./data/c.conf" } } });
     assert!(!check(&t, &policy()).blocking(true).is_empty());
+
     // A writable bind of the stack folder exposes compose.yaml and .env.
     assert!(!check(&svc(json!({ "volumes": [".:/app"] })), &policy()).blocking(true).is_empty());
+
     // Read-only parents, shared folders and siblings are fine.
     let ok = json!({ "services": {
         "a": { "image": "x", "volumes": [".:/app:ro", "./data:/data", "./html:/html"] },
@@ -426,6 +439,7 @@ fn binds_through_a_writable_bind_are_refused() {
     }});
     let r = check(&ok, &policy());
     assert!(r.blocking(false).is_empty(), "{:?}", r.findings);
+
     // env_file is listed for the node's link check.
     let t = svc(json!({ "env_file": [".env", { "path": "./x.env" }] }));
     let dir = "/opt/forge/stacks/web/shop";
@@ -445,9 +459,11 @@ fn host_network_by_name_needs_privileged() {
         assert!(r.privileged, "{nets}");
         assert!(r.blocking(true).is_empty(), "{nets}");
     }
+
     // A project network keyed `host` is an ordinary network.
     let t = json!({ "services": { "a": { "image": "x", "networks": ["host"] } }, "networks": { "host": {} } });
     assert!(!check(&t, &policy()).privileged);
+
     // `service:` must name a service of the stack.
     let t = json!({ "services": { "a": { "image": "x", "network_mode": "service:b" }, "b": { "image": "x" } } });
     assert!(!check(&t, &policy()).privileged);
@@ -469,6 +485,7 @@ fn hooks_environments_and_unknown_keys_are_caught() {
         assert!(r.privileged, "{extra}");
         assert!(r.blocking(true).is_empty(), "{extra}: {:?}", r.findings);
     }
+
     for extra in [
         json!({ "provider": { "type": "model", "options": {} } }),
         json!({ "some_future_key": true }),
@@ -476,6 +493,7 @@ fn hooks_environments_and_unknown_keys_are_caught() {
     ] {
         assert!(!check(&svc(extra.clone()), &policy()).blocking(true).is_empty(), "{extra}");
     }
+
     let ok = svc(json!({ "post_start": [{ "command": "id", "user": "app" }], "x-note": 1, "init": true }));
     assert!(check(&ok, &policy()).findings.is_empty());
 }
@@ -511,6 +529,7 @@ fn env_values_are_redacted_from_messages() {
     assert_eq!(redact("ping -phunter2 /srv/very-secret-dir 127", &env), "ping -p${DB_PASSWORD} ${SRC} 12${PIN_KEY}");
     let v = redact_value(&json!({ "m": ["hunter2"] }), &env);
     assert_eq!(v, json!({ "m": ["${DB_PASSWORD}"] }));
+
     // The node's errors do not carry .env values either.
     let part = StackPart {
         environment: "web".into(),

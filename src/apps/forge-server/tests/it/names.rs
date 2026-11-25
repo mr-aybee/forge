@@ -6,11 +6,12 @@
 
 use std::time::Duration;
 
-use crate::common::*;
 use forge_agent::enroll::{HostFacts, enroll};
 use forge_agent::{Agent, AgentConfig, StatePaths};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 struct Node {
     id: String,
@@ -24,6 +25,7 @@ async fn node(h: &Harness, admin: &Client, hostname: &str) -> Node {
     let dir = tempfile::tempdir().unwrap();
     let paths = StatePaths::new(dir.path());
     let mut config = AgentConfig::new(h.agent_url.clone());
+
     // Everything except `names`: never touch this machine's hosts file.
     config.allowed_commands.retain(|c| c != "names");
     let facts = HostFacts { hostname: hostname.into(), os: "linux".into(), arch: "x86_64".into() };
@@ -31,12 +33,14 @@ async fn node(h: &Harness, admin: &Client, hostname: &str) -> Node {
     let agent = Agent::load(paths).unwrap();
     let (stop, rx) = tokio::sync::watch::channel(false);
     tokio::spawn(agent.run(rx));
+
     Node { id: id.server_id, _stop: stop, _dir: dir }
 }
 
 async fn names(c: &Client) -> Value {
     let (s, v) = c.get("/api/v1/names").await;
     assert_eq!(s, StatusCode::OK, "{v}");
+
     v
 }
 
@@ -62,22 +66,28 @@ async fn names_follow_renames_and_reach_every_node() {
     // The signed command reaches both nodes (and they refuse it here).
     for n in [&a, &b] {
         let mut last = Value::Null;
+
         for _ in 0..150 {
             last = node_row(&names(&admin).await, &n.id)["sync"].clone();
+
             if last["error"].as_str().is_some_and(|e| e.contains("`names` is not allowed")) {
                 break;
             }
+
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
+
         assert!(last["error"].as_str().unwrap_or_default().contains("`names` is not allowed"), "{last}");
     }
 
     // Rename b: validated, unique in the workspace, audited.
     let url = |n: &Node| format!("/api/v1/servers/{}/dns-name", n.id);
+
     for bad in ["Bad_Name", "localhost", "-x", "a.b", "a b", "x\n10.0.0.1 evil", &"a".repeat(64)] {
         let (s, body) = admin.put(&url(&b), json!({ "label": bad })).await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{bad:?}: {body}");
     }
+
     // Review of D-084: b cannot take the name a derives.
     let first = if la == "web-01" { &b } else { &a };
     let (s, body) = admin.put(&url(first), json!({ "label": "web-01" })).await;
@@ -98,6 +108,7 @@ async fn names_follow_renames_and_reach_every_node() {
     let (s, _) = admin.put(&format!("/api/v1/servers/{}/name", a.id), json!({ "name": "Front Door" })).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(node_row(&names(&admin).await, &a.id)["label"], la);
+
     // Renaming a away leaves b alone, and a's old name stays free.
     let (s, body) = admin.put(&url(&a), json!({ "label": "front" })).await;
     assert_eq!(s, StatusCode::OK, "{body}");
@@ -141,15 +152,18 @@ async fn the_suffix_is_a_validated_audited_runtime_setting() {
     // Without MFA: refused and audited.
     let (s, e) = admin.put("/api/v1/names/suffix", json!({ "suffix": "home.arpa" })).await;
     assert_eq!((s, e["title"].as_str()), (StatusCode::FORBIDDEN, Some("step_up_required")), "{e}");
+
     // The generic settings editor cannot be used around it.
     let (s, _) = admin.put("/api/v1/settings/names.suffix", json!({ "value": "com" })).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
 
     step_up(&mut admin).await;
+
     for bad in ["com", "net", "org", "Home.Arpa", "a..b", "x.localhost", "-a.internal", "lab_1.internal"] {
         let (s, body) = admin.put("/api/v1/names/suffix", json!({ "suffix": bad })).await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{bad:?}: {body}");
     }
+
     let (s, v) = admin.put("/api/v1/names/suffix", json!({ "suffix": "home.arpa" })).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!((v["suffix"].as_str(), v["source"].as_str()), (Some("home.arpa"), Some("setting")), "{v}");

@@ -131,19 +131,24 @@ impl UserRepository for Store {
 
     async fn get_users(&self, ids: &[UserId]) -> DomainResult<Vec<User>> {
         let mut out = Vec::with_capacity(ids.len());
+
         // One statement per 200 ids keeps the placeholder count small.
         for chunk in ids.chunks(200) {
             let marks: Vec<String> = (1..=chunk.len()).map(|i| format!("${i}")).collect();
             let sql = format!("SELECT * FROM users WHERE id IN ({})", marks.join(", "));
             let mut q = sqlx::query(&sql);
+
             for id in chunk {
                 q = q.bind(id.to_string());
             }
+
             let rows = q.fetch_all(self.pool()).await.map_err(db_err)?;
+
             for r in &rows {
                 out.push(user_row(r)?);
             }
         }
+
         Ok(out)
     }
 

@@ -101,6 +101,7 @@ impl StackRepository for Store {
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
+
         tx.commit().await.map_err(db_err)
     }
 
@@ -175,11 +176,13 @@ impl StackRepository for Store {
             None => sqlx::query("SELECT * FROM stacks ORDER BY name").fetch_all(self.pool()).await,
         }
         .map_err(db_err)?;
+
         rows.iter().map(stack_row).collect()
     }
 
     async fn delete_stack(&self, id: StackId) -> DomainResult<()> {
         let mut tx = self.pool().begin().await.map_err(db_err)?;
+
         for q in [
             "DELETE FROM stack_nodes WHERE stack_id = $1",
             "DELETE FROM stack_revisions WHERE stack_id = $1",
@@ -187,6 +190,7 @@ impl StackRepository for Store {
         ] {
             sqlx::query(q).bind(id.to_string()).execute(&mut *tx).await.map_err(db_err)?;
         }
+
         tx.commit().await.map_err(db_err)
     }
 
@@ -219,6 +223,7 @@ impl StackRepository for Store {
             .await
             .map_err(db_err)?;
         tx.commit().await.map_err(db_err)?;
+
         Ok(next)
     }
 

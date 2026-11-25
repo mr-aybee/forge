@@ -46,16 +46,20 @@ impl FakeSmtp {
                 tokio::spawn(async move { this.session(stream).await });
             }
         });
+
         me
     }
 
     async fn session(&self, stream: tokio::net::TcpStream) {
         let (r, mut w) = stream.into_split();
         let mut lines = BufReader::new(r).lines();
+
         if w.write_all(b"220 fake.test ESMTP\r\n").await.is_err() {
             return;
         }
+
         let mut rcpts = Vec::new();
+
         while let Ok(Some(line)) = lines.next_line().await {
             let upper = line.to_ascii_uppercase();
             let answer = if upper.starts_with("EHLO") || upper.starts_with("HELO") {
@@ -70,14 +74,18 @@ impl FakeSmtp {
                 if w.write_all(b"354 go ahead\r\n").await.is_err() {
                     return;
                 }
+
                 let mut data = String::new();
+
                 while let Ok(Some(l)) = lines.next_line().await {
                     if l == "." {
                         break;
                     }
+
                     data.push_str(&l);
                     data.push('\n');
                 }
+
                 let reply = self.script.lock().unwrap().pop_front().unwrap_or(*self.always.lock().unwrap());
                 self.mails.lock().unwrap().push(Mail { rcpts: std::mem::take(&mut rcpts), data, reply });
                 format!("{reply} done\r\n")
@@ -89,6 +97,7 @@ impl FakeSmtp {
             } else {
                 "500 unknown\r\n".to_owned()
             };
+
             if w.write_all(answer.as_bytes()).await.is_err() {
                 return;
             }
@@ -135,6 +144,7 @@ async fn a_fired_alarm_sends_exactly_one_email_and_a_test_message_goes_out() {
     })
     .await;
     assert_eq!((sent["attempt_count"].as_i64(), sent["last_http_status"].as_i64()), (Some(1), Some(250)), "{sent}");
+
     // Several more passes add nothing.
     tokio::time::sleep(quiet_period(&h)).await;
     let mails = smtp.mails();
@@ -145,8 +155,10 @@ async fn a_fired_alarm_sends_exactly_one_email_and_a_test_message_goes_out() {
     assert!(m.data.contains("Resource: server lab-b"), "{}", m.data);
     assert!(m.data.contains(&format!("Message-ID: <{}@", sent["id"].as_str().unwrap())), "{}", m.data);
     assert!(m.data.contains("Auto-Submitted: auto-generated"), "{}", m.data);
+
     // The body is quoted-printable: `=` is written `=3D`.
     assert!(m.data.contains("Observed: node.disk.root.percent =3D 97.5"), "{}", m.data);
+
     // Plain text and a designed HTML part with the brand mark inline (D-119).
     assert!(m.data.contains("Content-Type: multipart/alternative"), "{}", m.data);
     let (plain, html) = (m.data.find("Content-Type: text/plain"), m.data.find("Content-Type: text/html"));
@@ -225,6 +237,7 @@ async fn the_smtp_password_is_write_only() {
     let c = created(&admin, "/api/v1/notification-channels", body.clone()).await;
     assert_eq!(c["email"]["password_set"], true);
     let cid = c["id"].as_str().unwrap().to_owned();
+
     // An update without the password keeps it.
     let mut keep = body.clone();
     keep["email"].as_object_mut().unwrap().remove("password");
@@ -245,9 +258,11 @@ async fn the_smtp_password_is_write_only() {
     let (_, one) = admin.get(&format!("/api/v1/notification-channels/{cid}")).await;
     let (_, history) = admin.get("/api/v1/notification-deliveries").await;
     let (_, audit) = admin.get("/api/v1/audit?limit=200").await;
+
     for (what, v) in [("create", &c), ("list", &list), ("get", &one), ("test", &view), ("deliveries", &history)] {
         assert!(!v.to_string().contains(SMTP_PASSWORD), "{what}: {v}");
     }
+
     let audit = audit.to_string();
     assert!(audit.contains(AUDIT_CREATE) && audit.contains(AUDIT_UPDATE), "channel changes are audited");
     assert!(!audit.contains(SMTP_PASSWORD), "the audit log never holds the SMTP password");
@@ -264,6 +279,7 @@ fn subject(data: &str) -> String {
     use base64::Engine as _;
     let mut raw = String::new();
     let mut inside = false;
+
     for line in data.lines() {
         if let Some(rest) = line.strip_prefix("Subject:") {
             raw.push_str(rest.trim());
@@ -275,20 +291,25 @@ fn subject(data: &str) -> String {
             break;
         }
     }
+
     // White space between two encoded words is dropped; any other stays.
     let mut out = String::new();
     let mut last_encoded = false;
+
     for word in raw.split(' ') {
         let encoded = word.strip_prefix("=?utf-8?b?").or_else(|| word.strip_prefix("=?UTF-8?B?"));
         let decoded = encoded
             .and_then(|w| w.strip_suffix("?="))
             .map(|b64| String::from_utf8(base64::engine::general_purpose::STANDARD.decode(b64).unwrap()).unwrap());
+
         if !out.is_empty() && !(last_encoded && decoded.is_some()) {
             out.push(' ');
         }
+
         last_encoded = decoded.is_some();
         out.push_str(&decoded.unwrap_or_else(|| word.to_owned()));
     }
+
     out
 }
 
@@ -323,6 +344,7 @@ async fn a_policy_emails_named_users_and_role_holders() {
 
     let smtp = FakeSmtp::start(&[], 250).await;
     let c = created(&admin, "/api/v1/notification-channels", email_channel("Ops mail", &smtp)).await;
+
     // An email channel is required, and it must be one.
     let mut body = policy(&[]);
     body["email_users"] = json!([dev.id, nomail.id]);
@@ -383,6 +405,7 @@ async fn alert_emails_link_to_the_runtime_public_address() {
         async move { deliveries(c, &format!("?alarm={aid}&status=sent")).await.pop() }
     })
     .await;
+
     // Undo quoted-printable: soft line breaks and `=3D`.
     let body = smtp.mails()[0].data.replace("=\r\n", "").replace("=\n", "").replace("=3D", "=");
     let link = format!("https://forge.example.com/alerts?alarm={}", alarm.id);

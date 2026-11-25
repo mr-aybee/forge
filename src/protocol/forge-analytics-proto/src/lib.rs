@@ -21,10 +21,11 @@ pub use messages::{PROTOCOL, Reply, Request, Response, WorkerError};
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // reason: tests
 mod tests {
-    use super::*;
     use forge_core::analytics::{AnalyticsMaps, AppKey, Placement};
     use forge_core::logs::{LogFilter, LogPage, LogQuery, SearchLimits};
     use forge_core::{ServerId, ServiceId, Timestamp};
+
+    use super::*;
 
     async fn round_trip<T>(msg: &T, blob: &[u8], limits: Limits) -> (T, Vec<u8>)
     where
@@ -32,6 +33,7 @@ mod tests {
     {
         let (mut a, mut b) = tokio::io::duplex(1 << 20);
         write_message(&mut a, msg, blob).await.unwrap();
+
         read_message(&mut b, limits).await.unwrap()
     }
 
@@ -77,11 +79,13 @@ mod tests {
             Request::LogHistogram { query: query(), now: Timestamp(9) },
             Request::ContainerHistory { server, container: Some("db".into()), from: 1, to: 2, limit: 3 },
         ];
+
         for r in requests {
             let (back, blob) = round_trip(&r, b"abc\n\0", REQUEST_LIMITS).await;
             assert_eq!(back, r);
             assert_eq!(blob, b"abc\n\0");
         }
+
         let answers: Vec<Response> = vec![
             Ok(Reply::Ok),
             Ok(Reply::TelemetryAck { ack: 7 }),
@@ -90,6 +94,7 @@ mod tests {
             Err(WorkerError::Unavailable { reason: "down".into() }),
             Err(WorkerError::ProtocolMismatch { expected: 1, got: 2 }),
         ];
+
         for a in answers {
             let (back, blob) = round_trip(&a, &[], RESPONSE_LIMITS).await;
             assert_eq!(back, a);

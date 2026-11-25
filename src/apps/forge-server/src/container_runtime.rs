@@ -109,12 +109,14 @@ async fn probe(state: &AppState, server: &Server, principal: &str) -> Engine {
     if !crate::agent_hub::linked(state, server.id) {
         return Engine::Unknown;
     }
+
     let command = Command::ContainerAction(ContainerAction { op: "info".into(), ..ContainerAction::default() });
     let (body, signed) = state.signer.issue(&server.id.to_string(), principal, command, state.clock.now(), PROBE_WAIT);
     if let Err(e) = state.hub.enqueue(server.id, &body.operation_id, signed) {
         tracing::warn!(server = %server.id, error = %e, "could not ask the node about Docker Engine");
         return Engine::Unknown;
     }
+
     classify(state.hub.wait(&body.operation_id, PROBE_WAIT).await.as_ref())
 }
 
@@ -124,16 +126,19 @@ async fn probe(state: &AppState, server: &Server, principal: &str) -> Engine {
 pub async fn nodes_without_engine(state: &AppState, principal: &str, servers: &[ServerId]) -> ApiResult<Vec<ServerId>> {
     let Some(package) = forge_catalog::find(DOCKER_PACKAGE) else { return Ok(Vec::new()) };
     let mut missing = Vec::new();
+
     for &id in servers {
         let server = state.store.get_server(id).await.map_err(|_| ApiError::not_found("server not found"))?;
         if !package.os.contains(&server.os.as_str()) {
             continue;
         }
+
         let record = recorded(&state.store.list_installations(Some(id)).await?);
         if asks_node(record) && install_needed(record, probe(state, &server, principal).await) {
             missing.push(id);
         }
     }
+
     Ok(missing)
 }
 
@@ -175,10 +180,13 @@ mod tests {
     fn the_record_says_installed_busy_failed_or_nothing() {
         assert_eq!(recorded(&[]), Recorded::None);
         assert_eq!(recorded(&[docker("installed")]), Recorded::Installed);
+
         for busy in ["pending", "installing", "updating", "restarting"] {
             assert_eq!(recorded(&[docker(busy)]), Recorded::Busy, "{busy}");
         }
+
         assert_eq!(recorded(&[docker("failed")]), Recorded::Failed);
+
         // `missing` ends in "ing" but is no action in progress: the node reported the package gone.
         assert_eq!(recorded(&[docker("missing")]), Recorded::None);
         let mut other = docker("installed");
@@ -199,13 +207,16 @@ mod tests {
     fn docker_is_installed_only_when_unrecorded_and_missing() {
         assert!(install_needed(Recorded::None, Engine::Missing));
         assert!(install_needed(Recorded::Failed, Engine::Missing), "a failed install is tried again");
+
         // An engine installed outside Forge, or a silent node: left alone.
         assert!(!install_needed(Recorded::None, Engine::Present));
         assert!(!install_needed(Recorded::None, Engine::Unknown));
+
         // Forge's own installation is trusted; the node is not even asked.
         for known in [Recorded::Installed, Recorded::Busy] {
             assert!(!asks_node(known) && !install_needed(known, Engine::Missing));
         }
+
         assert!(package_version().is_ok(), "the catalog has the Docker Engine package");
     }
 }

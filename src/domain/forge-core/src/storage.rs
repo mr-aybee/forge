@@ -297,6 +297,7 @@ mod tests {
         for a in BucketAccess::ALL {
             assert_eq!(BucketAccess::parse(a.as_str()), Some(a));
         }
+
         assert_eq!(BucketAccess::parse("admin"), None);
         assert!(BucketAccess::Read.allows(BucketAccess::Read));
         assert!(!BucketAccess::Read.allows(BucketAccess::ReadWrite));

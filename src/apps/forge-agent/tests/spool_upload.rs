@@ -93,6 +93,7 @@ impl Fixture {
         tokio::spawn(forge_analytics_worker::ingest::upload::serve(tcp, tls, uploads, rx));
         let fx = Self { ca, ids: Ids::default(), store, worker, addr, stop };
         fx.push(maps).await;
+
         fx
     }
 
@@ -116,6 +117,7 @@ impl Fixture {
         let csr = AgentCsr::generate("n").unwrap();
         let cert =
             ca.issue_agent_certificate(&csr.csr_pem, &node.to_string(), now(), Duration::from_secs(3_600)).unwrap();
+
         (forge_agent::tls::mutual(ca.cert_pem(), &cert.cert_pem, &csr.key_pem).unwrap(), cert.serial_hex)
     }
 
@@ -168,13 +170,16 @@ fn sealed(s: &Spool, rows: &[Row]) -> (String, Vec<u8>) {
     for r in rows {
         s.append(r, now().0).unwrap();
     }
+
     s.seal(now().0).unwrap();
     let f = s.oldest().unwrap();
+
     (f.stem.clone(), std::fs::read(&f.path).unwrap())
 }
 
 async fn wait_for(what: &str, mut f: impl FnMut() -> bool) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+
     while !f() {
         assert!(tokio::time::Instant::now() < deadline, "timed out waiting for {what}");
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -189,15 +194,20 @@ async fn end_to_end_rows_sent_equal_rows_stored_and_the_spool_empties() {
     let fx = Fixture::start(ca.clone(), state.path(), maps(node, svc), 4).await;
     let dir = tempfile::tempdir().unwrap();
     let s = Arc::new(spool(dir.path(), node));
+
     // 3 files: CLEF bodies, container lines, and minute rows.
     let clef = "{\"@t\":\"2024-01-01T00:00:00Z\",\"@mt\":\"order {Id}\",\"Id\":1}\n".repeat(50);
+
     for _ in 0..20 {
         s.append(&app_log_row(&key_hash(), &clef, now().0), now().0).unwrap();
     }
+
     s.seal(now().0).unwrap();
+
     for i in 0..300 {
         s.append(&container_row(i, "prod/api"), now().0).unwrap();
     }
+
     s.seal(now().0).unwrap();
     let mut b = MinuteBucket::new(0);
     b.add(&NodeSample { cpu: 5.0, ..NodeSample::default() });
@@ -255,14 +265,17 @@ async fn unknown_revoked_and_foreign_nodes_are_refused() {
         Outcome::Retry(r) => assert!(r.contains("403"), "{r}"),
         other => panic!("{other:?}"),
     }
+
     // Revoking the node: it leaves the active list.
     let mut revoked = maps(node, svc);
     revoked.active_nodes.clear();
     fx.push(revoked).await;
+
     match fx.sink(node).upload(&stem, body.clone()).await {
         Outcome::Retry(r) => assert!(r.contains("403"), "{r}"),
         other => panic!("{other:?}"),
     }
+
     fx.push(maps(node, svc)).await;
 
     // A certificate of the node that is not its current one (replaced at
@@ -278,10 +291,12 @@ async fn unknown_revoked_and_foreign_nodes_are_refused() {
     let mut both = maps(node, svc);
     both.active_nodes.push(other);
     fx.push(both).await;
+
     match fx.sink(other).upload(&stem, body.clone()).await {
         Outcome::Retry(r) => assert!(r.contains("403"), "{r}"),
         other => panic!("{other:?}"),
     }
+
     // A node cannot write for a service placed elsewhere: its lines are
     // stored for the node, unattributed, and its app keys are not taken.
     let odir = tempfile::tempdir().unwrap();
@@ -305,11 +320,13 @@ async fn a_file_sent_again_is_stored_once_even_after_a_worker_restart() {
     assert!(FileName::parse(&stem).is_some());
     let fx = Fixture::start(ca.clone(), state.path(), maps(node, svc), 4).await;
     assert_eq!(fx.sink(node).upload(&stem, body.clone()).await, Outcome::Stored);
+
     // The ack was lost: the agent sends the file again.
     assert_eq!(fx.sink(node).upload(&stem, body.clone()).await, Outcome::Stored);
     assert_eq!(fx.store.counts()[0], 10);
     fx.stop.send_replace(true);
     drop(fx);
+
     // A new worker process with the same state folder and a fresh store:
     // the id log remembers the file, so nothing is written.
     let fx = Fixture::start(ca, state.path(), maps(node, svc), 4).await;
@@ -347,10 +364,12 @@ async fn over_the_import_limit_the_worker_answers_429_at_once_and_the_file_waits
     s.ack(&s.oldest().unwrap().stem).unwrap();
     let (second, body2) = sealed(&s, &[container_row(1, "prod/api")]);
     let started = std::time::Instant::now();
+
     match fx.sink(node).upload(&second, body2.clone()).await {
         Outcome::Retry(r) => assert!(r.contains("429"), "{r}"),
         other => panic!("{other:?}"),
     }
+
     assert!(started.elapsed() < Duration::from_secs(5), "refused at once, not held");
     gate.release();
     assert_eq!(held.await.unwrap(), Outcome::Stored);
@@ -364,6 +383,7 @@ async fn served_certificate(fx: &Fixture, node: ServerId) -> Vec<u8> {
     let tcp = tokio::net::TcpStream::connect(fx.addr).await.unwrap();
     let name = rustls_pki_types::ServerName::try_from("localhost").unwrap();
     let tls = tokio_rustls::TlsConnector::from(fx.tls(node)).connect(name, tcp).await.unwrap();
+
     tls.get_ref().1.peer_certificates().unwrap()[0].as_ref().to_vec()
 }
 
@@ -391,6 +411,7 @@ async fn a_running_worker_takes_a_renewed_listener_certificate() {
     let bad = fx.worker.handle(set(renewed.cert_pem.clone(), "not a key".into()), Vec::new()).await;
     assert!(bad.is_err(), "{bad:?}");
     assert_eq!(served_certificate(&fx, node).await, first, "a bad pair leaves the current one");
+
     // A certificate that has expired is refused as well.
     let old = ca.issue_server_certificate(&["localhost".into()], Timestamp(now().0 - 100 * 24 * 3_600_000)).unwrap();
     assert!(fx.worker.handle(set(old.cert_pem, old.key_pem), Vec::new()).await.is_err());
@@ -421,6 +442,7 @@ async fn uploads_reach_a_worker_with_its_own_pinned_key() {
     assert_eq!(fx.worker.handle(set, Vec::new()).await, Ok(Reply::Ok));
     let csr = AgentCsr::generate("n").unwrap();
     let cert = ca.issue_agent_certificate(&csr.csr_pem, &node.to_string(), now(), Duration::from_secs(3_600)).unwrap();
+
     // This identity is the node's in the maps pushed next.
     fx.ids.0.lock().unwrap().insert(
         node,

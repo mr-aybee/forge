@@ -15,6 +15,7 @@ mod provider;
 pub use envelope::Envelope;
 pub use provider::{KeyProvider, LocalKeyProvider, write_private};
 
+/// Errors from sealing and opening secrets.
 #[derive(Debug, thiserror::Error)]
 pub enum SecretError {
     #[error("malformed sealed secret")]

@@ -170,19 +170,24 @@ pub trait WebhookRepository: Send + Sync + std::fmt::Debug {
 pub fn tag_matches(pattern: &str, tag: &str) -> bool {
     let parts: Vec<&str> = pattern.split('*').collect();
     let (first, last) = (parts[0], parts[parts.len() - 1]);
+
     if parts.len() == 1 {
         return pattern == tag;
     }
+
     if !tag.starts_with(first) || !tag[first.len()..].ends_with(last) || tag.len() < first.len() + last.len() {
         return false;
     }
+
     let mut rest = &tag[first.len()..tag.len() - last.len()];
+
     for mid in &parts[1..parts.len() - 1] {
         match rest.find(mid) {
             Some(i) => rest = &rest[i + mid.len()..],
             None => return false,
         }
     }
+
     true
 }
 

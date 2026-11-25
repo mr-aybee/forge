@@ -148,6 +148,7 @@ pub async fn put_ssh(
     Json(req): Json<PutSsh>,
 ) -> ApiResult<Json<SshEndpoint>> {
     caller.authorize(Action::ServerManage, server_ref(id)).await?;
+
     // Where root terminals for this node connect to: as strong as running a
     // command on it (MFA).
     caller.authorize(Action::ServerCommand, server_ref(id)).await?;
@@ -156,14 +157,17 @@ pub async fn put_ssh(
     if host.is_empty() || host.len() > 253 || host.chars().any(|c| c.is_whitespace() || c == '/') {
         return Err(ApiError::bad_request("invalid host"));
     }
+
     if req.port == 0 || !req.host_key_fingerprint.starts_with("SHA256:") {
         return Err(ApiError::bad_request("port and a SHA256 host-key fingerprint are required"));
     }
+
     if let Err(reason) = endpoint_belongs_to(&state, &caller, &server, host, req.port, &req.host_key_fingerprint).await
     {
         caller.audit_denied("server.ssh_endpoint", &server_ref(id), Some(server.workspace_id), &reason).await;
         return Err(ApiError::bad_request(reason));
     }
+
     let endpoint = SshEndpoint {
         server_id: id,
         host: host.to_owned(),
@@ -180,6 +184,7 @@ pub async fn put_ssh(
             json!({ "host": endpoint.host, "port": endpoint.port, "host_key": endpoint.host_key_fingerprint }),
         )
         .await;
+
     Ok(Json(endpoint))
 }
 
@@ -213,16 +218,20 @@ async fn endpoint_belongs_to(
     let others = state.store.list_servers(None).await.map_err(|e| e.to_string())?;
     let facts = state.store.all_facts().await.unwrap_or_default();
     let own_address = agent_address(server.id, &facts);
+
     for o in others.iter().filter(|o| o.id != server.id) {
         let name = o.display_name.clone().unwrap_or_else(|| o.hostname.clone());
+
         if let Ok(Some(e)) = state.store.get_ssh_endpoint(o.id).await {
             if e.host_key_fingerprint == fingerprint {
                 return Err(format!("this host key is pinned for node {name}"));
             }
+
             if same_host(&e.host, host) && e.port == port {
                 return Err(format!("{host}:{port} is the SSH endpoint of node {name}"));
             }
         }
+
         if let Some(addr) = agent_address(o.id, &facts)
             && same_host(&addr, host)
             && !own_address.as_deref().is_some_and(|own| same_host(own, &addr))
@@ -230,6 +239,7 @@ async fn endpoint_belongs_to(
             return Err(format!("{host} is the address of node {name}"));
         }
     }
+
     if server.status == forge_core::model::AgentStatus::Online
         && let Ok(r) = super::sites::run_as(
             state,
@@ -246,10 +256,12 @@ async fn endpoint_belongs_to(
             .and_then(serde_json::Value::as_array)
             .map(|k| k.iter().filter_map(serde_json::Value::as_str).filter_map(fingerprint_of).collect())
             .unwrap_or_default();
+
         if !reported.is_empty() && !reported.iter().any(|f| f == fingerprint) {
             return Err("this host key is not one of the keys the node's agent reports".into());
         }
     }
+
     Ok(())
 }
 
@@ -302,9 +314,11 @@ fn exec_command(argv: Option<Vec<String>>, command: Option<String>) -> Result<St
         (None, Some(c)) if !c.trim().is_empty() => c,
         _ => return Err("send either argv (a non-empty list) or command"),
     };
+
     if cmd.len() > MAX_COMMAND || cmd.contains('\0') {
         return Err("command too long or contains a NUL byte");
     }
+
     Ok(cmd)
 }
 
@@ -316,6 +330,7 @@ fn client_kind(caller: &Caller, headers: &HeaderMap) -> ApiResult<&'static str> 
     if bearer && cookie {
         return Err(ApiError::bad_request("send either a bearer token or a session cookie, not both"));
     }
+
     Ok(if caller.session.session.kind == SessionKind::Bearer { "cli" } else { "console" })
 }
 
@@ -332,11 +347,13 @@ pub async fn open(
     if !crate::request_origin::origin_header_ok(&state, &origin, &headers) {
         return Err(ApiError::forbidden("origin not allowed; open the console on the address you use"));
     }
+
     let client = client_kind(&caller, &headers)?;
     let (workspace, endpoint) = prepare(&state, &caller, id, &q, Action::TerminalOpen).await?;
     let size = TermSize { cols: q.cols, rows: q.rows }.clamped();
     let session =
         Session { state, caller, server_id: id, workspace, endpoint, login: q.login, size, client, container: None };
+
     Ok(ws.max_message_size(256 * 1024).on_upgrade(move |socket| session.run(socket)))
 }
 
@@ -395,20 +412,24 @@ async fn refuse(caller: &Caller, id: ServerId, workspace: Option<forge_core::Wor
 /// and whose agent reports `container_exec`, and the per-user and per-node
 /// limits, whose place is held from here on. Refusals are audited.
 async fn agent_shell_target(state: &AppState, caller: &Caller, id: ServerId) -> ApiResult<AgentTarget> {
+    use forge_core::tags::FactsRepository;
+
     use super::remote_sessions::Limits;
     use crate::container_exec::{MAX_PER_NODE, MAX_PER_USER};
-    use forge_core::tags::FactsRepository;
     caller.authorize(Action::ContainerExec, server_ref(id)).await?;
     let server = state.store.get_server(id).await.map_err(|_| ApiError::not_found("server not found"))?;
     let ws = Some(server.workspace_id);
+
     if server.os.eq_ignore_ascii_case("windows") {
         return Err(
             refuse(caller, id, ws, ApiError::conflict("container shell is not supported on Windows nodes")).await
         );
     }
+
     if server.status != forge_core::model::AgentStatus::Online {
         return Err(refuse(caller, id, ws, ApiError::conflict("the node is offline")).await);
     }
+
     let facts = state.store.all_facts().await?;
     let ready = match facts.get(&id) {
         None => Err(ApiError::conflict("the node has not reported its facts yet; try again in a minute")),
@@ -422,9 +443,11 @@ async fn agent_shell_target(state: &AppState, caller: &Caller, id: ServerId) -> 
         }
         Some(_) => Ok(()),
     };
+
     if let Err(e) = ready {
         return Err(refuse(caller, id, ws, e).await);
     }
+
     let limits = Limits { per_user: MAX_PER_USER, per_node: MAX_PER_NODE };
     match state.remote_sessions.reserve(SHELL_KIND, caller.session.user.id, id, limits) {
         Ok(reservation) => Ok(AgentTarget { workspace: server.workspace_id, reservation }),
@@ -437,6 +460,7 @@ const SHELL_KIND: &str = "container";
 
 fn limit_message(r: super::remote_sessions::Refusal) -> String {
     use super::remote_sessions::Refusal;
+
     match r {
         Refusal::PerUser(n) => format!("you already have {n} open container shells"),
         Refusal::PerNode(n) => format!("this node already has {n} open container shells"),
@@ -457,19 +481,24 @@ pub async fn container_shell(
     if !crate::request_origin::origin_header_ok(&state, &origin, &headers) {
         return Err(ApiError::forbidden("origin not allowed"));
     }
+
     if !super::containers::valid_container_id(&container_id) {
         return Err(ApiError::bad_request("invalid container id"));
     }
+
     let client = client_kind(&caller, &headers)?;
     let size = TermSize { cols: q.cols, rows: q.rows }.clamped();
+
     let login = match shell_path(q.login.as_deref()) {
         ShellPath::Ssh(login) => login,
         ShellPath::Agent => {
             let target = agent_shell_target(&state, &caller, id).await?;
             let session = AgentShell { state, caller, server_id: id, target, container: container_id, size, client };
+
             return Ok(ws.max_message_size(256 * 1024).on_upgrade(move |socket| session.run(socket)));
         }
     };
+
     let tq = TerminalQuery { login, cols: q.cols, rows: q.rows };
     let (workspace, endpoint) = prepare(&state, &caller, id, &tq, Action::ContainerExec).await?;
     let session = Session {
@@ -483,6 +512,7 @@ pub async fn container_shell(
         client,
         container: Some(container_id),
     };
+
     Ok(ws.max_message_size(256 * 1024).on_upgrade(move |socket| session.run(socket)))
 }
 
@@ -511,6 +541,7 @@ pub async fn container_shell_check(
     if !super::containers::valid_container_id(&container_id) {
         return Err(ApiError::bad_request("invalid container id"));
     }
+
     let login = match shell_path(q.login.as_deref()) {
         ShellPath::Ssh(login) => login,
         ShellPath::Agent => {
@@ -519,8 +550,10 @@ pub async fn container_shell_check(
             return Ok(Json(ShellCheck { ok: true, path: "agent", host: None, port: None, login: None }));
         }
     };
+
     let tq = TerminalQuery { login, cols: q.cols, rows: q.rows };
     let (_, endpoint) = prepare(&state, &caller, id, &tq, Action::ContainerExec).await?;
+
     Ok(Json(ShellCheck {
         ok: true,
         path: "ssh",
@@ -544,11 +577,13 @@ pub async fn exec(
     if !crate::request_origin::origin_header_ok(&state, &origin, &headers) {
         return Err(ApiError::forbidden("origin not allowed"));
     }
+
     let client = client_kind(&caller, &headers)?;
     let (workspace, endpoint) = prepare(&state, &caller, id, &q, Action::TerminalOpen).await?;
     let size = TermSize { cols: q.cols, rows: q.rows }.clamped();
     let session =
         Session { state, caller, server_id: id, workspace, endpoint, login: q.login, size, client, container: None };
+
     Ok(ws.max_message_size(1024 * 1024).on_upgrade(move |socket| session.run_exec(socket)))
 }
 
@@ -579,7 +614,9 @@ async fn prepare(
     if !valid_login(&q.login) {
         return Err(ApiError::bad_request("invalid login name"));
     }
+
     caller.authorize(action, server_ref(id)).await?;
+
     if privileged_login(&q.login) && !node_bound(state, id).await {
         caller
             .audit_denied(action.as_str(), &server_ref(id), None, "root on a node without node-bound certificates")
@@ -590,11 +627,14 @@ async fn prepare(
             "this node's agent does not bind terminal certificates to the node, so a root certificate would also              work on other such nodes. Update the agent (Software → Updates → Agents), or sign in with another account",
         ));
     }
+
     let server = state.store.get_server(id).await.map_err(|_| ApiError::not_found("server not found"))?;
+
     let endpoint = match state.store.get_ssh_endpoint(id).await? {
         Some(e) => e,
         None => auto_endpoint(state, caller, &server).await?,
     };
+
     Ok((server.workspace_id, endpoint))
 }
 
@@ -605,6 +645,7 @@ pub fn fingerprint(pubkey_line: &str) -> Option<String> {
     let blob = pubkey_line.split_whitespace().nth(1)?;
     let raw = base64::engine::general_purpose::STANDARD.decode(blob).ok()?;
     let digest = ring::digest::digest(&ring::digest::SHA256, &raw);
+
     Some(format!("SHA256:{}", base64::engine::general_purpose::STANDARD_NO_PAD.encode(digest.as_ref())))
 }
 
@@ -617,9 +658,11 @@ async fn auto_endpoint(
     server: &forge_core::model::Server,
 ) -> ApiResult<SshEndpoint> {
     let none = || ApiError::conflict("no SSH endpoint configured for this node (node → SSH / Terminal → set endpoint)");
+
     if server.status != forge_core::model::AgentStatus::Online {
         return Err(none());
     }
+
     let r = super::sites::run_as(
         state,
         caller.principal(),
@@ -631,11 +674,13 @@ async fn auto_endpoint(
     .await
     .map_err(|_| none())?;
     let keys = r.pointer("/result/ssh_host_keys").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
+
     let Some(fp) = keys.iter().filter_map(serde_json::Value::as_str).find_map(fingerprint) else {
         return Err(ApiError::conflict(
             "this node did not report an SSH host key (is OpenSSH installed?); set the endpoint by hand under node → SSH",
         ));
     };
+
     let endpoint = SshEndpoint {
         server_id: server.id,
         host: super::ingress::node_address(state, server).await,
@@ -652,6 +697,7 @@ async fn auto_endpoint(
             json!({ "host": endpoint.host, "port": endpoint.port, "host_key": endpoint.host_key_fingerprint, "source": "agent" }),
         )
         .await;
+
     Ok(endpoint)
 }
 
@@ -681,6 +727,7 @@ async fn authenticate(caller: &Caller, socket: &mut WebSocket) -> bool {
     if caller.session.session.kind == SessionKind::Bearer {
         return true;
     }
+
     let authed = match tokio::time::timeout(AUTH_TIMEOUT, socket.recv()).await {
         Ok(Some(Ok(Message::Text(t)))) => match serde_json::from_str::<Control>(&t) {
             Ok(Control::Auth { csrf }) => IdentityService::verify_csrf(&caller.session, Some(&csrf)),
@@ -688,9 +735,11 @@ async fn authenticate(caller: &Caller, socket: &mut WebSocket) -> bool {
         },
         _ => false,
     };
+
     if !authed {
         let _ = send_status(socket, json!({"type": "error", "message": "missing or invalid CSRF token"})).await;
     }
+
     authed
 }
 
@@ -757,10 +806,12 @@ impl Session {
         if !self.authenticate(&mut socket).await {
             return;
         }
+
         let (kind, opened, closed) = match self.container {
             Some(_) => ("container", "container.exec", "container.exec_close"),
             None => ("terminal", "terminal.open", "terminal.close"),
         };
+
         let mut reg = self.register(kind);
 
         let started = Instant::now();
@@ -769,19 +820,23 @@ impl Session {
             "login": self.login, "host": self.endpoint.host, "port": self.endpoint.port,
             "client": self.client, "session": reg.id,
         });
+
         if let Some(c) = &self.container {
             details["container"] = json!(c);
         }
+
         self.caller.audit(opened, &resource, Some(self.workspace), details.clone()).await;
 
         let (bytes_in, bytes_out, reason) = match self.connect().await {
             Ok((reader, writer)) => {
                 let ready =
                     json!({"type": "ready", "login": self.login, "host": self.endpoint.host, "session": reg.id});
+
                 if !send_status(&mut socket, ready).await {
                     writer.close().await;
                     return;
                 }
+
                 relay(&mut socket, reader, writer, &self.recheck(), &mut reg.revoked).await
             }
             Err(e) => {
@@ -789,6 +844,7 @@ impl Session {
                 (0, 0, "connect_failed")
             }
         };
+
         let _ = send_status(&mut socket, json!({"type": "closed", "reason": reason})).await;
         let mut end = details;
         end["duration_secs"] = json!(started.elapsed().as_secs());
@@ -800,24 +856,28 @@ impl Session {
 
     async fn connect(&self) -> forge_core::DomainResult<(Box<dyn ShellReader>, Box<dyn ShellWriter>)> {
         let remote = self.remote().await?;
+
         // The shell keeps its channel; the session handle is moved into a
         // background holder so the connection lives as long as the shell.
         let (reader, writer) = match &self.container {
             Some(c) => remote.shell_command("xterm-256color", self.size, &container_shell_command(c)).await?,
             None => remote.shell("xterm-256color", self.size).await?,
         };
+
         Ok((Box::new(Holder { inner: reader, _session: remote }), writer))
     }
 
     /// An SSH connection to the node as `login`, with a fresh short-lived certificate.
     async fn remote(&self) -> forge_core::DomainResult<Box<dyn forge_core::remote::RemoteSession>> {
         let key_id = format!("forge:{}:{}", self.caller.principal(), self.server_id);
+
         // A node that reports node-bound certificates gets one only it
         // accepts (D-069); older nodes still take the bare login, never root.
         let bound = node_bound(&self.state, self.server_id).await;
         if privileged_login(&self.login) && !bound {
             return Err(forge_core::DomainError::Denied("root needs node-bound certificates: update the agent".into()));
         }
+
         let principal = cert_principal(&self.server_id.to_string(), &self.login, bound);
         let cert = self.state.ssh_ca.issue(&principal, &key_id, CERT_TTL)?;
         let target = RemoteTarget {
@@ -827,6 +887,7 @@ impl Session {
             host_key_fingerprint: self.endpoint.host_key_fingerprint.clone(),
         };
         let auth = RemoteAuth::Certificate { key_openssh: cert.key_openssh, cert_openssh: cert.cert_openssh };
+
         self.state.ssh.connect(&target, &auth).await
     }
 
@@ -834,6 +895,7 @@ impl Session {
         if !self.authenticate(&mut socket).await {
             return;
         }
+
         // The command comes next.
         let command = match tokio::time::timeout(AUTH_TIMEOUT, socket.recv()).await {
             Ok(Some(Ok(Message::Text(t)))) => match serde_json::from_str::<Control>(&t) {
@@ -842,6 +904,7 @@ impl Session {
             },
             _ => Err("no command received"),
         };
+
         let command = match command {
             Ok(c) => c,
             Err(m) => {
@@ -849,9 +912,11 @@ impl Session {
                 return;
             }
         };
+
         let mut reg = self.register("exec");
         let started = Instant::now();
         let resource = server_ref(self.server_id);
+
         // The command is audited (truncated): pass secrets on stdin, not in arguments.
         let shown: String = command.chars().take(1000).collect();
         let details = json!({
@@ -859,6 +924,7 @@ impl Session {
             "client": self.client, "session": reg.id, "command": shown,
         });
         self.caller.audit("terminal.exec", &resource, Some(self.workspace), details.clone()).await;
+
         let opened = match self.remote().await {
             Ok(remote) => match remote.exec_stream(&command).await {
                 Ok((reader, writer)) => Ok((remote, reader, writer)),
@@ -866,12 +932,14 @@ impl Session {
             },
             Err(e) => Err(e),
         };
+
         let (status, bytes_in, bytes_out, reason) = match opened {
             Ok((_remote, reader, writer)) => {
                 if !send_status(&mut socket, json!({"type": "ready", "session": reg.id})).await {
                     writer.close().await;
                     return;
                 }
+
                 relay_exec(&mut socket, reader, writer, &self.recheck(), &mut reg.revoked).await
             }
             Err(e) => {
@@ -879,6 +947,7 @@ impl Session {
                 (None, 0, 0, "connect_failed")
             }
         };
+
         let _ = send_status(&mut socket, json!({"type": "closed", "reason": reason})).await;
         let mut end = details;
         end["duration_secs"] = json!(started.elapsed().as_secs());
@@ -937,17 +1006,21 @@ impl AgentShell {
         use crate::container_exec::{OpenRequest, ShellEnd};
         let resource = server_ref(self.server_id);
         let workspace = Some(self.target.workspace);
+
         if !authenticate(&self.caller, &mut socket).await {
             self.caller.audit_denied(EXEC_OPEN, &resource, workspace, "missing or invalid CSRF token").await;
             return;
         }
+
         let n = NewRemote { server_id: self.server_id, login: "agent", kind: SHELL_KIND, client: self.client };
         let mut reg = register(&self.state, &self.caller, &n);
+
         // The registration holds the place now; check again, so that no
         // path around the reservation can pass the limit.
         drop(self.target.reservation);
         let (mine, on_node) =
             self.state.remote_sessions.count_open(SHELL_KIND, self.caller.session.user.id, self.server_id);
+
         let over = if mine > crate::container_exec::MAX_PER_USER {
             Some(super::remote_sessions::Refusal::PerUser(crate::container_exec::MAX_PER_USER))
         } else if on_node > crate::container_exec::MAX_PER_NODE {
@@ -955,12 +1028,15 @@ impl AgentShell {
         } else {
             None
         };
+
         if let Some(r) = over {
             let m = limit_message(r);
             self.caller.audit_denied(EXEC_OPEN, &resource, workspace, &m).await;
             let _ = send_status(&mut socket, json!({"type": "error", "message": m})).await;
+
             return;
         }
+
         let started = Instant::now();
         let opened = ExecOpened { container: &self.container, client: self.client, session: &reg.id, path: "agent" };
         self.caller.audit(EXEC_OPEN, &resource, workspace, audit_value(&opened)).await;
@@ -977,6 +1053,7 @@ impl AgentShell {
             action: Action::ContainerExec,
             server_id: self.server_id,
         };
+
         let (bytes_in, bytes_out, reason, end) = match crate::container_exec::open(&self.state, &request).await {
             Ok(shell) => {
                 let ready = json!({"type": "ready", "container": self.container, "session": reg.id, "path": "agent"});
@@ -984,6 +1061,7 @@ impl AgentShell {
                     shell.writer.close().await;
                     return;
                 }
+
                 let end = shell.end.clone();
                 let (i, o, r) =
                     relay(&mut socket, Box::new(shell.reader), Box::new(shell.writer), &recheck, &mut reg.revoked)
@@ -996,16 +1074,19 @@ impl AgentShell {
                 (0, 0, "connect_failed", Some(ShellEnd::Error(e.to_string())))
             }
         };
+
         let (exit_code, error) = match &end {
             Some(ShellEnd::Exit(c)) => (Some(*c), None),
             Some(ShellEnd::Error(m)) => (None, Some(m.as_str())),
             None => (None, None),
         };
+
         if reason != "connect_failed"
             && let Some(m) = error
         {
             let _ = send_status(&mut socket, json!({"type": "error", "message": m})).await;
         }
+
         let _ = send_status(&mut socket, json!({"type": "closed", "reason": reason, "exit_code": exit_code})).await;
         let closed = ExecClosed {
             opened,
@@ -1044,6 +1125,7 @@ async fn relay(
     let deadline = tokio::time::Instant::now() + MAX_LIFETIME;
     let mut recheck = tokio::time::interval(RECHECK);
     recheck.tick().await;
+
     let reason = loop {
         tokio::select! {
             () = tokio::time::sleep_until(deadline) => break "max_lifetime",
@@ -1084,7 +1166,9 @@ async fn relay(
             },
         }
     };
+
     writer.close().await;
+
     (bytes_in, bytes_out, reason)
 }
 
@@ -1102,6 +1186,7 @@ async fn relay_exec(
     let mut recheck = tokio::time::interval(RECHECK);
     recheck.tick().await;
     let mut input_open = true;
+
     let reason = loop {
         tokio::select! {
             () = tokio::time::sleep_until(deadline) => break "max_lifetime",
@@ -1159,7 +1244,9 @@ async fn relay_exec(
             },
         }
     };
+
     writer.close().await;
+
     (status, bytes_in, bytes_out, reason)
 }
 
@@ -1220,6 +1307,7 @@ mod tests {
         for ok in ["forgeops", "deploy_user", "a.b-c"] {
             assert!(valid_login(ok), "{ok}");
         }
+
         for bad in ["", "-oProxyCommand", "root;id", "a b", "x".repeat(33).as_str()] {
             assert!(!valid_login(bad), "{bad}");
         }

@@ -100,6 +100,7 @@ async fn authorize_scope(caller: &Caller, ws: WorkspaceId, scope: &SilenceScope)
             Err(e) => return Err(e),
         }
     }
+
     Ok(())
 }
 
@@ -109,9 +110,11 @@ async fn readable(caller: &Caller, ws: WorkspaceId, silences: &[Silence]) -> Vec
     if caller.can(Action::AlertView, ws_ref(ws)).await {
         return vec![true; silences.len()];
     }
+
     let refs: Vec<Vec<EntityRef>> = silences.iter().map(|s| s.scope.refs(s.workspace_id)).collect();
     let flat: Vec<EntityRef> = refs.iter().flatten().cloned().collect();
     let mut allowed = caller.can_many(Action::AlertView, flat).await.into_iter();
+
     refs.iter().map(|r| !r.is_empty() && allowed.by_ref().take(r.len()).all(|ok| ok)).collect()
 }
 
@@ -122,6 +125,7 @@ async fn silence_for(state: &AppState, caller: &Caller, id: SilenceId) -> ApiRes
         DomainError::NotFound(_) => ApiError::not_found(MISSING),
         other => other.into(),
     })?;
+
     if readable(caller, s.workspace_id, std::slice::from_ref(&s)).await.first().copied().unwrap_or(false) {
         Ok(s)
     } else {
@@ -153,27 +157,33 @@ pub async fn list_silences(
 ) -> ApiResult<Json<Vec<SilenceView>>> {
     let ws = q.workspace.unwrap_or(default);
     let limit = q.limit.unwrap_or(100).clamp(1, 500);
+
     // The read filter runs after the query: page on until the list is full
     // or the silences run out; bounded.
     let mut out: Vec<Silence> = Vec::new();
     let mut before = None;
+
     for _ in 0..5 {
         let page = state.notifier.silences.list(ws, q.state, before, limit).await?;
         let full = page.len() == limit as usize;
         before = page.last().map(|s| (s.starts_at, s.id));
         let ok = readable(&caller, ws, &page).await;
         out.extend(page.into_iter().zip(ok).filter(|(_, ok)| *ok).map(|(s, _)| s));
+
         if out.len() >= limit as usize || !full {
             break;
         }
     }
+
     if out.is_empty() {
         // Nothing to show: an empty list only for someone who may read the
         // workspace's alerts; anyone else gets the refusal (recorded), so a
         // caller without any role here cannot tell "none" from "not yours".
         caller.authorize(Action::AlertView, ws_ref(ws)).await?;
     }
+
     out.truncate(limit as usize);
+
     Ok(Json(out.into_iter().map(|s| view(&state, s)).collect()))
 }
 
@@ -254,11 +264,14 @@ pub async fn create_silence(
     Json(body): Json<SilenceBody>,
 ) -> ApiResult<(StatusCode, Json<SilenceView>)> {
     let ws = body.workspace_id.unwrap_or(default);
+
     // `Action::AlertManage` on everything the scope names.
     authorize_scope(&caller, ws, &body.scope).await?;
+
     if ws != default {
         return Err(ApiError::bad_request("no such workspace"));
     }
+
     let now = state.clock.now();
     let base = body.starts_at.map_or(now, |t| Timestamp(t.0.max(now.0)));
     let ends_at = end_of(body.ends_at, body.duration_secs, base, "duration_secs")?;
@@ -274,6 +287,7 @@ pub async fn create_silence(
     };
     let silence = state.notifier.silences.create(ws, input, caller.principal()).await?;
     caller.audit(AUDIT_SILENCE_CREATE, &ws_ref(ws), Some(ws), silence_audit(&silence, None, false)).await;
+
     Ok((StatusCode::CREATED, Json(view(&state, silence))))
 }
 
@@ -294,12 +308,15 @@ async fn silence_to_manage(state: &AppState, caller: &Caller, id: SilenceId, aud
                     caller.audit_denied(audit_action, &ws_ref(ws), Some(ws), "silence not readable").await;
                 }
             }
+
             return Err(e);
         }
     };
+
     if !caller.can(Action::AlertManage, ws_ref(s.workspace_id)).await {
         authorize_scope(caller, s.workspace_id, &s.scope).await?;
     }
+
     Ok(s)
 }
 
@@ -330,6 +347,7 @@ pub async fn extend_silence(
     let silence = state.notifier.silences.extend(id, ends_at).await?;
     let details = silence_audit(&silence, Some(&old), false);
     caller.audit(AUDIT_SILENCE_EXTEND, &ws_ref(old.workspace_id), Some(old.workspace_id), details).await;
+
     Ok(Json(view(&state, silence)))
 }
 
@@ -345,6 +363,7 @@ pub async fn end_silence(
     let silence = state.notifier.silences.end(id, caller.principal()).await?;
     let details = silence_audit(&silence, Some(&old), true);
     caller.audit(AUDIT_SILENCE_END, &ws_ref(old.workspace_id), Some(old.workspace_id), details).await;
+
     Ok(Json(view(&state, silence)))
 }
 
@@ -359,6 +378,7 @@ mod tests {
         assert_eq!(end_of(None, Some(60), base, "x").ok(), Some(Timestamp(61_000)));
         assert!(end_of(None, None, base, "x").is_err());
         assert!(end_of(Some(Timestamp(5)), Some(60), base, "x").is_err());
+
         // A huge length saturates; the service refuses it as too long.
         assert_eq!(plus_secs(base, u64::MAX), Timestamp(i64::MAX));
     }

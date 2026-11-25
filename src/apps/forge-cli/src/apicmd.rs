@@ -87,17 +87,20 @@ fn read_body(spec: Option<&str>) -> Result<Option<Value>> {
         }
         s => s.to_owned(),
     };
+
     serde_json::from_str(&text).map(Some).map_err(|e| CliError::usage(format!("--body is not valid JSON: {e}")))
 }
 
 /// `(method, path, operation)` for every operation in the document.
 fn operations(doc: &Value) -> Vec<(String, String, Value)> {
     let mut out = Vec::new();
+
     for (path, item) in doc["paths"].as_object().into_iter().flatten() {
         for (method, op) in item.as_object().into_iter().flatten() {
             out.push((method.to_uppercase(), path.clone(), op.clone()));
         }
     }
+
     out
 }
 
@@ -129,24 +132,29 @@ fn referenced_schemas(doc: &Value, value: &Value) -> serde_json::Map<String, Val
                 {
                     out.push(r.to_owned());
                 }
+
                 m.values().for_each(|x| refs(x, out));
             }
             Value::Array(a) => a.iter().for_each(|x| refs(x, out)),
             _ => {}
         }
     }
+
     let mut found = serde_json::Map::new();
     let mut todo = Vec::new();
     refs(value, &mut todo);
+
     while let Some(name) = todo.pop() {
         if found.contains_key(&name) || name == "Problem" {
             continue;
         }
+
         if let Some(s) = doc["components"]["schemas"].get(&name) {
             refs(s, &mut todo);
             found.insert(name, s.clone());
         }
     }
+
     found
 }
 
@@ -154,27 +162,33 @@ fn confirm_mutation(g: &Global, method: &str, what: &str, yes: bool) -> Result<(
     if method == "GET" || yes {
         return Ok(());
     }
+
     if g.non_interactive || !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         return Err(CliError::usage(format!("{method} {what} changes state: pass --yes to confirm")));
     }
+
     eprint!("{method} {what} changes state. Type `yes` to continue: ");
     let _ = std::io::stderr().flush();
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
+
     if line.trim() == "yes" { Ok(()) } else { Err(CliError::new(Exit::General, "cancelled").with_code("cancelled")) }
 }
 
 pub async fn run(g: &Global, cmd: ApiCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         ApiCmd::Request { method, path, body, idempotency_key, no_validate, yes } => {
             api.set_idempotency_key(idempotency_key);
             let m = Method::from_bytes(method.to_uppercase().as_bytes())
                 .map_err(|_| CliError::usage(format!("bad method {method}")))?;
+
             if !path.starts_with('/') {
                 return Err(CliError::usage("the path must start with / (e.g. /api/v1/servers)"));
             }
+
             confirm_mutation(g, m.as_str(), &path, yes)?;
             let body = read_body(body.as_deref())?;
             if let (Some(b), false) = (&body, no_validate)
@@ -182,6 +196,7 @@ pub async fn run(g: &Global, cmd: ApiCmd) -> Result<()> {
             {
                 crate::schemacheck::validate(&doc, m.as_str(), &path, b)?;
             }
+
             let v = api.call(m, &path, body.as_ref()).await?;
             out::result(g.output, &v, None);
             Ok(())
@@ -195,6 +210,7 @@ pub async fn run(g: &Global, cmd: ApiCmd) -> Result<()> {
                 }
             })?;
             let ops = operations(&doc);
+
             match cmd {
                 ApiCmd::Operations { tag, search } => {
                     let s = search.map(|s| s.to_lowercase());
@@ -235,12 +251,14 @@ pub async fn run(g: &Global, cmd: ApiCmd) -> Result<()> {
                     if !schemas.is_empty() {
                         v["components"] = json!({ "schemas": schemas });
                     }
+
                     // A schema reads best as YAML for people.
                     if g.output.is_machine() {
                         out::result(g.output, &v, None);
                     } else {
                         out::emit(&out::to_yaml(&v));
                     }
+
                     Ok(())
                 }
                 ApiCmd::Call { operation, params, query, body, out_file, idempotency_key, no_validate, yes } => {
@@ -252,48 +270,61 @@ pub async fn run(g: &Global, cmd: ApiCmd) -> Result<()> {
                             "{operation} is a {transport} stream; use its dedicated command"
                         )));
                     }
+
                     let mut path = p.clone();
+
                     for (k, v) in &params {
                         path = path.replace(&format!("{{{k}}}"), &enc(v));
                     }
+
                     if let Some(missing) = path.split('/').find(|s| s.starts_with('{')) {
                         return Err(CliError::usage(format!(
                             "missing path parameter {missing}: add -p {}=…",
                             missing.trim_matches(['{', '}'])
                         )));
                     }
+
                     if !query.is_empty() {
                         let q: Vec<String> = query.iter().map(|(k, v)| format!("{}={}", enc(k), enc(v))).collect();
                         path = format!("{path}?{}", q.join("&"));
                     }
+
                     confirm_mutation(g, m, &format!("{operation} ({path})"), yes)?;
                     let body = read_body(body.as_deref())?;
                     if let (Some(b), false) = (&body, no_validate) {
                         crate::schemacheck::validate(&doc, m, p, b)?;
                     }
+
                     let method = Method::from_bytes(m.as_bytes()).map_err(|_| CliError::usage("bad method"))?;
+
                     if transport == "stream" {
                         let file = out_file.ok_or_else(|| {
                             CliError::usage(format!("{operation} returns bytes: add --out-file <path>"))
                         })?;
+
                         if file.exists() {
                             return Err(CliError::new(
                                 Exit::Conflict,
                                 format!("{} exists; refusing to overwrite", file.display()),
                             ));
                         }
+
                         let mut resp = api.send(method, &path, body.as_ref()).await?;
                         let mut f = std::fs::File::create_new(&file)?;
                         let mut written = 0u64;
+
                         while let Some(chunk) =
                             resp.chunk().await.map_err(|e| CliError::new(Exit::Transport, e.to_string()))?
                         {
                             f.write_all(&chunk)?;
                             written += chunk.len() as u64;
                         }
+
                         out::result(g.output, &json!({ "file": file, "bytes": written }), None);
+
                         return Ok(());
                     }
+
                     let v = api.call(method, &path, body.as_ref()).await?;
                     out::result(g.output, &v, None);
                     Ok(())

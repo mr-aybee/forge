@@ -35,13 +35,16 @@ async fn run_stdin(cmd: &str, args: &[&str], input: &str) -> Result<String, Stri
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("{cmd}: {e}"))?;
+
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(input.as_bytes()).await.map_err(|e| format!("{cmd}: {e}"))?;
     }
+
     let out = tokio::time::timeout(T, child.wait_with_output())
         .await
         .map_err(|_| format!("{cmd}: timed out"))?
         .map_err(|e| format!("{cmd}: {e}"))?;
+
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
     } else {
@@ -113,6 +116,7 @@ async fn install() -> Result<Value, String> {
     if installed().await {
         return Ok(json!({ "installed": true, "changed": false }));
     }
+
     #[cfg(windows)]
     {
         run(
@@ -145,9 +149,11 @@ async fn install() -> Result<Value, String> {
             if run("sh", &["-c", &format!("command -v {pm}")]).await.is_err() {
                 continue;
             }
+
             if pm == "apt-get" {
                 let _ = run("apt-get", &["-o", crate::recipes::APT_LOCK_TIMEOUT, "update"]).await;
             }
+
             match run(pm, args).await {
                 Ok(_) => {
                     done = true;
@@ -155,6 +161,7 @@ async fn install() -> Result<Value, String> {
                 }
                 Err(e) => last = e,
             }
+
             // RHEL 8 and some rebuilds ship wireguard-tools in EPEL only.
             if matches!(pm, "dnf" | "yum") && run(pm, &["install", "-y", "epel-release"]).await.is_ok() {
                 match run(pm, args).await {
@@ -175,6 +182,7 @@ async fn install() -> Result<Value, String> {
     if !installed().await {
         return Err("WireGuard was installed but `wg` is still not available".into());
     }
+
     Ok(json!({ "installed": true, "changed": true }))
 }
 
@@ -190,8 +198,10 @@ async fn private_key(iface: &str) -> Result<String, String> {
             return Ok(k);
         }
     }
+
     let k = run(&wg(), &["genkey"]).await?.trim().to_owned();
     write_private(&p, &k)?;
+
     Ok(k)
 }
 
@@ -199,9 +209,11 @@ async fn key(iface: &str) -> Result<Value, String> {
     if !installed().await {
         return Err("WireGuard is not installed yet".into());
     }
+
     let private = private_key(iface).await?;
     let public = run_stdin(&wg(), &["pubkey"], &private).await?;
     valid_key(&public)?;
+
     Ok(json!({ "public_key": public }))
 }
 
@@ -235,6 +247,7 @@ async fn apply(c: &MeshConfig) -> Result<Value, String> {
                 let _ = run(WIREGUARD_EXE, &["/uninstalltunnelservice", &c.iface]).await;
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
+
             run(WIREGUARD_EXE, &["/installtunnelservice", &path_s]).await?;
         }
         if c.forward {
@@ -286,10 +299,12 @@ async fn open_firewalld(port: u16) {
     if run("firewall-cmd", &["--state"]).await.is_err() {
         return;
     }
+
     let rule = format!("{port}/udp");
     if run("firewall-cmd", &["--query-port", &rule]).await.is_ok() {
         return;
     }
+
     let _ = run("firewall-cmd", &["--permanent", "--add-port", &rule]).await;
     let _ = run("firewall-cmd", &["--add-port", &rule]).await;
 }
@@ -300,9 +315,11 @@ async fn status(iface: &str) -> Result<Value, String> {
     if !installed().await {
         return Ok(json!({ "installed": false, "up": false, "peers": [] }));
     }
+
     let Ok(out) = run(&wg(), &["show", iface, "dump"]).await else {
         return Ok(json!({ "installed": true, "up": false, "peers": [] }));
     };
+
     let mut lines = out.lines();
     let iface_line = lines.next().unwrap_or_default();
     let public = iface_line.split('\t').nth(1).unwrap_or_default();
@@ -320,6 +337,7 @@ async fn status(iface: &str) -> Result<Value, String> {
             })
         })
         .collect();
+
     Ok(json!({ "installed": true, "up": true, "public_key": public, "peers": peers }))
 }
 
@@ -343,11 +361,13 @@ async fn remove(iface: &str) -> Result<Value, String> {
             _ => {}
         }
     }
+
     Ok(json!({ "removed": iface }))
 }
 
 pub async fn run_op(op: &FabricOp) -> Result<Value, String> {
     op.validate()?;
+
     match op {
         FabricOp::Install => install().await,
         FabricOp::Key { iface } => key(iface).await,
@@ -374,5 +394,6 @@ fn write_hosts(iface: &str, hosts: &[forge_catalog::fabric::HostEntry]) -> Resul
         .map(|h| forge_catalog::names::NameEntry { name: h.name.clone(), ip: std::net::IpAddr::V4(h.ip) })
         .collect();
     crate::host_names::write_block(iface, &entries)?;
+
     Ok(hosts.len())
 }

@@ -72,6 +72,7 @@ impl Inner {
         self.failures.retain(|_, (_, at)| at.elapsed() < FAILURE_WINDOW);
         let count = |k: Option<String>| k.and_then(|k| self.failures.get(&k).map(|(n, _)| *n)).unwrap_or(0);
         let extra = count(login.map(key)).max(count(ip_key(ip))).min(MAX_EXTRA_BITS);
+
         (BASE_BITS + extra).min(pow::MAX_BITS)
     }
 }
@@ -82,13 +83,16 @@ impl LoginChallenges {
     pub fn issue(&self, login: Option<&str>, ip: Option<IpAddr>) -> Option<Issued> {
         let mut m = self.0.lock().ok()?;
         m.pending.retain(|_, p| p.at.elapsed() < TTL);
+
         if m.pending.len() >= MAX_PENDING {
             return None;
         }
+
         let bits = m.bits_for(login, ip);
         let salt = forge_secrets::crypto::random_bytes::<16>();
         let id = forge_secrets::crypto::random_token::<18>();
         m.pending.insert(id.clone(), Pending { salt, bits, at: Instant::now() });
+
         Some(Issued { id, salt_hex: salt.iter().map(|b| format!("{b:02x}")).collect(), bits, expires_in: TTL })
     }
 
@@ -99,6 +103,7 @@ impl LoginChallenges {
         if p.bits < m.bits_for(Some(login), ip) {
             return Err(Refusal::TooEasy);
         }
+
         if pow::check(&p.salt, nonce, p.bits) { Ok(()) } else { Err(Refusal::Wrong) }
     }
 
@@ -151,10 +156,12 @@ mod tests {
         let attacker: IpAddr = "203.0.113.7".parse().unwrap_or_else(|_| unreachable!());
         let other: IpAddr = "198.51.100.1".parse().unwrap_or_else(|_| unreachable!());
         let local: IpAddr = "127.0.0.1".parse().unwrap_or_else(|_| unreachable!());
+
         for name in ["a", "b", "c"] {
             c.failed(name, Some(attacker));
             c.failed(name, Some(local));
         }
+
         // Spraying many names from one address makes every name harder there.
         assert_eq!(c.issue(Some("d"), Some(attacker)).map(|i| i.bits), Some(BASE_BITS + 3));
         assert_eq!(c.issue(Some("d"), Some(other)).map(|i| i.bits), Some(BASE_BITS));
@@ -172,11 +179,13 @@ mod tests {
         let c = LoginChallenges::default();
         let i = c.issue(None, None).unwrap_or_else(|| unreachable!());
         let n = pow::solve(&salt(&i), i.bits);
+
         if let Ok(mut m) = c.0.lock()
             && let Some(p) = m.pending.get_mut(&i.id)
         {
             p.at = Instant::now().checked_sub(TTL + Duration::from_secs(1)).unwrap_or_else(Instant::now);
         }
+
         assert_eq!(c.verify(&i.id, &n, "admin", None), Err(Refusal::Invalid));
     }
 
@@ -192,9 +201,11 @@ mod tests {
         assert_eq!(c.verify(&easy.id, &n, "admin", None), Err(Refusal::TooEasy));
         c.succeeded("admin");
         assert_eq!(c.issue(Some("admin"), None).map(|i| i.bits), Some(BASE_BITS));
+
         for _ in 0..50 {
             c.failed("x", None);
         }
+
         assert_eq!(c.issue(Some("x"), None).map(|i| i.bits), Some(BASE_BITS + MAX_EXTRA_BITS));
     }
 }

@@ -52,6 +52,7 @@ pub fn valid_name(name: &str) -> Result<()> {
     let ok = !name.is_empty()
         && name.len() <= 64
         && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+
     if ok {
         Ok(())
     } else {
@@ -63,9 +64,11 @@ pub fn valid_name(name: &str) -> Result<()> {
 pub fn normalise_server(raw: &str) -> Result<String> {
     let url = url::Url::parse(raw.trim()).map_err(|_| CliError::usage(format!("invalid server URL `{raw}`")))?;
     let host = url.host_str().unwrap_or_default().to_owned();
+
     if !url.username().is_empty() || url.password().is_some() || url.query().is_some() || url.fragment().is_some() {
         return Err(CliError::usage("the server URL must not contain credentials, a query or a fragment"));
     }
+
     match url.scheme() {
         "https" => {}
         "http" if is_loopback(&host) || std::env::var_os("FORGE_ALLOW_HTTP").is_some() => {}
@@ -76,6 +79,7 @@ pub fn normalise_server(raw: &str) -> Result<String> {
         }
         s => return Err(CliError::usage(format!("unsupported URL scheme `{s}`"))),
     }
+
     Ok(url.as_str().trim_end_matches('/').to_owned())
 }
 
@@ -90,6 +94,7 @@ pub fn config_dir() -> Result<PathBuf> {
     if let Some(d) = std::env::var_os("FORGE_CONFIG_DIR") {
         return Ok(PathBuf::from(d));
     }
+
     let base = if cfg!(windows) {
         std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("OrbynForge"))
     } else if cfg!(target_os = "macos") {
@@ -99,6 +104,7 @@ pub fn config_dir() -> Result<PathBuf> {
             .map(|x| PathBuf::from(x).join("orbyn-forge"))
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/orbyn-forge")))
     };
+
     base.map(|b| b.join("cli"))
         .ok_or_else(|| CliError::new(Exit::General, "cannot find a config directory (set FORGE_CONFIG_DIR)"))
 }
@@ -119,6 +125,7 @@ pub fn write_private(path: &Path, data: &[u8]) -> Result<()> {
     ensure_dir(dir)?;
     let tmp =
         dir.join(format!(".{}.tmp-{}", path.file_name().and_then(|n| n.to_str()).unwrap_or("f"), std::process::id()));
+
     {
         let mut opts = fs::OpenOptions::new();
         opts.write(true).create(true).truncate(true);
@@ -131,9 +138,11 @@ pub fn write_private(path: &Path, data: &[u8]) -> Result<()> {
         std::io::Write::write_all(&mut f, data)?;
         f.sync_all()?;
     }
+
     fs::rename(&tmp, path).inspect_err(|_| {
         let _ = fs::remove_file(&tmp);
     })?;
+
     Ok(())
 }
 
@@ -146,6 +155,7 @@ impl Lock {
         ensure_dir(dir)?;
         let path = dir.join(".lock");
         let deadline = Instant::now() + Duration::from_secs(10);
+
         loop {
             match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
                 Ok(_) => return Ok(Self(path)),
@@ -156,16 +166,19 @@ impl Lock {
                         .ok()
                         .and_then(|t| t.elapsed().ok())
                         .is_some_and(|age| age > Duration::from_secs(30));
+
                     if stale {
                         let _ = fs::remove_file(&path);
                         continue;
                     }
+
                     if Instant::now() >= deadline {
                         return Err(CliError::new(
                             Exit::Timeout,
                             format!("config is locked by another forge process ({})", path.display()),
                         ));
                     }
+
                     std::thread::sleep(Duration::from_millis(50));
                 }
                 Err(e) => return Err(e.into()),
@@ -204,6 +217,7 @@ impl Config {
         let mut cfg = Self::load_from(&dir)?;
         let out = f(&mut cfg)?;
         write_private(&Self::path(&dir), &serde_json::to_vec_pretty(&cfg)?)?;
+
         Ok(out)
     }
 

@@ -206,6 +206,7 @@ pub async fn list_channels(
 ) -> ApiResult<Json<Vec<Channel>>> {
     let ws = q.workspace.unwrap_or(default);
     caller.authorize(Action::AlertView, ws_ref(ws)).await?;
+
     Ok(Json(state.notifier.channels(ws).await?))
 }
 
@@ -215,6 +216,7 @@ async fn channel_for(state: &AppState, caller: &Caller, id: ChannelId, action: A
     const MISSING: &str = "notification channel not found";
     let c = state.notifier.channel(id).await.map_err(|e| or_not_found(e, MISSING))?;
     authorize_found(caller, action, c.workspace_id, MISSING).await?;
+
     Ok(c)
 }
 
@@ -236,16 +238,20 @@ pub async fn create_channel(
 ) -> ApiResult<(StatusCode, Json<Channel>)> {
     let ws = body.workspace_id.unwrap_or(default);
     caller.authorize(Action::NotificationManage, ws_ref(ws)).await?;
+
     if ws != default {
         return Err(ApiError::bad_request("no such workspace"));
     }
+
     // Signing sends something derived from the vault item to the target:
     // the same right as using the item anywhere else.
     if let Some(item) = body.secret_item {
         super::vault::authorize_item_use(&state, &caller, ws, item, AUDIT_CHANNEL_CREATE).await?;
     }
+
     let channel = state.notifier.create_channel(ws, body.into_input(), caller.principal()).await?;
     caller.audit(AUDIT_CHANNEL_CREATE, &ws_ref(ws), Some(ws), channel_audit(&channel)).await;
+
     Ok((StatusCode::CREATED, Json(channel)))
 }
 
@@ -261,7 +267,9 @@ pub async fn update_channel(
     if body.workspace_id.is_some_and(|w| w != ws) {
         return Err(ApiError::bad_request("a channel cannot move to another workspace"));
     }
+
     let input = body.into_input();
+
     // A signed channel pointed at a new URL, or a channel given another
     // secret, uses the vault item anew.
     if let Some(item) = input.secret_item
@@ -269,6 +277,7 @@ pub async fn update_channel(
     {
         super::vault::authorize_item_use(&state, &caller, ws, item, AUDIT_CHANNEL_UPDATE).await?;
     }
+
     let url_changed = input.url.is_some();
     let password_changed = input.email.as_ref().is_some_and(|e| e.password.is_some());
     let channel = state.notifier.update_channel(id, input).await?;
@@ -277,7 +286,9 @@ pub async fn update_channel(
         d.insert("url_changed".into(), json!(url_changed));
         d.insert("password_changed".into(), json!(password_changed));
     }
+
     caller.audit(AUDIT_CHANNEL_UPDATE, &ws_ref(ws), Some(ws), details).await;
+
     Ok(Json(channel))
 }
 
@@ -293,6 +304,7 @@ pub async fn delete_channel(
     caller
         .audit(AUDIT_CHANNEL_DELETE, &ws_ref(old.workspace_id), Some(old.workspace_id), channel_audit(&channel))
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -316,11 +328,13 @@ pub async fn test_channel(
     let channel = channel_for(&state, &caller, id, Action::NotificationManage).await?;
     let ws = channel.workspace_id;
     let about = json!({ "channel": id, "name": channel.name, "target": channel.target });
+
     let (delivery, attempts) = match state.notifier.test_channel(id).await {
         Ok(done) => done,
         Err(TestError::Cooldown(secs)) => {
             let e = TestError::Cooldown(secs).to_string();
             caller.audit_denied(AUDIT_CHANNEL_TEST, &ws_ref(ws), Some(ws), &e).await;
+
             return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "rate_limited", e));
         }
         // A request may have left before this failure: it is on record
@@ -330,6 +344,7 @@ pub async fn test_channel(
             return Err(e.into());
         }
     };
+
     let details = json!({
         "channel": id,
         "name": channel.name,
@@ -340,6 +355,7 @@ pub async fn test_channel(
         "error": delivery.last_error,
     });
     caller.audit(AUDIT_CHANNEL_TEST, &ws_ref(ws), Some(ws), details).await;
+
     Ok(Json(DeliveryView { delivery: shown(&caller, ws, vec![delivery]).await.remove(0), attempts }))
 }
 
@@ -470,6 +486,7 @@ pub async fn list_policies(
 ) -> ApiResult<Json<Vec<PolicyView>>> {
     let ws = q.workspace.unwrap_or(default);
     caller.authorize(Action::AlertView, ws_ref(ws)).await?;
+
     Ok(Json(views(&state, state.notifier.policies(ws).await?).await?))
 }
 
@@ -482,6 +499,7 @@ async fn policy_for(
     const MISSING: &str = "notification policy not found";
     let p = state.notifier.policy(id).await.map_err(|e| or_not_found(e, MISSING))?;
     authorize_found(caller, action, p.workspace_id, MISSING).await?;
+
     Ok(p)
 }
 
@@ -504,11 +522,14 @@ pub async fn create_policy(
 ) -> ApiResult<(StatusCode, Json<PolicyView>)> {
     let ws = body.workspace_id.unwrap_or(default);
     caller.authorize(Action::AlertManage, ws_ref(ws)).await?;
+
     if ws != default {
         return Err(ApiError::bad_request("no such workspace"));
     }
+
     let policy = state.notifier.create_policy(ws, body.into_input(), caller.principal()).await?;
     caller.audit(AUDIT_POLICY_CREATE, &ws_ref(ws), Some(ws), policy_audit(&policy)).await;
+
     Ok((StatusCode::CREATED, Json(view(&state, policy).await?)))
 }
 
@@ -523,11 +544,14 @@ pub async fn update_policy(
     if body.workspace_id.is_some_and(|w| w != old.workspace_id) {
         return Err(ApiError::bad_request("a policy cannot move to another workspace"));
     }
+
     let policy = state.notifier.update_policy(id, body.into_input()).await?;
+
     // What it matched before and what it matches now: a policy edit can
     // send alarms somewhere new.
     let details = json!({ "policy": id, "before": policy_audit(&old), "after": policy_audit(&policy) });
     caller.audit(AUDIT_POLICY_UPDATE, &ws_ref(old.workspace_id), Some(old.workspace_id), details).await;
+
     Ok(Json(view(&state, policy).await?))
 }
 
@@ -541,6 +565,7 @@ pub async fn delete_policy(
     let old = policy_for(&state, &caller, id, Action::AlertManage).await?;
     let policy = state.notifier.delete_policy(id).await?;
     caller.audit(AUDIT_POLICY_DELETE, &ws_ref(old.workspace_id), Some(old.workspace_id), policy_audit(&policy)).await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -576,6 +601,7 @@ async fn visible(caller: &Caller, deliveries: Vec<Delivery>) -> Vec<Delivery> {
     let ok = caller.can_many(Action::View, refs).await;
     out.extend(with.into_iter().zip(ok).filter(|(_, ok)| *ok).map(|(d, _)| d));
     out.sort_by_key(|d| std::cmp::Reverse((d.created_at, d.id)));
+
     out
 }
 
@@ -587,6 +613,7 @@ async fn shown(caller: &Caller, ws: WorkspaceId, mut deliveries: Vec<Delivery>) 
             r.redact();
         }
     }
+
     deliveries
 }
 
@@ -602,19 +629,24 @@ pub async fn list_deliveries(
     let limit = q.limit.unwrap_or(100).clamp(1, 500);
     let mut filter =
         DeliveryFilter { workspace: Some(ws), alarm: q.alarm, channel: q.channel, status: q.status, before: None };
+
     // The view filter runs after the query: page on until the list is full
     // or the deliveries run out; bounded.
     let mut out: Vec<Delivery> = Vec::new();
+
     for _ in 0..20 {
         let page = state.notifier.deliveries(&filter, limit).await?;
         let full = page.len() == limit as usize;
         filter.before = page.last().map(|d| (d.created_at, d.id));
         out.extend(visible(&caller, page).await);
+
         if out.len() >= limit as usize || !full {
             break;
         }
     }
+
     out.truncate(limit as usize);
+
     Ok(Json(shown(&caller, ws, out).await))
 }
 
@@ -630,9 +662,12 @@ pub async fn get_delivery(
     const MISSING: &str = "delivery not found";
     let (delivery, attempts) = state.notifier.delivery(id).await.map_err(|e| or_not_found(e, MISSING))?;
     authorize_found(&caller, Action::AlertView, delivery.workspace_id, MISSING).await?;
+
     if visible(&caller, vec![delivery.clone()]).await.is_empty() {
         return Err(ApiError::not_found(MISSING));
     }
+
     let ws = delivery.workspace_id;
+
     Ok(Json(DeliveryView { delivery: shown(&caller, ws, vec![delivery]).await.remove(0), attempts }))
 }

@@ -9,6 +9,7 @@ use serde_json::json;
 async fn store() -> (Store, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let s = Store::open_sqlite(&dir.path().join("forge.db")).await.unwrap();
+
     (s, dir)
 }
 
@@ -30,6 +31,7 @@ async fn seed_workspace(s: &Store) -> (Workspace, Environment) {
         created_at: Timestamp(1),
     };
     s.create_environment(&env).await.unwrap();
+
     (org, env)
 }
 
@@ -90,6 +92,7 @@ async fn resolver_builds_full_ancestry() {
         r.ancestors,
         vec![EntityRef::new(EntityKind::Environment, env.id), EntityRef::new(EntityKind::Workspace, org.id),]
     );
+
     // Unknown ids do not resolve (fail closed).
     assert!(s.resolve(&EntityRef::new(EntityKind::Server, ServerId::new())).await.is_err());
 }
@@ -303,14 +306,17 @@ async fn resolve_many_matches_resolve_for_servers() {
         created_at: Timestamp(1),
     };
     let (a, b, c) = (mk("a", Some(env.id)), mk("b", None), mk("c", Some(env.id)));
+
     for x in [&a, &b, &c] {
         s.create_server(x).await.unwrap();
     }
+
     s.assign_server(c.id, Some(cluster.id), Some(env.id)).await.unwrap();
     let mut refs: Vec<EntityRef> = [&a, &b, &c].iter().map(|x| EntityRef::new(EntityKind::Server, x.id)).collect();
     refs.push(EntityRef::new(EntityKind::Server, ServerId::new())); // unknown
     let many = s.resolve_many(&refs).await;
     assert_eq!(many.len(), 4);
+
     for (r, m) in refs.iter().zip(many) {
         match (s.resolve(r).await, m) {
             (Ok(one), Ok(batch)) => {
@@ -375,8 +381,10 @@ async fn environment_names_are_unique_per_cluster() {
     assert!(matches!(s.set_environment_cluster(dev_b.id, a.id).await, Err(DomainError::Conflict(_))));
     s.set_environment_cluster(qa_b.id, a.id).await.unwrap();
     assert_eq!(s.get_environment(qa_b.id).await.unwrap().cluster_id, Some(a.id));
+
     // The name is free again in b.
     s.create_environment(&environment_in(org.id, b.id, "qa")).await.unwrap();
+
     // The resolver: environment → workspace (the cluster is placement only).
     let r = s.resolve(&EntityRef::new(EntityKind::Environment, qa_b.id)).await.unwrap();
     assert_eq!(r.ancestors, vec![EntityRef::new(EntityKind::Workspace, org.id)]);
@@ -407,10 +415,12 @@ async fn node_labels_are_unique_per_workspace() {
     let (a, b) = (node("a"), node("b"));
     s.create_server(&a).await.unwrap();
     s.create_server(&b).await.unwrap();
+
     // A derived label is claimed once and never replaced by a later claim.
     assert!(s.claim_node_label(a.id, org.id, "web", Timestamp(2)).await.unwrap());
     assert!(!s.claim_node_label(a.id, org.id, "other", Timestamp(2)).await.unwrap());
     assert!(matches!(s.claim_node_label(b.id, org.id, "web", Timestamp(2)).await, Err(DomainError::Conflict(_))));
+
     // Set and derived labels share one environment.
     assert!(matches!(s.set_node_label(b.id, org.id, "web", true, Timestamp(2)).await, Err(DomainError::Conflict(_))));
     s.set_node_label(a.id, org.id, "web-1", true, Timestamp(3)).await.unwrap();
@@ -463,6 +473,7 @@ async fn object_store_owner_round_trips_and_survives_a_save() {
     assert_eq!(s.get_object_store(owned.id).await.unwrap().unwrap(), owned);
 
     s.set_object_store_owner(shared.id, Some(ns.id), Timestamp(7)).await.unwrap();
+
     // A job that loaded the store before the change saves its copy: the
     // status is written, the owner is not.
     let mut stale = shared.clone();
@@ -557,9 +568,11 @@ async fn bucket_grants_round_trip_and_go_with_their_store() {
     let mut read = grant(&ada, &logs, "app", 30, NEVER_EXPIRES);
     read.access = BucketAccess::Read;
     let other = grant(&bob, &media, "photos", 40, NEVER_EXPIRES);
+
     for g in [&forever, &short, &read, &other] {
         s.put_bucket_grant(g).await.unwrap();
     }
+
     assert_eq!(s.get_bucket_grant(forever.id).await.unwrap().unwrap(), forever);
     assert_eq!(s.get_bucket_grant(read.id).await.unwrap().unwrap(), read);
     assert!(s.get_bucket_grant(BucketGrantId::new()).await.unwrap().is_none());
@@ -568,9 +581,11 @@ async fn bucket_grants_round_trip_and_go_with_their_store() {
     let ids = |v: Vec<BucketGrant>| v.into_iter().map(|g| g.id).collect::<Vec<_>>();
     assert_eq!(ids(s.list_live_bucket_grants(ada.id, Timestamp(999)).await.unwrap()), [read.id, short.id, forever.id]);
     assert_eq!(ids(s.list_live_bucket_grants(ada.id, Timestamp(1_000)).await.unwrap()), [read.id, forever.id]);
+
     // A store's grants, newest first and bounded.
     assert_eq!(ids(s.list_store_bucket_grants(media.id, None, 10).await.unwrap()), [other.id, short.id, forever.id]);
     assert_eq!(ids(s.list_store_bucket_grants(media.id, None, 1).await.unwrap()), [other.id]);
+
     // Only the live ones: the limit counts live rows, not the rows skipped.
     let live = |at: i64, limit: u32| s.list_store_bucket_grants(media.id, Some(Timestamp(at)), limit);
     assert_eq!(ids(live(999, 10).await.unwrap()), [other.id, short.id, forever.id]);
@@ -585,6 +600,7 @@ async fn bucket_grants_round_trip_and_go_with_their_store() {
     let got = s.get_bucket_grant(forever.id).await.unwrap().unwrap();
     assert_eq!(got, BucketGrant { revoked_at: Some(Timestamp(50)), ..forever.clone() });
     assert_eq!(ids(s.list_live_bucket_grants(ada.id, Timestamp(999)).await.unwrap()), [read.id, short.id]);
+
     // A revocation is final: a stale copy without it does not bring the
     // grant back, and a later revocation does not move the first one.
     s.put_bucket_grant(&forever).await.unwrap();
@@ -594,12 +610,14 @@ async fn bucket_grants_round_trip_and_go_with_their_store() {
     s.put_bucket_grant(&later).await.unwrap();
     assert_eq!(s.get_bucket_grant(forever.id).await.unwrap().unwrap().revoked_at, Some(Timestamp(50)));
     assert_eq!(ids(s.list_live_bucket_grants(ada.id, Timestamp(999)).await.unwrap()), [read.id, short.id]);
+
     // The live grants of one bucket, whoever holds them.
     let of_bucket = |bucket: &'static str, at: i64| s.list_live_grants_of_bucket(media.id, bucket, Timestamp(at));
     assert_eq!(ids(of_bucket("photos", 999).await.unwrap()), [other.id], "the revoked one is left out");
     assert_eq!(ids(of_bucket("videos", 999).await.unwrap()), [short.id]);
     assert!(of_bucket("videos", 1_000).await.unwrap().is_empty(), "expired");
     assert!(of_bucket("app", 0).await.unwrap().is_empty(), "a bucket of another store");
+
     // Users by id, for the names in a list.
     let mut found: Vec<UserId> =
         s.get_users(&[bob.id, UserId::new(), ada.id]).await.unwrap().iter().map(|u| u.id).collect();
@@ -636,6 +654,7 @@ async fn swarm_rows_round_trip_and_go_with_the_cluster() {
         founder: None,
         updated_at: Timestamp(1),
     };
+
     // Only the first claim wins; the recorded swarm id is found again.
     assert!(store.claim_swarm(&swarm).await.unwrap());
     assert!(!store.claim_swarm(&swarm).await.unwrap());
@@ -713,6 +732,7 @@ async fn registries_round_trip_one_per_host() {
     assert_eq!(store.list_registries(ws.id).await.unwrap(), vec![r.clone()]);
     store.delete_registry(r.id).await.unwrap();
     assert!(store.get_registry(r.id).await.unwrap().is_none());
+
     assert!(matches!(store.update_registry(&r).await, Err(DomainError::NotFound(_))), "no silent update")
 }
 
@@ -742,6 +762,7 @@ async fn webhooks_round_trip_and_keep_bounded_deliveries() {
     store.create_webhook(&w).await.unwrap();
     assert_eq!(store.webhook_by_token_hash("h1").await.unwrap().map(|x| x.id), Some(w.id));
     assert!(store.webhook_by_token_hash("h2").await.unwrap().is_none());
+
     for i in 0..(DELIVERIES_KEPT + 5) {
         let d = Delivery {
             id: WebhookDeliveryId::new(),
@@ -755,6 +776,7 @@ async fn webhooks_round_trip_and_keep_bounded_deliveries() {
         };
         store.add_delivery(&d).await.unwrap();
     }
+
     let all = store.list_deliveries(w.id, 1000).await.unwrap();
     assert_eq!(all.len(), DELIVERIES_KEPT as usize);
     assert_eq!(all[0].at, Timestamp(i64::from(DELIVERIES_KEPT) + 14), "newest first");

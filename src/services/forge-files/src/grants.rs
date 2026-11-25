@@ -6,9 +6,8 @@
 //! re-reads it (revocation and expiry take effect at once) and is authorized
 //! as its creator, so losing a role removes the access too.
 
-use std::net::IpAddr;
-
 use std::collections::HashMap;
+use std::net::IpAddr;
 
 use forge_core::files::{FileGrant, NEVER_EXPIRES, NODE_ROOT};
 use forge_core::model::AuditOutcome;
@@ -91,6 +90,7 @@ fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Resul
 pub fn grant_diff(before: &FileGrant, after: &FileGrant) -> serde_json::Map<String, serde_json::Value> {
     let (b, a) = (json!(before), json!(after));
     let mut out = serde_json::Map::new();
+
     for key in [
         "name",
         "roots",
@@ -107,6 +107,7 @@ pub fn grant_diff(before: &FileGrant, after: &FileGrant) -> serde_json::Map<Stri
             out.insert(key.to_owned(), json!({ "before": b[key], "after": a[key] }));
         }
     }
+
     out
 }
 
@@ -120,6 +121,7 @@ pub fn narrows(before: &FileGrant, after: &FileGrant) -> bool {
         (None, Some(_)) => true,
         (Some(b), Some(a)) => a < b,
     };
+
     before.roots.iter().any(|r| !after.roots.contains(r))
         || (before.write && !after.write)
         || (before.delete && !after.delete)
@@ -151,7 +153,9 @@ pub fn ip_allowed(list: &[String], ip: Option<IpAddr>) -> bool {
     if list.is_empty() {
         return true;
     }
+
     let Some(ip) = ip else { return false };
+
     list.iter().any(|entry| match entry.split_once('/') {
         None => entry.parse::<IpAddr>().is_ok_and(|a| a == ip),
         Some((net, bits)) => match (net.parse::<IpAddr>(), bits.parse::<u32>(), ip) {
@@ -190,14 +194,18 @@ impl FileService {
     /// every right the grant carries on every root it covers.
     pub async fn create_grant(&self, actor: &Actor, server_id: ServerId, req: NewGrant) -> FileResult<IssuedGrant> {
         let repo = self.grants_repo()?.clone();
+
         let Actor::User { ctx, .. } = actor else {
             return Err(FileError::Denied("temporary access cannot issue more access".into()));
         };
+
         let server = self.server(server_id).await?;
+
         if !ctx.mfa {
             self.denied(actor, "file.grant.create", &server, "MFA required").await;
             return Err(FileError::StepUp("creating SFTP access needs a recent MFA check".into()));
         }
+
         let now = self.clock.now();
         let minutes = if req.never_expires { None } else { Some(req.expires_in_minutes) };
         let expires_at =
@@ -238,6 +246,7 @@ impl FileService {
             }),
         )
         .await;
+
         Ok(IssuedGrant { grant, token })
     }
 
@@ -260,11 +269,14 @@ impl FileService {
                         .into(),
                 ));
             }
+
             if self.require(actor, Action::FileAdmin, server).await.is_err() {
                 return Err(FileError::Denied("only file administrators may issue access that never expires".into()));
             }
+
             return Ok(Some(Timestamp(NEVER_EXPIRES)));
         }
+
         let Some(m) = minutes else { return Ok(None) };
         if m == 0 || i64::from(m) > self.max_grant_minutes {
             return Err(FileError::Invalid(format!(
@@ -272,6 +284,7 @@ impl FileService {
                 self.max_grant_minutes / 60
             )));
         }
+
         Ok(Some(Timestamp(self.clock.now().0 + i64::from(m) * 60_000)))
     }
 
@@ -279,40 +292,53 @@ impl FileService {
     /// everything the grant carries, on every root, right now.
     async fn checked(&self, actor: &Actor, server: &Server, mut g: FileGrant) -> FileResult<FileGrant> {
         g.name = g.name.trim().to_owned();
+
         if g.name.is_empty() || g.name.len() > 120 {
             return Err(FileError::Invalid("the name must be 1–120 characters".into()));
         }
+
         g.roots.sort();
         g.roots.dedup();
+
         if g.roots.is_empty() || g.roots.len() > 8 {
             return Err(FileError::Invalid("choose between 1 and 8 roots".into()));
         }
+
         if g.max_sessions == 0 || g.max_sessions > 10 {
             return Err(FileError::Invalid("allow between 1 and 10 sessions".into()));
         }
+
         g.allowed_ips = g.allowed_ips.iter().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).collect();
+
         if g.allowed_ips.len() > 32 || !g.allowed_ips.iter().all(|e| valid_ip_entry(e)) {
             return Err(FileError::Invalid("allowed addresses must be IPs or CIDR ranges (at most 32)".into()));
         }
+
         if g.bandwidth_kbps == Some(0) || g.transfer_limit == Some(0) {
             return Err(FileError::Invalid("limits must be greater than 0".into()));
         }
+
         let mut needed = vec![Action::FileRead];
+
         if g.write {
             needed.push(Action::FileWrite);
         }
+
         if g.delete {
             needed.push(Action::FileDelete);
         }
+
         for a in &needed {
             self.require(actor, *a, server).await?;
         }
+
         for r in &g.roots {
             let resolved = self.resolve(actor, server, r).await?;
             if resolved.read_only && (g.write || g.delete) {
                 return Err(FileError::Invalid(format!("root `{r}` is read-only; issue read-only access to it")));
             }
         }
+
         Ok(g)
     }
 
@@ -327,22 +353,27 @@ impl FileService {
         needs_mfa: bool,
     ) -> FileResult<FileGrant> {
         let repo = self.grants_repo()?.clone();
+
         let Actor::User { ctx, .. } = actor else {
             return Err(FileError::Denied("temporary access cannot manage access".into()));
         };
+
         let g = repo
             .get_grant(id)
             .await
             .map_err(|e| FileError::Internal(e.to_string()))?
             .filter(|g| g.server_id == server.id)
             .ok_or_else(|| FileError::NotFound("access not found".into()))?;
+
         if g.created_by != actor.key() && g.owner != actor.key() {
             self.require(actor, Action::FileAdmin, server).await?;
         }
+
         if needs_mfa && !ctx.mfa {
             self.denied(actor, action, server, "MFA required").await;
             return Err(FileError::StepUp("changing SFTP access needs a recent MFA check".into()));
         }
+
         Ok(g)
     }
 
@@ -362,50 +393,67 @@ impl FileService {
         if before.revoked_at.is_some() {
             return Err(FileError::Conflict("revoked access cannot be changed".into()));
         }
+
         let mut after = before.clone();
+
         if let Some(v) = changes.name {
             after.name = v;
         }
+
         if let Some(v) = changes.roots {
             after.roots = v;
         }
+
         if let Some(v) = changes.write {
             after.write = v;
         }
+
         if let Some(v) = changes.delete {
             after.delete = v;
         }
+
         if let Some(v) = changes.allowed_ips {
             after.allowed_ips = v;
         }
+
         if let Some(v) = changes.max_sessions {
             after.max_sessions = v;
         }
+
         if let Some(v) = changes.bandwidth_kbps {
             after.bandwidth_kbps = v;
         }
+
         if let Some(v) = changes.transfer_limit {
             after.transfer_limit = v;
         }
+
         let never = changes.never_expires == Some(true);
+
         if changes.never_expires == Some(false) && changes.expires_in_minutes.is_none() && before.never_expires() {
             return Err(FileError::Invalid("give `expires_in_minutes` to set an expiry".into()));
         }
+
         let minutes = if never { None } else { changes.expires_in_minutes };
         if let Some(at) = self.expiry(actor, &server, "file.grant.update", never, minutes).await? {
             after.expires_at = at;
         }
+
         let mut after = self.checked(actor, &server, after).await?;
+
         // Widening makes the editor the owner: the grant then acts with the
         // editor's rights, never with rights its previous owner did not hold.
         if widens(&before, &after) {
             after.owner = actor.key();
         }
+
         let diff = grant_diff(&before, &after);
         if diff.is_empty() {
             return Ok(before);
         }
+
         repo.put_grant(&after).await.map_err(|e| FileError::Internal(e.to_string()))?;
+
         // A new owner also means open sessions act for someone else: close them.
         let narrowed = narrows(&before, &after) || before.owner != after.owner;
         self.record(
@@ -416,9 +464,11 @@ impl FileService {
             json!({ "grant": after.id, "changes": diff, "sessions_closed": narrowed }),
         )
         .await;
+
         if narrowed {
             let _ = self.grant_drops.send(after.id.clone());
         }
+
         Ok(after)
     }
 
@@ -431,11 +481,13 @@ impl FileService {
         if g.revoked_at.is_some() {
             return Err(FileError::Conflict("revoked access cannot be changed".into()));
         }
+
         let token = random_token::<32>();
         g.token_hash = sha256_hex(token.as_bytes());
         repo.put_grant(&g).await.map_err(|e| FileError::Internal(e.to_string()))?;
         self.record(actor, "file.grant.reset_password", &server, AuditOutcome::Success, json!({ "grant": g.id })).await;
         let _ = self.grant_drops.send(g.id.clone());
+
         Ok(IssuedGrant { grant: g, token })
     }
 
@@ -447,6 +499,7 @@ impl FileService {
         let admin = self.can(actor, Action::FileAdmin, server_id).await;
         let all = repo.list_grants(server_id).await.map_err(|e| FileError::Internal(e.to_string()))?;
         let me = actor.key();
+
         Ok(all.into_iter().filter(|g| admin || g.created_by == me || g.owner == me).collect())
     }
 
@@ -471,6 +524,7 @@ impl FileService {
         let mut ids: Vec<ServerId> = all.iter().map(|g| g.server_id).collect();
         ids.sort_unstable();
         ids.dedup();
+
         for id in ids {
             let entry = match self.servers.get_server(id).await {
                 Ok(s) if self.can(actor, Action::FileRead, s.id).await => {
@@ -479,8 +533,10 @@ impl FileService {
                 }
                 _ => None,
             };
+
             seen.insert(id, entry);
         }
+
         for g in all {
             if let Some(Some((s, admin))) = seen.get(&g.server_id)
                 && (*admin || g.created_by == actor.key() || g.owner == actor.key())
@@ -489,6 +545,7 @@ impl FileService {
                 out.push((g, s));
             }
         }
+
         Ok(out)
     }
 
@@ -508,8 +565,10 @@ impl FileService {
             g.revoked_at = Some(self.clock.now());
             repo.put_grant(&g).await.map_err(|e| FileError::Internal(e.to_string()))?;
         }
+
         self.record(actor, "file.grant.revoke", &server, AuditOutcome::Success, json!({ "grant": g.id })).await;
         let _ = self.grant_drops.send(g.id.clone());
+
         Ok(g)
     }
 
@@ -517,18 +576,23 @@ impl FileService {
     pub async fn authenticate(&self, user: &str, token: &str, peer: Option<IpAddr>) -> FileResult<Actor> {
         let generic = || FileError::Denied("invalid credentials".into());
         let repo = self.grants_repo()?.clone();
+
         if !(user.len() == 18 && user.starts_with("fg") && user[2..].bytes().all(|b| b.is_ascii_hexdigit())) {
             return Err(generic());
         }
+
         let g = repo.get_grant(user).await.map_err(|e| FileError::Internal(e.to_string()))?.ok_or_else(generic)?;
         let hash = sha256_hex(token.as_bytes());
         if !constant_time_eq(hash.as_bytes(), g.token_hash.as_bytes()) {
             return Err(generic());
         }
+
         if !g.is_active(self.clock.now()) || !ip_allowed(&g.allowed_ips, peer) {
             return Err(generic());
         }
+
         let creator: Principal = g.owner.parse().map_err(|_| generic())?;
+
         Ok(Actor::Grant { grant: Box::new(g), creator })
     }
 
@@ -542,6 +606,7 @@ impl FileService {
             .map_err(|e| FileError::Internal(e.to_string()))?
             .filter(|g| g.is_active(self.clock.now()))
             .ok_or_else(|| FileError::Denied("this access has expired or was revoked".into()))?;
+
         Ok(Some(g))
     }
 
@@ -552,6 +617,7 @@ impl FileService {
         if !g.roots.iter().any(|r| r == root_id) {
             return Err(FileError::Denied("this access does not cover that folder".into()));
         }
+
         for a in actions {
             let ok = match a {
                 Action::FileRead | Action::FileNode => true,
@@ -559,27 +625,33 @@ impl FileService {
                 Action::FileDelete => g.delete,
                 _ => false,
             };
+
             if !ok {
                 return Err(FileError::Denied(format!("this access does not allow `{a}`")));
             }
         }
+
         if root_id == NODE_ROOT && !g.roots.iter().any(|r| r == NODE_ROOT) {
             return Err(FileError::Denied("this access does not cover the whole node".into()));
         }
+
         if g.transfer_limit.is_some_and(|l| g.bytes_transferred >= l) {
             return Err(FileError::TooLarge("this access has used up its transfer allowance".into()));
         }
+
         // The owner must hold every right this operation uses right now, on
         // this node (read, upload/create, delete/replace). Checked against the
         // grant as stored, so an ownership change applies at once.
         let owner: Principal =
             g.owner.parse().map_err(|_| FileError::Denied("this access has no valid owner".into()))?;
         let as_owner = Actor::Grant { grant: Box::new(g.clone()), creator: owner };
+
         for a in actions {
             if !self.can(&as_owner, *a, g.server_id).await {
                 return Err(FileError::Denied(format!("the owner of this access no longer holds `{a}` on this node")));
             }
         }
+
         Ok(())
     }
 
@@ -591,9 +663,11 @@ impl FileService {
         if !g.is_active(self.clock.now()) {
             return false;
         }
+
         let Ok(creator) = g.owner.parse::<Principal>() else { return false };
         let server = g.server_id;
         let actor = Actor::Grant { grant: Box::new(g), creator };
+
         self.can(&actor, Action::FileRead, server).await
     }
 

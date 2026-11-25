@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use duckdb::Connection;
+use forge_analytics_proto::views::JobReport;
 use forge_core::analytics::{
     AnalyticsStore, ContainerMinute, ContainerSeries, EngineStats, FileWrite, NodeMinute, NodePoint, NodeProcessMinute,
     ProcessUsage, Resolution, Retention, SpoolFileWriter, SpoolRows, TopBy,
@@ -21,7 +22,6 @@ use crate::catalog::{Catalog, Limits};
 use crate::jobs;
 use crate::read;
 use crate::writer::{self, Cmd, Rolled, Rows, Writer, guard};
-use forge_analytics_proto::views::JobReport;
 
 /// Pooled read connections kept.
 const MAX_POOL: usize = 16;
@@ -80,6 +80,7 @@ impl DuckDb {
         let retention = catalog.with_admin(|c| {
             let v: Option<String> =
                 c.query_row("SELECT max(value) FROM meta.settings WHERE key = 'version'", [], |r| r.get(0))?;
+
             if let Some(v) = v.and_then(|v| v.parse::<u32>().ok())
                 && v > crate::schema::VERSION
             {
@@ -88,6 +89,7 @@ impl DuckDb {
                     crate::schema::VERSION
                 )));
             }
+
             let r: Option<String> =
                 c.query_row("SELECT max(value) FROM meta.settings WHERE key = 'retention'", [], |r| r.get(0))?;
             Ok(r.and_then(|r| serde_json::from_str::<Retention>(&r).ok()))
@@ -99,6 +101,7 @@ impl DuckDb {
         let w = Writer::new(catalog.clone(), conn, clock.clone(), seen, rolled.clone());
         let rows = cfg.batch_rows.max(1);
         std::thread::Builder::new().name("duckdb-writer".into()).spawn(move || w.run(&rx, rows))?;
+
         Ok(Arc::new(Self {
             catalog,
             tx,
@@ -132,6 +135,7 @@ impl DuckDb {
     async fn rows(&self, rows: Rows) -> DomainResult<()> {
         let (reply, rx) = oneshot::channel();
         self.send(Cmd::Rows(rows, reply)).await.map_err(domain)?;
+
         rx.await.map_err(|_| domain(Error::Stopped))?.map_err(domain)
     }
 
@@ -139,6 +143,7 @@ impl DuckDb {
     async fn job(&self, job: writer::Job) -> Result<(), Error> {
         let (reply, rx) = oneshot::channel();
         self.send(Cmd::Job(job, reply)).await?;
+
         rx.await.map_err(|_| Error::Stopped)?
     }
 
@@ -152,19 +157,23 @@ impl DuckDb {
     {
         // Waiting for a slot counts against the query's time limit.
         let started = Instant::now();
+
         let slots = match kind {
             ReadKind::Search => &self.searches,
             ReadKind::Other => &self.reads,
         };
+
         let _slot = tokio::time::timeout(timeout, slots.clone().acquire_owned())
             .await
             .map_err(|_| Error::Timeout)?
             .map_err(|_| Error::Stopped)?;
         let timeout = timeout.saturating_sub(started.elapsed());
+
         let conn = match guard(&self.pool).pop() {
             Some(c) => c,
             None => self.catalog.connect()?,
         };
+
         let interrupt = conn.interrupt_handle();
         let (catalog, rolled) = (self.catalog.clone(), self.rolled.clone());
         let mut task = tokio::task::spawn_blocking(move || {
@@ -183,6 +192,7 @@ impl DuckDb {
         if pool.len() < MAX_POOL {
             pool.push(conn);
         }
+
         r
     }
 
@@ -192,6 +202,7 @@ impl DuckDb {
         if *cur != l {
             self.catalog.set_limits(l)?;
             let (old, new) = (read_slots(*cur), read_slots(l));
+
             for slots in [&self.reads, &self.searches] {
                 if new > old {
                     slots.add_permits(new - old);
@@ -200,8 +211,10 @@ impl DuckDb {
                     slots.forget_permits(old - new);
                 }
             }
+
             *cur = l;
         }
+
         Ok(())
     }
 
@@ -225,9 +238,11 @@ impl DuckDb {
             error: r.as_ref().err().map(ToString::to_string),
             done: *r.as_ref().unwrap_or(&0),
         };
+
         if let Err(e) = &r {
             tracing::warn!(job = name, error = %e, "DuckDB analytics job failed");
         }
+
         let mut reports = guard(&self.reports);
         reports.retain(|j| j.name != name);
         reports.push(report);
@@ -245,10 +260,12 @@ impl DuckDb {
                 Ok(())
             }))
             .await;
+
         let r = match outcome {
             Ok(()) => done_rx.await.unwrap_or(Err(Error::Stopped)),
             Err(e) => Err(e),
         };
+
         self.record(name, started, at, r);
     }
 
@@ -263,6 +280,7 @@ impl DuckDb {
     /// It sleeps in between: no polling.
     pub async fn run_jobs(self: Arc<Self>, mut shutdown: watch::Receiver<bool>) {
         let mut wait = JOB_FIRST;
+
         loop {
             tokio::select! {
                 () = tokio::time::sleep(wait) => {}
@@ -283,6 +301,7 @@ impl DuckDb {
                 c.execute("INSERT INTO meta.settings VALUES ('version', ?)", [crate::schema::VERSION.to_string()])?;
                 Ok(())
             })();
+
             match res {
                 Ok(()) => Ok(c.execute_batch("COMMIT")?),
                 Err(e) => {
@@ -292,6 +311,7 @@ impl DuckDb {
             }
         })?;
         *guard(&self.retention) = Some(r);
+
         Ok(())
     }
 }
@@ -318,6 +338,7 @@ impl SpoolFileWriter for DuckDb {
     async fn write_spool_file(&self, file: SpoolRows) -> DomainResult<FileWrite> {
         let (reply, rx) = oneshot::channel();
         self.send(Cmd::Spool(file, reply)).await.map_err(domain)?;
+
         rx.await.map_err(|_| domain(Error::Stopped))?.map_err(domain)
     }
 }
@@ -340,6 +361,7 @@ impl AnalyticsStore for DuckDb {
     async fn apply_retention(&self, retention: Retention) -> DomainResult<()> {
         self.save_retention(retention).map_err(domain)?;
         self.run_job("retention", jobs::retention).await;
+
         Ok(())
     }
 
@@ -359,6 +381,7 @@ impl AnalyticsStore for DuckDb {
             .map_err(domain)?;
         let dir = self.catalog.root().to_path_buf();
         let free = tokio::task::spawn_blocking(move || free_disk_bytes(&dir)).await.ok().flatten();
+
         Ok(EngineStats { memory_used_bytes: used, server_memory_limit_bytes: Some(limit), free_disk_bytes: free })
     }
 

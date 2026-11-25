@@ -46,6 +46,7 @@ impl AgentUpdateOverview {
     pub async fn nodes(&self) -> DomainResult<Vec<NodeUpdate>> {
         let servers = self.servers.list_servers(None).await?;
         let facts = self.facts.all_facts().await?;
+
         Ok(servers
             .into_iter()
             .map(|s| {

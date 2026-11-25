@@ -74,52 +74,64 @@ fn log_where(q: &LogQuery, p: &mut Params) -> String {
     let mut sql = format!(
         "({apps} OR (service_id IS NOT NULL AND server_id IS NOT NULL AND {inst}) OR (service_id IS NULL AND {open}))"
     );
+
     if !q.nodes.is_empty() {
         let nodes = p.in_list("server_id", q.nodes.iter().map(ToString::to_string));
         let _ = write!(sql, " AND {nodes}");
     }
+
     if let Some(c) = &q.container {
         let c = p.text(c.clone());
         let _ = write!(sql, " AND (container_name = {c} OR starts_with(container_id, {c}))");
     }
+
     if let Some(st) = &q.stack {
         let st = p.text(st.clone());
         let _ = write!(sql, " AND stack = {st}");
     }
+
     if let Some(src) = q.source {
         let src = p.text(src.as_str());
         let _ = write!(sql, " AND source = {src}");
     }
+
     if !q.levels.is_empty() {
         let l = p.in_list("level", q.levels.iter().map(|l| l.as_str().to_owned()));
         let _ = write!(sql, " AND {l}");
     }
+
     if let Some(t) = &q.filter.text {
         let t = p.text(t.to_lowercase());
         let _ = write!(sql, " AND (contains(lower(message), {t}) OR contains(lower(exception), {t}))");
     }
+
     for (k, v) in &q.filter.properties {
         // As in ClickHouse: a JSON string equal to the value or, when the
         // value reads as a JSON scalar, that raw value.
         let quoted = serde_json::Value::String(v.clone()).to_string();
+
         let raw = match serde_json::from_str::<serde_json::Value>(v) {
             Ok(j @ (serde_json::Value::Number(_) | serde_json::Value::Bool(_) | serde_json::Value::Null)) => {
                 j.to_string()
             }
             _ => quoted.clone(),
         };
+
         let path = p.text(json_path(k));
         let (raw, quoted) = (p.text(raw), p.text(quoted));
         let _ = write!(sql, " AND CAST(json_extract(properties, {path}) AS VARCHAR) IN ({raw}, {quoted})");
     }
+
     if let Some(f) = q.from {
         let f = p.int(f.0);
         let _ = write!(sql, " AND ts >= {f}");
     }
+
     if let Some(t) = q.to {
         let t = p.int(t.0);
         let _ = write!(sql, " AND ts < {t}");
     }
+
     sql
 }
 
@@ -139,10 +151,12 @@ fn log_event(r: &duckdb::Row<'_>) -> duckdb::Result<LogEvent> {
         // A bag that cannot be read is shown empty rather than failing the page.
         _ => serde_json::Map::new(),
     };
+
     let level: String = r.get(5)?;
     let source: String = r.get(14)?;
     let stream: String = r.get(18)?;
     let id: String = r.get(2)?;
+
     Ok(LogEvent {
         service_id: r.get::<_, Option<String>>(0)?.and_then(|s| s.parse().ok()),
         ts: Timestamp(r.get(1)?),
@@ -175,28 +189,35 @@ pub fn query_logs(cat: &std::sync::Arc<Catalog>, c: &Connection, q: &LogQuery) -
     if q.is_empty() {
         return Ok(Vec::new());
     }
+
     let (from, to) = log_window(q);
     let lease = cat.lease(&cat.overlapping(Family::Logs, from, to), false)?;
     let Some(src) = union(&lease, "app_logs", "*") else { return Ok(Vec::new()) };
     let mut p = Params::default();
     let mut wh = log_where(q, &mut p);
+
     let (cursor, order) = match q.page {
         LogPage::Older(c) => (c.map(|c| (c, "<")), "DESC"),
         LogPage::Newer(c) => (Some((c, ">")), "ASC"),
     };
+
     if let Some((c, op)) = cursor {
         let (ts, id) = (p.int(c.ts), p.text(c.id.to_string()));
+
         // `op` is one of two fixed operators.
         let _ = write!(wh, " AND (ts {op} {ts} OR (ts = {ts} AND id {op} {id}))");
     }
+
     let limit = p.int(i64::from(q.limit.clamp(1, 1000)));
     let sql = format!("SELECT {LOG_COLUMNS} FROM ({src}) WHERE {wh} ORDER BY ts {order}, id {order} LIMIT {limit}");
     let mut st = c.prepare(&sql)?;
     let rows = st.query_map(duckdb::params_from_iter(p.0.iter()), log_event)?;
     let mut out = rows.collect::<Result<Vec<_>, _>>()?;
+
     if matches!(q.page, LogPage::Newer(_)) {
         out.reverse(); // newest first, like every page
     }
+
     Ok(out)
 }
 
@@ -210,8 +231,10 @@ pub fn log_histogram(
     if q.is_empty() {
         return Ok(Vec::new());
     }
+
     let (from, to) = log_window(q);
     let lease = cat.lease(&cat.overlapping(Family::Logs, from, to), false)?;
+
     let Some(src) = union(
         &lease,
         "app_logs",
@@ -219,6 +242,7 @@ pub fn log_histogram(
     ) else {
         return Ok(Vec::new());
     };
+
     let mut p = Params::default();
     let wh = log_where(q, &mut p);
     let step = p.int(step_ms.max(1000));
@@ -230,12 +254,14 @@ pub fn log_histogram(
         Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
     })?;
     let mut out = Vec::new();
+
     for row in rows {
         let (t, level, count) = row?;
         if let Some(level) = LogLevel::parse_lenient(&level) {
             out.push(LogBucket { t, level, count: u64::try_from(count).unwrap_or(0) });
         }
     }
+
     Ok(out)
 }
 
@@ -272,6 +298,7 @@ pub fn node_series(
     let (from, to) = (sec_ms(window.0), sec_ms(window.1));
     let mut p = Params::default();
     let (s, f, t) = (p.text(server.to_string()), p.int(from), p.int(to));
+
     match resolution {
         Resolution::Minute => {
             let lease = cat.lease(&cat.overlapping(Family::Metrics, from, to), false)?;
@@ -287,6 +314,7 @@ pub fn node_series(
         }
         Resolution::Hour => {
             let guard = rolled.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+
             // Minute files that can hold rows of these hours.
             let minutes = cat.lease(&cat.overlapping(Family::Metrics, from, to.saturating_add(HOUR_MS)), false)?;
             let states = cat.lease(&rollup_parts(cat, from, to), false)?;
@@ -301,9 +329,11 @@ pub fn node_series(
                 ),
             );
             parts.extend(states.parts().iter().map(|r| format!("SELECT * FROM {}.node_1h", r.alias())));
+
             if parts.is_empty() {
                 return Ok(Vec::new());
             }
+
             let src = parts.join(" UNION ALL ");
             let sql = format!(
                 "SELECT hour, (sum(cpu_sum) / sum(n))::REAL, max(cpu_max), CAST(trunc(sum(mem_sum) / sum(n)) AS UBIGINT),
@@ -336,6 +366,7 @@ fn run_points<L>(c: &Connection, sql: &str, p: &Params, _lease: L) -> Result<Vec
             load1: r.get::<_, Option<f32>>(9)?.unwrap_or(0.0),
         })
     })?;
+
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
@@ -354,10 +385,12 @@ pub fn top_processes(
     let mut p = Params::default();
     let (s, f, t) = (p.text(server.to_string()), p.int(from), p.int(to));
     let l = p.int(i64::from(limit.clamp(1, 100)));
+
     let order = match by {
         TopBy::Cpu => "cpu_avg",
         TopBy::Mem => "mem_avg",
     };
+
     // `order` is one of two fixed column names.
     let sql = format!(
         "SELECT name, \"user\", avg(cpu)::REAL AS cpu_avg, max(cpu), CAST(trunc(avg(mem)) AS UBIGINT) AS mem_avg,
@@ -378,6 +411,7 @@ pub fn top_processes(
             cmd: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
         })
     })?;
+
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
@@ -400,6 +434,7 @@ pub fn container_series(
 ) -> Result<Vec<ContainerSeries>, Error> {
     let (from, to) = (sec_ms(q.window.0), sec_ms(q.window.1));
     let guard = rolled.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+
     let (src, select, col, _leases) = match q.resolution {
         Resolution::Minute => {
             let lease = cat.lease(&cat.overlapping(Family::Metrics, from, to), false)?;
@@ -425,9 +460,11 @@ pub fn container_series(
                 ),
             );
             parts.extend(states.parts().iter().map(|r| format!("SELECT * FROM {}.container_1h", r.alias())));
+
             if parts.is_empty() {
                 return Ok(Vec::new());
             }
+
             let select = "arg_max(container_id, last_minute), arg_max(image, last_minute),
                 arg_max(service_id, last_minute), arg_max(stack, last_minute), (sum(cpu_sum) / sum(n))::REAL,
                 max(cpu_max), CAST(trunc(sum(mem_sum) / sum(n)) AS UBIGINT), max(mem_limit),
@@ -437,9 +474,11 @@ pub fn container_series(
             (parts.join(" UNION ALL "), select, "hour", (minutes, Some(states)))
         }
     };
+
     let mut p = Params::default();
     let (s, f, t) = (p.text(q.server.to_string()), p.int(from), p.int(to));
     let scope = format!("server_id = {s} AND {col} >= {f} AND {col} < {t}");
+
     let filter = match q.container {
         Some(name) => format!(" AND container_name = {}", p.text(name)),
         None => {
@@ -450,6 +489,7 @@ pub fn container_series(
             )
         }
     };
+
     // `select` and `col` are fixed text chosen above.
     let sql = format!(
         "WITH src AS ({src}) SELECT container_name, {col}, {select} FROM src WHERE {scope}{filter}
@@ -479,5 +519,6 @@ pub fn container_series(
     })?;
     let rows = rows.collect::<Result<Vec<_>, _>>()?;
     drop(guard);
+
     Ok(group_series(rows))
 }

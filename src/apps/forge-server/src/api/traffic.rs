@@ -87,6 +87,7 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Query(q): Query<
         names.into_iter().map(move |n| (s.id, n))
     });
     let resolved = resolve_all(lookups.collect()).await;
+
     for (id, ips) in resolved {
         for ip in ips {
             by_ip.entry(ip).or_insert(id);
@@ -96,11 +97,14 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Query(q): Query<
     let now = state.clock.now().0;
     let mut out = Traffic { window_secs: 60, ..Traffic::default() };
     let visible_ids: Vec<ServerId> = visible.iter().map(|s| s.id).collect();
+
     for (edge, sites) in state.telemetry.traffic(now - FRESH_MS) {
         if !visible_ids.contains(&edge) {
             continue;
         }
+
         let e = out.edges.entry(edge).or_default();
+
         for site in sites {
             e.flow.requests += site.requests;
             e.flow.in_bps += site.in_bytes_per_sec;
@@ -109,20 +113,24 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Query(q): Query<
             f.requests += site.requests;
             f.in_bps += site.in_bytes_per_sec;
             f.out_bps += site.out_bytes_per_sec;
+
             for u in site.upstreams {
                 let slot = match ip_of(&u.address).and_then(|ip| by_ip.get(&ip)) {
                     Some(id) => out.nodes.entry(*id).or_default(),
                     None => out.unmatched.entry(u.address.clone()).or_default(),
                 };
+
                 slot.requests += u.requests;
                 slot.to_bps += u.sent_bytes_per_sec;
                 slot.from_bps += u.received_bytes_per_sec;
             }
         }
+
         out.total.requests += e.flow.requests;
         out.total.in_bps += e.flow.in_bps;
         out.total.out_bps += e.flow.out_bps;
     }
+
     Ok(Json(out))
 }
 
@@ -130,25 +138,31 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Query(q): Query<
 /// taken as they are.
 async fn resolve_all(names: Vec<(ServerId, String)>) -> Vec<(ServerId, Vec<IpAddr>)> {
     let mut set = tokio::task::JoinSet::new();
+
     for (id, name) in names {
         set.spawn(async move {
             if let Ok(ip) = name.parse::<IpAddr>() {
                 return (id, vec![ip]);
             }
+
             let ips =
                 match tokio::time::timeout(Duration::from_secs(2), tokio::net::lookup_host((name.as_str(), 0))).await {
                     Ok(Ok(it)) => it.map(|a| a.ip()).collect(),
                     _ => Vec::new(),
                 };
+
             (id, ips)
         });
     }
+
     let mut out = Vec::new();
+
     while let Some(r) = set.join_next().await {
         if let Ok(v) = r {
             out.push(v);
         }
     }
+
     out
 }
 

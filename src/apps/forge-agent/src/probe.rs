@@ -20,7 +20,9 @@ pub fn parse_target(t: &str) -> Result<(String, Option<u16>), String> {
     } else {
         (t, None)
     };
+
     let port = port.map(|p| p.parse::<u16>().map_err(|_| format!("bad port in `{t}`"))).transpose()?;
+
     if host.is_empty()
         || host.len() > 253
         || host.starts_with('-')
@@ -28,6 +30,7 @@ pub fn parse_target(t: &str) -> Result<(String, Option<u16>), String> {
     {
         return Err(format!("invalid target `{t}`"));
     }
+
     Ok((host.to_owned(), port))
 }
 
@@ -46,6 +49,7 @@ fn leading_num(s: &str) -> Option<u32> {
 /// Parses iputils, busybox and Windows `ping` summaries.
 fn parse_ping(out: &str) -> Option<PingStats> {
     let mut st = PingStats::default();
+
     for line in out.lines() {
         let l = line.trim();
         if l.contains("packets transmitted") {
@@ -65,34 +69,42 @@ fn parse_ping(out: &str) -> Option<PingStats> {
             st.avg_ms = avg.trim().trim_end_matches("ms").parse().ok();
         }
     }
+
     (st.sent > 0).then_some(st)
 }
 
 async fn icmp(host: &str, count: u32) -> Option<PingStats> {
     let mut cmd = tokio::process::Command::new("ping");
+
     if cfg!(windows) {
         cmd.args(["-n", &count.to_string(), "-w", "2000", host]);
     } else {
         cmd.args(["-c", &count.to_string(), "-i", "0.2", "-W", "2", "-q", host]);
     }
+
     cmd.env("LC_ALL", "C").kill_on_drop(true);
     let out = tokio::time::timeout(Duration::from_secs(u64::from(count) * 3 + 3), cmd.output()).await.ok()?.ok()?;
+
     parse_ping(&String::from_utf8_lossy(&out.stdout))
 }
 
 async fn tcp(host: &str, port: u16, count: u32) -> PingStats {
     let mut st = PingStats { sent: count, ..PingStats::default() };
     let mut total = 0.0;
+
     for _ in 0..count {
         let t0 = Instant::now();
+
         if let Ok(Ok(_)) = tokio::time::timeout(TIMEOUT, tokio::net::TcpStream::connect((host, port))).await {
             st.received += 1;
             total += t0.elapsed().as_secs_f64() * 1000.0;
         }
     }
+
     if st.received > 0 {
         st.avg_ms = Some(total / f64::from(st.received));
     }
+
     st
 }
 
@@ -101,14 +113,18 @@ async fn one(target: String, count: u32) -> Value {
         Ok(v) => v,
         Err(e) => return json!({ "target": target, "reachable": false, "error": e }),
     };
+
     let t0 = Instant::now();
+
     let (method, st) = match icmp(&host, count).await {
         // No ping binary, no permission, or ICMP filtered: try TCP.
         Some(st) if st.received > 0 => ("icmp", st),
         _ => ("tcp", tcp(&host, port.unwrap_or(TCP_DEFAULT_PORT), count).await),
     };
+
     let lost = st.sent - st.received.min(st.sent);
     let loss = if st.sent == 0 { 100.0 } else { f64::from(lost) * 100.0 / f64::from(st.sent) };
+
     json!({
         "target": target,
         "method": method,
@@ -126,12 +142,15 @@ pub async fn run(targets: &[String], count: u32) -> Result<Value, String> {
     if targets.is_empty() || targets.len() > MAX_TARGETS {
         return Err(format!("between 1 and {MAX_TARGETS} targets"));
     }
+
     let count = count.clamp(1, 10);
     let tasks: Vec<_> = targets.iter().map(|t| tokio::spawn(one(t.clone(), count))).collect();
     let mut results = Vec::with_capacity(tasks.len());
+
     for t in tasks {
         results.push(t.await.unwrap_or_else(|e| json!({ "reachable": false, "error": e.to_string() })));
     }
+
     Ok(json!({ "results": results }))
 }
 

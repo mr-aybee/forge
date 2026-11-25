@@ -112,6 +112,7 @@ pub async fn save_onboarding_login(
     let Some(before) = crate::api::logins::save_login(logins, server, login, now).await? else {
         return Ok(false);
     };
+
     let mut after = before.clone();
     after.push(login.to_owned());
     let ev = AuditEvent::new(
@@ -122,9 +123,11 @@ pub async fn save_onboarding_login(
     )
     .in_org(Some(workspace))
     .with_details(json!({ "from": before, "to": after, "source": "onboarding" }));
+
     if let Err(e) = audit.record(ev).await {
         tracing::error!(error = %e, "audit write failed");
     }
+
     Ok(true)
 }
 
@@ -143,15 +146,18 @@ fn log(ctx: &mut StepContext, step: &str, text: &str, secret: Option<&str>) {
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0));
     let mut lines: Vec<Value> = ctx.state_value("log").and_then(Value::as_array).cloned().unwrap_or_default();
     let mut live = Vec::new();
+
     for line in text.lines().map(str::trim_end).filter(|l| !l.trim().is_empty()) {
         let line = match secret.filter(|s| !s.is_empty()) {
             Some(s) => line.replace(s, "********"),
             None => line.to_owned(),
         };
+
         let line: String = line.chars().take(400).collect();
         lines.push(json!({ "t": t, "step": step, "line": line }));
         live.push(line);
     }
+
     // Also to the live console, so the browser sees it while the step runs.
     crate::api::onboarding::push(&crate::api::onboarding::job_key(ctx.job.id), step, &live);
     let excess = lines.len().saturating_sub(LOG_LINES);
@@ -193,9 +199,11 @@ impl NodeBootstrapJob {
         )
         .await
         .map_err(classify)?;
+
         if saved {
             log(ctx, "await_online", &format!("saved `{login}` as a terminal login for this node"), None);
         }
+
         Ok(())
     }
 
@@ -207,6 +215,7 @@ impl NodeBootstrapJob {
             .map_err(classify)?
             .ok_or_else(|| fatal("the SSH credential has expired or was deleted; start onboarding again"))?;
         let plain = self.envelope.open(&rec.sealed, &secret_aad(p.secret_id)).map_err(fatal)?;
+
         serde_json::from_slice(&plain).map_err(fatal)
     }
 
@@ -223,16 +232,20 @@ impl NodeBootstrapJob {
     fn as_root(ctx: &StepContext, cred: &BootstrapCredential, cmd: &str) -> (String, Option<Vec<u8>>) {
         let root = ctx.state_value("root").and_then(Value::as_bool).unwrap_or(false);
         let nopass = ctx.state_value("sudo_nopass").and_then(Value::as_bool).unwrap_or(false);
+
         if root {
             return (cmd.to_owned(), None);
         }
+
         if nopass {
             return (format!("sudo -n {cmd}"), None);
         }
+
         let pw = cred.sudo_password.clone().or_else(|| match &cred.auth {
             RemoteAuth::Password { password } => Some(password.clone()),
             RemoteAuth::PrivateKey { .. } | RemoteAuth::Certificate { .. } => None,
         });
+
         (format!("sudo -S -p '' {cmd}"), pw.map(|p| format!("{p}\n").into_bytes()))
     }
 
@@ -250,40 +263,48 @@ impl NodeBootstrapJob {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(20 * 60);
         let (mut offset, mut all, mut partial) = (0usize, String::new(), String::new());
         let mut failures = 0;
+
         loop {
             let cmd =
                 format!("cat {dir}/rc 2>/dev/null; echo {MARK}; tail -c +{} {dir}/out.log 2>/dev/null", offset + 1);
+
             match s.exec(&cmd, None).await {
                 Ok(r) => {
                     failures = 0;
                     let (head, body) = r.stdout.split_once(&format!("{MARK}\n")).unwrap_or((r.stdout.as_str(), ""));
                     offset += body.len();
                     partial.push_str(body);
+
                     // Complete lines only; keep the rest for the next read.
                     if let Some(cut) = partial.rfind('\n') {
                         let done: String = partial.drain(..=cut).collect();
                         log(ctx, "install", &done, Some(token));
                         all.push_str(&done);
                     }
+
                     if let Ok(rc) = head.trim().parse::<i32>() {
                         if !partial.is_empty() {
                             log(ctx, "install", &partial, Some(token));
                             all.push_str(&partial);
                         }
+
                         return (all, Some(rc));
                     }
                 }
                 Err(_) => {
                     failures += 1;
+
                     if failures >= 5 {
                         return (all, None);
                     }
                 }
             }
+
             if tokio::time::Instant::now() >= deadline {
                 log(ctx, "install", "the installer is still running after 20 minutes; giving up", None);
                 return (all, None);
             }
+
             tokio::time::sleep(Duration::from_millis(1500)).await;
         }
     }
@@ -299,15 +320,19 @@ impl NodeBootstrapJob {
         let out = s.exec(probe, None).await.map_err(classify)?;
         s.close().await;
         let lines: Vec<&str> = out.stdout.lines().map(str::trim).collect();
+
         let [os, arch, uid, sudo, init, fetch, ..] = lines.as_slice() else {
             return Err(fatal(format!("unexpected preflight output: {}", out.stdout)));
         };
+
         if *os != "Linux" {
             return Err(fatal(format!("{os} is not supported by assisted onboarding yet; use the manual installer")));
         }
+
         if *fetch == "FETCH_MISSING" {
             return Err(fatal("the node has neither curl nor wget; install one and retry"));
         }
+
         let root = *uid == "0";
         if !root
             && *sudo == "SUDO_PASS"
@@ -316,6 +341,7 @@ impl NodeBootstrapJob {
         {
             return Err(fatal("sudo needs a password: provide the sudo password"));
         }
+
         log(
             ctx,
             "connect",
@@ -344,6 +370,7 @@ impl NodeBootstrapJob {
         ctx.set_state("root", json!(root));
         ctx.set_state("sudo_nopass", json!(*sudo == "SUDO_NOPASS"));
         ctx.set_state("systemd", json!(*init == "SYSTEMD"));
+
         Ok(())
     }
 
@@ -351,10 +378,13 @@ impl NodeBootstrapJob {
         if ctx.state_value("server_id").is_some() {
             return Ok(()); // already enrolled on a previous attempt
         }
+
         let p = Self::payload(ctx)?;
+
         if !self.dist.available() {
             return Err(fatal("no agent binaries are configured on the control plane (agent_dist_dir)"));
         }
+
         let cred = self.credential(&p).await?;
 
         // A fresh single-use token for this attempt; only its id is kept.
@@ -389,6 +419,7 @@ impl NodeBootstrapJob {
             },
         );
         let s = self.session(&p, &cred).await?;
+
         // A private directory (0700, the login user's) for the installer, its
         // runner, its output and its exit code.
         log(ctx, "install", "$ mktemp -d /tmp/forge-install.XXXXXX  # upload the installer", None);
@@ -402,6 +433,7 @@ impl NodeBootstrapJob {
             .await
             .map_err(classify)?;
         let dir = up.stdout.trim().to_owned();
+
         if !up.ok()
             || !dir.starts_with("/tmp/forge-install.")
             || !dir.bytes().all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(&b))
@@ -409,6 +441,7 @@ impl NodeBootstrapJob {
             s.close().await;
             return Err(StepError::Retryable(format!("could not upload installer: {}", up.stderr.trim())));
         }
+
         // Run it as root in the background, detached from this SSH channel,
         // and follow its output while it runs.
         let root = ctx.state_value("root").and_then(Value::as_bool).unwrap_or(false);
@@ -427,8 +460,10 @@ impl NodeBootstrapJob {
             } else {
                 format!("could not start the installer: {e}")
             };
+
             return Err(fatal(msg));
         }
+
         let token = generated.display.clone();
         let (output, rc) = self.follow(ctx, &*s, &dir, &token).await;
         let (cleanup, cstdin) = Self::as_root(ctx, &cred, &format!("rm -rf {dir}"));
@@ -448,10 +483,13 @@ impl NodeBootstrapJob {
                 .collect::<Vec<_>>()
                 .join(" | ")
                 .replace(&token, "********");
+
             return Err(fatal(format!("installer failed (exit {rc}): {tail}")));
         }
+
         let run_stdout = output;
         ctx.set_state("install_log", json!(run_stdout.lines().last().unwrap_or_default()));
+
         // A machine that was already enrolled keeps its identity: the
         // installer reports it, and onboarding continues with that server
         // (updated in place and placed in the chosen cluster) instead of
@@ -460,6 +498,7 @@ impl NodeBootstrapJob {
             .lines()
             .find_map(|l| l.trim().strip_prefix("forge-install: server "))
             .and_then(|s| s.trim().parse::<ServerId>().ok());
+
         if let Some(id) = reported
             && ctx.state_value("server_id").is_none()
             && let Ok(server) = self.servers.get_server(id).await
@@ -473,7 +512,9 @@ impl NodeBootstrapJob {
                 None,
             );
         }
+
         log(ctx, "install", "waiting for the agent to enroll and connect", None);
+
         Ok(())
     }
 
@@ -481,14 +522,17 @@ impl NodeBootstrapJob {
         let p = Self::payload(ctx)?;
         let token_id = ctx.state_value("token_id").and_then(Value::as_str).unwrap_or_default().to_owned();
         let deadline = tokio::time::Instant::now() + self.online_timeout;
+
         loop {
             let server_id = match ctx.state_value("server_id").and_then(Value::as_str) {
                 Some(s) => s.parse::<ServerId>().ok(),
                 None => self.enrollment.get_token(&token_id).await.map_err(classify)?.and_then(|t| t.server_id),
             };
+
             if let Some(id) = server_id {
                 ctx.set_state("server_id", json!(id));
                 let server = self.servers.get_server(id).await.map_err(classify)?;
+
                 // Place the node in its cluster as soon as it has enrolled,
                 // not only once it is online: a slow first connection or a
                 // retried step must never leave it unassigned.
@@ -510,6 +554,7 @@ impl NodeBootstrapJob {
                         None,
                     );
                 }
+
                 if server.status == AgentStatus::Online {
                     // The browser terminal reuses the address and the host key
                     // the user confirmed for onboarding.
@@ -530,12 +575,15 @@ impl NodeBootstrapJob {
                         &format!("agent enrolled as {} and online (agent {})", server.hostname, server.agent_version),
                         None,
                     );
+
                     return Ok(());
                 }
             }
+
             if tokio::time::Instant::now() >= deadline {
                 return Err(StepError::Retryable("the agent was installed but has not connected yet".into()));
             }
+
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
     }
@@ -550,7 +598,9 @@ impl NodeBootstrapJob {
             ctx.set_state("credential", json!("kept for repairs"));
             log(ctx, "cleanup", "the SSH credential is kept, sealed, for repairs", None);
         }
+
         log(ctx, "cleanup", "onboarding complete", None);
+
         Ok(())
     }
 }

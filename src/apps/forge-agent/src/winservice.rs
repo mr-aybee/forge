@@ -38,10 +38,12 @@ static RUNNER: OnceLock<Runner> = OnceLock::new();
 #[must_use]
 pub fn launch_arguments(state_dir: Option<&Path>) -> Vec<OsString> {
     let mut args = vec![OsString::from("service"), OsString::from("run")];
+
     if let Some(d) = state_dir {
         args.push(OsString::from("--state-dir"));
         args.push(d.as_os_str().to_owned());
     }
+
     args
 }
 
@@ -87,6 +89,7 @@ pub fn require_protected_location(exe: &Path) -> anyhow::Result<()> {
     if is_inside(&exe_real, &base_real) {
         return Ok(());
     }
+
     anyhow::bail!(
         "{} is not under {}: the service runs it as LocalSystem, and a folder other accounts can write would let \
          them replace it. Copy it to {}\\OrbynForge, or use install.ps1",
@@ -102,6 +105,7 @@ fn is_inside(path: &Path, base: &Path) -> bool {
     let lower = |p: &Path| p.to_string_lossy().to_lowercase();
     let (p, b) = (lower(path), lower(base));
     let b = b.trim_end_matches('\\');
+
     p.len() > b.len() && p.starts_with(b) && p.as_bytes().get(b.len()) == Some(&b'\\')
 }
 
@@ -114,6 +118,7 @@ pub fn install(exe: &Path, state_dir: Option<&Path>) -> anyhow::Result<()> {
     let access =
         ServiceAccess::QUERY_STATUS | ServiceAccess::START | ServiceAccess::STOP | ServiceAccess::CHANGE_CONFIG;
     let info = info(exe, state_dir);
+
     let service = match manager.open_service(SERVICE_NAME, access) {
         Ok(s) => {
             // Re-install (upgrade): point the existing service at this binary.
@@ -122,31 +127,39 @@ pub fn install(exe: &Path, state_dir: Option<&Path>) -> anyhow::Result<()> {
         }
         Err(_) => manager.create_service(&info, access)?,
     };
+
     service.set_description(DESCRIPTION)?;
     service.update_failure_actions(failure_actions())?;
     service.set_failure_actions_on_non_crash_failures(true)?;
+
     if service.query_status()?.current_state != ServiceState::Running {
         service.start::<&str>(&[])?;
     }
+
     Ok(())
 }
 
 /// Stops (waiting up to 30 s) and deletes the service. Needs Administrator.
 pub fn uninstall() -> anyhow::Result<bool> {
     let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
+
     let Ok(service) =
         manager.open_service(SERVICE_NAME, ServiceAccess::QUERY_STATUS | ServiceAccess::STOP | ServiceAccess::DELETE)
     else {
         return Ok(false);
     };
+
     if service.query_status()?.current_state != ServiceState::Stopped {
         let _ = service.stop();
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
+
         while service.query_status()?.current_state != ServiceState::Stopped && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(250));
         }
     }
+
     service.delete()?;
+
     Ok(true)
 }
 
@@ -157,6 +170,7 @@ pub fn run(state_dir: PathBuf, runner: Runner) -> anyhow::Result<()> {
     let _ = STATE_DIR.set(state_dir);
     let _ = RUNNER.set(runner);
     service_dispatcher::start(SERVICE_NAME, ffi_service_main)?;
+
     Ok(())
 }
 
@@ -183,16 +197,19 @@ const STOP_GRACE: Duration = Duration::from_secs(15);
 fn service_main(_arguments: Vec<OsString>) {
     let (tx, rx) = tokio::sync::watch::channel(false);
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+
     // The handler reports StopPending itself, at once: callers such as
     // PowerShell's Stop-Service give up after about 2 s if the service still
     // reads Running.
     let handle_cell: Arc<OnceLock<ServiceStatusHandle>> = Arc::new(OnceLock::new());
     let handler_cell = Arc::clone(&handle_cell);
+
     let handler = move |event| match event {
         ServiceControl::Stop | ServiceControl::Shutdown => {
             if let Some(h) = handler_cell.get() {
                 let _ = h.set_service_status(status(ServiceState::StopPending, 0, STOP_GRACE + Duration::from_secs(5)));
             }
+
             let _ = tx.send(true);
             let _ = stop_tx.send(());
             ServiceControlHandlerResult::NoError
@@ -200,10 +217,12 @@ fn service_main(_arguments: Vec<OsString>) {
         ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
         _ => ServiceControlHandlerResult::NotImplemented,
     };
+
     let Ok(handle) = service_control_handler::register(SERVICE_NAME, handler) else {
         tracing::error!("could not register the service control handler");
         return;
     };
+
     let _ = handle_cell.set(handle);
     let _ = handle.set_service_status(status(ServiceState::Running, 0, Duration::ZERO));
     let paths = StatePaths::new(STATE_DIR.get().cloned().unwrap_or_else(StatePaths::default_dir));
@@ -216,18 +235,22 @@ fn service_main(_arguments: Vec<OsString>) {
         let result = runner.map_or_else(|| Err(anyhow::anyhow!("no agent runner")), |run| run(paths, rx));
         let _ = done_tx.send(result);
     });
+
     let result = match spawned {
         Ok(_) => wait_for_agent(&done_rx, &stop_rx, STOP_GRACE),
         Err(e) => Err(anyhow::anyhow!("could not start the agent thread: {e}")),
     };
+
     let exit = match result {
         Ok(()) => 0,
         Err(e) => {
             tracing::error!(error = %e, "agent stopped with an error");
+
             // ERROR_SERVICE_SPECIFIC_ERROR: the SCM's failure actions restart it.
             1066
         }
     };
+
     let _ = handle.set_service_status(status(ServiceState::Stopped, exit, Duration::ZERO));
 }
 
@@ -238,6 +261,7 @@ fn wait_for_agent(
     grace: Duration,
 ) -> anyhow::Result<()> {
     let mut stop_at: Option<std::time::Instant> = None;
+
     loop {
         match done.recv_timeout(Duration::from_millis(250)) {
             Ok(result) => return result,
@@ -246,9 +270,11 @@ fn wait_for_agent(
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
         }
+
         if stop_at.is_none() && stop.try_recv().is_ok() {
             stop_at = Some(std::time::Instant::now());
         }
+
         if stop_at.is_some_and(|t| t.elapsed() >= grace) {
             tracing::warn!(?grace, "agent did not finish in time; stopping the service anyway");
             return Ok(());
@@ -281,6 +307,7 @@ mod tests {
         assert!(!is_inside(Path::new(r"\\?\C:\Program Files Evil\forge-agent.exe"), base), "a sibling, not inside");
         assert!(!is_inside(Path::new(r"\\?\C:\Users\bob\Downloads\forge-agent.exe"), base));
         assert!(!is_inside(base, base));
+
         // The test binary itself lives in target\, outside Program Files.
         let me = std::env::current_exe().unwrap_or_else(|e| panic!("{e}"));
         let err = require_protected_location(&me).err().map(|e| e.to_string()).unwrap_or_default();

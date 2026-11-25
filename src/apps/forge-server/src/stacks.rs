@@ -21,9 +21,11 @@ pub fn parse_compose(text: &str) -> Result<Value, String> {
     if text.len() > MAX_COMPOSE_BYTES {
         return Err(format!("the compose file is larger than {} KiB", MAX_COMPOSE_BYTES / 1024));
     }
+
     if text.trim().is_empty() {
         return Err("the compose file is empty".into());
     }
+
     let mut budget = serde_saphyr::Budget::default();
     budget.max_depth = 32;
     budget.max_nodes = 50_000;
@@ -35,6 +37,7 @@ pub fn parse_compose(text: &str) -> Result<Value, String> {
     budget.max_recorded_anchor_bytes = MAX_COMPOSE_BYTES * 4;
     let mut options = serde_saphyr::Options::default();
     options.budget = Some(budget);
+
     // YAML 1.2: `yes`, `on` stay strings; `0755` stays a string.
     options.strict_booleans = true;
     options.leading_zero_numbers_as_strings = true;
@@ -42,13 +45,16 @@ pub fn parse_compose(text: &str) -> Result<Value, String> {
         let msg = e.to_string();
         format!("invalid YAML: {}", msg.lines().next().unwrap_or(&msg))
     })?;
+
     if !v.is_object() {
         return Err("the compose file must be a mapping with `services`".into());
     }
+
     // `version` is obsolete in Compose v2 and only causes warnings.
     if let Some(m) = v.as_object_mut() {
         m.remove("version");
     }
+
     Ok(v)
 }
 
@@ -76,7 +82,9 @@ pub fn seal_env(
     if vars.is_empty() {
         return Ok(None);
     }
+
     let plain = serde_json::to_vec(vars).map_err(|e| e.to_string())?;
+
     envelope.seal(&plain, &env_aad(stack)).map(Some).map_err(|e| e.to_string())
 }
 
@@ -84,6 +92,7 @@ pub fn seal_env(
 pub fn open_env(envelope: &Envelope, stack: StackId, sealed: Option<&str>) -> Result<BTreeMap<String, String>, String> {
     let Some(s) = sealed else { return Ok(BTreeMap::new()) };
     let plain = envelope.open(s, &env_aad(stack)).map_err(|_| "cannot unseal the stack's .env".to_owned())?;
+
     serde_json::from_slice(&plain).map_err(|e| e.to_string())
 }
 
@@ -144,14 +153,17 @@ pub fn stack_dir(dir: Option<&str>, environment: &str, stack: &str) -> String {
 /// Cluster network addresses of nodes whose mesh is up.
 pub async fn fabric_ips(fabrics: &dyn FabricRepository, ws: WorkspaceId) -> HashMap<String, String> {
     let mut out = HashMap::new();
+
     for f in fabrics.list_fabrics(Some(ws)).await.unwrap_or_default() {
         let up = |id: &str| f.status.pointer(&format!("/nodes/{id}/state")).and_then(Value::as_str) == Some("ok");
+
         for l in serde_json::from_value::<Vec<Lease>>(f.leases.clone()).unwrap_or_default() {
             if l.kind == LeaseKind::Node && up(&l.owner) {
                 out.insert(l.owner, l.cidr.first().to_string());
             }
         }
     }
+
     out
 }
 
@@ -174,6 +186,7 @@ async fn resolve_node(deps: &Deps<'_>, ws: WorkspaceId, all: &[Server], name: &s
     if let Some(s) = deps.servers.find_server_by_hostname(ws, name).await.map_err(|e| e.to_string())? {
         return Ok(s);
     }
+
     all.iter()
         .find(|s| s.display_name.as_deref() == Some(name) || s.id.to_string() == name)
         .cloned()
@@ -202,14 +215,17 @@ pub async fn plan(
         .map_err(|e| cat::redact(&e, env))?;
     let hide = |f: &mut cat::Finding| f.message = cat::redact(&f.message, env);
     p.report.findings.iter_mut().for_each(hide);
+
     for n in &mut p.nodes {
         n.findings.iter_mut().for_each(hide);
+
         for port in &mut n.ports {
             for s in [&mut port.host_ip, &mut port.published, &mut port.target, &mut port.protocol] {
                 *s = cat::redact(s, env);
             }
         }
     }
+
     Ok(p)
 }
 
@@ -232,6 +248,7 @@ async fn plan_unredacted(
     let default = all.iter().find(|s| s.id == default_server).cloned().ok_or("the stack's node no longer exists")?;
     let clusters = deps.clusters.list_clusters(ws).await.map_err(|e| e.to_string())?;
     let mut assign: BTreeMap<ServerId, (Server, BTreeSet<String>)> = BTreeMap::new();
+
     for (service, p) in &placements {
         let targets: Vec<Server> = match p {
             Placement::Default => vec![default.clone()],
@@ -243,21 +260,26 @@ async fn plan_unredacted(
                 if nodes.is_empty() {
                     return Err(format!("cluster `{c}` has no nodes"));
                 }
+
                 nodes
             }
         };
+
         for s in targets {
             if !s.os.eq_ignore_ascii_case("linux") {
                 return Err(format!("{service}: compose stacks run on Linux nodes only ({} is {})", s.hostname, s.os));
             }
+
             assign.entry(s.id).or_insert_with(|| (s.clone(), BTreeSet::new())).1.insert(service.clone());
         }
     }
+
     let ips = fabric_ips(deps.fabrics, ws).await;
     let sdir = stack_dir(dir, environment, stack);
     let label = format!("{environment}/{stack}");
     let mut report = Report::default();
     let mut nodes = Vec::new();
+
     for (id, (server, services)) in assign {
         let part = cat::part_for(&interpolated, &services, &label)?;
         let roots = bind_roots(deps.files, id).await;
@@ -266,11 +288,13 @@ async fn plan_unredacted(
         let internal_ip = ips.get(&id.to_string()).cloned().unwrap_or_else(|| "127.0.0.1".into());
         let mut bound = part;
         let ports = cat::bind_ports(&mut bound, &internal_ip, &mut r);
+
         for f in &r.findings {
             if !report.findings.iter().any(|x| x == f) {
                 report.findings.push(f.clone());
             }
         }
+
         report.privileged |= r.privileged;
         nodes.push(NodePlan {
             server_id: id,
@@ -282,11 +306,13 @@ async fn plan_unredacted(
             findings: r.findings,
         });
     }
+
     // Top-level problems (no services, unknown keys) even when nothing was placed.
     if nodes.is_empty() {
         let r = cat::check(&interpolated, &Policy { allow_privileged, bind_roots: Vec::new(), stack_dir: sdir });
         report.findings.extend(r.findings);
     }
+
     Ok(Plan { tree, interpolated, nodes, report })
 }
 
@@ -301,8 +327,10 @@ pub fn node_part(
     allow_privileged: bool,
 ) -> Result<StackPart, String> {
     let sdir = stack_dir(dir, environment, stack);
+
     // The raw (not interpolated) part: the helper interpolates with the same `.env`.
     let compose = cat::part_for(&plan.tree, &node.services, &format!("{environment}/{stack}"))?;
+
     Ok(StackPart {
         environment: environment.to_owned(),
         stack: stack.to_owned(),
@@ -324,6 +352,7 @@ fn secretish(key: &str) -> bool {
 fn masked_env(svc: &Value) -> Vec<Value> {
     let mask =
         |k: &str, v: String| if secretish(k) && !v.starts_with("${") { "••••••".to_owned() } else { v };
+
     match svc.get("environment") {
         Some(Value::Object(m)) => m
             .iter()
@@ -333,6 +362,7 @@ fn masked_env(svc: &Value) -> Vec<Value> {
                     Value::Null => String::new(),
                     other => other.to_string(),
                 };
+
                 json!({ "key": k, "value": mask(k, v) })
             })
             .collect(),
@@ -356,6 +386,7 @@ fn masked_env(svc: &Value) -> Vec<Value> {
 pub fn preview(plan: &Plan) -> Value {
     let raw = plan.tree.get("services").and_then(Value::as_object).cloned().unwrap_or_default();
     let mut services = Vec::new();
+
     for (name, svc) in &raw {
         let i = svc;
         let nodes: Vec<Value> = plan
@@ -387,7 +418,9 @@ pub fn preview(plan: &Plan) -> Value {
             "findings": findings,
         }));
     }
+
     let top: Vec<&cat::Finding> = plan.report.findings.iter().filter(|f| f.service.is_empty()).collect();
+
     json!({
         "services": services,
         "nodes": plan.nodes,
@@ -488,37 +521,49 @@ impl ContainerForm {
         if !cat::valid_service_name(&self.name) {
             return Err("the name uses letters, digits, `.`, `_` and `-`".into());
         }
+
         if self.image.trim().is_empty() || self.image.contains(char::is_whitespace) {
             return Err("enter an image such as nginx:1.27".into());
         }
+
         if !matches!(self.restart.as_str(), "no" | "always" | "on-failure" | "unless-stopped") {
             return Err("restart: no, always, on-failure or unless-stopped".into());
         }
+
         let mut svc = serde_json::Map::new();
         svc.insert("image".into(), json!(self.image.trim()));
+
         if let Some(c) = self.command.as_deref().filter(|c| !c.trim().is_empty()) {
             svc.insert("command".into(), json!(c));
         }
+
         if let Some(e) = self.entrypoint.as_deref().filter(|e| !e.trim().is_empty()) {
             svc.insert("entrypoint".into(), json!(e));
         }
+
         let mut ports = Vec::new();
         let mut public = Vec::new();
+
         for p in &self.ports {
             if p.container == 0 || !matches!(p.protocol.as_str(), "tcp" | "udp") {
                 return Err("ports: container port 1–65535, tcp or udp".into());
             }
+
             let host = p.host.unwrap_or(p.container);
             ports.push(json!(format!("{host}:{}/{}", p.container, p.protocol)));
+
             if p.public {
                 public.push(json!(host));
             }
         }
+
         if !ports.is_empty() {
             svc.insert("ports".into(), json!(ports));
         }
+
         let mut env = BTreeMap::new();
         let mut environment = serde_json::Map::new();
+
         for e in &self.env {
             let k = e.key.trim();
             if k.is_empty()
@@ -527,14 +572,18 @@ impl ContainerForm {
             {
                 return Err(format!("`{k}` is not a valid variable name"));
             }
+
             env.insert(k.to_owned(), e.value.clone());
             environment.insert(k.to_owned(), json!(format!("${{{k}}}")));
         }
+
         if !environment.is_empty() {
             svc.insert("environment".into(), Value::Object(environment));
         }
+
         let mut vols = Vec::new();
         let mut named = serde_json::Map::new();
+
         for v in &self.volumes {
             if !v.target.starts_with('/')
                 || v.source.trim().is_empty()
@@ -543,46 +592,62 @@ impl ContainerForm {
             {
                 return Err("volumes: a name or host path, and an absolute container path".into());
             }
+
             let ro = if v.read_only { ":ro" } else { "" };
             vols.push(json!(format!("{}:{}{ro}", v.source, v.target)));
+
             if !v.source.starts_with('/') && !v.source.starts_with('.') {
                 named.insert(v.source.clone(), json!({}));
             }
         }
+
         if !vols.is_empty() {
             svc.insert("volumes".into(), json!(vols));
         }
+
         svc.insert("restart".into(), json!(self.restart));
         let mut limits = serde_json::Map::new();
+
         if let Some(c) = self.cpus.filter(|c| *c > 0.0) {
             limits.insert("cpus".into(), json!(c.to_string()));
         }
+
         if let Some(m) = self.memory_mb.filter(|m| *m > 0) {
             limits.insert("memory".into(), json!(format!("{m}M")));
         }
+
         if !limits.is_empty() {
             svc.insert("deploy".into(), json!({ "resources": { "limits": limits } }));
         }
+
         if let Some(h) = &self.healthcheck {
             svc.insert("healthcheck".into(), json!({ "test": ["CMD-SHELL", h.test], "interval": h.interval }));
         }
+
         let mut labels = serde_json::Map::new();
+
         for (k, v) in &self.labels {
             labels.insert(k.clone(), json!(v));
         }
+
         if let Some(e) = &self.expose {
             if !matches!(e.as_str(), "http" | "https") {
                 return Err("expose: http or https".into());
             }
+
             labels.insert("forge.expose".into(), json!(e));
         }
+
         if !labels.is_empty() {
             svc.insert("labels".into(), Value::Object(labels));
         }
+
         if !public.is_empty() {
             svc.insert("x-forge".into(), json!({ "public": public }));
         }
+
         let mut doc = serde_json::Map::new();
+
         match self.network.as_deref().filter(|n| !n.is_empty()) {
             None => {}
             // As `network_mode`, so the policy sees them: `host` needs
@@ -596,10 +661,13 @@ impl ContainerForm {
             }
             Some(_) => return Err("network: a Docker network name".into()),
         }
+
         doc.insert("services".into(), json!({ &self.name: svc }));
+
         if !named.is_empty() {
             doc.insert("volumes".into(), Value::Object(named));
         }
+
         Ok((cat::to_yaml(&Value::Object(doc)), env))
     }
 }
@@ -625,10 +693,12 @@ mod tests {
     fn hostile_yaml_is_refused() {
         let mut laughs = String::from("a: &a [x,x,x,x,x,x,x,x,x]\n");
         let mut p = 'a';
+
         for c in "bcdefghij".chars() {
             laughs += &format!("{c}: &{c} [*{p},*{p},*{p},*{p},*{p},*{p},*{p},*{p},*{p}]\n");
             p = c;
         }
+
         assert!(parse_compose(&laughs).is_err());
         assert!(parse_compose(&("[".repeat(10_000) + &"]".repeat(10_000))).is_err());
         assert!(parse_compose(&"a: 1\n".repeat(200_000)).is_err(), "size cap");
@@ -686,6 +756,7 @@ mod tests {
         assert!(
             serde_json::from_value::<ContainerForm>(json!({ "name": "x", "image": "a", "privileged": true })).is_err()
         );
+
         // The host network needs stack.privileged, however it is spelled.
         let host: ContainerForm =
             serde_json::from_value(json!({ "name": "x", "image": "a", "network": "host" })).unwrap();

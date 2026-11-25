@@ -35,9 +35,11 @@ pub fn password(paths: &EmbeddedPaths) -> anyhow::Result<String> {
             return Ok(s);
         }
     }
+
     std::fs::create_dir_all(&paths.root).context("creating the analytics directory")?;
     let pw = forge_secrets::crypto::random_token::<24>();
     forge_secrets::write_private(&paths.secret, pw.as_bytes()).context("writing the analytics secret")?;
+
     Ok(pw)
 }
 
@@ -150,7 +152,9 @@ pub fn cpu_cap(quota_vcpu: f64) -> Option<u32> {
     if !quota_vcpu.is_finite() || quota_vcpu <= 0.0 {
         return None;
     }
+
     let host = std::thread::available_parallelism().map_or(1, |n| u32::try_from(n.get()).unwrap_or(u32::MAX));
+
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // reason: validated to 0.1..=256 vCPU
     let want = quota_vcpu.ceil() as u32;
     Some(want.clamp(1, host.max(1)))
@@ -223,6 +227,7 @@ pub fn write_config(paths: &EmbeddedPaths, c: &EngineConfig, password: &str) -> 
     forge_secrets::write_private(&overrides.join("forge-quiet.xml"), QUIET.as_bytes())
         .context("writing config.d/forge-quiet.xml")?;
     forge_secrets::write_private(&paths.users, users_xml.as_bytes()).context("writing users.xml")?;
+
     Ok(())
 }
 
@@ -316,6 +321,7 @@ impl ManagedEngine {
         let Some(pid) = self.pid() else { return Ok(None) };
         let res = affinity::pin_process(pid, cpu_cap(t.cpu_quota_vcpu)).and_then(|()| affinity::count(pid));
         self.set_pin_error(res.as_ref().err().cloned());
+
         res.map(Some)
     }
 }
@@ -328,9 +334,11 @@ pub fn proc_usage(pid: u32) -> Option<ProcessUsage> {
     // kernel ABI fixes at 100 per second.
     const TICK_USEC: u64 = 10_000;
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+
     // Fields after the command name, which is in parentheses and may hold spaces.
     let rest = stat.get(stat.rfind(')')? + 2..)?;
     let f: Vec<&str> = rest.split_whitespace().collect();
+
     // utime and stime are fields 14 and 15 of the line, 12 and 13 here;
     // they cover every thread of the process.
     let ticks = f.get(11)?.parse::<u64>().ok()? + f.get(12)?.parse::<u64>().ok()?;
@@ -339,6 +347,7 @@ pub fn proc_usage(pid: u32) -> Option<ProcessUsage> {
         .lines()
         .find_map(|l| l.strip_prefix("VmRSS:"))
         .and_then(|v| v.split_whitespace().next()?.parse::<u64>().ok())?;
+
     Some(ProcessUsage { memory_bytes: rss_kb * 1024, cpu_usec: ticks * TICK_USEC })
 }
 
@@ -361,9 +370,11 @@ mod affinity {
         let Some(cap) = cap else { return Ok(allowed) };
         let mut set = CpuSet::new();
         let take = usize::try_from(cap).unwrap_or(usize::MAX);
+
         for cpu in (0..CpuSet::MAX_CPU).filter(|c| allowed.is_set(*c)).take(take) {
             set.set(cpu);
         }
+
         Ok(set)
     }
 
@@ -373,6 +384,7 @@ mod affinity {
         if cap.is_none() {
             return Ok(());
         }
+
         sched_setaffinity(None, &cpu_set(cap)?).map_err(err)
     }
 
@@ -386,25 +398,32 @@ mod affinity {
     pub fn pin_process(pid: u32, cap: Option<u32>) -> Result<(), PinError> {
         let set = cpu_set(cap)?;
         let mut done = std::collections::HashSet::new();
+
         for _ in 0..5 {
             let mut new = 0;
+
             for tid in tids(pid)? {
                 if done.contains(&tid) {
                     continue;
                 }
+
                 let Some(p) = Pid::from_raw(tid) else { continue };
+
                 // A thread that exited meanwhile is not an error.
                 match sched_setaffinity(Some(p), &set) {
                     Ok(()) | Err(rustix::io::Errno::SRCH) => {}
                     Err(e) => return Err(err(e)),
                 }
+
                 done.insert(tid);
                 new += 1;
             }
+
             if new == 0 {
                 return Ok(());
             }
         }
+
         Ok(())
     }
 
@@ -446,6 +465,7 @@ fn engine_command(paths: &EmbeddedPaths) -> tokio::process::Command {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
+
     cmd
 }
 
@@ -465,9 +485,11 @@ async fn spawn_pinned(
         // The child is registered with the worker's runtime, which reaps it.
         let _rt = handle.enter();
         let pinned = affinity::pin_this_thread(cap).err();
+
         // The receiver only goes away when the supervisor stops.
         let _ = tx.send(cmd.spawn().map(|c| (c, pinned)));
     })?;
+
     rx.await.map_err(|_| std::io::Error::other("the spawn thread stopped"))?
 }
 
@@ -480,6 +502,7 @@ pub async fn supervise(
 ) {
     let paths = engine.paths.clone();
     let mut backoff = Duration::from_secs(2);
+
     loop {
         if !tokio::fs::try_exists(&paths.binary).await.unwrap_or(false) {
             tracing::warn!(
@@ -491,9 +514,11 @@ pub async fn supervise(
                 _ = shutdown.changed() => return,
             }
         }
+
         stale::stop(&paths).await;
         let started = std::time::Instant::now();
         let t = *tuning.borrow();
+
         // The thread pools in the configuration follow the CPU cap.
         let e = engine.clone();
         match tokio::task::spawn_blocking(move || e.write_config(&t)).await {
@@ -503,12 +528,14 @@ pub async fn supervise(
             }
             Err(err) => tracing::warn!(error = %err, "rewriting the analytics engine configuration panicked"),
         }
+
         let cap = cpu_cap(t.cpu_quota_vcpu);
         let mut child = match spawn_pinned(&paths, cap).await {
             Ok((c, pinned)) => {
                 if let Some(err) = &pinned {
                     tracing::warn!(error = %err, "the analytics engine runs without its CPU cap");
                 }
+
                 engine.set_pin_error(pinned);
                 c
             }
@@ -519,9 +546,11 @@ pub async fn supervise(
                     _ = shutdown.changed() => return,
                 }
                 backoff = (backoff * 2).min(Duration::from_secs(300));
+
                 continue;
             }
         };
+
         tracing::info!(cpus = ?cap, "embedded analytics engine started");
         engine.pid.store(child.id().unwrap_or(0), Ordering::Release);
         stale::record(&paths, child.id()).await;
@@ -553,14 +582,17 @@ pub async fn supervise(
         }
         engine.pid.store(0, Ordering::Release);
         stale::record(&paths, None).await;
+
         if asked {
             backoff = Duration::from_secs(2);
             continue;
         }
+
         // Reset the back-off after a healthy run.
         if started.elapsed() > Duration::from_secs(300) {
             backoff = Duration::from_secs(2);
         }
+
         tokio::select! {
             () = tokio::time::sleep(backoff) => {}
             _ = shutdown.changed() => return,
@@ -589,6 +621,7 @@ mod stale {
                 other => other,
             },
         };
+
         if let Err(e) = res {
             tracing::warn!(error = %e, "cannot record the analytics engine's pid");
         }
@@ -598,6 +631,7 @@ mod stale {
     fn is_engine(pid: u32, binary: &Path) -> bool {
         let Ok(cmd) = std::fs::read(format!("/proc/{pid}/cmdline")) else { return false };
         let want = binary.as_os_str().as_encoded_bytes();
+
         cmd.split(|b| *b == 0).next().is_some_and(|argv0| argv0 == want)
     }
 
@@ -616,6 +650,7 @@ mod stale {
     async fn alive(pid: u32) -> bool {
         let Ok(stat) = tokio::fs::read_to_string(format!("/proc/{pid}/stat")).await else { return false };
         let state = stat.rfind(')').and_then(|i| stat.get(i + 2..i + 3));
+
         state.is_some_and(|s| s != "Z" && s != "X")
     }
 
@@ -629,11 +664,14 @@ mod stale {
             record(paths, None).await;
             return;
         }
+
         tracing::warn!(pid, "stopped an analytics engine left by a previous worker");
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+
         while alive(pid).await && tokio::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+
         record(paths, None).await;
     }
 
@@ -654,10 +692,12 @@ mod stale {
             record(&paths, Some(sleeper.id())).await;
             stop(&paths).await;
             let deadline = std::time::Instant::now() + Duration::from_secs(10);
+
             while sleeper.try_wait().unwrap().is_none() {
                 assert!(std::time::Instant::now() < deadline, "the stale engine was not stopped");
                 std::thread::sleep(Duration::from_millis(20));
             }
+
             assert!(!paths.pid_file.exists());
             other.kill().unwrap();
             other.wait().unwrap();

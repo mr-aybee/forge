@@ -176,11 +176,13 @@ const SLOT_COLS: &[Col] = &[
 
 fn read_doc(file: &str) -> Result<String> {
     let mut text = String::new();
+
     if file == "-" {
         std::io::stdin().read_to_string(&mut text).map_err(|e| CliError::usage(format!("stdin: {e}")))?;
     } else {
         text = std::fs::read_to_string(file).map_err(|e| CliError::usage(format!("{file}: {e}")))?;
     }
+
     Ok(text)
 }
 
@@ -199,6 +201,7 @@ fn print_plan(fmt: Format, plan: &Value) {
         out::result(fmt, plan, None);
         return;
     }
+
     let s = |p: &str| plan.pointer(p).and_then(Value::as_str).unwrap_or_default().to_owned();
     let new = if plan["creates_service"] == true { " (new service)" } else { "" };
     println!("Service      {}{new} in {}", s("/service"), s("/environment"));
@@ -215,17 +218,22 @@ fn print_plan(fmt: Format, plan: &Value) {
             .unwrap_or_default()
     };
     println!("Nodes        {}", list("nodes"));
+
     if !list("added_nodes").is_empty() {
         println!("Adds         {}", list("added_nodes"));
     }
+
     if !list("removed_nodes").is_empty() {
         println!("Removes      {}", list("removed_nodes"));
     }
+
     println!("Downtime     {}", if plan["downtime"] == true { "yes" } else { "no" });
     println!("\nSteps");
+
     for (i, step) in plan["steps"].as_array().into_iter().flatten().enumerate() {
         println!("  {:>2}. {}", i + 1, step.as_str().unwrap_or_default());
     }
+
     for n in plan["notes"].as_array().into_iter().flatten().filter_map(Value::as_str) {
         println!("\nNote: {n}");
     }
@@ -241,10 +249,13 @@ async fn follow(g: &Global, api: &mut crate::api::Api, id: &str, timeout: Durati
     let deadline = Instant::now() + timeout;
     let mut after = 0i64;
     let mut last_state = String::new();
+
     loop {
         let events = api.get(&format!("/api/v1/deployments/{}/events?after={after}", enc(id))).await?;
+
         for e in events.as_array().into_iter().flatten() {
             after = after.max(e["seq"].as_i64().unwrap_or(after));
+
             if g.output == Format::Table {
                 let level = e["level"].as_str().unwrap_or("info");
                 let mark = match level {
@@ -252,33 +263,42 @@ async fn follow(g: &Global, api: &mut crate::api::Api, id: &str, timeout: Durati
                     "warn" => "!",
                     _ => "·",
                 };
+
                 eprintln!("{mark} {}", e["message"].as_str().unwrap_or_default());
             }
         }
+
         let d = api.get(&format!("/api/v1/deployments/{}", enc(id))).await?;
         let state = d["state"].as_str().unwrap_or_default().to_owned();
         if state != last_state && state == "awaiting_approval" && g.output == Format::Table {
             eprintln!("! waiting for approval: forge deploy approve {id}");
         }
+
         last_state.clone_from(&state);
+
         if terminal(&state) {
             let summary = json!({
                 "id": d["id"], "service": d["service"], "release_number": d["release_number"],
                 "state": d["state"], "error": d["error"],
             });
             out::result(g.output, &summary, Some(DEPLOYMENT_COLS));
+
             if state == "succeeded" {
                 return Ok(());
             }
+
             let why = d["error"].as_str().unwrap_or(&state).to_owned();
+
             return Err(CliError::new(Exit::JobFailed, format!("the deployment ended {state}: {why}")));
         }
+
         if Instant::now() >= deadline {
             return Err(CliError::new(
                 Exit::Timeout,
                 format!("the deployment is still {state}; follow it with `forge deploy status {id} --follow`"),
             ));
         }
+
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
@@ -286,20 +306,24 @@ async fn follow(g: &Global, api: &mut crate::api::Api, id: &str, timeout: Durati
 /// After a start: the plan, then either the deployment or the rollout.
 async fn started(g: &Global, api: &mut crate::api::Api, v: &Value, wait: &WaitArgs) -> Result<()> {
     let id = v.pointer("/deployment/id").and_then(Value::as_str).unwrap_or_default().to_owned();
+
     if !wait.wait {
         out::result(g.output, &v["deployment"], Some(DEPLOYMENT_COLS));
         return Ok(());
     }
+
     if g.output == Format::Table {
         print_plan(g.output, &v["plan"]);
         eprintln!("\nDeployment {id}");
     }
+
     follow(g, api, &id, Duration::from_secs(wait.timeout.max(1) * 60)).await
 }
 
 pub async fn run(g: &Global, cmd: DeployCmd) -> Result<()> {
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
+
     match cmd {
         DeployCmd::Validate(doc) => {
             let v = api.post("/api/v1/deployments/validate", &body(&doc)?).await?;
@@ -319,22 +343,29 @@ pub async fn run(g: &Global, cmd: DeployCmd) -> Result<()> {
             if f {
                 return follow(g, &mut api, &deployment, Duration::from_secs(24 * 3600)).await;
             }
+
             let v = api.get(&format!("/api/v1/deployments/{}", enc(&deployment))).await?;
+
             if g.output != Format::Table {
                 out::result(g.output, &v, None);
                 return Ok(());
             }
+
             out::result(g.output, &v, Some(DEPLOYMENT_COLS));
             println!("\nSteps");
             let done = v["step"].as_i64().unwrap_or(0);
+
             for (i, s) in v["steps"].as_array().into_iter().flatten().enumerate() {
                 let mark = if (i as i64) < done { "✓" } else { " " };
                 println!("  {mark} {:>2}. {}", i + 1, s.as_str().unwrap_or_default());
             }
+
             println!("\nEvents");
+
             for e in v["events"].as_array().into_iter().flatten() {
                 println!("  {} {}", e["level"].as_str().unwrap_or_default(), e["message"].as_str().unwrap_or_default());
             }
+
             Ok(())
         }
         DeployCmd::History { svc, limit } => {
@@ -346,33 +377,42 @@ pub async fn run(g: &Global, cmd: DeployCmd) -> Result<()> {
         DeployCmd::Releases { svc, limit } => {
             let id = service_id(&mut api, &svc).await?;
             let mut v = api.get(&format!("/api/v1/services/{}/releases?limit={limit}", enc(&id))).await?;
+
             for r in v.as_array_mut().into_iter().flatten() {
                 r["artifact_label"] = json!(artifact_label(&r["artifact"]));
             }
+
             out::result(g.output, &v, Some(RELEASE_COLS));
             Ok(())
         }
         DeployCmd::Release { svc, number } => {
             let id = service_id(&mut api, &svc).await?;
             let v = api.get(&format!("/api/v1/services/{}/releases/{number}", enc(&id))).await?;
+
             if g.output == Format::Table {
                 println!("Release {} — {}", v["number"], artifact_label(&v["artifact"]));
+
                 if let Some(src) = v["source"].as_str() {
                     println!("\n{src}");
                 }
+
                 return Ok(());
             }
+
             out::result(g.output, &v, None);
             Ok(())
         }
         DeployCmd::Slots { svc } => {
             let id = service_id(&mut api, &svc).await?;
             let v = api.get(&format!("/api/v1/services/{}/slots", enc(&id))).await?;
+
             if g.output == Format::Table {
                 println!("Current release {}", v["current_release"]);
                 out::result(g.output, &v["slots"], Some(SLOT_COLS));
+
                 return Ok(());
             }
+
             out::result(g.output, &v, None);
             Ok(())
         }
@@ -398,6 +438,7 @@ pub async fn run(g: &Global, cmd: DeployCmd) -> Result<()> {
 async fn request(g: &Global, api: &mut crate::api::Api, id: &str, what: &str) -> Result<()> {
     let v = api.post(&format!("/api/v1/deployments/{}/{what}", enc(id)), &json!({})).await?;
     out::result(g.output, &v, Some(DEPLOYMENT_COLS));
+
     Ok(())
 }
 

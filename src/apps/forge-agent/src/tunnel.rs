@@ -66,6 +66,7 @@ impl Slot {
             ACTIVE.fetch_sub(1, Ordering::SeqCst);
             return Err(format!("this node already has {MAX_CONNECTIONS} tunnel connections"));
         }
+
         Ok(Self)
     }
 }
@@ -96,6 +97,7 @@ pub fn local_addresses() -> Vec<IpAddr> {
 /// port and where to dial it.
 pub fn validate(t: &TunnelOpen, now_ms: i64, local: &[IpAddr]) -> Result<(u16, Dial), String> {
     let port = u16::try_from(t.port).ok().filter(|p| *p > 0).ok_or("invalid port")?;
+
     let dial = if t.dial_ip.is_empty() {
         Dial::Loopback
     } else {
@@ -109,22 +111,28 @@ pub fn validate(t: &TunnelOpen, now_ms: i64, local: &[IpAddr]) -> Result<(u16, D
             return Err(format!("{ip} is not an address of this node; tunnels dial the node itself only"));
         }
     };
+
     if !t.allowed_ports.contains(&t.port) {
         return Err(format!("port {port} is not allowed for tunnels on this node"));
     }
+
     let hex32 = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
     if !hex32(&t.connection_id, 32) {
         return Err("invalid connection id".into());
     }
+
     if !hex32(&t.stream_token, 64) {
         return Err("invalid stream token".into());
     }
+
     if !(1..=86_400).contains(&t.idle_secs) {
         return Err("invalid idle timeout".into());
     }
+
     if t.expires_at_ms <= now_ms {
         return Err("the tunnel connection has expired".into());
     }
+
     Ok((port, dial))
 }
 
@@ -153,6 +161,7 @@ async fn dial(port: u16, where_: Dial) -> Result<TcpStream, String> {
             .map_err(|_| "timed out".to_owned())?
             .map_err(|e| e.to_string())
     };
+
     match where_ {
         Dial::Addr(ip) => try_one(ip).await.map_err(|e| format!("nothing answers on {ip}:{port} of this node ({e})")),
         Dial::Loopback => match try_one(IpAddr::from([127, 0, 0, 1])).await {
@@ -190,25 +199,30 @@ pub async fn open(t: TunnelOpen, endpoint: Endpoint, tls: Arc<ClientConfig>) -> 
     tokio::spawn(async move {
         let _slot = slot;
         let _sender = sender;
+
         // Local socket → control plane.
         let up = async {
             let mut buf = vec![0u8; CHUNK];
+
             loop {
                 match rd.read(&mut buf).await {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
                         up_last.store(now_ms(), Ordering::Relaxed);
+
                         if up_tx.send(Bytes::copy_from_slice(&buf[..n])).await.is_err() {
                             break;
                         }
                     }
                 }
             }
+
             // End of the request body: the control plane learns that the
             // service finished sending (half-close), and everything queued is
             // still delivered.
             drop(up_tx);
         };
+
         // Control plane → local socket.
         let down_last = last.clone();
         let down_fut = async {
@@ -216,13 +230,16 @@ pub async fn open(t: TunnelOpen, endpoint: Endpoint, tls: Arc<ClientConfig>) -> 
                 let Ok(frame) = frame else { break };
                 if let Ok(data) = frame.into_data() {
                     down_last.store(now_ms(), Ordering::Relaxed);
+
                     if wr.write_all(&data).await.is_err() {
                         break;
                     }
                 }
             }
+
             let _ = wr.shutdown().await;
         };
+
         // Both directions end on their own (a half-closed side keeps the
         // other one flowing); only then is the connection dropped, so no
         // queued bytes are lost. Idleness and the lifetime cut both.
@@ -232,6 +249,7 @@ pub async fn open(t: TunnelOpen, endpoint: Endpoint, tls: Arc<ClientConfig>) -> 
         }
         conn_task.abort();
     });
+
     Ok(json!({ "connected": true, "port": port }))
 }
 
@@ -300,10 +318,12 @@ pub(crate) async fn dial_control(
         .await
         .map_err(|_| "the control plane did not accept the stream in time".to_owned())?
         .map_err(|e| e.to_string())?;
+
     if !resp.status().is_success() {
         conn_task.abort();
         return Err(format!("the control plane refused the stream ({})", resp.status()));
     }
+
     Ok(ControlStream { up: up_tx, down: resp.into_body(), sender, conn_task })
 }
 
@@ -330,11 +350,14 @@ mod tests {
     #[test]
     fn commands_are_checked_before_anything_is_dialled() {
         assert_eq!(validate(&cmd(), 1_000, &LOCAL), Ok((5432, Dial::Loopback)));
+
         let bad = |f: fn(&mut TunnelOpen)| {
             let mut c = cmd();
             f(&mut c);
+
             validate(&c, 1_000, &LOCAL)
         };
+
         assert!(bad(|c| c.port = 8080).unwrap_err().contains("not allowed"), "only signed ports");
         assert!(bad(|c| c.port = 0).is_err());
         assert!(bad(|c| c.port = 70_000).is_err());

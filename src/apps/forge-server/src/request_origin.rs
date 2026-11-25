@@ -100,9 +100,11 @@ fn parse_authority(s: &str) -> Result<(String, Option<u16>), OriginError> {
     if s.len() > MAX_HOST_LEN + 8 {
         return Err(HostError::TooLong.into());
     }
+
     if s.contains('@') || s.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err(HostError::Invalid(s.chars().take(80).collect()).into());
     }
+
     let (host, port) = if s.starts_with('[') {
         match s.find(']') {
             Some(end) => {
@@ -111,6 +113,7 @@ fn parse_authority(s: &str) -> Result<(String, Option<u16>), OriginError> {
                     "" => None,
                     r => Some(r.strip_prefix(':').ok_or(OriginError::Port)?),
                 };
+
                 (&s[..=end], port)
             }
             None => return Err(HostError::Invalid(s.chars().take(80).collect()).into()),
@@ -121,6 +124,7 @@ fn parse_authority(s: &str) -> Result<(String, Option<u16>), OriginError> {
             None => (s, None),
         }
     };
+
     let port = match port {
         None => None,
         Some(p) if !p.is_empty() && p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit()) => {
@@ -128,6 +132,7 @@ fn parse_authority(s: &str) -> Result<(String, Option<u16>), OriginError> {
         }
         Some(_) => return Err(OriginError::Port),
     };
+
     // A bare IPv6 address (`2001:db8::1`) is not a valid Host: brackets are
     // required there, and the `split_once` above already refused it.
     Ok((normalize_host(host)?, port))
@@ -154,14 +159,18 @@ impl RequestOrigin {
         } else {
             (None, None)
         };
+
         let fwd_proto = fwd_proto.map(Scheme::parse).transpose()?;
         let raw = fwd_host.or(i.authority).or_else(|| i.headers.get(header::HOST).and_then(|v| v.to_str().ok()));
         let pinned = i.pinned.and_then(Self::from_origin);
+
         let Some(raw) = raw else {
             // No host at all: in-process dispatch or an HTTP/1.0 client.
             return Ok(pinned.unwrap_or_else(|| Self::localhost(fwd_proto.unwrap_or(Scheme::Http))));
         };
+
         let (host, port) = parse_authority(raw)?;
+
         let scheme = match fwd_proto {
             Some(s) => s,
             // The pinned address's own host and port: its scheme (a TLS
@@ -171,6 +180,7 @@ impl RequestOrigin {
                 _ => Scheme::Http,
             },
         };
+
         Ok(Self { scheme, host, port: port.filter(|p| *p != scheme.default_port()) })
     }
 
@@ -181,6 +191,7 @@ impl RequestOrigin {
         let (scheme, rest) = origin.trim().split_once("://")?;
         let scheme = Scheme::parse(scheme).ok()?;
         let (host, port) = parse_authority(rest.trim_end_matches('/')).ok()?;
+
         Some(Self { scheme, host, port: port.filter(|p| *p != scheme.default_port()) })
     }
 
@@ -245,6 +256,7 @@ impl NodeUrls {
         } else {
             origin.agent_url(config.agent_listen.port())
         };
+
         Self { forge_url, agent_url }
     }
 
@@ -260,6 +272,7 @@ fn resolve_parts(parts: &Parts, state: &AppState) -> Result<RequestOrigin, Origi
     let peer = parts.extensions.get::<axum::extract::ConnectInfo<SocketAddr>>().map(|c| c.0);
     let trusted = state.config.trusted_proxies();
     let pinned = state.public_address.pinned();
+
     RequestOrigin::resolve(Inputs {
         headers: &parts.headers,
         authority: parts.uri.authority().map(axum::http::uri::Authority::as_str),
@@ -276,8 +289,10 @@ impl FromRequestParts<AppState> for RequestOrigin {
         if let Some(o) = parts.extensions.get::<Self>() {
             return Ok(o.clone());
         }
+
         let o = resolve_parts(parts, state).map_err(|e| ApiError::bad_request(e.to_string()))?;
         parts.extensions.insert(o.clone());
+
         Ok(o)
     }
 }
@@ -296,6 +311,7 @@ pub fn origin_header_ok(state: &AppState, request: &RequestOrigin, headers: &Hea
     let Some(v) = headers.get(header::ORIGIN) else { return true };
     let Ok(o) = v.to_str() else { return false };
     let o = o.trim().trim_end_matches('/');
+
     (o.eq_ignore_ascii_case(&request.origin()) && state.allowed_hosts.allows(request.host()))
         || crate::public_address::origin_allowed(&state.public_address, o)
 }
@@ -309,17 +325,21 @@ pub async fn guard(
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
+
     if req.uri().path() == HEALTH_PATH {
         return next.run(req).await;
     }
+
     let (mut parts, body) = req.into_parts();
     let origin = match resolve_parts(&parts, &state) {
         Ok(o) => o,
         Err(e) => return ApiError::bad_request(e.to_string()).into_response(),
     };
+
     if !state.allowed_hosts.allows(origin.host()) {
         return axum::http::StatusCode::MISDIRECTED_REQUEST.into_response();
     }
+
     let https = origin.is_https();
     parts.extensions.insert(origin);
     let mut resp = next.run(axum::extract::Request::from_parts(parts, body)).await;
@@ -327,6 +347,7 @@ pub async fn guard(
         resp.headers_mut()
             .insert(header::STRICT_TRANSPORT_SECURITY, axum::http::HeaderValue::from_static("max-age=31536000"));
     }
+
     resp
 }
 
@@ -340,9 +361,11 @@ mod tests {
 
     fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
         let mut h = HeaderMap::new();
+
         for (k, v) in pairs {
             h.append(axum::http::HeaderName::from_bytes(k.as_bytes()).unwrap(), v.parse().unwrap());
         }
+
         h
     }
 
@@ -410,6 +433,7 @@ mod tests {
         assert_eq!(o.origin(), "http://192.0.2.5:3880");
         let o = resolve(&h, "198.51.100.1:5000", &[], None).unwrap();
         assert_eq!(o.origin(), "http://192.0.2.5:3880");
+
         // A garbage proto from an untrusted peer is ignored too.
         let h = headers(&[("host", "x.example"), ("x-forwarded-proto", "gopher")]);
         assert!(resolve(&h, "198.51.100.1:5000", &[], None).is_ok());
@@ -433,6 +457,7 @@ mod tests {
         ] {
             assert!(resolve(&headers(&[("host", bad)]), "198.51.100.1:5000", &[], None).is_err(), "{bad}");
         }
+
         let long = format!("{}.example", "a".repeat(250));
         assert!(resolve(&headers(&[("host", &long)]), "198.51.100.1:5000", &[], None).is_err());
         let h = headers(&[("host", "x.example"), ("x-forwarded-proto", "ftp")]);

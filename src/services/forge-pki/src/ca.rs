@@ -41,6 +41,7 @@ pub struct AgentCsr {
 }
 
 impl AgentCsr {
+    /// Generates a new CA for `hostname`.
     pub fn generate(hostname: &str) -> Result<Self, PkiError> {
         let key = KeyPair::generate().map_err(gen_err)?;
         let mut params = CertificateParams::new(Vec::<String>::new()).map_err(gen_err)?;
@@ -48,6 +49,7 @@ impl AgentCsr {
         dn.push(DnType::CommonName, hostname);
         params.distinguished_name = dn;
         let csr = params.serialize_request(&key).map_err(gen_err)?;
+
         Ok(Self { csr_pem: csr.pem().map_err(gen_err)?, key_pem: key.serialize_pem() })
     }
 }
@@ -76,10 +78,12 @@ fn odt(t: Timestamp) -> OffsetDateTime {
 
 fn serial() -> (SerialNumber, String) {
     let mut bytes = random_bytes::<16>();
+
     // Positive (top bit clear) and never a leading zero byte: DER drops
     // leading zero bytes, and the hex recorded here must be the one a peer
     // presents (`PeerIdentity::serial_hex`). 126 random bits.
     bytes[0] = (bytes[0] & 0x7f) | 0x40;
+
     (SerialNumber::from_slice(&bytes), hex::encode(bytes))
 }
 
@@ -100,6 +104,7 @@ impl CertificateAuthority {
         params.serial_number = Some(serial().0);
         let cert = params.self_signed(&key).map_err(gen_err)?;
         let cert_pem = cert.pem();
+
         Self::assemble(cert, key, cert_pem)
     }
 
@@ -110,19 +115,24 @@ impl CertificateAuthority {
         if cert_path.exists() && key_path.exists() {
             return Self::from_pem(&std::fs::read_to_string(&cert_path)?, &std::fs::read_to_string(&key_path)?);
         }
+
         let ca = Self::generate("Orbyn Forge Internal CA", now)?;
         std::fs::create_dir_all(dir)?;
         std::fs::write(&cert_path, &ca.cert_pem)?;
         forge_secrets::write_private(&key_path, ca.key.serialize_pem().as_bytes())?;
+
         Ok(ca)
     }
 
+    /// Loads a CA from its PEM certificate and key.
     pub fn from_pem(cert_pem: &str, key_pem: &str) -> Result<Self, PkiError> {
         let key = KeyPair::from_pem(key_pem).map_err(gen_err)?;
+
         // Rebuild an issuer object from the stored certificate's parameters;
         // only its subject and key are used for signing.
         let params = CertificateParams::from_ca_cert_pem(cert_pem).map_err(gen_err)?;
         let issuer = params.self_signed(&key).map_err(gen_err)?;
+
         Self::assemble(issuer, key, cert_pem.to_owned())
     }
 
@@ -171,6 +181,7 @@ impl CertificateAuthority {
         csr.params.serial_number = Some(sn);
         csr.params.custom_extensions.clear();
         let cert = csr.signed_by(&self.issuer, &self.key).map_err(gen_err)?;
+
         Ok(IssuedCertificate { cert_pem: cert.pem(), serial_hex, not_before, not_after })
     }
 
@@ -215,6 +226,7 @@ impl CertificateAuthority {
         params.not_after = odt(not_after);
         params.serial_number = Some(serial().0);
         let cert = params.signed_by(key, &self.issuer, &self.key).map_err(gen_err)?;
+
         Ok(ServerCertificate { cert_pem: cert.pem(), key_pem: key.serialize_pem(), not_before, not_after })
     }
 }
@@ -259,6 +271,7 @@ impl CertificateAuthority {
         csr.params.serial_number = Some(sn);
         csr.params.custom_extensions.clear();
         let cert = csr.signed_by(&self.issuer, &self.key).map_err(gen_err)?;
+
         Ok(IssuedCertificate { cert_pem: cert.pem(), serial_hex, not_before, not_after })
     }
 
@@ -283,6 +296,7 @@ impl CertificateAuthority {
         params.not_after = odt(not_after);
         params.serial_number = Some(serial().0);
         let cert = params.signed_by(&key, &self.issuer, &self.key).map_err(gen_err)?;
+
         Ok(ServerCertificate { cert_pem: cert.pem(), key_pem: key.serialize_pem(), not_before, not_after })
     }
 }
@@ -318,6 +332,7 @@ mod tests {
         let a = CertificateAuthority::load_or_create(dir.path(), NOW).unwrap();
         let b = CertificateAuthority::load_or_create(dir.path(), NOW).unwrap();
         assert_eq!(a.fingerprint(), b.fingerprint());
+
         // The reloaded CA can still issue.
         let csr = AgentCsr::generate("h").unwrap();
         b.issue_agent_certificate(&csr.csr_pem, "s", NOW, Duration::from_secs(60)).unwrap();

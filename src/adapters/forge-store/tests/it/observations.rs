@@ -11,6 +11,7 @@ use forge_store::Store;
 async fn store() -> (Store, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let s = Store::open_sqlite(&dir.path().join("forge.db")).await.unwrap();
+
     (s, dir)
 }
 
@@ -109,6 +110,7 @@ async fn stale_values_are_listed_until_noted() {
         .await
         .unwrap();
     assert!(s.stale_since(Timestamp(20_000), 10).await.unwrap().is_empty());
+
     // A fresh value clears the mark.
     s.apply(&batch(&k, Some(HealthState::Unknown), HealthState::Passing, 30_000)).await.unwrap();
     assert_eq!(s.stale_since(Timestamp(40_000), 10).await.unwrap().len(), 1);
@@ -118,9 +120,11 @@ async fn stale_values_are_listed_until_noted() {
 async fn the_filter_selects_by_resource_server_and_subject_prefix() {
     let (s, _d) = store().await;
     let (a, b) = (ServerId::new(), ServerId::new());
+
     for (subj, srv) in [("health.readiness.web", a), ("health.liveness.web", a), ("node.reachable", b)] {
         s.apply(&batch(&key(subj, Some(srv)), None, HealthState::Passing, 1_000)).await.unwrap();
     }
+
     let f = |server, prefix: Option<&str>| ObservationFilter {
         resource: Some(EntityRef::new(EntityKind::Server, "node-1")),
         server,
@@ -129,6 +133,7 @@ async fn the_filter_selects_by_resource_server_and_subject_prefix() {
     assert_eq!(s.latest(&f(None, None), 10).await.unwrap().len(), 3);
     assert_eq!(s.latest(&f(Some(a), None), 10).await.unwrap().len(), 2);
     assert_eq!(s.latest(&f(None, Some("health.")), 10).await.unwrap().len(), 2);
+
     // `_` in a prefix is literal, not a LIKE wildcard.
     assert!(s.latest(&f(None, Some("health_")), 10).await.unwrap().is_empty());
     assert_eq!(s.latest(&f(None, None), 1).await.unwrap().len(), 1, "limit applies");
@@ -205,6 +210,7 @@ async fn seeded() -> (Store, tempfile::TempDir, ServerId, ServiceId) {
     })
     .await
     .unwrap();
+
     (s, d, server.id, app.id)
 }
 
@@ -234,9 +240,11 @@ async fn observations_of_deleted_resources_are_removed() {
         server: None,
         subject: Subject::new("health.readiness.node").unwrap(),
     };
+
     for k in [&node_key, &app_key, &gone_key] {
         s.apply(&batch(k, None, HealthState::Passing, 1_000)).await.unwrap();
     }
+
     assert_eq!(s.delete_orphans().await.unwrap(), 2, "the unknown node's latest and history rows");
     s.delete_service(app).await.unwrap();
     assert_eq!(s.delete_orphans().await.unwrap(), 2, "the deleted app's rows");

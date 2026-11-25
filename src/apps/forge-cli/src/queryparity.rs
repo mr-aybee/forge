@@ -32,18 +32,22 @@ fn fields(src: &str, ty: &str, depth: u8) -> Vec<String> {
     let body = &body[..body.find("\n}").unwrap_or(body.len())];
     let mut out = Vec::new();
     let mut attrs = String::new();
+
     for line in body.lines() {
         let t = line.trim();
         if t.starts_with("//") || t.is_empty() {
             continue;
         }
+
         if t.starts_with("#[") {
             attrs.push_str(t);
             continue;
         }
+
         let t = t.strip_prefix("pub ").unwrap_or(t);
         if let Some((name, rest)) = t.split_once(':') {
             let name = name.trim().trim_start_matches("r#");
+
             if attrs.contains("skip_deserializing") || attrs.contains("serde(skip)") {
             } else if attrs.contains("flatten") {
                 if depth < 3 {
@@ -56,8 +60,10 @@ fn fields(src: &str, ty: &str, depth: u8) -> Vec<String> {
                 out.push(name.to_owned());
             }
         }
+
         attrs.clear();
     }
+
     out
 }
 
@@ -66,12 +72,15 @@ fn flags_of(how: &str) -> Option<Vec<String>> {
     let cli = crate::Cli::command();
     let first = how.split(" / ").next().unwrap_or_default();
     let mut cmd = &cli;
+
     for w in first.split_whitespace().skip(1).take_while(|w| !w.starts_with(['-', '<', '(', '['])) {
         let head = w.split('|').next().unwrap_or_default();
         cmd = cmd.find_subcommand(head)?;
     }
+
     let mut out: Vec<String> = cmd.get_arguments().filter_map(|a| a.get_long().map(|l| format!("--{l}"))).collect();
     out.extend(cli.get_arguments().filter_map(|a| a.get_long().map(|l| format!("--{l}"))));
+
     Some(out)
 }
 
@@ -79,11 +88,13 @@ fn flags_of(how: &str) -> Option<Vec<String>> {
 fn query_params() -> BTreeMap<String, Vec<String>> {
     let dir = api_dir();
     let mut out = BTreeMap::new();
+
     for r in build_routes::scan(&dir) {
         let Some(q) = r.query.as_deref() else { continue };
         let src = std::fs::read_to_string(dir.join(format!("{}.rs", r.module))).unwrap_or_default();
         out.insert(format!("{} {}", r.method, r.path), fields(&src, q, 0));
     }
+
     out
 }
 
@@ -103,14 +114,17 @@ mod tests {
         assert!(params.len() > 20, "the route scan found only {} query types", params.len());
         let doc: Value = serde_json::from_str(crate::parity::PARITY_JSON).unwrap_or(Value::Null);
         let mut problems = Vec::new();
+
         for (op, names) in &params {
             let Some(how) = doc["command"][op].as_str() else { continue };
             let map = &doc["query"][op];
             let how = map["_command"].as_str().unwrap_or(how);
+
             let Some(flags) = flags_of(how) else {
                 problems.push(format!("{op}: `{how}` is not a command"));
                 continue;
             };
+
             for p in names {
                 match map[p.as_str()].as_str() {
                     Some(f) if f.starts_with("--") => {
@@ -129,6 +143,7 @@ mod tests {
                 }
             }
         }
+
         // Mappings for parameters that no longer exist are stale.
         for (op, map) in doc["query"].as_object().into_iter().flatten() {
             for k in map.as_object().into_iter().flatten().map(|(k, _)| k).filter(|k| *k != "_command") {
@@ -137,6 +152,7 @@ mod tests {
                 }
             }
         }
+
         assert!(problems.is_empty(), "{} gaps:\n{}", problems.len(), problems.join("\n"));
     }
 }

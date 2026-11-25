@@ -41,13 +41,16 @@ pub async fn list(
     let workspaces: BTreeSet<String> = visible.values().map(ToString::to_string).collect();
     let mut names = Vec::new();
     let mut nodes = Vec::new();
+
     for ws in workspaces.iter().filter_map(|w| w.parse::<WorkspaceId>().ok()) {
         let fleet = crate::names::fleet(&state, ws).await.map_err(|e| ApiError::from(DomainError::internal(e)))?;
+
         for r in fleet.rows.iter().filter(|r| visible.contains_key(&r.server_id)) {
             let mut v = serde_json::to_value(r).unwrap_or_default();
             v["workspace_id"] = json!(ws);
             names.push(v);
         }
+
         for s in fleet.servers.iter().filter(|s| visible.contains_key(&s.id)) {
             let l = fleet.labels.get(&s.id);
             nodes.push(json!({
@@ -59,7 +62,9 @@ pub async fn list(
             }));
         }
     }
+
     let (suffix, suffix_source) = crate::names::suffix_with_source(&state).await;
+
     Ok(Json(json!({
         "enabled": state.config.names.enabled,
         "suffix": suffix,
@@ -91,6 +96,7 @@ pub async fn set_dns_name(
     if !label.is_empty() {
         forge_catalog::names::check_label(label).map_err(ApiError::bad_request)?;
     }
+
     let before =
         crate::names::fleet(&state, server.workspace_id).await.map_err(|e| ApiError::from(DomainError::internal(e)))?;
     let old = before.labels.get(&id).cloned();
@@ -98,6 +104,7 @@ pub async fn set_dns_name(
     let stored = crate::names::stored_labels(&state, server.workspace_id)
         .await
         .map_err(|e| ApiError::from(DomainError::internal(e)))?;
+
     // Set and derived labels share one environment: never take another node's.
     let holder = |l: &str| stored.iter().find(|(o, (sl, _))| **o != id && sl == l).map(|(o, _)| *o);
     let in_use = |l: &str, other: ServerId| {
@@ -108,11 +115,13 @@ pub async fn set_dns_name(
             .map_or_else(|| other.to_string(), |s| s.display_name.clone().unwrap_or_else(|| s.hostname.clone()));
         ApiError::conflict(format!("`{l}` is in use by node {shown}; rename that node first"))
     };
+
     let (chosen, explicit) = match new {
         Some(l) => {
             if let Some(other) = holder(l) {
                 return Err(in_use(l, other));
             }
+
             (l.to_owned(), true)
         }
         // Back to a derived label that no other node holds.
@@ -121,12 +130,14 @@ pub async fn set_dns_name(
             (crate::names::free_label(&server, &taken), false)
         }
     };
+
     match state.store.set_node_label(id, server.workspace_id, &chosen, explicit, state.clock.now()).await {
         Err(DomainError::Conflict(_)) => {
             return Err(ApiError::conflict(format!("another node of this workspace is already named `{chosen}`")));
         }
         r => r?,
     }
+
     let after =
         crate::names::fleet(&state, server.workspace_id).await.map_err(|e| ApiError::from(DomainError::internal(e)))?;
     let name = crate::names::node_name(&after, id).map(|r| r.name.clone());
@@ -144,6 +155,7 @@ pub async fn set_dns_name(
         )
         .await;
     crate::names::poke();
+
     Ok(Json(json!({
         "server_id": id,
         "label": after.labels.get(&id).map(|l| l.label.clone()),
@@ -156,6 +168,7 @@ pub async fn set_dns_name(
 pub async fn of_node(state: &AppState, server: &forge_core::model::Server) -> Value {
     let Ok(fleet) = crate::names::fleet(state, server.workspace_id).await else { return Value::Null };
     let l = fleet.labels.get(&server.id);
+
     json!({
         "label": l.map(|l| l.label.clone()),
         "label_set": l.is_some_and(|l| l.explicit),
@@ -188,6 +201,7 @@ pub async fn get_suffix(
     if !crate::console_access::is_member(&state.store, &state.store, caller.session.user.id, ws).await? {
         caller.authorize(Action::View, EntityRef::new(EntityKind::Workspace, ws)).await?;
     }
+
     Ok(Json(suffix_view(&state).await))
 }
 
@@ -209,6 +223,7 @@ pub async fn put_suffix(
     Json(req): Json<SuffixRequest>,
 ) -> ApiResult<Json<Value>> {
     let platform = EntityRef::platform();
+
     if state.config.mfa_required() && !caller.ctx().mfa {
         caller.audit_denied("names.suffix.update", &platform, None, "MFA required").await;
         return Err(ApiError::new(
@@ -217,6 +232,7 @@ pub async fn put_suffix(
             "changing the local name suffix needs an MFA-verified session",
         ));
     }
+
     caller.authorize(Action::SystemUpdate, platform.clone()).await?;
     let new = req.suffix.trim().to_owned();
     if !new.is_empty()
@@ -225,12 +241,15 @@ pub async fn put_suffix(
         caller.audit_denied("names.suffix.update", &platform, None, &e).await;
         return Err(ApiError::bad_request(e));
     }
+
     let (old, old_source) = crate::names::suffix_with_source(&state).await;
+
     if new.is_empty() {
         state.store.delete_setting(crate::names::SUFFIX_KEY).await?;
     } else {
         state.store.put_setting(crate::names::SUFFIX_KEY, &new, state.clock.now()).await?;
     }
+
     let view = suffix_view(&state).await;
     caller
         .audit(
@@ -241,5 +260,6 @@ pub async fn put_suffix(
         )
         .await;
     crate::names::poke();
+
     Ok(Json(view))
 }

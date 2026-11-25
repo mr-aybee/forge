@@ -60,6 +60,7 @@ pub fn parse(chain_pem: &str, key_pem: &str, now_ms: i64) -> Result<Parsed, Stri
     if chain_pem.len() > 64 * 1024 || key_pem.len() > 16 * 1024 {
         return Err("certificate or key too large".into());
     }
+
     let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(chain_pem.as_bytes())
         .collect::<Result<_, _>>()
         .map_err(|_| "the certificate is not valid PEM".to_owned())?;
@@ -82,6 +83,7 @@ pub fn parse(chain_pem: &str, key_pem: &str, now_ms: i64) -> Result<Parsed, Stri
     if not_after <= now_ms {
         return Err("the certificate has expired".into());
     }
+
     let mut domains: Vec<String> = x
         .subject_alternative_name()
         .ok()
@@ -97,9 +99,11 @@ pub fn parse(chain_pem: &str, key_pem: &str, now_ms: i64) -> Result<Parsed, Stri
                 .collect()
         })
         .unwrap_or_default();
+
     if domains.is_empty() {
         domains = x.subject().iter_common_name().filter_map(|c| c.as_str().ok()).map(str::to_ascii_lowercase).collect();
     }
+
     let issuer = x
         .issuer()
         .iter_organization()
@@ -117,6 +121,7 @@ pub fn parse(chain_pem: &str, key_pem: &str, now_ms: i64) -> Result<Parsed, Stri
         format!("-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n", lines.join("\n"))
     };
     let chain_pem = certs.iter().map(|c| b64(c.as_ref())).collect::<String>();
+
     Ok(Parsed { domains, issuer, not_before, not_after, fingerprint, chain_pem })
 }
 
@@ -157,6 +162,7 @@ async fn usage(
     let mut out: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
     let sites = state.store.list_sites().await?;
     let visible = if whole { vec![true; sites.len()] } else { super::sites::visible_sites(caller, &sites).await };
+
     for (s, _) in sites.into_iter().zip(visible).filter(|(_, ok)| *ok) {
         if s.config["spec"]["tls"] == "uploaded"
             && let Some(id) = s.config["spec"]["cert_id"].as_str()
@@ -164,6 +170,7 @@ async fn usage(
             out.entry(id.to_owned()).or_default().push(s.name.clone());
         }
     }
+
     Ok(out)
 }
 
@@ -176,8 +183,10 @@ pub async fn list(State(state): State<AppState>, caller: Caller, Ws(ws): Ws) -> 
     if !whole && !crate::console_access::is_member(&state.store, &state.store, caller.session.user.id, ws).await? {
         caller.authorize(Action::View, ws_ref(ws)).await?;
     }
+
     let used = usage(&state, &caller, whole).await?;
     let now = state.clock.now();
+
     Ok(Json(
         state
             .store
@@ -210,6 +219,7 @@ pub async fn create(
     if name.is_empty() || name.len() > 100 {
         return Err(ApiError::bad_request("name: 1 to 100 characters"));
     }
+
     let now = state.clock.now();
     let p = parse(&req.chain_pem, &req.key_pem, now.0).map_err(ApiError::bad_request)?;
     let id = CertificateId::new();
@@ -239,6 +249,7 @@ pub async fn create(
             json!({ "certificate": id, "name": cert.name, "domains": cert.domains, "not_after": cert.not_after, "fingerprint": cert.fingerprint }),
         )
         .await;
+
     Ok((StatusCode::CREATED, Json(view(&cert, &[], now))))
 }
 
@@ -253,10 +264,12 @@ pub async fn delete(
     if let Some(users) = usage(&state, &caller, true).await?.get(&cert.id.to_string()) {
         return Err(ApiError::conflict(format!("used by {}; switch those endpoints first", users.join(", "))));
     }
+
     state.store.delete_certificate(cert.id).await?;
     caller
         .audit("certificate.delete", &ws_ref(ws), Some(ws), json!({ "certificate": cert.id, "name": cert.name }))
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 

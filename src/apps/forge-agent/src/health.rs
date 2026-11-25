@@ -154,11 +154,13 @@ fn file_of(dir: &Path, environment: &str, name: &str) -> PathBuf {
 pub fn on_deployed(spec: &AppSpec) {
     let Some(dir) = DIR.get() else { return };
     let mut d = Descriptor::from_spec(spec);
+
     // A deploy carries no fleet list: keep the one Forge sent last, until
     // the policy arrives again.
     if let Some(before) = load_one(dir, &d.environment, &d.name) {
         d.fleet = before.fleet;
     }
+
     if let Err(e) = save(dir, &d) {
         tracing::warn!(app = %d.key(), error = %e, "could not save the health descriptor");
     }
@@ -170,6 +172,7 @@ fn save(dir: &Path, d: &Descriptor) -> std::io::Result<()> {
     std::fs::write(&tmp, serde_json::to_vec(d).unwrap_or_default())?;
     std::fs::rename(tmp, file_of(dir, &d.environment, &d.name))?;
     CHANGED.store(true, std::sync::atomic::Ordering::SeqCst);
+
     Ok(())
 }
 
@@ -186,14 +189,18 @@ fn apply_in(dir: &Path, spec_json: &str) -> Result<serde_json::Value, String> {
     if !forge_catalog::apps::valid_slug(&a.environment, 40) || !forge_catalog::apps::valid_slug(&a.name, 40) {
         return Err("invalid app name".into());
     }
+
     if let Some(e) = a.policy.validate().first() {
         return Err(format!("invalid health policy: {}: {}", e.field, e.message));
     }
+
     if !file_of(dir, &a.environment, &a.name).exists() {
         return Err(format!("{}/{} is not deployed on this node", a.environment, a.name));
     }
+
     let d = Descriptor::from_apply(a);
     save(dir, &d).map_err(|e| format!("saving the health policy: {e}"))?;
+
     Ok(serde_json::json!({ "applied": true, "revision": d.revision }))
 }
 
@@ -249,11 +256,14 @@ fn load_all(dir: &Path) -> Vec<Descriptor> {
 #[must_use]
 pub fn ambiguous_ports(apps: &[Descriptor]) -> Vec<u16> {
     let mut count: HashMap<u16, usize> = HashMap::new();
+
     for p in apps.iter().filter(|a| a.runtime == Runtime::Systemd).filter_map(|a| a.listen_port) {
         *count.entry(p).or_default() += 1;
     }
+
     let mut out: Vec<u16> = count.into_iter().filter(|(_, n)| *n > 1).map(|(p, _)| p).collect();
     out.sort_unstable();
+
     out
 }
 
@@ -330,19 +340,23 @@ impl Tracked {
             self.successes = 0;
             self.generation = a.generation;
         }
+
         if a.ok {
             self.failures = 0;
             self.successes = self.successes.saturating_add(1);
+
             if self.successes >= t.successes {
                 self.state = "passing";
             }
         } else {
             self.successes = 0;
             self.failures = self.failures.saturating_add(1);
+
             if self.failures >= t.failures {
                 self.state = "failing";
             }
         }
+
         // A pass can carry a note (`ambiguous_port`: only the unit was
         // checked); keep it so it reaches the server.
         self.reason = a.reason;
@@ -359,17 +373,21 @@ impl Tracked {
             self.state = "waiting";
             self.generation = a.generation;
         }
+
         if matches!(self.state, "succeeded" | "exhausted") {
             return;
         }
+
         if a.ok {
             self.state = "succeeded";
         } else {
             self.failures = self.failures.saturating_add(1);
+
             if self.failures >= t.failures {
                 self.state = "exhausted";
             }
         }
+
         self.reason = a.reason;
         self.detail = a.detail;
         self.observed_at_ms = now_ms;
@@ -430,14 +448,17 @@ impl Runner {
         use std::sync::atomic::Ordering;
         let Some(dir) = DIR.get().cloned() else { return };
         let Ok(handle) = tokio::runtime::Handle::try_current() else { return };
+
         if self.started.swap(true, Ordering::SeqCst) {
             return;
         }
+
         let r = self.clone();
         handle.spawn(async move { r.run(dir).await });
     }
     async fn run(self, dir: PathBuf) {
         let sem = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT));
+
         // A random phase spreads nodes over the period.
         tokio::time::sleep(Duration::from_millis(u64::from(rand_u16()) % 10_000)).await;
         let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -446,9 +467,11 @@ impl Runner {
         let mut loaded: Option<Instant> = None;
         let mut default_due: Option<Instant> = None;
         let mut due: HashMap<Key, Instant> = HashMap::new();
+
         loop {
             tick.tick().await;
             let now = Instant::now();
+
             // Vault values whose time is up leave memory, asked for again or not.
             self.secrets.purge(now);
             let changed = CHANGED.swap(false, std::sync::atomic::Ordering::SeqCst);
@@ -458,27 +481,32 @@ impl Runner {
                 self.forget_missing(&apps);
                 due.retain(|k, _| apps.iter().any(|a| a.environment == k.0 && a.name == k.1));
             }
+
             // The default check, which also finds the workload generation.
             if default_due.is_none_or(|t| now >= t) {
                 default_due = Some(now + PERIOD);
                 let ambiguous = ambiguous_ports(&apps);
+
                 for d in apps.iter() {
                     let Ok(permit) = sem.clone().try_acquire_owned() else {
                         tracing::debug!("health checks throttled this period");
                         break;
                     };
+
                     let amb = d.listen_port.is_some_and(|p| ambiguous.contains(&p));
                     let (r, d) = (self.clone(), d.clone());
                     tokio::spawn(async move {
                         let a = check(&d, amb).await;
                         drop(permit);
                         r.note_generation(&d, &a.generation);
+
                         if d.default_checks {
                             r.record(&d, a);
                         }
                     });
                 }
             }
+
             // Configured checks, each at its own period.
             for d in apps.iter() {
                 for (purpose, c) in self.plan(d, now, &mut due) {
@@ -487,6 +515,7 @@ impl Runner {
                         due.remove(&key_of(d, purpose, &c.name));
                         continue;
                     };
+
                     let (r, d) = (self.clone(), d.clone());
                     tokio::spawn(async move {
                         let outcome = r.attempt(&d, purpose, &c).await;
@@ -503,6 +532,7 @@ impl Runner {
         use forge_catalog::health::Probe;
         let timeout = Duration::from_secs(u64::from(c.timeout_secs));
         let none: &[crate::health_secrets::ResolvedHeader] = &[];
+
         let secrets = match &c.probe {
             Probe::Exec(_) | Probe::Shell(_) => return command_check(d, purpose, c, timeout).await,
             Probe::Http(h) if h.headers.iter().any(|x| x.secret.is_some()) => {
@@ -513,6 +543,7 @@ impl Runner {
                     check: c.name.clone(),
                     policy_revision: d.revision,
                 };
+
                 // Refused or unanswered: the check is unknown and nothing
                 // is sent to its target.
                 match self.secrets.resolve(req).await {
@@ -522,7 +553,9 @@ impl Runner {
             }
             Probe::Http(_) | Probe::Tcp(_) => None,
         };
+
         let secrets = secrets.as_ref().map_or(none, |s| s.as_slice());
+
         crate::health_probe::run(&c.probe, timeout, crate::health_probe::Context { fleet: &d.fleet, secrets }).await
     }
 
@@ -553,12 +586,14 @@ impl Runner {
             e.revision = d.revision;
             k
         };
+
         // Startup checks that gate the others: the enabled ones. One this
         // node will never run as it is (a permanent refusal: no Landlock,
         // not Linux, no account) is no evidence and holds nothing back. One
         // that only could not run yet (a policy on its way, a busy node,
         // Forge not answering) stays `waiting` and keeps the gate shut.
         let mut started = true;
+
         for c in d.policy.startup.iter().filter(|c| c.enabled) {
             let k = entry(&mut t, Purpose::Startup, c);
             if let Some(e) = t.get_mut(&k) {
@@ -566,28 +601,35 @@ impl Runner {
                     e.generation.clone_from(&generation);
                     e.set("waiting", "", "", now_ms);
                 }
+
                 started &= e.state == "succeeded" || (e.state == "unknown" && e.permanent);
             }
         }
+
         let fixed = |e: &mut Tracked, state: &'static str, reason: &str, detail: &str| {
             if e.state != state || e.reason != reason {
                 e.set(state, reason, detail, now_ms);
             }
+
             // Keep the evidence time moving so keep-alives stay current.
             e.observed_at_ms = now_ms;
         };
         let mut run = Vec::new();
+
         for (purpose, c) in d.policy.checks() {
             let k = entry(&mut t, purpose, c);
             let Some(e) = t.get_mut(&k) else { continue };
+
             if !c.enabled {
                 // Startup has no `disabled` state: a disabled startup check
                 // is not reported, and gates nothing.
                 if purpose != Purpose::Startup {
                     fixed(e, "disabled", "", "");
                 }
+
                 continue;
             }
+
             if purpose == Purpose::Startup {
                 if matches!(e.state, "succeeded" | "exhausted") {
                     continue;
@@ -596,14 +638,17 @@ impl Runner {
                 fixed(e, "pending", "", "waiting for the startup checks");
                 continue;
             }
+
             if now.duration_since(since) < Duration::from_secs(u64::from(c.initial_delay_secs)) {
                 continue;
             }
+
             if due.get(&k).is_none_or(|at| now >= *at) {
                 due.insert(k, now + Duration::from_secs(u64::from(c.period_secs)));
                 run.push((purpose, c.clone()));
             }
         }
+
         run
     }
 
@@ -617,6 +662,7 @@ impl Runner {
         use crate::health_probe::{Unknown, Verdict};
         let throttled = o.verdict == Verdict::Unknown && o.unknown == Unknown::Throttled;
         e.throttled = if throttled { e.throttled.saturating_add(1) } else { 0 };
+
         // No free place several periods in a row is a failed attempt: the
         // check did not answer in time, whatever the reason.
         let o = if throttled && e.throttled >= MAX_THROTTLED {
@@ -627,23 +673,29 @@ impl Runner {
         } else {
             o
         };
+
         if o.verdict == Verdict::Unknown {
             // The check did not run: no failure, no success, counts start
             // over. A startup check that already ended keeps its final state.
             let ended = purpose == Purpose::Startup
                 && matches!(e.state, "succeeded" | "exhausted")
                 && e.generation == generation;
+
             if !ended {
                 e.generation = generation;
                 e.permanent = o.unknown == Unknown::Permanent;
+
                 // A startup check that only could not run yet keeps waiting.
                 let state = if purpose == Purpose::Startup && !e.permanent { "waiting" } else { "unknown" };
                 e.set(state, o.reason, &o.detail, now_ms());
             }
+
             return;
         }
+
         e.permanent = false;
         let a = Attempt { ok: o.ok(), reason: o.reason.to_owned(), detail: o.detail, generation };
+
         if purpose == Purpose::Startup {
             e.apply_startup(a, now_ms(), t);
         } else {
@@ -655,18 +707,23 @@ impl Runner {
     fn forget_missing(&self, apps: &[Descriptor]) {
         let by_app: HashMap<(&str, &str), &Descriptor> =
             apps.iter().map(|a| ((a.environment.as_str(), a.name.as_str()), a)).collect();
+
         if let Ok(mut t) = self.tracked.lock() {
             t.retain(|(ns, app, purpose, check), _| {
                 let Some(d) = by_app.get(&(ns.as_str(), app.as_str())) else { return false };
+
                 if check == "default" {
                     return d.default_checks && (purpose != "readiness" || !d.has_readiness);
                 }
+
                 d.policy.checks().any(|(p, c)| p.as_str() == purpose && c.name == *check)
             });
         }
+
         if let Ok(mut g) = self.generations.lock() {
             g.retain(|(ns, app), _| by_app.contains_key(&(ns.as_str(), app.as_str())));
         }
+
         // Vault values of checks that are gone or disabled leave memory
         // with them.
         self.secrets.retain(|(ns, app, purpose, check)| {
@@ -681,6 +738,7 @@ impl Runner {
         let Ok(mut t) = self.tracked.lock() else { return };
         let purposes: &[Purpose] =
             if d.has_readiness { &[Purpose::Liveness] } else { &[Purpose::Liveness, Purpose::Readiness] };
+
         for p in purposes {
             let e = t.entry(key_of(d, *p, "default")).or_insert_with(Tracked::new);
             e.revision = d.revision;
@@ -695,19 +753,23 @@ impl Runner {
         let now = Instant::now();
         let Ok(mut t) = self.tracked.lock() else { return Vec::new() };
         let mut out = Vec::new();
+
         for ((environment, app, purpose, check), s) in t.iter_mut() {
             if out.len() >= MAX_HEALTH_REPORTS || s.observed_at_ms == 0 {
                 continue;
             }
+
             let due = match &s.reported {
                 None => true,
                 Some((state, reason, at)) => {
                     *state != s.state || *reason != s.reason || now.duration_since(*at) >= s.fresh_for / 2
                 }
             };
+
             if !due {
                 continue;
             }
+
             out.push(HealthReport {
                 environment: environment.clone(),
                 app: app.clone(),
@@ -723,6 +785,7 @@ impl Runner {
             });
             s.reported = Some((s.state, s.reason.clone(), now));
         }
+
         out
     }
 }
@@ -733,9 +796,11 @@ impl Runner {
 async fn command_check(d: &Descriptor, purpose: Purpose, c: &Check, timeout: Duration) -> crate::health_probe::Outcome {
     use crate::health_exec::{CheckRef, Refusal};
     use crate::health_probe::{Outcome, Unknown};
+
     if !cfg!(target_os = "linux") {
         return Outcome::unknown(Unknown::Permanent, "unsupported_executor", Refusal::Unsupported.detail());
     }
+
     let check = CheckRef {
         environment: d.environment.clone(),
         app: d.name.clone(),
@@ -743,6 +808,7 @@ async fn command_check(d: &Descriptor, purpose: Purpose, c: &Check, timeout: Dur
         check: c.name.clone(),
         revision: d.revision,
     };
+
     // The helper ends the run at the check's timeout; the margin is for its answer.
     let wait = timeout + Duration::from_secs(5);
     let r = crate::helper::call(&crate::helper::HelperRequest::HealthCheck { check }, wait).await;
@@ -757,6 +823,7 @@ async fn command_check(d: &Descriptor, purpose: Purpose, c: &Check, timeout: Dur
             format!("the node's helper did not run the check (not running, or older than its agent): {said}"),
         );
     }
+
     match r.data.map(serde_json::from_value::<crate::health_exec::ExecResult>) {
         Some(Ok(result)) => command_outcome(result, timeout),
         _ => Outcome::unknown(
@@ -771,6 +838,7 @@ async fn command_check(d: &Descriptor, purpose: Purpose, c: &Check, timeout: Dur
 fn command_outcome(result: crate::health_exec::ExecResult, timeout: Duration) -> crate::health_probe::Outcome {
     use crate::health_exec::{ExecResult, Refusal};
     use crate::health_probe::{Outcome, Unknown};
+
     match result {
         ExecResult::Exited { passed: true, .. } => Outcome::pass(),
         ExecResult::Exited { code, output, .. } if output.is_empty() => {
@@ -830,6 +898,7 @@ async fn check_service(d: &Descriptor, ambiguous: bool) -> Attempt {
         detail,
         generation,
     };
+
     let (active, generation) = if service_manager_present() {
         match crate::service::unit_active_state(&d.unit()).await {
             Ok(Some(s)) => s,
@@ -845,9 +914,11 @@ async fn check_service(d: &Descriptor, ambiguous: bool) -> Attempt {
             None => return fail("app_failure", "the supervised process is not running".into(), String::new()),
         }
     };
+
     if active != "active" && active != "reloading" {
         return fail("app_failure", format!("the systemd unit is {active}"), generation);
     }
+
     match d.listen_port {
         Some(port) if ambiguous => Attempt {
             ok: true,
@@ -869,6 +940,7 @@ async fn check_service(d: &Descriptor, ambiguous: bool) -> Attempt {
 
 async fn check_container(d: &Descriptor) -> Attempt {
     use crate::helper::HelperRequest;
+
     // Read-only and allowed unsigned for `forge-app-*` names (D-068): the
     // agent asks on its own, with no command from Forge.
     let r = crate::helper::call(&HelperRequest::ContainerState { name: d.unit() }, Duration::from_secs(5)).await;
@@ -880,6 +952,7 @@ async fn check_container(d: &Descriptor) -> Attempt {
             generation: String::new(),
         };
     }
+
     container_attempt(&r.data.unwrap_or_default())
 }
 
@@ -888,13 +961,16 @@ fn container_attempt(v: &serde_json::Value) -> Attempt {
     let generation = v["id"].as_str().unwrap_or_default().to_owned();
     let fail =
         |detail: String| Attempt { ok: false, reason: "app_failure".into(), detail, generation: generation.clone() };
+
     if v["running"].as_bool() != Some(true) {
         let status = v["status"].as_str().filter(|s| !s.is_empty()).unwrap_or("not running");
         return fail(format!("the container is {status}"));
     }
+
     if v["health"].as_str() == Some("unhealthy") {
         return fail("the image HEALTHCHECK reports unhealthy".into());
     }
+
     Attempt { ok: true, reason: String::new(), detail: String::new(), generation }
 }
 fn now_ms() -> i64 {
@@ -907,6 +983,7 @@ fn now_ms() -> i64 {
 fn rand_u16() -> u16 {
     use std::hash::{BuildHasher, Hasher};
     let h = std::collections::hash_map::RandomState::new().build_hasher().finish();
+
     u16::try_from(h & 0xffff).unwrap_or(0)
 }
 #[cfg(test)]
@@ -979,8 +1056,10 @@ mod tests {
         assert_eq!(of(ExecResult::TimedOut), (Verdict::Fail, "timeout", "not finished within 3 s; ended".into()));
         assert_eq!(of(ExecResult::StartFailed { detail: "no such file".into() }).1, "invalid_config");
         assert_eq!(of(ExecResult::NotRunning).0, Verdict::Fail);
+
         // A run that could not be ended is still a timeout, not a new run.
         assert_eq!(of(ExecResult::Refused { why: Refusal::Busy }).1, "timeout");
+
         for why in [
             Refusal::NoPolicy,
             Refusal::StalePolicy,
@@ -998,13 +1077,16 @@ mod tests {
             let (verdict, reason, detail) = of(ExecResult::Refused { why });
             assert_eq!((verdict, reason), (Verdict::Unknown, "unsupported_executor"), "{why:?}");
             assert_eq!(detail, why.detail());
+
             // Whether waiting can help travels with it.
             let kind = command_outcome(ExecResult::Refused { why }, t).unknown;
+
             let expected = match why {
                 Refusal::Throttled => crate::health_probe::Unknown::Throttled,
                 w if w.permanent() => crate::health_probe::Unknown::Permanent,
                 _ => crate::health_probe::Unknown::Transient,
             };
+
             assert_eq!(kind, expected, "{why:?}");
         }
     }
@@ -1027,10 +1109,12 @@ mod tests {
             command_outcome(ExecResult::Exited { code: 0, passed: true, output: String::new() }, Duration::from_secs(2))
         };
         r.record_configured(&d, Purpose::Liveness, &c, pass());
+
         for _ in 1..MAX_THROTTLED {
             r.record_configured(&d, Purpose::Liveness, &c, throttled());
             assert_eq!(state_of(&r, &d, Purpose::Liveness, "cmd"), "unknown");
         }
+
         // The third in a row is a failed attempt; with the fourth the
         // check's own threshold (2) is reached.
         r.record_configured(&d, Purpose::Liveness, &c, throttled());
@@ -1038,6 +1122,7 @@ mod tests {
         r.record_configured(&d, Purpose::Liveness, &c, throttled());
         assert_eq!(state_of(&r, &d, Purpose::Liveness, "cmd"), "failing");
         assert!(reason_of(&r, &d, Purpose::Liveness, "cmd").1.contains("not run for 4 periods"));
+
         // One run that gets a place starts the count over.
         r.record_configured(&d, Purpose::Liveness, &c, pass());
         assert_eq!(state_of(&r, &d, Purpose::Liveness, "cmd"), "passing");
@@ -1063,6 +1148,7 @@ mod tests {
         let run = r.plan(&d, now, &mut due);
         assert_eq!(run.iter().map(|(_, c)| c.name.as_str()).collect::<Vec<_>>(), ["boot"]);
         let boot = d.policy.startup[0].clone();
+
         // A refusal that passes on its own (the policy is on its way):
         // the startup check keeps waiting and the gate stays shut.
         let not_yet = command_outcome(
@@ -1076,6 +1162,7 @@ mod tests {
         assert_eq!(run.iter().map(|(_, c)| c.name.as_str()).collect::<Vec<_>>(), ["boot"], "liveness still waits");
         assert_eq!(state_of(&r, &d, Purpose::Liveness, "live"), "pending");
         let now = now + Duration::from_secs(11);
+
         // A refusal the node will repeat for ever releases the gate.
         let refused = || {
             command_outcome(
@@ -1088,22 +1175,26 @@ mod tests {
         let (reason, detail) = reason_of(&r, &d, Purpose::Startup, "boot");
         assert_eq!(reason, "unsupported_executor");
         assert!(detail.contains("can't confine command checks"), "{detail}");
+
         // Liveness runs; the startup check is tried again at its period.
         let run = r.plan(&d, now + Duration::from_secs(11), &mut due);
         let names: Vec<&str> = run.iter().map(|(_, c)| c.name.as_str()).collect();
         assert!(names.contains(&"live") && names.contains(&"boot"), "{names:?}");
         assert_eq!(state_of(&r, &d, Purpose::Startup, "boot"), "unknown", "planning does not reset it");
+
         // The report carries the reason and the revision.
         let report = r.drain().into_iter().find(|h| h.check == "boot").unwrap();
         assert_eq!(
             (report.state.as_str(), report.reason.as_str(), report.policy_revision),
             ("unknown", "unsupported_executor", 7)
         );
+
         // Once it can run and succeeds, it is final; a later refusal changes nothing.
         r.record_configured(&d, Purpose::Startup, &boot, Outcome::pass());
         assert_eq!(state_of(&r, &d, Purpose::Startup, "boot"), "succeeded");
         r.record_configured(&d, Purpose::Startup, &boot, refused());
         assert_eq!(state_of(&r, &d, Purpose::Startup, "boot"), "succeeded");
+
         // An unknown readiness result clears a passing state without counting as a failure.
         let live = d.policy.liveness[0].clone();
         r.record_configured(&d, Purpose::Liveness, &live, Outcome::pass());
@@ -1138,6 +1229,7 @@ mod tests {
             .to_string()
         ));
         assert!(!runs_code(&spec.to_string()) && !runs_code("not json"));
+
         // The helper must take a policy that has command checks, and one
         // that removes them: it still holds the old ones.
         assert!(!helper_must_take_in(dir.path(), &spec.to_string()), "no command checks before or after");
@@ -1148,6 +1240,7 @@ mod tests {
         assert!(helper_must_take_in(dir.path(), &with_cmd.to_string()));
         apply_in(dir.path(), &with_cmd.to_string()).unwrap();
         assert!(helper_must_take_in(dir.path(), &spec.to_string()), "the new policy removes command checks");
+
         // A descriptor written by an older agent has no list.
         let old = serde_json::json!({ "environment": "uat", "name": "web", "runtime": "systemd", "listen_port": null,
             "default_checks": true, "has_readiness": false });
@@ -1163,19 +1256,23 @@ mod tests {
         let r = Runner::default();
         let d = with_policy("api", serde_json::json!({ "startup": [tcp("boot")], "liveness": [tcp("live")] }));
         let (now, mut due) = (Instant::now(), HashMap::new());
+
         // Only the startup check runs; liveness waits.
         let run = r.plan(&d, now, &mut due);
         assert_eq!(run.iter().map(|(p, c)| (*p, c.name.as_str())).collect::<Vec<_>>(), [(Purpose::Startup, "boot")]);
         assert_eq!(state_of(&r, &d, Purpose::Startup, "boot"), "waiting");
         assert_eq!(state_of(&r, &d, Purpose::Liveness, "live"), "pending");
+
         // Not due again within its period.
         assert!(r.plan(&d, now + Duration::from_secs(1), &mut due).is_empty());
+
         // It succeeds: liveness runs, startup doesn't run again.
         let boot = d.policy.startup[0].clone();
         r.record_configured(&d, Purpose::Startup, &boot, outcome(true));
         assert_eq!(state_of(&r, &d, Purpose::Startup, "boot"), "succeeded");
         let run = r.plan(&d, now + Duration::from_secs(11), &mut due);
         assert_eq!(run.iter().map(|(p, _)| *p).collect::<Vec<_>>(), [Purpose::Liveness]);
+
         // A restart (new generation) starts over.
         r.note_generation(&d, "g2");
         let run = r.plan(&d, now + Duration::from_secs(30), &mut due);
@@ -1189,12 +1286,15 @@ mod tests {
         let d = with_policy("api", serde_json::json!({ "startup": [tcp("boot")] }));
         let boot = d.policy.startup[0].clone();
         r.plan(&d, Instant::now(), &mut HashMap::new());
+
         for _ in 0..2 {
             r.record_configured(&d, Purpose::Startup, &boot, outcome(false));
         }
+
         assert_eq!(state_of(&r, &d, Purpose::Startup, "boot"), "waiting");
         r.record_configured(&d, Purpose::Startup, &boot, outcome(false));
         assert_eq!(state_of(&r, &d, Purpose::Startup, "boot"), "exhausted");
+
         // Final for this generation: no further attempts, a late pass changes nothing.
         assert!(r.plan(&d, Instant::now() + Duration::from_secs(60), &mut HashMap::new()).is_empty());
         r.record_configured(&d, Purpose::Startup, &boot, outcome(true));
@@ -1213,6 +1313,7 @@ mod tests {
             ] }),
         );
         r.note_generation(&d, "g1");
+
         // The command check is due like any other (the helper runs it); the
         // delayed one is not yet.
         let run = r.plan(&d, Instant::now(), &mut HashMap::new());
@@ -1269,6 +1370,7 @@ mod tests {
         assert_eq!(state_of(&r, &d, Purpose::Readiness, "slow"), "pending");
         r.record_configured(&d, Purpose::Readiness, &c, outcome(true));
         assert_eq!(state_of(&r, &d, Purpose::Readiness, "slow"), "passing");
+
         // The policy drops the check, and turns the defaults off.
         r.record(&d, Attempt { ok: true, reason: String::new(), detail: String::new(), generation: String::new() });
         let mut next = with_policy("api", serde_json::json!({ "default_checks": false }));
@@ -1287,12 +1389,14 @@ mod tests {
             })
             .to_string()
         };
+
         // Not deployed here: refused.
         assert!(apply_in(dir.path(), &spec("api", 9)).unwrap_err().contains("not deployed"));
         save(dir.path(), &svc("api", Some(8080))).unwrap();
         assert_eq!(apply_in(dir.path(), &spec("api", 9)).unwrap()["revision"], 42);
         let d = load_all(dir.path()).pop().unwrap();
         assert_eq!((d.revision, d.policy.liveness.len(), d.default_checks), (42, 1, true));
+
         // An invalid policy and a bad name are refused.
         assert!(apply_in(dir.path(), &spec("api", 0)).unwrap_err().contains("invalid health policy"));
         assert!(apply_in(dir.path(), &spec("../x", 9)).is_err());
@@ -1323,6 +1427,7 @@ mod tests {
         assert_eq!((t.state, t.reason.as_str()), ("failing", "timeout"));
         t.apply(ok(), 5, d);
         assert_eq!(t.state, "passing");
+
         // A new generation starts counting afresh.
         t.apply(bad(), 6, d);
         t.apply(bad(), 7, d);
@@ -1352,9 +1457,11 @@ mod tests {
         let good = svc("api", Some(8080));
         let mut bad = svc("x", None);
         bad.name = "../../etc;rm".into();
+
         for d in [&good, &bad] {
             std::fs::write(dir.path().join(format!("{}.json", d.name.len())), serde_json::to_vec(d).unwrap()).unwrap();
         }
+
         assert_eq!(load_all(dir.path()), vec![good]);
     }
 
@@ -1419,12 +1526,14 @@ mod tests {
         let first = r.drain();
         assert_eq!(first.len(), 2, "liveness and readiness");
         assert!(r.drain().is_empty(), "nothing changed");
+
         for _ in 0..3 {
             r.record(
                 &d,
                 Attempt { ok: false, reason: "app_failure".into(), detail: String::new(), generation: "g".into() },
             );
         }
+
         let changed = r.drain();
         assert!(changed.iter().all(|h| h.state == "failing" && h.check == "default"), "{changed:?}");
     }

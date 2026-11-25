@@ -117,11 +117,13 @@ fn clean_reason(reason: &str) -> DomainResult<String> {
     if r.is_empty() {
         return Err(DomainError::Invalid("reason: required, so others can tell why alarms are quiet".into()));
     }
+
     if r.chars().count() > MAX_SILENCE_REASON || r.chars().any(|c| c.is_control() && c != '\n') {
         return Err(DomainError::Invalid(format!(
             "reason: at most {MAX_SILENCE_REASON} characters, without control characters"
         )));
     }
+
     Ok(r.to_owned())
 }
 
@@ -130,16 +132,19 @@ fn check_window(starts: Timestamp, ends: Timestamp, now: Timestamp) -> DomainRes
     if ends.0 <= now.0 {
         return Err(DomainError::Invalid("ends_at: the end is not in the future".into()));
     }
+
     let length = ends.0 - starts.0;
     if length < MIN_SILENCE_MS {
         return Err(DomainError::Invalid("ends_at: a silence lasts at least one minute".into()));
     }
+
     if length > MAX_SILENCE_MS {
         return Err(DomainError::Invalid(format!(
             "ends_at: a silence lasts at most {} days from its start; create another one for longer",
             MAX_SILENCE_MS / (24 * 3600 * 1000)
         )));
     }
+
     Ok(())
 }
 
@@ -153,6 +158,7 @@ pub struct Silences {
 }
 
 impl Silences {
+    /// One silence by id.
     pub async fn get(&self, id: SilenceId) -> DomainResult<Silence> {
         self.store.get_silence(id).await?.ok_or_else(|| DomainError::NotFound("silence".into()))
     }
@@ -168,6 +174,7 @@ impl Silences {
     ) -> DomainResult<Vec<Silence>> {
         let now = self.clock.now();
         let filter = SilenceFilter { workspace: Some(workspace), state: state.map(|s| (s, now)), before };
+
         self.store.list_silences(&filter, limit).await
     }
 
@@ -179,26 +186,32 @@ impl Silences {
             SilenceScope::Services { ids } => ids.len(),
             _ => 1,
         };
+
         if count == 0 {
             return Err(DomainError::Invalid(
                 "scope: name at least one id, or use the workspace scope to cover everything".into(),
             ));
         }
+
         if count > MAX_SILENCE_SCOPE_IDS {
             return Err(DomainError::Invalid(format!("scope: at most {MAX_SILENCE_SCOPE_IDS} ids")));
         }
+
         let refs = scope.refs(workspace);
         let home = EntityRef::new(EntityKind::Workspace, workspace);
+
         for (r, resolved) in refs.iter().zip(self.resolver.resolve_many(&refs).await) {
             let inside = match resolved {
                 Ok(res) => res.entity == home || res.ancestors.contains(&home),
                 Err(DomainError::NotFound(_) | DomainError::Invalid(_)) => false,
                 Err(e) => return Err(e),
             };
+
             if !inside {
                 return Err(DomainError::Invalid(format!("scope: no {} {}", r.kind.as_str(), r.id)));
             }
         }
+
         Ok(())
     }
 
@@ -206,16 +219,20 @@ impl Silences {
         let mut rules = rules.to_vec();
         rules.sort();
         rules.dedup();
+
         if rules.len() > MAX_SILENCE_RULES {
             return Err(DomainError::Invalid(format!("rules: at most {MAX_SILENCE_RULES}")));
         }
+
         if !rules.is_empty() {
             let known: std::collections::HashSet<AlertRuleId> =
                 self.alerts.list_rules(Some(workspace)).await?.into_iter().map(|r| r.id).collect();
+
             if let Some(missing) = rules.iter().find(|r| !known.contains(r)) {
                 return Err(DomainError::Invalid(format!("rules: no alert rule {missing}")));
             }
         }
+
         Ok(rules)
     }
 
@@ -223,11 +240,13 @@ impl Silences {
     pub async fn create(&self, workspace: WorkspaceId, input: SilenceInput, by: Principal) -> DomainResult<Silence> {
         let now = self.clock.now();
         let reason = clean_reason(&input.reason)?;
+
         if let (Some(min), Some(max)) = (input.min_severity, input.max_severity)
             && min > max
         {
             return Err(DomainError::Invalid("max_severity: milder than min_severity, so nothing would match".into()));
         }
+
         let starts_at = match input.starts_at {
             None => now,
             Some(t) if t.0 < now.0 - START_SLACK_MS => {
@@ -241,9 +260,11 @@ impl Silences {
             }
             Some(t) => Timestamp(t.0.max(now.0)),
         };
+
         check_window(starts_at, input.ends_at, now)?;
         self.check_scope(workspace, &input.scope).await?;
         let rules = self.check_rules(workspace, &input.rules).await?;
+
         // Check then insert, not atomic: two parallel requests can pass the
         // cap by one each. The caps bound growth; they are not a quota.
         if self.store.count_open_silences(workspace, now, Some(&by)).await? >= MAX_OPEN_SILENCES_PER_PERSON {
@@ -251,12 +272,14 @@ impl Silences {
                 "one person has at most {MAX_OPEN_SILENCES_PER_PERSON} silences that have not ended; end one first"
             )));
         }
+
         if !input.manages_workspace && self.store.count_open_silences(workspace, now, None).await? >= MAX_OPEN_SILENCES
         {
             return Err(DomainError::Conflict(format!(
                 "a workspace has at most {MAX_OPEN_SILENCES} silences that have not ended; end one first"
             )));
         }
+
         let silence = Silence {
             id: SilenceId::new(),
             workspace_id: workspace,
@@ -273,6 +296,7 @@ impl Silences {
             ended_by: None,
         };
         self.store.create_silence(&silence).await?;
+
         Ok(silence)
     }
 
@@ -283,16 +307,19 @@ impl Silences {
         if old.state(now) == SilenceState::Expired {
             return Err(DomainError::Conflict("the silence has ended; create a new one".into()));
         }
+
         if ends_at.0 <= old.ends_at.0 {
             return Err(DomainError::Invalid(
                 "ends_at: not later than the current end; to stop a silence, end it".into(),
             ));
         }
+
         check_window(old.starts_at, ends_at, now)?;
         let window = SilenceWindow { starts_at: old.starts_at, ends_at, ended_by: None, updated_at: now };
         if !self.store.set_silence_window(id, &window, now).await? {
             return Err(DomainError::Conflict("the silence has ended; create a new one".into()));
         }
+
         self.get(id).await
     }
 
@@ -307,9 +334,11 @@ impl Silences {
             ended_by: Some(by),
             updated_at: now,
         };
+
         if !self.store.set_silence_window(id, &window, now).await? {
             return Err(DomainError::Conflict("the silence has already ended".into()));
         }
+
         self.get(id).await
     }
 
@@ -319,6 +348,7 @@ impl Silences {
     async fn places(&self, alarms: &[&Alarm]) -> DomainResult<Vec<AlarmPlace>> {
         let resources: Vec<EntityRef> = alarms.iter().map(|a| a.resource.clone()).collect();
         let mut places = Vec::with_capacity(alarms.len());
+
         for resolved in self.resolver.resolve_many(&resources).await {
             places.push(match resolved {
                 Ok(r) => AlarmPlace { ancestors: r.ancestors },
@@ -326,6 +356,7 @@ impl Silences {
                 Err(e) => return Err(e),
             });
         }
+
         Ok(places)
     }
 
@@ -333,20 +364,24 @@ impl Silences {
     /// ends last when several do.
     pub async fn covering(&self, alarms: &[&Alarm], now: Timestamp) -> DomainResult<Vec<Option<Silence>>> {
         let mut active: HashMap<WorkspaceId, Vec<Silence>> = HashMap::new();
+
         for a in alarms {
             if let std::collections::hash_map::Entry::Vacant(v) = active.entry(a.workspace_id) {
                 v.insert(self.store.active_silences(a.workspace_id, now).await?);
             }
         }
+
         if active.values().all(Vec::is_empty) {
             return Ok(vec![None; alarms.len()]);
         }
+
         // Ancestry is read only when a silence asks where a resource sits.
         let places = if active.values().flatten().any(|s| needs_place(&s.scope)) {
             self.places(alarms).await?
         } else {
             vec![AlarmPlace::default(); alarms.len()]
         };
+
         Ok(alarms
             .iter()
             .zip(&places)
@@ -372,6 +407,7 @@ impl Silences {
     pub async fn marks(&self, alarms: &[Alarm]) -> DomainResult<Vec<Option<SilenceMark>>> {
         let firing: Vec<&Alarm> = alarms.iter().filter(|a| a.state == AlarmState::Firing).collect();
         let mut covering = self.covering(&firing, self.clock.now()).await?.into_iter();
+
         Ok(alarms
             .iter()
             .map(|a| {

@@ -98,6 +98,7 @@ impl Logs {
     /// longer exists is left out: its events show no node.
     pub async fn node_names(&self, ids: &[ServerId]) -> HashMap<ServerId, String> {
         let mut out = HashMap::new();
+
         for id in ids {
             match self.servers.get_server(*id).await {
                 Ok(s) => {
@@ -108,6 +109,7 @@ impl Logs {
                 Err(e) => tracing::warn!(server = %id, error = %e, "could not name a log event's node"),
             }
         }
+
         out
     }
 
@@ -135,6 +137,7 @@ impl Logs {
         if name.is_empty() || name.chars().count() > MAX_KEY_NAME || name.chars().any(char::is_control) {
             return Err(LogsError::Invalid("a key name is 1 to 80 characters, without control characters"));
         }
+
         let token = format!("{TOKEN_PREFIX}{}", forge_secrets::crypto::random_token::<24>());
         let key = LogKey {
             id: LogKeyId::new(),
@@ -146,6 +149,7 @@ impl Logs {
             last_used_at: None,
         };
         self.keys.create_log_key(&key, &hash(&token)).await?;
+
         Ok(CreatedKey { key, token })
     }
 
@@ -160,6 +164,7 @@ impl Logs {
     pub async fn revoke_key(&self, id: LogKeyId) -> Result<(), LogsError> {
         self.keys.delete_log_key(id).await?;
         self.touched.lock().unwrap_or_else(PoisonError::into_inner).remove(&id);
+
         Ok(())
     }
 
@@ -168,6 +173,7 @@ impl Logs {
         if !token.starts_with(TOKEN_PREFIX) || token.len() > 200 {
             return Err(LogsError::BadKey);
         }
+
         // Looked up by SHA-256, like API keys: only the hash is stored.
         self.keys.find_log_key(&hash(token)).await?.ok_or(LogsError::BadKey)
     }
@@ -179,8 +185,10 @@ impl Logs {
             if t.len() >= MAX_TOUCHED {
                 t.clear();
             }
+
             t.insert(id, now);
         }
+
         due
     }
 
@@ -189,12 +197,14 @@ impl Logs {
         let key = self.key_for(token).await?;
         let now = self.clock.now();
         let count = self.sink.ingest_logs(key.service_id, now, body).await?;
+
         if self.should_touch(key.id, now.0)
             && let Err(e) = self.keys.touch_log_key(key.id, now).await
         {
             // Only the "last used" column is stale; the events are stored.
             tracing::warn!(key = %key.id, error = %e, "could not record log key use");
         }
+
         Ok(count)
     }
 }

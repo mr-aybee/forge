@@ -3,7 +3,9 @@
 
 use ring::hmac;
 
+/// Length of one TOTP time step, in seconds.
 pub const STEP_SECS: i64 = 30;
+/// Digits in a TOTP code.
 pub const DIGITS: u32 = 6;
 
 /// A new 160-bit secret.
@@ -23,6 +25,7 @@ pub fn code_for_counter(secret: &[u8], counter: u64) -> u32 {
         | u32::from(d[offset + 1]) << 16
         | u32::from(d[offset + 2]) << 8
         | u32::from(d[offset + 3]);
+
     bin % 10u32.pow(DIGITS)
 }
 
@@ -46,15 +49,19 @@ pub fn matched_step(secret: &[u8], code: &str, unix_secs: i64) -> Option<i64> {
     if code.len() != DIGITS as usize || !code.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
+
     let n = code.parse::<u32>().ok()?;
     let mut found = None;
+
     for drift in [-1i64, 0, 1] {
         let at = unix_secs + drift * STEP_SECS;
+
         // Evaluate all windows to keep timing independent of which matched.
         if forge_secrets::crypto::constant_time_eq(&code_at(secret, at).to_be_bytes(), &n.to_be_bytes()) {
             found = Some(at.max(0) / STEP_SECS);
         }
     }
+
     found
 }
 
@@ -65,17 +72,21 @@ pub fn base32_encode(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len().div_ceil(5) * 8);
     let mut buffer: u32 = 0;
     let mut bits = 0u32;
+
     for &byte in data {
         buffer = (buffer << 8) | u32::from(byte);
         bits += 8;
+
         while bits >= 5 {
             out.push(char::from(ALPHABET[((buffer >> (bits - 5)) & 31) as usize]));
             bits -= 5;
         }
     }
+
     if bits > 0 {
         out.push(char::from(ALPHABET[((buffer << (5 - bits)) & 31) as usize]));
     }
+
     out
 }
 
@@ -85,19 +96,23 @@ pub fn base32_decode(s: &str) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let mut buffer: u32 = 0;
     let mut bits = 0u32;
+
     for c in s.chars().filter(|c| !matches!(c, '=' | ' ')) {
         let v = match c.to_ascii_uppercase() {
             c @ 'A'..='Z' => c as u32 - 'A' as u32,
             c @ '2'..='7' => c as u32 - '2' as u32 + 26,
             _ => return None,
         };
+
         buffer = (buffer << 5) | v;
         bits += 5;
+
         if bits >= 8 {
             out.push(u8::try_from((buffer >> (bits - 8)) & 0xff).ok()?);
             bits -= 8;
         }
     }
+
     Some(out)
 }
 
@@ -106,6 +121,7 @@ pub fn base32_decode(s: &str) -> Option<Vec<u8>> {
 pub fn provisioning_uri(secret: &[u8], issuer: &str, account: &str) -> String {
     let label = url::form_urlencoded::byte_serialize(format!("{issuer}:{account}").as_bytes()).collect::<String>();
     let issuer_q = url::form_urlencoded::byte_serialize(issuer.as_bytes()).collect::<String>();
+
     format!(
         "otpauth://totp/{label}?secret={}&issuer={issuer_q}&algorithm=SHA1&digits={DIGITS}&period={STEP_SECS}",
         base32_encode(secret)

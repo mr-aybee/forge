@@ -74,6 +74,7 @@ mod unix {
     /// Files and directories below `dir`, never following symlinks.
     fn walk(dir: &Path, depth: usize, unfixed: &mut Unfixed) {
         let Ok(entries) = std::fs::read_dir(dir) else { return };
+
         for e in entries.flatten() {
             let path = e.path();
             let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
@@ -81,11 +82,14 @@ mod unix {
             if ft.is_symlink() {
                 continue;
             }
+
             let mode = meta.permissions().mode() & 0o7777;
+
             if ft.is_dir() {
                 if mode & 0o077 != 0 || mode & 0o700 != 0o700 {
                     set(&path, 0o700, unfixed);
                 }
+
                 if depth < MAX_DEPTH {
                     walk(&path, depth + 1, unfixed);
                 }
@@ -99,9 +103,11 @@ mod unix {
         std::fs::set_permissions(data, std::fs::Permissions::from_mode(0o700))
             .map_err(|e| format!("cannot make {} owner-only (0700): {e}", data.display()))?;
         let mut unfixed = Vec::new();
+
         // Files directly in the data directory (forge.db and its -wal/-shm,
         // marker files) and the private subdirectories with their contents.
         let Ok(entries) = std::fs::read_dir(data) else { return Ok(unfixed) };
+
         for e in entries.flatten() {
             let path = e.path();
             let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
@@ -115,9 +121,11 @@ mod unix {
                 if mode != 0o700 {
                     set(&path, 0o700, &mut unfixed);
                 }
+
                 walk(&path, 1, &mut unfixed);
             }
         }
+
         Ok(unfixed)
     }
 }
@@ -144,18 +152,22 @@ mod tests {
         let data = d.path().join("forge");
         std::fs::create_dir(&data).unwrap();
         std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o755)).unwrap();
+
         for f in ["forge.db", "forge.db-wal", "forge.db-shm"] {
             put(&data.join(f), 0o644);
         }
+
         for sub in PRIVATE_DIRS {
             let s = data.join(sub);
             std::fs::create_dir(&s).unwrap();
             std::fs::set_permissions(&s, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
+
         put(&data.join("pki/ca.key"), 0o644);
         put(&data.join("backups/forge-1.db"), 0o664);
         std::fs::create_dir(data.join("updates/1.2.3")).unwrap();
         put(&data.join("updates/1.2.3/forge-server"), 0o755);
+
         // A symlink to something outside is never followed or changed.
         let outside = d.path().join("outside");
         put(&outside, 0o644);
@@ -164,16 +176,21 @@ mod tests {
         let unfixed = harden(&data).unwrap();
         assert!(unfixed.is_empty(), "{unfixed:?}");
         assert_eq!(mode(&data), 0o700);
+
         for f in ["forge.db", "forge.db-wal", "forge.db-shm", "pki/ca.key"] {
             assert_eq!(mode(&data.join(f)), 0o600, "{f}");
         }
+
         assert_eq!(mode(&data.join("backups/forge-1.db")), 0o600);
+
         for sub in PRIVATE_DIRS {
             assert_eq!(mode(&data.join(sub)), 0o700, "{sub}");
         }
+
         assert_eq!(mode(&data.join("updates/1.2.3")), 0o700);
         assert_eq!(mode(&data.join("updates/1.2.3/forge-server")), 0o700, "owner keeps execute");
         assert_eq!(mode(&outside), 0o644, "symlink target untouched");
+
         // Idempotent.
         assert!(harden(&data).unwrap().is_empty());
     }

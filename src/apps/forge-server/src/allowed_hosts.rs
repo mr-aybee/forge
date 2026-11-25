@@ -15,11 +15,13 @@ pub async fn load(settings: &dyn SettingsRepository) -> anyhow::Result<AllowedHo
         let parsed = serde_json::from_str::<Vec<String>>(&v)
             .map_err(|e| e.to_string())
             .and_then(|l| parse_list(&l).map_err(|e| e.to_string()));
+
         match parsed {
             Ok(p) => hosts.set(Some(p)),
             Err(e) => tracing::warn!(error = %e, "ignoring the stored allowed hosts; any host is allowed"),
         }
     }
+
     Ok(hosts)
 }
 
@@ -44,5 +46,6 @@ pub async fn save(
             hosts.set(None);
         }
     }
+
     Ok(())
 }

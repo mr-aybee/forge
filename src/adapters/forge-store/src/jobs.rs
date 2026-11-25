@@ -81,6 +81,7 @@ impl JobRepository for Store {
         if res.rows_affected() == 1 {
             return Ok((self.get_job(id).await?, true));
         }
+
         let key = job.idempotency_key.unwrap_or_default();
         let r = sqlx::query("SELECT * FROM jobs WHERE kind = $1 AND idempotency_key = $2")
             .bind(&job.kind)
@@ -88,6 +89,7 @@ impl JobRepository for Store {
             .fetch_one(self.pool())
             .await
             .map_err(db_err)?;
+
         Ok((job_row(&r)?, false))
     }
 
@@ -123,6 +125,7 @@ impl JobRepository for Store {
         .fetch_all(self.pool())
         .await
         .map_err(db_err)?;
+
         rows.iter().map(job_row).collect()
     }
 
@@ -164,6 +167,7 @@ impl JobRepository for Store {
             .fetch_optional(self.pool())
             .await
             .map_err(db_err)?;
+
         r.as_ref().map(job_row).transpose()
     }
 
@@ -194,6 +198,7 @@ impl JobRepository for Store {
         .execute(self.pool())
         .await
         .map_err(db_err)?;
+
         Ok(())
     }
 
@@ -218,9 +223,11 @@ impl JobRepository for Store {
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
+
         if res.rows_affected() != 1 {
             return Err(lease_lost(id));
         }
+
         sqlx::query(
             "UPDATE job_steps SET status = 'succeeded', finished_at = $1 WHERE job_id = $2 AND step_index = $3",
         )
@@ -230,6 +237,7 @@ impl JobRepository for Store {
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
+
         tx.commit().await.map_err(db_err)
     }
 
@@ -254,9 +262,11 @@ impl JobRepository for Store {
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
+
         if res.rows_affected() != 1 {
             return Err(lease_lost(id));
         }
+
         if error.is_some() {
             sqlx::query(
                 "UPDATE job_steps SET status = 'failed', finished_at = $1, error = $2
@@ -269,6 +279,7 @@ impl JobRepository for Store {
             .await
             .map_err(db_err)?;
         }
+
         tx.commit().await.map_err(db_err)
     }
 
@@ -294,9 +305,11 @@ impl JobRepository for Store {
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
+
         if res.rows_affected() != 1 {
             return Err(lease_lost(id));
         }
+
         sqlx::query(
             "UPDATE job_steps SET status = 'retrying', finished_at = $1, error = $2 WHERE job_id = $3 AND status = 'running'",
         )
@@ -306,6 +319,7 @@ impl JobRepository for Store {
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
+
         tx.commit().await.map_err(db_err)
     }
 

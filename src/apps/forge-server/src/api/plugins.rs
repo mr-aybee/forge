@@ -50,6 +50,7 @@ pub async fn install(
 ) -> ApiResult<(StatusCode, Json<PluginRecord>)> {
     let (pkg, approved) = req.into_parts()?;
     let r = state.plugins.install(&caller.principal(), caller.ctx(), pkg, approved).await?;
+
     Ok((StatusCode::CREATED, Json(r)))
 }
 
@@ -118,5 +119,6 @@ pub async fn invoke(
         Some(s) => s.parse().map_err(ApiError::bad_request)?,
         None => EntityRef::platform(),
     };
+
     Ok(Json(state.plugins.invoke(&caller.principal(), caller.ctx(), &id, scope, req.input).await?))
 }

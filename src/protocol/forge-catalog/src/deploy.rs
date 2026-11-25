@@ -51,7 +51,9 @@ impl Secs {
             Some((i, 'd')) => (&s[..i], 86_400),
             _ => (s, 1),
         };
+
         let n: u64 = num.trim().parse().map_err(|_| format!("`{s}` is not a duration (use 30s, 5m, 2h or 1d)"))?;
+
         n.checked_mul(mult).map(Self).ok_or_else(|| format!("`{s}` is too long"))
     }
 }
@@ -408,6 +410,7 @@ impl std::fmt::Display for DocError {
 #[must_use]
 pub fn snake(k: &str) -> String {
     let mut out = String::with_capacity(k.len() + 4);
+
     for c in k.chars() {
         if c.is_ascii_uppercase() {
             out.push('_');
@@ -416,6 +419,7 @@ pub fn snake(k: &str) -> String {
             out.push(c);
         }
     }
+
     out
 }
 
@@ -435,9 +439,11 @@ pub fn merge_patch(target: &mut Value, patch: &Value) {
         *target = patch.clone();
         return;
     };
+
     if !target.is_object() {
         *target = Value::Object(serde_json::Map::new());
     }
+
     if let Value::Object(t) = target {
         for (k, v) in p {
             if v.is_null() {
@@ -456,14 +462,17 @@ pub fn parse(mut doc: Value, environment: Option<&str>) -> Result<DeploymentDoc,
     if let Some(env) = environment {
         doc["metadata"]["environment"] = Value::String(env.to_owned());
     }
+
     let env = doc.pointer("/metadata/environment").and_then(Value::as_str).unwrap_or_default().to_owned();
     if let Some(patch) = doc.pointer(&format!("/spec/overrides/{env}")).cloned()
         && let Some(spec) = doc.get_mut("spec")
     {
         merge_patch(spec, &patch);
     }
+
     let d: DeploymentDoc = serde_json::from_value(doc).map_err(|e| DocError::new("", e.to_string()))?;
     d.check()?;
+
     Ok(d)
 }
 
@@ -480,32 +489,41 @@ impl DeploymentDoc {
         if self.api_version != API_VERSION {
             return Err(DocError::new("apiVersion", format!("must be {API_VERSION}")));
         }
+
         if self.kind != KIND {
             return Err(DocError::new("kind", format!("must be {KIND}")));
         }
+
         if !crate::apps::valid_slug(&self.metadata.name, 40) {
             return Err(DocError::new("metadata.name", "lowercase letters, digits and dashes, at most 40"));
         }
+
         if !crate::apps::valid_slug(&self.metadata.environment, 40) {
             return Err(DocError::new("metadata.environment", "the environment's slug, e.g. prod"));
         }
+
         if self.metadata.description.len() > 500 || self.metadata.description.contains(['\0', '\r']) {
             return Err(DocError::new("metadata.description", "at most 500 characters"));
         }
+
         self.spec.artifact.resolve(self.spec.runtime)?;
+
         for k in self.spec.env.keys() {
             if !crate::apps::valid_env_key(k) {
                 return Err(DocError::new(&format!("spec.env.{k}"), "invalid variable name"));
             }
         }
+
         for k in &self.spec.secrets {
             if !crate::apps::valid_env_key(k) {
                 return Err(DocError::new("spec.secrets", format!("invalid variable name `{k}`")));
             }
+
             if self.spec.env.contains_key(k) {
                 return Err(DocError::new("spec.secrets", format!("`{k}` is also a plain variable")));
             }
         }
+
         for k in self.spec.template.keys() {
             if matches!(snake(k).as_str(), "env" | "environment" | "name" | "runtime" | "image" | "slot" | "health") {
                 return Err(DocError::new(
@@ -514,15 +532,19 @@ impl DeploymentDoc {
                 ));
             }
         }
+
         if let Some(p) = &self.spec.placement {
             if p.nodes.len() > MAX_NODES || p.replicas.is_some_and(|r| r == 0 || r as usize > MAX_NODES) {
                 return Err(DocError::new("spec.placement", format!("between 1 and {MAX_NODES} nodes")));
             }
+
             if p.nodes.is_empty() && p.node_selector.is_empty() {
                 return Err(DocError::new("spec.placement", "list nodes or a nodeSelector"));
             }
         }
+
         self.policy()?;
+
         Ok(())
     }
 
@@ -533,7 +555,9 @@ impl DeploymentDoc {
             if s.steps.is_empty() || s.steps.len() > MAX_STEPS {
                 return Err(DocError::new("spec.strategy.steps", format!("a canary needs 1 to {MAX_STEPS} steps")));
             }
+
             let mut last = 0;
+
             for (i, st) in s.steps.iter().enumerate() {
                 if st.weight == 0 || st.weight > 100 || st.weight <= last {
                     return Err(DocError::new(
@@ -541,34 +565,43 @@ impl DeploymentDoc {
                         "weights rise from 1 to 100",
                     ));
                 }
+
                 last = st.weight;
             }
         } else if !s.steps.is_empty() {
             return Err(DocError::new("spec.strategy.steps", "only a canary has steps"));
         }
+
         if s.batch_size == Some(0) {
             return Err(DocError::new("spec.strategy.batchSize", "at least 1"));
         }
+
         let h = &self.spec.health;
         if h.startup_timeout.0 == 0 || h.startup_timeout.0 > 3 * 3_600 {
             return Err(DocError::new("spec.health.startupTimeout", "between 1s and 3h"));
         }
+
         if h.stabilization_period.0 > 3_600 {
             return Err(DocError::new("spec.health.stabilizationPeriod", "at most 1h"));
         }
+
         if self.spec.traffic.drain_timeout.0 > 3_600 {
             return Err(DocError::new("spec.traffic.drainTimeout", "at most 1h"));
         }
+
         if s.approval.timeout.0 == 0 || s.approval.timeout.0 > 30 * 86_400 {
             return Err(DocError::new("spec.strategy.approval.timeout", "between 1s and 30d"));
         }
+
         if self.spec.rollback.retain_releases == 0 || self.spec.rollback.retain_releases > 500 {
             return Err(DocError::new("spec.rollback.retainReleases", "between 1 and 500"));
         }
+
         let batch = s.batch_size.unwrap_or(match s.replacement {
             Replacement::StartFirst => s.max_surge.max(1),
             Replacement::StopFirst => s.max_unavailable.max(1),
         });
+
         Ok(RolloutPolicy {
             strategy: s.kind,
             replacement: s.replacement,
@@ -591,17 +624,21 @@ impl ArtifactSpec {
     pub fn resolve(&self, runtime: Runtime) -> Result<ArtifactRef, DocError> {
         let count =
             usize::from(self.image.is_some()) + usize::from(self.git.is_some()) + usize::from(self.archive.is_some());
+
         if count != 1 {
             return Err(DocError::new("spec.artifact", "exactly one of image, git and archive"));
         }
+
         if let Some(image) = &self.image {
             if runtime != Runtime::Container {
                 return Err(DocError::new("spec.artifact.image", "an image needs runtime: container"));
             }
+
             let (name, inline_digest) = match image.split_once('@') {
                 Some((n, d)) => (n.to_owned(), Some(d.to_owned())),
                 None => (image.clone(), None),
             };
+
             let digest = match (inline_digest, &self.digest) {
                 (Some(a), Some(b)) if a != *b => {
                     return Err(DocError::new("spec.artifact.digest", "differs from the digest in image"));
@@ -609,45 +646,58 @@ impl ArtifactSpec {
                 (Some(a), _) => Some(a),
                 (None, b) => b.clone(),
             };
+
             if let Some(d) = &digest
                 && !d.strip_prefix("sha256:").is_some_and(|h| hex(h, 64))
             {
                 return Err(DocError::new("spec.artifact.digest", "sha256: and 64 lower-case hex digits"));
             }
+
             let probe = format!("{name}{}", digest.as_ref().map(|d| format!("@{d}")).unwrap_or_default());
             if !crate::apps::valid_image_ref(&probe) {
                 return Err(DocError::new("spec.artifact.image", "not an image reference"));
             }
+
             return Ok(ArtifactRef::Image { image: name, digest });
         }
+
         if runtime == Runtime::Container {
             return Err(DocError::new("spec.artifact", "a container runs an image"));
         }
+
         if let Some(g) = &self.git {
             if !https_url(&g.repo) {
                 return Err(DocError::new("spec.artifact.git.repo", "an https:// URL"));
             }
+
             if !hex(&g.commit, 40) {
                 return Err(DocError::new("spec.artifact.git.commit", "the full 40-character commit SHA, lower case"));
             }
+
             if !valid_subpath(&g.path) {
                 return Err(DocError::new("spec.artifact.git.path", "a relative folder without .."));
             }
+
             return Ok(ArtifactRef::Git { repo: g.repo.clone(), commit: g.commit.clone(), path: g.path.clone() });
         }
+
         let Some(a) = &self.archive else { return Err(DocError::new("spec.artifact", "missing")) };
         if !https_url(&a.url) {
             return Err(DocError::new("spec.artifact.archive.url", "an https:// URL"));
         }
+
         if !hex(&a.sha256, 64) {
             return Err(DocError::new("spec.artifact.archive.sha256", "64 lower-case hex digits"));
         }
+
         if a.strip_components > 8 {
             return Err(DocError::new("spec.artifact.archive.stripComponents", "at most 8"));
         }
+
         if ArchiveKind::of(&a.url).is_none() {
             return Err(DocError::new("spec.artifact.archive.url", "a .tar.gz, .tgz, .tar or .zip file"));
         }
+
         Ok(ArtifactRef::Archive { url: a.url.clone(), sha256: a.sha256.clone(), strip_components: a.strip_components })
     }
 }
@@ -729,6 +779,7 @@ impl ArtifactRef {
                 if !crate::apps::valid_image_ref(image) {
                     return Err("not an image reference".into());
                 }
+
                 if digest.as_deref().is_some_and(|d| !d.strip_prefix("sha256:").is_some_and(|h| hex(h, 64))) {
                     return Err("the digest must be sha256: and 64 hex digits".into());
                 }
@@ -737,9 +788,11 @@ impl ArtifactRef {
                 if !https_url(repo) || repo.contains(['\'', '"', ' ']) {
                     return Err("the repository must be an https:// URL".into());
                 }
+
                 if !hex(commit, 40) {
                     return Err("the commit must be a full 40-character SHA".into());
                 }
+
                 if !valid_subpath(path) {
                     return Err("the path must be a relative folder without ..".into());
                 }
@@ -748,17 +801,21 @@ impl ArtifactRef {
                 if !https_url(url) {
                     return Err("the archive must be an https:// URL".into());
                 }
+
                 if !hex(sha256, 64) {
                     return Err("sha256 must be 64 lower-case hex digits".into());
                 }
+
                 if *strip_components > 8 {
                     return Err("strip at most 8 leading folders".into());
                 }
+
                 if ArchiveKind::of(url).is_none() {
                     return Err("the archive must be a .tar.gz, .tgz, .tar or .zip".into());
                 }
             }
         }
+
         Ok(())
     }
 }
@@ -905,12 +962,15 @@ pub fn published_host_ports(ports: &[String]) -> Vec<u16> {
 pub fn into_slot(spec: &mut crate::AppSpec, slot: Slot, slot_ports: &[u16]) -> Result<BTreeMap<u16, u16>, String> {
     let mut map = BTreeMap::new();
     spec.slot = slot.as_str().to_owned();
+
     match spec.runtime {
         Runtime::Container => {
             if slot_ports.len() < spec.ports.len() {
                 return Err("not enough slot ports".into());
             }
+
             let mut out = Vec::with_capacity(spec.ports.len());
+
             for (p, slot_port) in spec.ports.iter().zip(slot_ports) {
                 let (body, proto) = p.split_once('/').map_or((p.as_str(), None), |(b, pr)| (b, Some(pr)));
                 let parts: Vec<&str> = body.split(':').collect();
@@ -919,18 +979,23 @@ pub fn into_slot(spec: &mut crate::AppSpec, slot: Slot, slot_ports: &[u16]) -> R
                     [ip, h, c] => (Some(*ip), *h, *c),
                     _ => return Err(format!("invalid port mapping `{p}`")),
                 };
+
                 let host: u16 = host.parse().map_err(|_| format!("invalid port mapping `{p}`"))?;
                 map.insert(host, *slot_port);
+
                 let mut m = match ip {
                     Some(ip) => format!("{ip}:{slot_port}:{ctr}"),
                     None => format!("{slot_port}:{ctr}"),
                 };
+
                 if let Some(pr) = proto {
                     m.push('/');
                     m.push_str(pr);
                 }
+
                 out.push(m);
             }
+
             spec.ports = out;
         }
         Runtime::Systemd => {
@@ -943,15 +1008,18 @@ pub fn into_slot(spec: &mut crate::AppSpec, slot: Slot, slot_ports: &[u16]) -> R
             }
         }
     }
+
     if let Some(h) = spec.health.as_mut() {
         retarget(h, &map);
     }
+
     Ok(map)
 }
 
 /// Moves HTTP and TCP probes of the workload from service ports to slot ports.
 pub fn retarget(policy: &mut crate::health::HealthPolicy, map: &BTreeMap<u16, u16>) {
     use crate::health::Probe;
+
     for c in policy.startup.iter_mut().chain(policy.readiness.iter_mut()).chain(policy.liveness.iter_mut()) {
         match &mut c.probe {
             Probe::Http(h) if crate::health::workload_host(&h.host) => {
@@ -1047,6 +1115,7 @@ impl Step {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
+
         match self {
             Self::Start { targets } => format!("start the release on {}", copies(targets)),
             Self::Gate { targets } => format!("wait until {} is ready and stable", copies(targets)),
@@ -1103,12 +1172,15 @@ impl std::fmt::Display for PlanError {
 /// side-by-side copies nobody can reach, and downtime nobody accepted.
 pub fn plan(input: &PlanInput) -> Result<Plan, PlanError> {
     let p = &input.policy;
+
     if input.nodes.is_empty() {
         return Err(PlanError("the service is not placed on any node".into()));
     }
+
     if input.nodes.len() > MAX_NODES {
         return Err(PlanError(format!("at most {MAX_NODES} nodes per deployment")));
     }
+
     let offline: Vec<&str> = input.nodes.iter().filter(|n| !n.online).map(|n| n.name.as_str()).collect();
     if !offline.is_empty() {
         return Err(PlanError(format!(
@@ -1117,6 +1189,7 @@ pub fn plan(input: &PlanInput) -> Result<Plan, PlanError> {
             if offline.len() == 1 { "it" } else { "them" }
         )));
     }
+
     let mut notes = Vec::new();
     let slotted = p.slotted();
     if slotted && !input.routed {
@@ -1134,11 +1207,13 @@ pub fn plan(input: &PlanInput) -> Result<Plan, PlanError> {
             )
         }));
     }
+
     if slotted && input.runtime == Runtime::Systemd && input.has_ports {
         notes.push(
             "each copy gets its own port in $PORT (and listen_port): the service must listen on $PORT".to_owned(),
         );
     }
+
     let new_slot = |n: &PlanNode| -> Option<Slot> {
         if slotted {
             Some(match n.serving {
@@ -1151,6 +1226,7 @@ pub fn plan(input: &PlanInput) -> Result<Plan, PlanError> {
     };
     let targets: Vec<Target> =
         input.nodes.iter().map(|n| Target { server_id: n.server_id.clone(), slot: new_slot(n) }).collect();
+
     // Copies that serve now and are replaced by another slot.
     let old_of = |n: &PlanNode| -> Option<Target> {
         match n.serving {
@@ -1160,12 +1236,15 @@ pub fn plan(input: &PlanInput) -> Result<Plan, PlanError> {
     };
     let weights = |nodes: &[&PlanNode], new: u32| -> Vec<Weight> {
         let mut w = Vec::new();
+
         for n in nodes {
             w.push(Weight { server_id: n.server_id.clone(), slot: new_slot(n), weight: new });
+
             if let Some(o) = old_of(n) {
                 w.push(Weight { server_id: o.server_id, slot: o.slot, weight: 100 - new });
             }
         }
+
         w
     };
     let target_of = |n: &PlanNode| Target { server_id: n.server_id.clone(), slot: new_slot(n) };
@@ -1179,6 +1258,7 @@ pub fn plan(input: &PlanInput) -> Result<Plan, PlanError> {
         }
     };
     let mut downtime = false;
+
     match (p.strategy, slotted) {
         (Strategy::Recreate, _) => {
             downtime = all.iter().any(|n| n.serving.is_some());
@@ -1186,9 +1266,11 @@ pub fn plan(input: &PlanInput) -> Result<Plan, PlanError> {
             let ts: Vec<Target> = all.iter().map(|n| target_of(n)).collect();
             steps.push(Step::Start { targets: ts.clone() });
             steps.push(Step::Gate { targets: ts });
+
             if input.routed {
                 steps.push(Step::Route { weights: weights(&all, 100) });
             }
+
             notes.push("recreate replaces every copy at once: requests fail until the new release is up".into());
         }
         (Strategy::Rolling | Strategy::Manual, false) => {
@@ -1201,22 +1283,28 @@ pub fn plan(input: &PlanInput) -> Result<Plan, PlanError> {
                         if all.len() == 1 { "one node".to_owned() } else { format!("batches of {batch}") }
                     )));
                 }
+
                 downtime = true;
                 notes.push("every running copy is replaced at once: requests fail meanwhile (allowDowntime)".into());
             }
+
             approve_first(&mut steps);
+
             for (i, chunk) in all.chunks(batch).enumerate() {
                 if p.strategy == Strategy::Manual && !(i == 0 && p.approval) {
                     steps.push(Step::Approve { reason: format!("batch {}", i + 1) });
                 }
+
                 let ts: Vec<Target> = chunk.iter().map(|n| target_of(n)).collect();
                 let running: Vec<&PlanNode> = chunk.iter().copied().filter(|n| n.serving.is_some()).collect();
                 if input.routed && !running.is_empty() && all.len() > chunk.len() {
                     steps.push(Step::Route { weights: weights(&running, 0) });
                     steps.push(drain("in-flight requests finish"));
                 }
+
                 steps.push(Step::Start { targets: ts.clone() });
                 steps.push(Step::Gate { targets: ts });
+
                 if input.routed {
                     steps.push(Step::Route { weights: weights(chunk, 100) });
                 }
@@ -1224,10 +1312,12 @@ pub fn plan(input: &PlanInput) -> Result<Plan, PlanError> {
         }
         (Strategy::Rolling | Strategy::Manual, true) => {
             approve_first(&mut steps);
+
             for (i, chunk) in all.chunks(batch).enumerate() {
                 if p.strategy == Strategy::Manual && !(i == 0 && p.approval) {
                     steps.push(Step::Approve { reason: format!("batch {}", i + 1) });
                 }
+
                 let ts: Vec<Target> = chunk.iter().map(|n| target_of(n)).collect();
                 steps.push(Step::Start { targets: ts.clone() });
                 steps.push(Step::Gate { targets: ts });
@@ -1250,6 +1340,7 @@ pub fn plan(input: &PlanInput) -> Result<Plan, PlanError> {
                 steps.push(drain("the old release finishes its requests"));
                 steps.push(Step::Stop { targets: old });
             }
+
             notes.push("every node runs both releases until traffic switches at once".into());
         }
         (Strategy::Canary, _) => {
@@ -1258,12 +1349,15 @@ pub fn plan(input: &PlanInput) -> Result<Plan, PlanError> {
             steps.push(Step::Gate { targets: ts });
             approve_first(&mut steps);
             let first_release = all.iter().all(|n| n.serving.is_none());
+
             for st in &p.steps {
                 if first_release && st.weight < 100 {
                     // Nothing to compare with: the first release takes all traffic.
                     continue;
                 }
+
                 steps.push(Step::Route { weights: weights(&all, st.weight) });
+
                 if st.pause.0 > 0 || st.analysis.is_some() {
                     steps.push(Step::Wait {
                         secs: st.pause.0,
@@ -1271,13 +1365,16 @@ pub fn plan(input: &PlanInput) -> Result<Plan, PlanError> {
                         analysis: st.analysis.clone(),
                     });
                 }
+
                 if st.approval {
                     steps.push(Step::Approve { reason: format!("canary at {}%", st.weight) });
                 }
             }
+
             if p.steps.last().is_none_or(|s| s.weight < 100) || first_release {
                 steps.push(Step::Route { weights: weights(&all, 100) });
             }
+
             let old: Vec<Target> = all.iter().filter_map(|n| old_of(n)).collect();
             if !old.is_empty() {
                 steps.push(drain("the old release finishes its requests"));
@@ -1285,6 +1382,7 @@ pub fn plan(input: &PlanInput) -> Result<Plan, PlanError> {
             }
         }
     }
+
     // Back-to-back routes become one: the later weight of a copy wins.
     steps.dedup_by(|later, earlier| match (earlier, later) {
         (Step::Route { weights: first }, Step::Route { weights: second }) => {
@@ -1294,13 +1392,16 @@ pub fn plan(input: &PlanInput) -> Result<Plan, PlanError> {
                     None => first.push(w),
                 }
             }
+
             true
         }
         _ => false,
     });
+
     if !input.routed && input.has_ports && !downtime {
         notes.push("no Forge endpoint routes to this service: clients reach each node directly".into());
     }
+
     Ok(Plan { strategy: p.strategy, slotted, steps, downtime, notes, targets })
 }
 

@@ -11,12 +11,14 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 /// Answers host calls for one invocation.
 #[async_trait]
 pub trait HostCalls: Send + Sync {
+    /// Answers one host function call.
     async fn call(&self, function: &str, args: Value) -> Result<Value, String>;
 }
 
 /// Executes a component invocation in isolation.
 #[async_trait]
 pub trait PluginRunner: Send + Sync + std::fmt::Debug {
+    /// Runs one invocation, answering its host calls through `host`.
     async fn run(&self, req: RunRequest, host: &dyn HostCalls) -> DomainResult<RunnerMessage>;
 }
 
@@ -29,6 +31,7 @@ pub struct ProcessRunner {
 }
 
 impl ProcessRunner {
+    /// Creates a runner that spawns `binary`.
     #[must_use]
     pub fn new(binary: PathBuf) -> Self {
         Self { binary, startup_grace: Duration::from_secs(5) }
@@ -59,6 +62,7 @@ impl PluginRunner for ProcessRunner {
         let conversation = async {
             stdin.write_all(first.as_bytes()).await.map_err(DomainError::internal)?;
             stdin.flush().await.map_err(DomainError::internal)?;
+
             loop {
                 let mut line = String::new();
                 let n = (&mut lines).take(MAX_LINE).read_line(&mut line).await.map_err(DomainError::internal)?;
@@ -68,6 +72,7 @@ impl PluginRunner for ProcessRunner {
                         message: "runner exited unexpectedly".into(),
                     });
                 }
+
                 let msg: RunnerMessage = match serde_json::from_str(&line) {
                     Ok(m) => m,
                     Err(_) => {
@@ -77,12 +82,14 @@ impl PluginRunner for ProcessRunner {
                         });
                     }
                 };
+
                 match msg {
                     RunnerMessage::HostCall { id, function, args } => {
                         let reply = match host.call(&function, args).await {
                             Ok(v) => HostReply { id, result: Some(v), error: None },
                             Err(e) => HostReply { id, result: None, error: Some(e) },
                         };
+
                         let mut out = serde_json::to_string(&reply).map_err(DomainError::internal)?;
                         out.push('\n');
                         stdin.write_all(out.as_bytes()).await.map_err(DomainError::internal)?;
@@ -99,9 +106,11 @@ impl PluginRunner for ProcessRunner {
                 Ok(RunnerMessage::Failed { kind: FailureKind::Timeout, message: "wall-clock deadline exceeded".into() })
             }
         };
+
         // Always reap the process; kill it if it is still running.
         let _ = child.start_kill();
         let _ = child.wait().await;
+
         outcome
     }
 }

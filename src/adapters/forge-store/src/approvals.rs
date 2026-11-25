@@ -89,6 +89,7 @@ impl ApprovalRepository for Store {
             }
         }
         .map_err(db_err)?;
+
         rows.iter().map(approval_row).collect()
     }
 
@@ -147,6 +148,7 @@ impl ApprovalRepository for Store {
                 .execute(self.pool())
                 .await
                 .map_err(db_err)?;
+
         Ok(expired.rows_affected() + dropped.rows_affected())
     }
 
@@ -162,8 +164,10 @@ impl ApprovalRepository for Store {
             .await
             .map_err(db_err)?;
         let mut cancelled = Vec::new();
+
         for r in &rows {
             let id = text(r, "id")?;
+
             // Same guard as deciding: one that was approved meanwhile is left alone.
             let res = sqlx::query(
                 "UPDATE approvals SET status = 'cancelled', decided_by = $1, decided_at = $2
@@ -175,10 +179,12 @@ impl ApprovalRepository for Store {
             .execute(self.pool())
             .await
             .map_err(db_err)?;
+
             if res.rows_affected() == 1 {
                 cancelled.push(id);
             }
         }
+
         Ok(cancelled)
     }
 }

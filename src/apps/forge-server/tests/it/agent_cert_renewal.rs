@@ -4,7 +4,6 @@
 
 use std::time::Duration;
 
-use crate::common::*;
 use forge_agent::enroll::{HostFacts, enroll};
 use forge_agent::link::{Endpoint, Link};
 use forge_agent::{AgentConfig, StatePaths, tls};
@@ -14,6 +13,8 @@ use forge_pki::{AGENT_CERT_VALIDITY, AgentCsr};
 use forge_proto::messages::{Heartbeat, RenewRequest, RenewResponse};
 use prost::Message;
 use serde_json::json;
+
+use crate::common::*;
 
 struct Creds {
     key_pem: String,
@@ -27,6 +28,7 @@ fn issue(h: &Harness, server: &str, age: Duration) -> Creds {
     let csr = AgentCsr::generate("renewal-test").unwrap();
     let issued_at = h.app.state.clock.now().minus(age);
     let c = h.app.state.ca.issue_agent_certificate(&csr.csr_pem, server, issued_at, AGENT_CERT_VALIDITY).unwrap();
+
     Creds { key_pem: csr.key_pem, cert_pem: c.cert_pem, serial: c.serial_hex }
 }
 
@@ -39,6 +41,7 @@ async fn renew(h: &Harness, c: &Creds) -> anyhow::Result<RenewResponse> {
     let csr = AgentCsr::generate("renewal-test").unwrap();
     let body = RenewRequest { csr_pem: csr.csr_pem }.encode_to_vec();
     let raw = link(h, c).request(http::Method::POST, forge_proto::paths::RENEW, body).await?;
+
     Ok(RenewResponse::decode(raw.as_slice())?)
 }
 

@@ -50,12 +50,15 @@ pub struct TelemetryRequest {
 impl TelemetryRequest {
     pub fn validate(&self) -> Result<(), String> {
         use forge_proto::messages::{MAX_CONTAINER_EXCLUDES, MAX_CONTAINER_FIELD_BYTES};
+
         if self.exclude.len() > MAX_CONTAINER_EXCLUDES {
             return Err(format!("at most {MAX_CONTAINER_EXCLUDES} exclude entries"));
         }
+
         if self.exclude.iter().any(|e| e.is_empty() || e.len() > MAX_CONTAINER_FIELD_BYTES) {
             return Err("an exclude entry is 1 to 256 bytes".into());
         }
+
         Ok(())
     }
 }
@@ -170,11 +173,14 @@ pub fn parse_ts_ns(s: &str) -> Option<i64> {
         Some((a, b)) => (a.to_owned() + "Z", b.trim_end_matches('Z')),
         None => (s.to_owned(), ""),
     };
+
     if !frac.bytes().all(|b| b.is_ascii_digit()) || frac.len() > 9 {
         return None;
     }
+
     let ms = forge_core::logs::parse_rfc3339_ms(&secs)?;
     let nanos: i64 = if frac.is_empty() { 0 } else { format!("{frac:0<9}").parse().ok()? };
+
     ms.checked_mul(1_000_000)?.checked_add(nanos)
 }
 
@@ -187,6 +193,7 @@ pub fn split_timestamp(raw: &[u8]) -> Option<(i64, String)> {
     if text.last() == Some(&b'\r') {
         text = &text[..text.len() - 1];
     }
+
     Some((ts, String::from_utf8_lossy(text).into_owned()))
 }
 
@@ -211,35 +218,44 @@ impl Demux {
     /// Feeds a chunk; returns the lines it completed (without newline).
     pub fn push(&mut self, chunk: &[u8]) -> Vec<(Stream, Vec<u8>)> {
         let mut out = Vec::new();
+
         if self.tty {
             self.text(Stream::Stdout, chunk, &mut out);
             return out;
         }
+
         self.pending.extend_from_slice(chunk);
         let mut i = 0;
+
         while self.pending.len() - i >= 8 {
             let h = &self.pending[i..i + 8];
             let len = u32::from_be_bytes([h[4], h[5], h[6], h[7]]) as usize;
             if self.pending.len() - i - 8 < len {
                 break;
             }
+
             let stream = if h[0] == 2 { Stream::Stderr } else { Stream::Stdout };
             let body = self.pending[i + 8..i + 8 + len].to_vec();
             self.text(stream, &body, &mut out);
             i += 8 + len;
         }
+
         self.pending.drain(..i);
+
         out
     }
 
     fn text(&mut self, stream: Stream, mut data: &[u8], out: &mut Vec<(Stream, Vec<u8>)>) {
         let part = &mut self.partial[usize::from(stream == Stream::Stderr)];
+
         while let Some(nl) = data.iter().position(|b| *b == b'\n') {
             part.extend_from_slice(&data[..nl]);
             out.push((stream, std::mem::take(part)));
             data = &data[nl + 1..];
         }
+
         part.extend_from_slice(data);
+
         // A line that never ends is cut, so memory stays bounded.
         if part.len() > MAX_PARTIAL {
             out.push((stream, std::mem::take(part)));
@@ -257,6 +273,7 @@ impl Cursors {
     pub fn advance(&mut self, id: &str, ts: i64) {
         let e = self.0.entry(id.to_owned()).or_insert(ts);
         *e = (*e).max(ts);
+
         // Bounded: the oldest positions go first.
         while self.0.len() > MAX_CURSORS {
             let Some(oldest) = self.0.iter().min_by_key(|(_, t)| **t).map(|(k, _)| k.clone()) else { break };
@@ -306,14 +323,17 @@ impl Buffer {
         if self.resume_after(&line.container.id).is_some_and(|t| line.ts_ns <= t) {
             return false;
         }
+
         self.read.insert(line.container.id.clone(), line.ts_ns);
         self.bytes += line.line.len();
         self.lines.push_back(line);
+
         while self.lines.len() > MAX_BUFFER_LINES || self.bytes > MAX_BUFFER_BYTES {
             let Some(old) = self.lines.pop_front() else { break };
             self.bytes -= old.line.len();
             self.dropped += 1;
         }
+
         true
     }
 
@@ -322,14 +342,17 @@ impl Buffer {
     /// cursors changed (to be saved).
     pub fn take(&mut self, ack: u64, max: usize) -> (Option<Batch>, bool) {
         let mut changed = false;
+
         if ack != 0
             && let Some(p) = self.pending.take_if(|p| p.seq == ack)
         {
             for l in &p.lines {
                 self.committed.advance(&l.container.id, l.ts_ns);
             }
+
             changed = !p.lines.is_empty();
         }
+
         if self.pending.is_none() && (!self.lines.is_empty() || self.dropped > 0) {
             let n = self.lines.len().min(max);
             let lines: Vec<Line> = self.lines.drain(..n).collect();
@@ -337,6 +360,7 @@ impl Buffer {
             self.seq += 1;
             self.pending = Some(Batch { seq: self.seq, lines, dropped: std::mem::take(&mut self.dropped) });
         }
+
         (self.pending.clone(), changed)
     }
 
@@ -499,17 +523,22 @@ mod collector {
         pub async fn handle(&self, req: TelemetryRequest) -> Result<TelemetryResponse, String> {
             req.validate()?;
             self.configure(&req).await;
+
             if !req.enabled {
                 return Ok(TelemetryResponse::default());
             }
+
             let (batch, changed, samples) = self.with(|s| {
                 let (b, c) = s.buffer.take(req.ack, forge_proto::messages::MAX_CONTAINER_LOG_LINES);
                 (b, c, std::mem::take(&mut s.samples))
             });
+
             if changed {
                 self.save().await;
             }
+
             let bridge_gateway = self.bridge_gateway().await;
+
             Ok(TelemetryResponse { batch, samples, bridge_gateway })
         }
 
@@ -534,10 +563,13 @@ mod collector {
             }
             let (status, body) =
                 crate::docker::call_at(&self.socket, "GET", "/networks/bridge", None, QUICK).await.ok()?;
+
             if status != 200 {
                 return None;
             }
+
             let n: Network = serde_json::from_slice(&body).ok()?;
+
             n.ipam
                 .config
                 .unwrap_or_default()
@@ -552,12 +584,15 @@ mod collector {
             let same = run.as_ref().is_some_and(|(r, h)| {
                 r.enabled == req.enabled && r.exclude == req.exclude && (!r.enabled || !h.is_finished())
             });
+
             if same {
                 return;
             }
+
             if let Some((_, h)) = run.take() {
                 h.abort();
             }
+
             if req.enabled {
                 let me = self.clone();
                 let exclude = req.exclude.clone();
@@ -580,6 +615,7 @@ mod collector {
                 crate::self_update::write_nofollow(&dir.join(CURSOR_FILE), &data)
             })
             .await;
+
             match r {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => eprintln!("forge-agent-helper: saving container log cursors: {e}"),
@@ -593,10 +629,12 @@ mod collector {
             stats.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             let mut wait = RETRY;
             let mut last_error = String::new();
+
             loop {
                 let mut followers: HashMap<String, tokio::task::AbortHandle> = HashMap::new();
                 let mut tasks = JoinSet::new();
                 let started = Instant::now();
+
                 if let Err(e) = self.watch(&exclude, &mut followers, &mut tasks, &mut stats).await {
                     // Said once, not every retry (a node without Docker).
                     if e != last_error {
@@ -604,6 +642,7 @@ mod collector {
                         last_error = e;
                     }
                 }
+
                 // Dropping the set stops every follower; positions are kept.
                 drop(tasks);
                 wait = if started.elapsed() > MAX_RETRY { RETRY } else { (wait * 2).min(MAX_RETRY) };
@@ -626,16 +665,21 @@ mod collector {
             let mut events = crate::docker::stream_at(&self.socket, &path, QUICK)
                 .await?
                 .ok_or_else(|| "Docker has no events endpoint".to_owned())?;
+
             // Containers already running when the watch starts.
             let (status, body) = crate::docker::call_at(&self.socket, "GET", "/containers/json", None, QUICK).await?;
             if status != 200 {
                 return Err(crate::docker::docker_error(status, &body));
             }
+
             let running: Vec<Listed> = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+
             for c in running {
                 self.follow(c.id, exclude, followers, tasks);
             }
+
             let mut partial: Vec<u8> = Vec::new();
+
             loop {
                 tokio::select! {
                     frame = events.frame() => {
@@ -673,6 +717,7 @@ mod collector {
             if !crate::helper::valid_container_id(&id) || followers.get(&id).is_some_and(|h| !h.is_finished()) {
                 return;
             }
+
             let me = self.clone();
             let exclude = exclude.to_vec();
             let key = id.clone();
@@ -687,6 +732,7 @@ mod collector {
         async fn inspect(&self, id: &str) -> Result<Option<Inspect>, String> {
             let (status, body) =
                 crate::docker::call_at(&self.socket, "GET", &format!("/containers/{id}/json"), None, QUICK).await?;
+
             match status {
                 200 => serde_json::from_slice(&body).map(Some).map_err(|e| e.to_string()),
                 404 => Ok(None),
@@ -699,8 +745,10 @@ mod collector {
             if c.excluded(exclude) {
                 return Ok(());
             }
+
             let meta = c.meta();
             let after = self.with(|s| s.buffer.resume_after(&meta.id));
+
             // `since` is whole seconds at most this precise; lines up to the
             // resume point are skipped by the buffer.
             let since = after
@@ -709,6 +757,7 @@ mod collector {
             let path = format!("/containers/{id}/logs?follow=1&stdout=1&stderr=1&timestamps=1{since}");
             let Some(mut body) = crate::docker::stream_at(&self.socket, &path, QUICK).await? else { return Ok(()) };
             let mut demux = Demux::new(c.config.tty);
+
             while let Some(frame) = body.frame().await {
                 let frame = frame.map_err(|e| e.to_string())?;
                 let Ok(data) = frame.into_data() else { continue };
@@ -720,6 +769,7 @@ mod collector {
                         Some(Line { container: meta.clone(), stream, ts_ns, line })
                     })
                     .collect();
+
                 if !lines.is_empty() {
                     self.with(|s| {
                         for l in lines {
@@ -728,6 +778,7 @@ mod collector {
                     });
                 }
             }
+
             Ok(())
         }
 
@@ -746,26 +797,33 @@ mod collector {
             else {
                 return;
             };
+
             let Ok(running) = serde_json::from_slice::<Vec<Listed>>(&body) else { return };
             let mut out = Vec::new();
+
             for c in running.into_iter().take(forge_proto::messages::MAX_CONTAINER_SAMPLES) {
                 if !crate::helper::valid_container_id(&c.id) {
                     continue;
                 }
+
                 let Ok(Some(i)) = self.inspect(&c.id).await else { continue };
                 if i.excluded(exclude) {
                     continue;
                 }
+
                 let path = format!("/containers/{}/stats?stream=false", c.id);
+
                 let Ok((200, raw)) = crate::docker::call_at(&self.socket, "GET", &path, None, QUICK).await else {
                     continue;
                 };
+
                 let Ok(stats) = serde_json::from_slice::<Value>(&raw) else { continue };
                 let meta = i.meta();
                 let now = Counters { at: Instant::now(), ..counters(&stats) };
                 let prev = self.with(|s| s.counters.insert(meta.id.clone(), now));
                 out.push(sample(meta, i.restarts, &stats, prev, now));
             }
+
             self.with(|s| s.samples = out);
         }
     }
@@ -783,13 +841,16 @@ mod collector {
     /// Network and block-device byte counters of a stats answer.
     fn counters(s: &Value) -> Counters {
         let (mut rx, mut tx) = (0u64, 0u64);
+
         if let Some(nets) = s.get("networks").and_then(Value::as_object) {
             for n in nets.values() {
                 rx = rx.saturating_add(u(n, "/rx_bytes"));
                 tx = tx.saturating_add(u(n, "/tx_bytes"));
             }
         }
+
         let (mut read, mut write) = (0u64, 0u64);
+
         for e in s.pointer("/blkio_stats/io_service_bytes_recursive").and_then(Value::as_array).into_iter().flatten() {
             match e.get("op").and_then(Value::as_str).map(str::to_ascii_lowercase).as_deref() {
                 Some("read") => read = read.saturating_add(u(e, "/value")),
@@ -797,6 +858,7 @@ mod collector {
                 _ => {}
             }
         }
+
         Counters { at: Instant::now(), rx, tx, read, write }
     }
 
@@ -810,13 +872,16 @@ mod collector {
             }
             None => 0,
         };
+
         let usage = u(s, "/memory_stats/usage");
+
         // The page cache Docker's CLI leaves out (cgroup v2, then v1).
         let cache = s
             .pointer("/memory_stats/stats/inactive_file")
             .or_else(|| s.pointer("/memory_stats/stats/total_inactive_file"))
             .and_then(Value::as_u64)
             .unwrap_or(0);
+
         #[allow(clippy::cast_possible_truncation)] // reason: a percentage fits f32
         let cpu = crate::docker::stats_cpu_percent(s) as f32;
         Sample {
@@ -903,6 +968,7 @@ mod tests {
         let mut f = vec![stream, 0, 0, 0];
         f.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
         f.extend_from_slice(data);
+
         f
     }
 
@@ -919,12 +985,15 @@ mod tests {
         let mut raw = frame(1, b"2024-05-01T10:00:00.5Z out one\n2024-05-01T10:00:01Z out ");
         raw.extend(frame(2, b"2024-05-01T10:00:02Z err\n"));
         raw.extend(frame(1, b"two\n"));
+
         // Fed one byte at a time, the result is the same.
         let mut d = Demux::new(false);
         let mut got = Vec::new();
+
         for b in &raw {
             got.extend(d.push(std::slice::from_ref(b)));
         }
+
         let text: Vec<(Stream, String)> = got.into_iter().map(|(s, l)| (s, String::from_utf8(l).unwrap())).collect();
         assert_eq!(
             text,
@@ -979,9 +1048,11 @@ mod tests {
         let first = first.unwrap();
         assert_eq!((first.seq, first.lines.len(), changed), (1, 2, false));
         assert!(b.committed().0.is_empty(), "nothing is committed before the ack");
+
         // No ack (heartbeat failed): the same batch again.
         b.push(line("c1", 30));
         assert_eq!(b.take(0, 100).0.unwrap(), first);
+
         // A wrong ack changes nothing.
         assert_eq!(b.take(99, 100).0.unwrap(), first);
         let (next, changed) = b.take(1, 100);
@@ -996,9 +1067,11 @@ mod tests {
     fn resumes_after_a_restart_without_drops_or_duplicates() {
         // Run 1 stores up to 20; 30 was read but never acknowledged.
         let mut run1 = Buffer::new(Cursors::default());
+
         for t in [10, 20] {
             run1.push(line("c1", t));
         }
+
         run1.take(0, 100);
         run1.take(1, 100);
         run1.push(line("c1", 30));
@@ -1011,6 +1084,7 @@ mod tests {
         assert_eq!(taken, vec![false, false, true, true], "stored lines are skipped, the rest kept");
         let batch = run2.take(0, 100).0.unwrap();
         assert_eq!(batch.lines.iter().map(|l| l.ts_ns).collect::<Vec<_>>(), vec![30, 40]);
+
         // A follower restarted in the same run skips what it already read.
         assert_eq!(run2.resume_after("c1"), Some(40));
         assert!(!run2.push(line("c1", 40)));
@@ -1019,15 +1093,18 @@ mod tests {
     #[test]
     fn the_buffer_is_bounded_and_counts_drops() {
         let mut b = Buffer::new(Cursors::default());
+
         for t in 0..i64::try_from(MAX_BUFFER_LINES).unwrap() + 5 {
             b.push(line("c1", t + 1));
         }
+
         let batch = b.take(0, forge_proto::messages::MAX_CONTAINER_LOG_LINES).0.unwrap();
         assert_eq!(batch.dropped, 5);
         assert_eq!(batch.lines.len(), forge_proto::messages::MAX_CONTAINER_LOG_LINES);
         assert_eq!(batch.lines[0].ts_ns, 6, "the oldest went first");
         let rows: Vec<_> = rows::lines(&batch).collect();
         assert_eq!(rows.len(), forge_proto::messages::MAX_CONTAINER_LOG_LINES);
+
         match &rows[0] {
             forge_core::spool::Row::ContainerLog(l) => assert_eq!(l.ts, 0, "nanoseconds become milliseconds"),
             other => panic!("{other:?}"),
@@ -1040,9 +1117,11 @@ mod tests {
         c.advance("a", 5);
         c.advance("a", 3);
         assert_eq!(c.0["a"], 5, "never back");
+
         for i in 0..MAX_CURSORS + 3 {
             c.advance(&format!("k{i}"), i64::try_from(i).unwrap() + 10);
         }
+
         assert_eq!(c.0.len(), MAX_CURSORS);
         assert!(!c.0.contains_key("a"), "the oldest position went first");
         let mut b = Buffer::new(c);

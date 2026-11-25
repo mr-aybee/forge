@@ -67,14 +67,17 @@ pub async fn run(
     if !req.since.is_empty() && !forge_agent_since_ok(&req.since) {
         return Err(ApiError::bad_request("`since` must be a Unix time in seconds"));
     }
+
     if req.reveal_env && req.op != "inspect" {
         return Err(ApiError::bad_request("`reveal_env` applies to `inspect` only"));
     }
+
     let command = json!({
         "type": "container", "op": req.op, "id": req.id, "image": req.image, "tail": req.tail, "since": req.since,
         "reveal_env": req.reveal_env,
     });
     parse_command(&command).map_err(ApiError::bad_request)?;
+
     // Same rules as the node helper, so bad input fails fast with a 400.
     let id_ok = req.id.is_empty() || valid_container_id(&req.id);
     let image_ok = req.image.is_empty()
@@ -88,9 +91,11 @@ pub async fn run(
     if !id_ok || !image_ok || (needs_id && req.id.is_empty()) || (req.op == "pull" && req.image.is_empty()) {
         return Err(ApiError::bad_request("invalid container id or image reference"));
     }
+
     let server = state.store.get_server(server_id).await.map_err(|_| ApiError::not_found("server not found"))?;
     let resource = EntityRef::new(EntityKind::Server, server_id);
     let payload = json!({ "server_id": server_id, "command": command });
+
     // The job runner authorizes again before every step; checking here first
     // turns a denial (or a missing MFA step-up) into a plain 403 instead of
     // a failed job.
@@ -109,15 +114,18 @@ pub async fn run(
         })
         .await?;
     let deadline = tokio::time::Instant::now() + if req.op == "pull" { Duration::ZERO } else { QUICK_WAIT };
+
     loop {
         let j = state.store.get_job(job.id).await?;
         match j.status {
             JobStatus::Succeeded => {
                 let mut result = j.state.get("output").cloned().unwrap_or(Value::Null);
+
                 if req.reveal_env {
                     // The values were kept in memory for this call only.
                     let env =
                         state.hub.take_transient(&j.id.to_string()).and_then(|mut t| t.get_mut("env").map(Value::take));
+
                     let Some(env) = env else {
                         return Err(ApiError::new(
                             axum::http::StatusCode::CONFLICT,
@@ -125,10 +133,13 @@ pub async fn run(
                             "this node's agent does not return environment values; update the agent (Software → Updates → Agents)",
                         ));
                     };
+
                     let count = env.as_array().map_or(0, Vec::len);
+
                     if let Some(o) = result.as_object_mut() {
                         o.insert("env".into(), env);
                     }
+
                     caller
                         .audit(
                             "container.env.reveal",
@@ -138,6 +149,7 @@ pub async fn run(
                         )
                         .await;
                 }
+
                 return Ok(Json(json!({ "job_id": j.id, "status": "succeeded", "result": result })));
             }
             JobStatus::Failed | JobStatus::Cancelled => {

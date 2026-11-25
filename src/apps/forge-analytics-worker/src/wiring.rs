@@ -86,11 +86,13 @@ pub const DUCKDB_DEFAULT_THREADS: u32 = 2;
 async fn store(config: &WorkerConfig, password: Option<&str>, clock: Arc<dyn Clock>) -> anyhow::Result<Stores> {
     // One batch: what queued while the last one was written, up to the insert size.
     let batch_rows = usize::try_from(config.tuning.ingest_max_batch_rows).unwrap_or(20_000);
+
     let target = match &config.store {
         StoreSelection::Memory => return Ok(Stores::of(Arc::new(MemoryStore::default()))),
         StoreSelection::Duckdb { dir } => {
             let cfg = DuckDbConfig { dir: dir.clone(), limits: duck_limits(&config.tuning), batch_rows };
             let duck = tokio::task::spawn_blocking(move || DuckDb::open(&cfg, clock)).await??;
+
             return Ok(Stores { store: duck.clone(), spool: Some(duck.clone()), managed: None, duck: Some(duck) });
         }
         StoreSelection::Clickhouse { url } => ClickHouseTarget::from_url(url, password, "clickhouse"),
@@ -106,10 +108,12 @@ async fn store(config: &WorkerConfig, password: Option<&str>, clock: Arc<dyn Clo
             let managed = Arc::new(ManagedEngine::new((**paths).clone(), *port));
             let store =
                 ClickHouse::new(target.map_err(|e| anyhow::anyhow!("{e}"))?).map_err(|e| anyhow::anyhow!("{e}"))?;
+
             return Ok(Stores { managed: Some(managed), ..clickhouse(store, batch_rows) });
         }
     }
     .map_err(|e| anyhow::anyhow!("{e}"))?;
+
     Ok(clickhouse(ClickHouse::new(target).map_err(|e| anyhow::anyhow!("{e}"))?, batch_rows))
 }
 
@@ -165,6 +169,7 @@ impl Worker {
             tuning: tuning_tx,
             duck: duck.clone(),
         }));
+
         Self {
             analytics,
             ingest,
@@ -190,9 +195,11 @@ impl Worker {
         if let Some(u) = self.uploads.get() {
             return Ok(u.clone());
         }
+
         let seen = crate::ingest::seen::SeenLog::open(state_dir)?;
         let u =
             Arc::new(crate::ingest::upload::Uploads::new(self.ingest.clone(), seen, max_uploads, self.clock.clone()));
+
         Ok(self.uploads.get_or_init(|| u).clone())
     }
 
@@ -206,7 +213,9 @@ impl Worker {
         if let Some(t) = self.listener_tls.get() {
             return Ok(t.clone());
         }
+
         let t = Arc::new(crate::ingest::upload::ListenerTls::new(ca_pem, &tls.cert_pem, &tls.key_pem)?);
+
         Ok(self.listener_tls.get_or_init(|| t).clone())
     }
 
@@ -223,12 +232,15 @@ impl Worker {
             tokio::spawn(crate::analytics::run(self.analytics.clone(), self.clock.clone(), shutdown.clone())),
             tokio::spawn(crate::control::run(self.control.clone(), shutdown.clone())),
         ];
+
         if let Some(duck) = &self.duck {
             tasks.push(tokio::spawn(duck.clone().run_jobs(shutdown.clone())));
         }
+
         if let Some(engine) = &self.managed {
             tasks.push(tokio::spawn(embedded::supervise(engine.clone(), self.tuning.clone(), shutdown.clone())));
         }
+
         tasks
     }
 
@@ -239,11 +251,13 @@ impl Worker {
             Request::Ping => Ok(Reply::Pong { pid: std::process::id() }),
             Request::PushMaps(m) => {
                 self.maps.replace(m).map_err(|e| WorkerError::Invalid { reason: e.to_string() })?;
+
                 // Ids of nodes that left are forgotten (in the background).
                 if let Some(u) = self.uploads.get() {
                     let u = u.clone();
                     tokio::spawn(async move { u.prune().await });
                 }
+
                 Ok(Reply::Ok)
             }
             Request::SetTuning(t) => {
@@ -272,6 +286,7 @@ impl Worker {
                 if split > blob.len() {
                     return Err(WorkerError::Protocol { reason: "metrics_len exceeds the payload".into() });
                 }
+
                 let (metrics, logs) = blob.split_at(split);
                 Ok(Reply::TelemetryAck { ack: self.ingest.telemetry(server, now, metrics, logs).await? })
             }

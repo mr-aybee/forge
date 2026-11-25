@@ -74,6 +74,7 @@ pub fn family(family: Family, db: &str) -> Vec<String> {
         Family::Processes => PROCESSES,
         Family::Rollups => ROLLUPS,
     };
+
     list.iter().map(|s| s.replace("{db}", db)).collect()
 }
 

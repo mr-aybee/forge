@@ -2,10 +2,11 @@
 //! auth and the custom configuration check.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::{ADMIN_EMAIL, Client, Harness, PASSWORD, start};
 use forge_core::model::{AgentStatus, NodeRole, Server};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::{ADMIN_EMAIL, Client, Harness, PASSWORD, start};
 
 async fn add_node(h: &Harness, hostname: &str) -> Server {
     let n = Server {
@@ -26,15 +27,18 @@ async fn add_node(h: &Harness, hostname: &str) -> Server {
         created_at: forge_core::Timestamp(0),
     };
     forge_core::ports::ServerRepository::create_server(&h.app.state.store, &n).await.unwrap();
+
     n
 }
 
 fn on_node(name: &str, edge: &Server, extra: Value) -> Value {
     let mut v = json!({ "name": name, "domains": [format!("{name}.example.com")], "upstreams": ["10.0.0.5:8000"],
                         "placement": { "kind": "nodes", "server_ids": [edge.id] } });
+
     for (k, x) in extra.as_object().unwrap() {
         v[k] = x.clone();
     }
+
     v
 }
 
@@ -47,12 +51,14 @@ async fn placement_is_explicit_and_errors_say_what_is_missing() {
     assert_eq!(s, StatusCode::CREATED, "{b}");
     assert_eq!(b["config"]["placement"], json!({ "kind": "nodes", "server_ids": [edge.id] }));
     assert_eq!(b["config"]["edges"], json!([edge.id]), "older readers still see the edges");
+
     // No node chosen.
     let (s, e) = admin
         .post("/api/v1/sites", on_node("none", &edge, json!({ "placement": { "kind": "nodes", "server_ids": [] } })))
         .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
     assert!(e.to_string().contains("choose the node"), "{e}");
+
     // A cluster without an ingress profile.
     let (_, c) = admin.post("/api/v1/clusters", json!({ "name": "lab" })).await;
     let (s, e) = admin
@@ -63,6 +69,7 @@ async fn placement_is_explicit_and_errors_say_what_is_missing() {
         .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
     assert!(e.to_string().contains("ingress profile"), "{e}");
+
     // Older clients sending `edges` still work, and get a placement.
     let (s, b) = admin
         .post("/api/v1/sites", json!({ "name": "legacy", "domains": ["legacy.example.com"], "upstreams": ["10.0.0.5:80"], "edges": [edge.id] }))
@@ -127,6 +134,7 @@ async fn preview_renders_each_type_and_reports_custom_errors_by_line() {
     assert_eq!(s, StatusCode::OK, "{p}");
     assert_eq!(p["custom_error"]["line"], 2);
     assert_eq!(p["custom_error"]["directive"], "root");
+
     // A bad redirect URL is refused outright.
     let bad = on_node(
         "b",
@@ -167,6 +175,7 @@ async fn static_directories_must_be_inside_an_approved_root_on_every_edge() {
         .unwrap();
     let (s, b) = admin.post("/api/v1/sites", site("/srv/www/shop")).await;
     assert_eq!(s, StatusCode::CREATED, "{b}");
+
     // A sibling that only shares a name prefix, and /etc, are still refused.
     for bad in ["/srv/wwwx", "/etc"] {
         let mut v = site(bad);
@@ -192,6 +201,7 @@ async fn basic_auth_stores_only_hashes_and_never_returns_them() {
     let hash = stored.config["spec"]["access"]["basic_auth"]["users"][0]["hash"].as_str().unwrap().to_owned();
     assert!(hash.starts_with("$6$"));
     assert!(!stored.config.to_string().contains("s3cret"));
+
     // Saving the user without a password keeps the stored hash.
     let (s, b) = admin.put(&format!("/api/v1/sites/{id}"), auth(json!([{ "user": "ops" }]))).await;
     assert_eq!(s, StatusCode::OK, "{b}");
@@ -199,6 +209,7 @@ async fn basic_auth_stores_only_hashes_and_never_returns_them() {
     assert_eq!(again.config["spec"]["access"]["basic_auth"]["users"][0]["hash"], hash);
     let (_, list) = admin.get("/api/v1/sites").await;
     assert!(!list.to_string().contains("$6$"));
+
     // Logs are read only from the endpoint's own edges.
     let other = add_node(&h, "edge-2").await;
     let (s, _) = admin.get(&format!("/api/v1/sites/{id}/logs?server_id={}&log=access", other.id)).await;

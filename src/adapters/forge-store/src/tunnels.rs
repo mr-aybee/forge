@@ -23,6 +23,7 @@ fn ports_from_text(s: &str) -> Vec<u16> {
     if s == ALL_PORTS {
         return Vec::new();
     }
+
     s.split(',').filter_map(|p| p.trim().parse().ok()).collect()
 }
 

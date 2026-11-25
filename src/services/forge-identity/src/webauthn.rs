@@ -29,6 +29,7 @@ const ED: u8 = 0x80;
 /// Longest credential id accepted (the spec allows up to 1023 bytes).
 pub const MAX_CREDENTIAL_ID: usize = 1023;
 
+/// Errors from parsing or checking WebAuthn data.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum WebAuthnError {
     #[error("malformed passkey data: {0}")]
@@ -63,6 +64,7 @@ impl RelyingParty {
     pub fn from_public_url(url: &str) -> Result<Self, WebAuthnError> {
         let u = url::Url::parse(url).map_err(|_| WebAuthnError::Malformed("public_url".into()))?;
         let host = u.host_str().ok_or_else(|| WebAuthnError::Malformed("public_url has no host".into()))?;
+
         Ok(Self { id: host.to_ascii_lowercase(), origin: u.origin().ascii_serialization() })
     }
 }
@@ -94,12 +96,14 @@ impl PublicKey {
     pub fn from_cose(v: &Value) -> Result<Self, WebAuthnError> {
         let int = |k: i128| v.get_int(k).and_then(Value::as_int);
         let bytes = |k: i128| v.get_int(k).and_then(Value::as_bytes).map(<[u8]>::to_vec);
+
         match (int(1), int(3)) {
             // kty EC2, alg ES256, crv P-256
             (Some(2), Some(-7)) => {
                 if int(-1) != Some(1) {
                     return Err(WebAuthnError::Unsupported("EC2 key on a curve other than P-256".into()));
                 }
+
                 let (x, y) = (bytes(-2), bytes(-3));
                 match (x, y) {
                     (Some(x), Some(y)) if x.len() == 32 && y.len() == 32 => {
@@ -116,6 +120,7 @@ impl PublicKey {
                 if int(-1) != Some(6) {
                     return Err(WebAuthnError::Unsupported("OKP key on a curve other than Ed25519".into()));
                 }
+
                 match bytes(-2) {
                     Some(k) if k.len() == 32 => Ok(Self::EdDsa { key: k }),
                     _ => Err(WebAuthnError::Malformed("Ed25519 key".into())),
@@ -141,6 +146,7 @@ impl PublicKey {
                 signature::RsaPublicKeyComponents { n, e }.verify(&signature::RSA_PKCS1_2048_8192_SHA256, msg, sig)
             }
         };
+
         ok.map_err(|_| WebAuthnError::BadSignature)
     }
 }
@@ -156,24 +162,29 @@ pub struct AuthData {
 }
 
 impl AuthData {
+    /// Parses authenticator data.
     pub fn parse(data: &[u8]) -> Result<Self, WebAuthnError> {
         if data.len() < 37 {
             return Err(WebAuthnError::Malformed("authenticator data too short".into()));
         }
+
         let mut rp_id_hash = [0u8; 32];
         rp_id_hash.copy_from_slice(&data[..32]);
         let flags = data[32];
         let sign_count = u32::from_be_bytes([data[33], data[34], data[35], data[36]]);
         let mut rest = &data[37..];
         let mut credential = None;
+
         if flags & AT != 0 {
             if rest.len() < 18 {
                 return Err(WebAuthnError::Malformed("attested credential data too short".into()));
             }
+
             let id_len = usize::from(u16::from_be_bytes([rest[16], rest[17]]));
             if id_len == 0 || id_len > MAX_CREDENTIAL_ID {
                 return Err(WebAuthnError::Malformed("credential id length".into()));
             }
+
             let id = rest
                 .get(18..18 + id_len)
                 .ok_or_else(|| WebAuthnError::Malformed("credential id truncated".into()))?
@@ -183,17 +194,21 @@ impl AuthData {
             rest = &rest[used..];
             credential = Some((id, PublicKey::from_cose(&key)?));
         }
+
         if flags & ED != 0 {
             // Extensions: one CBOR map; Forge requests none and ignores them.
             let (ext, used) = cbor::decode_prefix(rest)?;
             if !matches!(ext, Value::Map(_)) {
                 return Err(WebAuthnError::Malformed("extensions must be a map".into()));
             }
+
             rest = &rest[used..];
         }
+
         if !rest.is_empty() {
             return Err(WebAuthnError::Malformed("trailing bytes in authenticator data".into()));
         }
+
         Ok(Self { rp_id_hash, flags, sign_count, credential })
     }
 }
@@ -217,22 +232,29 @@ fn check_client_data(rp: &RelyingParty, json: &[u8], kind: &str, challenge: &[u8
     if json.len() > 8 * 1024 {
         return Err(WebAuthnError::Malformed("client data too large".into()));
     }
+
     let c: ClientData =
         serde_json::from_slice(json).map_err(|_| WebAuthnError::Malformed("client data JSON".into()))?;
+
     if c.kind != kind {
         return Err(WebAuthnError::Mismatch("client data type"));
     }
+
     let got = forge_secrets::crypto::b64url_decode(&c.challenge)
         .ok_or_else(|| WebAuthnError::Malformed("challenge encoding".into()))?;
+
     if !forge_secrets::crypto::constant_time_eq(&got, challenge) {
         return Err(WebAuthnError::Mismatch("challenge"));
     }
+
     if c.origin != rp.origin {
         return Err(WebAuthnError::Mismatch("origin"));
     }
+
     if c.cross_origin {
         return Err(WebAuthnError::Mismatch("cross-origin request"));
     }
+
     Ok(())
 }
 
@@ -240,12 +262,15 @@ fn check_flags(rp: &RelyingParty, auth: &AuthData) -> Result<(), WebAuthnError> 
     if !forge_secrets::crypto::constant_time_eq(&auth.rp_id_hash, &sha256(rp.id.as_bytes())) {
         return Err(WebAuthnError::Mismatch("relying party"));
     }
+
     if auth.flags & UP == 0 {
         return Err(WebAuthnError::Mismatch("user presence"));
     }
+
     if auth.flags & UV == 0 {
         return Err(WebAuthnError::Mismatch("user verification (PIN or biometrics) is required"));
     }
+
     Ok(())
 }
 
@@ -273,15 +298,18 @@ pub fn verify_registration(
         }
         None => return Err(WebAuthnError::Malformed("attestation format".into())),
     }
+
     if !matches!(att.get("attStmt"), Some(Value::Map(m)) if m.is_empty()) {
         return Err(WebAuthnError::Malformed("`none` attestation must have an empty statement".into()));
     }
+
     let auth_data =
         att.get("authData").and_then(Value::as_bytes).ok_or_else(|| WebAuthnError::Malformed("authData".into()))?;
     let auth = AuthData::parse(auth_data)?;
     check_flags(rp, &auth)?;
     let (credential_id, public_key) =
         auth.credential.ok_or_else(|| WebAuthnError::Malformed("no attested credential".into()))?;
+
     Ok(NewCredential { credential_id, public_key, sign_count: auth.sign_count })
 }
 
@@ -314,19 +342,23 @@ pub fn verify_assertion(
     if !forge_secrets::crypto::constant_time_eq(a.credential_id, stored.credential_id) {
         return Err(WebAuthnError::Mismatch("credential"));
     }
+
     check_client_data(rp, a.client_data_json, "webauthn.get", challenge)?;
     let auth = AuthData::parse(a.authenticator_data)?;
     if auth.credential.is_some() {
         return Err(WebAuthnError::Malformed("unexpected attested data in a sign-in".into()));
     }
+
     check_flags(rp, &auth)?;
     let mut msg = a.authenticator_data.to_vec();
     msg.extend(sha256(a.client_data_json));
     stored.public_key.verify(&msg, a.signature)?;
+
     // Counters: 0 means the authenticator does not count (synced passkeys).
     if (auth.sign_count != 0 || stored.sign_count != 0) && auth.sign_count <= stored.sign_count {
         return Err(WebAuthnError::CounterRegression);
     }
+
     Ok(auth.sign_count)
 }
 
@@ -368,11 +400,13 @@ mod tests {
     fn bstr(b: &[u8]) -> Vec<u8> {
         let mut v = head(2, b.len());
         v.extend(b);
+
         v
     }
     fn tstr(s: &str) -> Vec<u8> {
         let mut v = head(3, s.len());
         v.extend(s.as_bytes());
+
         v
     }
     fn int(i: i64) -> Vec<u8> {
@@ -381,20 +415,24 @@ mod tests {
 
     fn es256_cose(public: &[u8]) -> Vec<u8> {
         let mut m = head(5, 5);
+
         for (k, v) in [(1, int(2)), (3, int(-7)), (-1, int(1)), (-2, bstr(&public[1..33])), (-3, bstr(&public[33..65]))]
         {
             m.extend(int(k));
             m.extend(v);
         }
+
         m
     }
 
     fn ed25519_cose(public: &[u8]) -> Vec<u8> {
         let mut m = head(5, 4);
+
         for (k, v) in [(1, int(1)), (3, int(-8)), (-1, int(6)), (-2, bstr(public))] {
             m.extend(int(k));
             m.extend(v);
         }
+
         m
     }
 
@@ -402,12 +440,14 @@ mod tests {
         let mut d = sha256(rp_id.as_bytes());
         d.push(flags);
         d.extend(count.to_be_bytes());
+
         if let Some((id, cose)) = cred {
             d.extend([0u8; 16]);
             d.extend(u16::try_from(id.len()).unwrap().to_be_bytes());
             d.extend(id);
             d.extend(cose);
         }
+
         d
     }
 
@@ -419,6 +459,7 @@ mod tests {
         m.extend(head(5, 0));
         m.extend(tstr("authData"));
         m.extend(bstr(auth));
+
         m
     }
 
@@ -429,6 +470,7 @@ mod tests {
         fn new() -> Self {
             let rng = SystemRandom::new();
             let pkcs8 = EcdsaKeyPair::generate_pkcs8(&signature::ECDSA_P256_SHA256_ASN1_SIGNING, &rng).unwrap();
+
             Self {
                 key: EcdsaKeyPair::from_pkcs8(&signature::ECDSA_P256_SHA256_ASN1_SIGNING, pkcs8.as_ref(), &rng)
                     .unwrap(),
@@ -437,6 +479,7 @@ mod tests {
         fn sign(&self, auth: &[u8], cd: &[u8]) -> Vec<u8> {
             let mut msg = auth.to_vec();
             msg.extend(sha256(cd));
+
             self.key.sign(&SystemRandom::new(), &msg).unwrap().as_ref().to_vec()
         }
     }
@@ -447,6 +490,7 @@ mod tests {
         let auth = auth_data("forge.example.com", UP | UV | AT, 0, Some((b"cred-1", &cose)));
         let cd = client_data("webauthn.create", CHALLENGE, "https://forge.example.com");
         let cred = verify_registration(&rp(), CHALLENGE, &cd, &attestation(&auth)).unwrap();
+
         (es, cred)
     }
 
@@ -490,6 +534,7 @@ mod tests {
         let good_cd = client_data("webauthn.create", CHALLENGE, "https://forge.example.com");
         let reg = |cd: &[u8], att: &[u8]| verify_registration(&rp(), CHALLENGE, cd, att);
         assert!(reg(&good_cd, &attestation(&good_auth)).is_ok());
+
         // Wrong type, challenge, origin.
         assert!(
             reg(&client_data("webauthn.get", CHALLENGE, "https://forge.example.com"), &attestation(&good_auth))
@@ -503,6 +548,7 @@ mod tests {
             reg(&client_data("webauthn.create", CHALLENGE, "https://evil.example.com"), &attestation(&good_auth))
                 .is_err()
         );
+
         // RP id hash of another site; missing UP; missing UV; no attested data.
         assert!(
             reg(&good_cd, &attestation(&auth_data("evil.example.com", UP | UV | AT, 0, Some((b"c", &cose))))).is_err()
@@ -510,20 +556,24 @@ mod tests {
         assert!(reg(&good_cd, &attestation(&auth_data("forge.example.com", UV | AT, 0, Some((b"c", &cose))))).is_err());
         assert!(reg(&good_cd, &attestation(&auth_data("forge.example.com", UP | AT, 0, Some((b"c", &cose))))).is_err());
         assert!(reg(&good_cd, &attestation(&auth_data("forge.example.com", UP | UV, 0, None))).is_err());
+
         // Other attestation formats and unsupported algorithms.
         let mut packed = attestation(&good_auth);
         let at = packed.windows(4).position(|w| w == b"none").unwrap();
         packed[at..at + 4].copy_from_slice(b"tpm ");
         assert!(reg(&good_cd, &packed).is_err());
         let mut cose_bad = head(5, 3);
+
         for (k, v) in [(1, int(2)), (3, int(-35)), (-1, int(2))] {
             cose_bad.extend(int(k));
             cose_bad.extend(v);
         }
+
         assert!(
             reg(&good_cd, &attestation(&auth_data("forge.example.com", UP | UV | AT, 0, Some((b"c", &cose_bad)))))
                 .is_err()
         );
+
         // Trailing junk after the key.
         let mut junk = good_auth.clone();
         junk.push(0);
@@ -545,14 +595,17 @@ mod tests {
             )
         };
         assert_eq!(check(&ok_auth, &ok_cd, &es.sign(&ok_auth, &ok_cd), b"cred-1").unwrap(), 8);
+
         // Another credential, bad signature, signature over other data.
         assert!(check(&ok_auth, &ok_cd, &es.sign(&ok_auth, &ok_cd), b"cred-2").is_err());
         assert_eq!(check(&ok_auth, &ok_cd, b"not a signature", b"cred-1"), Err(WebAuthnError::BadSignature));
         let other_cd = client_data("webauthn.get", CHALLENGE, "https://forge.example.com:8443");
         assert!(check(&ok_auth, &other_cd, &es.sign(&ok_auth, &other_cd), b"cred-1").is_err(), "origin");
+
         // Counter regression (clone detection).
         let old = auth_data("forge.example.com", UP | UV, 7, None);
         assert_eq!(check(&old, &ok_cd, &es.sign(&old, &ok_cd), b"cred-1"), Err(WebAuthnError::CounterRegression));
+
         // UV missing; replayed registration type.
         let no_uv = auth_data("forge.example.com", UP, 9, None);
         assert!(check(&no_uv, &ok_cd, &es.sign(&no_uv, &ok_cd), b"cred-1").is_err());
@@ -571,6 +624,7 @@ mod tests {
     #[test]
     fn malformed_authenticator_data_never_panics() {
         let mut s: u64 = 0x2545_f491_4f6c_dd1d;
+
         for _ in 0..20_000 {
             s ^= s << 13;
             s ^= s >> 7;
@@ -580,6 +634,7 @@ mod tests {
             if buf.len() > 32 {
                 buf[32] = u8::try_from(s & 0xff).unwrap() | AT;
             }
+
             let _ = AuthData::parse(&buf);
         }
     }

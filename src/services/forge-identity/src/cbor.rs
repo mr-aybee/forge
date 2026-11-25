@@ -14,6 +14,7 @@ pub const MAX_BYTES: usize = 16 * 1024;
 /// Most entries in one array or map.
 pub const MAX_ITEMS: usize = 64;
 
+/// A decoded CBOR value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     /// Unsigned or negative integer (CBOR major types 0 and 1).
@@ -46,6 +47,7 @@ impl Value {
         }
     }
 
+    /// The bytes of a byte string.
     #[must_use]
     pub fn as_bytes(&self) -> Option<&[u8]> {
         match self {
@@ -54,6 +56,7 @@ impl Value {
         }
     }
 
+    /// The text of a text string.
     #[must_use]
     pub fn as_text(&self) -> Option<&str> {
         match self {
@@ -62,6 +65,7 @@ impl Value {
         }
     }
 
+    /// The value of an integer.
     #[must_use]
     pub const fn as_int(&self) -> Option<i128> {
         match self {
@@ -71,6 +75,7 @@ impl Value {
     }
 }
 
+/// A CBOR decoding error.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("invalid CBOR: {0}")]
 pub struct CborError(pub &'static str);
@@ -84,6 +89,7 @@ impl Reader<'_> {
     fn byte(&mut self) -> Result<u8, CborError> {
         let b = *self.data.get(self.pos).ok_or(CborError("truncated"))?;
         self.pos += 1;
+
         Ok(b)
     }
 
@@ -91,6 +97,7 @@ impl Reader<'_> {
         let end = self.pos.checked_add(n).ok_or(CborError("length overflow"))?;
         let s = self.data.get(self.pos..end).ok_or(CborError("truncated"))?;
         self.pos = end;
+
         Ok(s)
     }
 
@@ -115,6 +122,7 @@ impl Reader<'_> {
         if n > max {
             return Err(CborError("length over the limit"));
         }
+
         Ok(n)
     }
 
@@ -122,6 +130,7 @@ impl Reader<'_> {
         if depth > MAX_DEPTH {
             return Err(CborError("nested too deeply"));
         }
+
         let head = self.byte()?;
         let (major, info) = (head >> 5, head & 0x1f);
         match major {
@@ -139,25 +148,31 @@ impl Reader<'_> {
             4 => {
                 let n = self.len(info, MAX_ITEMS)?;
                 let mut items = Vec::with_capacity(n);
+
                 for _ in 0..n {
                     items.push(self.value(depth + 1)?);
                 }
+
                 Ok(Value::Array(items))
             }
             5 => {
                 let n = self.len(info, MAX_ITEMS)?;
                 let mut entries: Vec<(Value, Value)> = Vec::with_capacity(n);
+
                 for _ in 0..n {
                     let k = self.value(depth + 1)?;
                     if !matches!(k, Value::Int(_) | Value::Text(_)) {
                         return Err(CborError("map keys must be integers or text"));
                     }
+
                     if entries.iter().any(|(e, _)| *e == k) {
                         return Err(CborError("duplicate map key"));
                     }
+
                     let v = self.value(depth + 1)?;
                     entries.push((k, v));
                 }
+
                 Ok(Value::Map(entries))
             }
             6 => Err(CborError("tags are not allowed")),
@@ -177,6 +192,7 @@ pub fn decode(data: &[u8]) -> Result<Value, CborError> {
     if used != data.len() {
         return Err(CborError("trailing bytes"));
     }
+
     Ok(v)
 }
 
@@ -186,6 +202,7 @@ pub fn decode(data: &[u8]) -> Result<Value, CborError> {
 pub fn decode_prefix(data: &[u8]) -> Result<(Value, usize), CborError> {
     let mut r = Reader { data, pos: 0 };
     let v = r.value(0)?;
+
     Ok((v, r.pos))
 }
 
@@ -210,6 +227,7 @@ mod tests {
         let v = decode(&doc).unwrap();
         assert_eq!(v.get("fmt").and_then(Value::as_text), Some("none"));
         assert_eq!(v.get("authData").and_then(Value::as_bytes), Some(&[1u8, 2][..]));
+
         // COSE-style integer keys, negative numbers.
         let cose = [0xa2, 0x01, 0x02, 0x03, 0x26];
         let k = decode(&cose).unwrap();
@@ -232,9 +250,11 @@ mod tests {
         ] {
             assert!(decode(bad).is_err(), "{bad:02x?}");
         }
+
         // Lengths beyond the limits fail before allocating.
         assert!(decode(&[0x5a, 0xff, 0xff, 0xff, 0xff]).is_err());
         assert!(decode(&[0x9b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]).is_err());
+
         // Nesting limit.
         let deep = [0x81u8; 32];
         assert!(decode(&deep).is_err());
@@ -252,18 +272,23 @@ mod tests {
             s
         };
         let seed = [0xa3u8, 0x63, b'f', b'm', b't', 0x64, b'n', b'o', b'n', b'e', 0x01, 0x26, 0x58, 0x20];
+
         for i in 0..20_000 {
             let len = usize::try_from(next() % 64).unwrap();
+
             let mut buf: Vec<u8> = if i % 2 == 0 {
                 (0..len).map(|_| u8::try_from(next() & 0xff).unwrap()).collect()
             } else {
                 let mut b = seed.to_vec();
+
                 for _ in 0..3 {
                     let at = usize::try_from(next()).unwrap() % b.len();
                     b[at] = u8::try_from(next() & 0xff).unwrap();
                 }
+
                 b
             };
+
             buf.truncate(len.max(1).min(buf.len()));
             let _ = decode(&buf);
             let _ = decode_prefix(&buf);

@@ -7,10 +7,12 @@ async fn a_database_newer_than_the_binary_is_reported() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("forge.db");
     let url = format!("sqlite:{}?mode=rwc", path.display().to_string().replace('\\', "/"));
+
     // A new database: nothing applied, nothing unknown.
     assert!(Store::unknown_migrations(&url).await.unwrap().is_empty());
     let store = Store::connect(&url).await.unwrap();
     assert!(Store::unknown_migrations(&url).await.unwrap().is_empty(), "every applied migration is known");
+
     // A newer binary applied a migration this one does not have.
     sqlx::query(
         "INSERT INTO _sqlx_migrations (version, description, installed_on, success, checksum, execution_time)
@@ -34,6 +36,7 @@ async fn api_keys_remember_the_elevated_flag() {
         .execute(store.pool())
         .await
         .unwrap();
+
     for (id, elevated) in [("a", true), ("b", false)] {
         store
             .create_api_key(&ApiKey {
@@ -51,6 +54,7 @@ async fn api_keys_remember_the_elevated_flag() {
             .await
             .unwrap();
     }
+
     assert!(store.api_key_by_hash("hash-a").await.unwrap().unwrap().elevated);
     assert!(!store.api_key_by_hash("hash-b").await.unwrap().unwrap().elevated);
 }
@@ -65,6 +69,7 @@ async fn profiles_that_name_retired_actions_still_load_after_the_upgrade() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open_sqlite(&dir.path().join("forge.db")).await.unwrap();
     let id = forge_core::PermissionProfileId::new();
+
     // Write the row as an old build would have, bypassing the strict parser.
     sqlx::query(
         "INSERT INTO permission_profiles (id, name, description, builtin, revision, created_by, created_at, updated_at)
@@ -83,10 +88,12 @@ async fn profiles_that_name_retired_actions_still_load_after_the_upgrade() {
     .execute(store.pool())
     .await
     .unwrap();
+
     // The loader must tolerate the retired names.
     let rev = store.get_revision(id, 1).await.unwrap().expect("revision loads");
     let names: Vec<&str> = rev.actions.iter().map(|a| a.as_str()).collect();
     assert_eq!(names, vec!["deploy", "view"]);
+
     // And the migration's data fix must leave valid JSON with the names gone
     // (re-run its statements on this row: the same SQL, same effect).
     for name in ["network.access", "network.connect", "network.manage"] {
@@ -98,6 +105,7 @@ async fn profiles_that_name_retired_actions_still_load_after_the_upgrade() {
                 .unwrap();
         }
     }
+
     let raw: (String,) = sqlx::query_as("SELECT actions FROM permission_profile_revisions WHERE profile_id = $1")
         .bind(id.to_string())
         .fetch_one(store.pool())
@@ -121,6 +129,7 @@ async fn the_baseline_and_later_migrations_apply_on_a_fresh_database() {
         .unwrap();
     let expected: Vec<i64> = (1..=i64::try_from(versions.len()).unwrap()).collect();
     assert_eq!(versions, expected, "the baseline first, then one migration per number with no gaps");
+
     for table in
         ["projects", "environments", "services", "service_instances", "log_ingest_keys", "deployments", "user_pins"]
     {
@@ -131,12 +140,14 @@ async fn the_baseline_and_later_migrations_apply_on_a_fresh_database() {
             .unwrap();
         assert_eq!(n, 1, "{table}");
     }
+
     let objects: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND name != '_sqlx_migrations'",
     )
     .fetch_one(store.pool())
     .await
     .unwrap();
+
     // 149 from the baseline, + 5 tables and 4 indexes from 0002 (container
     // platform: swarm, registries, webhooks), + 1 table and 1 index from 0003
     // (webhook replay markers; its primary key index is internal).

@@ -51,6 +51,7 @@ pub struct RecordReport {
     pub refused: usize,
 }
 
+/// Records observations reported by nodes.
 #[derive(Debug, Clone)]
 pub struct ObservationRecorder {
     store: Arc<dyn ObservationStore>,
@@ -60,6 +61,7 @@ pub struct ObservationRecorder {
 }
 
 impl ObservationRecorder {
+    /// Creates an observation recorder.
     pub fn new(
         store: Arc<dyn ObservationStore>,
         placements: Arc<dyn InstancePlacements>,
@@ -91,6 +93,7 @@ impl ObservationRecorder {
                 if let Some(&ok) = placed.get(&key.resource.id) {
                     return Ok(ok);
                 }
+
                 let ok = self.placements.is_placed_on(&key.resource.id, reporter).await?;
                 placed.insert(key.resource.id.clone(), ok);
                 Ok(ok)
@@ -114,9 +117,11 @@ impl ObservationRecorder {
                 self.config.max_batch
             )));
         }
+
         let mut refused = 0;
         let mut own = Vec::with_capacity(observations.len());
         let mut placed = HashMap::new();
+
         for mut o in observations {
             if self.may_report(reporter, &o.key, &mut placed).await? {
                 o.executor = Some(reporter);
@@ -125,11 +130,14 @@ impl ObservationRecorder {
                 refused += 1;
             }
         }
+
         if refused > 0 {
             tracing::warn!(%reporter, refused, "dropped observations the node may not report");
         }
+
         let mut report = self.record(own).await?;
         report.refused = refused;
+
         Ok(report)
     }
     /// Records observations from a trusted in-process source.
@@ -141,22 +149,28 @@ impl ObservationRecorder {
                 self.config.max_batch
             )));
         }
+
         let now = self.clock.now();
+
         // The last observation of a key in a report wins.
         let mut by_key: HashMap<ObservationKey, Observation> = HashMap::new();
+
         for o in observations {
             by_key.insert(o.key.clone(), o);
         }
+
         let keys: Vec<ObservationKey> = by_key.keys().cloned().collect();
         let prev: HashMap<ObservationKey, Latest> =
             self.store.latest_for(&keys).await?.into_iter().map(|l| (l.key.clone(), l)).collect();
 
         let mut batch = ObservationBatch::default();
         let mut outdated = 0;
+
         for (key, o) in by_key {
             let prev = prev.get(&key);
             let (observed_at, skewed) = clamp_observed_at(o.observed_at, now);
             let fresh_ms = o.fresh_for_ms.clamp(self.config.min_fresh_ms, self.config.max_fresh_ms);
+
             let transition = match decide(prev, &o, observed_at, now) {
                 Outcome::Outdated => {
                     outdated += 1;
@@ -164,8 +178,10 @@ impl ObservationRecorder {
                 }
                 Outcome::Apply { transition } => transition,
             };
+
             let fresh_until = now.plus(std::time::Duration::from_millis(fresh_ms));
             let changed = transition.is_some();
+
             // A measurement that moved past its deadband is new evidence, though
             // not a feed transition (D-085 amendment).
             let moved = prev.is_some_and(|p| beyond_deadband(p.value, o.value));
@@ -173,9 +189,11 @@ impl ObservationRecorder {
                 let half = i64::try_from(fresh_ms / 2).unwrap_or(i64::MAX);
                 p.fresh_until.0.saturating_sub(now.0) < half || p.reason != o.reason || p.detail != o.detail
             });
+
             if !changed && !moved && !needs_refresh {
                 continue;
             }
+
             let row = Latest {
                 key,
                 value: o.value,
@@ -194,16 +212,20 @@ impl ObservationRecorder {
                 let k = self.config.history_keepalive_ms.max(1);
                 now.0 / k != p.received_at.0 / k
             });
+
             // History: on transitions and keep-alives only. A measurement that
             // moved updates the current value, not history (about 100 rows/s
             // at 1,000 nodes otherwise; review of #34).
             if changed || keepalive_due {
                 batch.history.push(row.clone());
             }
+
             batch.latest.push(row);
             batch.transitions.extend(transition);
         }
+
         let transitions = self.store.apply(&batch).await?;
+
         Ok(RecordReport { transitions, outdated, refused: 0 })
     }
 
@@ -215,6 +237,7 @@ impl ObservationRecorder {
         let now = self.clock.now();
         let live = self.store.on_server(server, self.config.sweep_limit).await?;
         let mut batch = ObservationBatch::default();
+
         for l in live.into_iter().filter(|l| !l.value.is_unknown()) {
             let to = l.value.unknown();
             batch.transitions.push(Transition {
@@ -239,11 +262,14 @@ impl ObservationRecorder {
             batch.history.push(row.clone());
             batch.latest.push(row);
         }
+
         if batch.is_empty() {
             return Ok(Vec::new());
         }
+
         // The rows are unknown already, so the stale sweep has nothing to add.
         batch.stale_noted = batch.latest.iter().map(|l| l.key.clone()).collect();
+
         self.store.apply(&batch).await
     }
 
@@ -255,11 +281,14 @@ impl ObservationRecorder {
         if stale.is_empty() {
             return Ok(Vec::new());
         }
+
         let mut batch = ObservationBatch::default();
+
         for l in &stale {
             batch.transitions.extend(stale_transition(l, now));
             batch.stale_noted.push(l.key.clone());
         }
+
         self.store.apply(&batch).await
     }
 }
@@ -291,25 +320,31 @@ pub struct CheckValue {
 #[must_use]
 pub fn instance_status(startup: &[CheckValue], readiness: &[CheckValue], liveness: &[CheckValue]) -> InstanceStatus {
     use forge_core::observation::{HealthState as H, StartupState as S};
+
     let state = |c: &CheckValue| match c.value {
         ObservedValue::Health(h) => Some(h),
         _ => None,
     };
+
     if startup.iter().any(|c| c.value == ObservedValue::Startup(S::Exhausted))
         || liveness.iter().chain(readiness.iter().filter(|c| c.required)).any(|c| state(c) == Some(H::Failing))
     {
         return InstanceStatus::Unhealthy;
     }
+
     let started = startup.iter().all(|c| c.value == ObservedValue::Startup(S::Succeeded));
     let all_pass = |list: &[CheckValue]| {
         list.iter().filter(|c| c.required).all(|c| matches!(state(c), Some(H::Passing | H::Disabled)))
     };
+
     if liveness.is_empty() || !started || !all_pass(liveness) || !all_pass(readiness) {
         return InstanceStatus::Unknown;
     }
+
     if readiness.iter().any(|c| !c.required && state(c) == Some(H::Failing)) {
         return InstanceStatus::Degraded;
     }
+
     InstanceStatus::Healthy
 }
 
@@ -318,9 +353,11 @@ pub fn instance_status(startup: &[CheckValue], readiness: &[CheckValue], livenes
 pub fn sanitize_detail(s: &str) -> String {
     let mut out: String =
         s.chars().map(|c| if c.is_control() && c != '\n' { ' ' } else { c }).take(MAX_DETAIL_CHARS).collect();
+
     if s.chars().count() > MAX_DETAIL_CHARS {
         out.push('…');
     }
+
     out
 }
 
@@ -336,6 +373,7 @@ pub fn beyond_deadband(
     next: forge_core::observation::ObservedValue,
 ) -> bool {
     use forge_core::observation::{ObservedValue, Unit};
+
     match (prev, next) {
         (ObservedValue::Measure { milli: Some(a), unit: u1 }, ObservedValue::Measure { milli: Some(b), unit: u2 })
             if u1 == u2 =>
@@ -344,6 +382,7 @@ pub fn beyond_deadband(
                 Unit::Percent => 1_000,
                 _ => (a.saturating_abs() / 100).max(1),
             };
+
             a.saturating_sub(b).saturating_abs() >= band
         }
         _ => false,

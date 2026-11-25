@@ -45,6 +45,7 @@ pub fn parse_passwd(text: &str) -> Vec<PasswdEntry> {
             if f.len() < 7 {
                 return None;
             }
+
             Some(PasswdEntry { name: f[0].to_owned(), uid: f[2].parse().ok()?, shell: f[6].trim().to_owned() })
         })
         .collect()
@@ -61,6 +62,7 @@ pub fn unusable_accounts(shadow: &str, today: i64) -> BTreeSet<String> {
             if f.len() < 2 {
                 return None;
             }
+
             let locked = f[1].starts_with('!');
             let expired = f.get(7).and_then(|e| e.trim().parse::<i64>().ok()).is_some_and(|e| e <= today);
             (locked || expired).then(|| f[0].to_owned())
@@ -91,9 +93,11 @@ fn login_shell(shell: &str) -> bool {
 pub fn discover(passwd: &str, shadow: Option<&str>, root_allowed: bool, today: i64) -> Vec<String> {
     let unusable = shadow.map(|s| unusable_accounts(s, today)).unwrap_or_default();
     let mut out = Vec::new();
+
     if root_allowed {
         out.push("root".to_owned());
     }
+
     for e in parse_passwd(passwd) {
         if e.uid >= FIRST_UID
             && e.uid != NOBODY_UID
@@ -106,7 +110,9 @@ pub fn discover(passwd: &str, shadow: Option<&str>, root_allowed: bool, today: i
             out.push(e.name);
         }
     }
+
     out.truncate(MAX_REPORTED);
+
     out
 }
 
@@ -119,15 +125,19 @@ pub fn check_account(name: &str, passwd: &str, group: &str) -> Result<bool, Stri
             "`{name}` is not allowed: use 1–32 of a-z, 0-9, `_` and `-`, starting with a letter or `_`, and not a system name"
         ));
     }
+
     if let Some(e) = parse_passwd(passwd).into_iter().find(|e| e.name == name) {
         if e.uid < FIRST_UID || e.uid == NOBODY_UID {
             return Err(format!("`{name}` is a system account on this node (uid {})", e.uid));
         }
+
         return Ok(true);
     }
+
     if group.lines().any(|l| l.split(':').next() == Some(name)) {
         return Err(format!("`{name}` is already a group on this node; choose another name"));
     }
+
     Ok(false)
 }
 
@@ -154,6 +164,7 @@ fn sshd() -> Option<&'static str> {
 pub async fn gather() -> Vec<String> {
     let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
     let shadow = std::fs::read_to_string("/etc/shadow").ok();
+
     let root = match sshd() {
         Some(s) => tokio::process::Command::new(s)
             .arg("-T")
@@ -162,6 +173,7 @@ pub async fn gather() -> Vec<String> {
             .is_ok_and(|o| o.status.success() && root_login_allowed(&String::from_utf8_lossy(&o.stdout))),
         None => false,
     };
+
     discover(&passwd, shadow.as_deref(), root, today())
 }
 
@@ -197,16 +209,20 @@ pub async fn ensure(name: &str, sudo: bool) -> Result<serde_json::Value, String>
             &["--create-home", "--shell", shell, "--comment", "Orbyn Forge terminal account", "--user-group", name],
         )
         .await?;
+
         // No password. `*` (not `!`) is "no password" rather than "locked",
         // so certificate logins also work where sshd does not use PAM.
         run("usermod", &["-p", "*", name]).await?;
     }
+
     let dir = std::path::Path::new("/etc/sudoers.d");
     let file = dir.join(format!("{SUDOERS_PREFIX}{name}"));
+
     if sudo {
         if !dir.is_dir() {
             return Err("sudo is not installed on this node (/etc/sudoers.d is missing)".into());
         }
+
         // sudo ignores files whose name contains a dot, so the draft is inert.
         let draft = dir.join(format!(".{SUDOERS_PREFIX}{name}.new"));
         std::fs::write(&draft, sudoers_entry(name)).map_err(|e| format!("{}: {e}", draft.display()))?;
@@ -217,10 +233,12 @@ pub async fn ensure(name: &str, sudo: bool) -> Result<serde_json::Value, String>
             let _ = std::fs::remove_file(&draft);
             return Err(format!("the sudo rule was rejected, nothing changed: {e}"));
         }
+
         std::fs::rename(&draft, &file).map_err(|e| format!("{}: {e}", file.display()))?;
     } else if std::fs::read_to_string(&file).is_ok_and(|s| s.starts_with(SUDOERS_MARK)) {
         std::fs::remove_file(&file).map_err(|e| format!("{}: {e}", file.display()))?;
     }
+
     Ok(serde_json::json!({ "name": name, "created": !existed, "sudo": sudo }))
 }
 
@@ -253,8 +271,10 @@ old:$y$j9T$abc:19000:0:99999:7::19500:
     #[test]
     fn discovery_keeps_regular_unlocked_users_with_a_shell() {
         assert_eq!(discover(PASSWD, Some(SHADOW), true, 20_000), ["root", "alice", "bob"]);
+
         // Without root's view: no root, no lock or expiry check.
         assert_eq!(discover(PASSWD, None, false, 20_000), ["alice", "bob", "dave", "old"]);
+
         // Not expired yet.
         assert!(discover(PASSWD, Some(SHADOW), false, 19_000).contains(&"old".to_owned()));
     }
@@ -274,6 +294,7 @@ old:$y$j9T$abc:19000:0:99999:7::19500:
         for ok in ["forge-ops", "_ops", "ops2", "a"] {
             assert!(valid_account_name(ok), "{ok}");
         }
+
         for bad in
             ["", "Ops", "1ops", "-ops", "ops.x", "ops$", "root", "forge-agent", "nobody", "systemd-x", &"a".repeat(33)]
         {

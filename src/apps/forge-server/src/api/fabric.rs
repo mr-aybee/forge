@@ -14,7 +14,6 @@ use std::net::Ipv4Addr;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-
 use forge_catalog::fabric::{Cidr, DEFAULT_POOL, FabricSpec, Lease, allocate, suggest_subnet};
 use forge_core::model::FabricRecord;
 use forge_core::ports::{
@@ -55,11 +54,13 @@ async fn owners(
         state.store.list_servers(None).await?.into_iter().filter(|s| s.cluster_id == Some(cluster)).collect();
     let c = state.store.get_cluster(cluster).await?;
     let mut services = Vec::new();
+
     for ns in state.store.list_environments(c.workspace_id, Some(cluster)).await? {
         for a in state.store.list_services(Some(ns.id)).await? {
             services.push((a.id.to_string(), a.name.clone(), ns.name.clone()));
         }
     }
+
     Ok((nodes, services))
 }
 
@@ -68,15 +69,18 @@ async fn owners(
 /// address that is an IPv4 literal).
 async fn taken(state: &AppState, ws: WorkspaceId, except: Option<ClusterId>) -> ApiResult<Vec<(Cidr, String)>> {
     let mut out = Vec::new();
+
     for f in state.store.list_fabrics(Some(ws)).await? {
         if Some(f.cluster_id) == except {
             continue;
         }
+
         if let Ok(s) = serde_json::from_value::<FabricSpec>(f.spec) {
             let name = state.store.get_cluster(f.cluster_id).await.map(|c| c.name).unwrap_or_default();
             out.push((s.subnet, format!("cluster {name}")));
         }
     }
+
     for s in state.store.list_servers(Some(ws)).await? {
         if let Ok(ip) = node_address(state, &s).await.parse::<Ipv4Addr>()
             && let Ok(c) = Cidr::new(ip, 24)
@@ -84,6 +88,7 @@ async fn taken(state: &AppState, ws: WorkspaceId, except: Option<ClusterId>) -> 
             out.push((c, format!("network of {}", s.display_name.clone().unwrap_or_else(|| s.hostname.clone()))));
         }
     }
+
     Ok(out)
 }
 
@@ -101,6 +106,7 @@ pub async fn reallocate(state: &AppState, cluster: ClusterId) -> ApiResult<Optio
     rec.leases = serde_json::to_value(&leases).map_err(bad)?;
     rec.updated_at = state.clock.now();
     state.store.put_fabric(&rec).await?;
+
     Ok(Some(rec))
 }
 
@@ -109,6 +115,7 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Path(id): Path<C
     let rec = state.store.get_fabric(id).await?;
     let (nodes, services) = owners(&state, id).await?;
     let mut members = Vec::new();
+
     for n in &nodes {
         members.push(json!({
             "id": n.id,
@@ -118,17 +125,22 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Path(id): Path<C
             "os": n.os,
         }));
     }
+
     let services: Vec<Value> =
         services.iter().map(|(id, name, ns)| json!({ "id": id, "name": name, "environment": ns })).collect();
+
     let Some(rec) = rec else {
         return Ok(Json(json!({ "spec": null, "members": members, "services": services })));
     };
+
     let spec: Option<FabricSpec> = serde_json::from_value(rec.spec.clone()).ok();
+
     // The retired routed mode is shown as the mesh it becomes on apply.
     let mut shown = rec.spec.clone();
     if shown.get("mode").and_then(Value::as_str) == Some("routed") {
         shown["mode"] = json!("mesh");
     }
+
     Ok(Json(json!({
         "spec": shown,
         "layout": spec.map(|s| s.layout()),
@@ -162,6 +174,7 @@ pub async fn suggest(
 ) -> ApiResult<Json<Value>> {
     caller.authorize(Action::View, cluster_ref(id)).await?;
     let c = state.store.get_cluster(id).await?;
+
     suggestion(&state, c.workspace_id, Some(id), &c.name, req.prefix).await
 }
 
@@ -186,14 +199,17 @@ async fn suggestion(
     if !(16..=24).contains(&prefix) {
         return Err(ApiError::bad_request("prefix must be between 16 and 24"));
     }
+
     let pool = pool(state).await?;
     let taken = taken(state, ws, except).await?;
     let nets: Vec<Cidr> = taken.iter().map(|t| t.0).collect();
     let subnet = suggest_subnet(pool, prefix, &nets)
         .ok_or_else(|| ApiError::conflict(format!("no free /{prefix} left in the pool {pool}")))?;
+
     // `<cluster>.<suffix>`: the same names the fleet's hosts block uses (D-084).
     let slug = forge_catalog::names::label_from(name).unwrap_or_else(|| "cluster".into());
     let taken: Vec<Value> = taken.iter().map(|(c, why)| json!({ "subnet": c, "by": why })).collect();
+
     Ok(Json(json!({
         "subnet": subnet,
         "pool": pool,
@@ -221,11 +237,13 @@ pub async fn put(
     caller.authorize(Action::WorkspaceManage, target.clone()).await?;
     let c = state.store.get_cluster(id).await?;
     req.spec.validate().map_err(bad)?;
+
     if let Some((t, why)) =
         taken(&state, c.workspace_id, Some(id)).await?.into_iter().find(|(t, _)| t.overlaps(&req.spec.subnet))
     {
         return Err(ApiError::conflict(format!("{} overlaps {t} ({why})", req.spec.subnet)));
     }
+
     let previous = state.store.get_fabric(id).await?;
     let moved = previous
         .as_ref()
@@ -241,6 +259,7 @@ pub async fn put(
         updated_at: state.clock.now(),
     };
     state.store.put_fabric(&rec).await?;
+
     let saved = match reallocate(&state, id).await {
         Ok(r) => r,
         Err(e) => {
@@ -249,9 +268,11 @@ pub async fn put(
                 Some(p) => state.store.put_fabric(p).await?,
                 None => state.store.delete_fabric(id).await?,
             }
+
             return Err(e);
         }
     };
+
     caller
         .audit(
             "fabric.update",
@@ -260,6 +281,7 @@ pub async fn put(
             json!({ "subnet": req.spec.subnet, "mode": req.spec.mode, "domain": req.spec.domain, "pins": req.pins.len(), "moved": moved }),
         )
         .await;
+
     Ok(Json(json!({ "leases": saved.map(|r| r.leases) })))
 }
 
@@ -272,9 +294,11 @@ async fn authorize_members(
 ) -> ApiResult<Vec<forge_core::model::Server>> {
     let members: Vec<_> =
         state.store.list_servers(None).await?.into_iter().filter(|s| s.cluster_id == Some(cluster)).collect();
+
     for m in &members {
         caller.authorize(Action::ServerCommand, EntityRef::new(EntityKind::Server, m.id)).await?;
     }
+
     Ok(members)
 }
 
@@ -288,19 +312,24 @@ pub async fn apply(State(state): State<AppState>, caller: Caller, Path(id): Path
     let mut rec =
         state.store.get_fabric(id).await?.ok_or_else(|| ApiError::not_found("this cluster has no network yet"))?;
     let by = AppliedBy { principal: caller.principal(), context: caller.ctx(), at: state.clock.now() };
+
     if !rec.status.is_object() {
         rec.status = json!({});
     }
+
     rec.status["applied_by"] = serde_json::to_value(&by).map_err(bad)?;
+
     // A network saved in the retired routed mode becomes a mesh when applied.
     if rec.spec.get("mode").and_then(Value::as_str) == Some("routed") {
         rec.spec["mode"] = json!("mesh");
     }
+
     reset(&mut rec, None);
     state.store.put_fabric(&rec).await?;
     caller.audit("fabric.apply", &target, Some(c.workspace_id), json!({ "nodes": members.len() })).await;
     let s = state.clone();
     tokio::spawn(async move { reconcile_cluster(&s, id).await });
+
     Ok(Json(json!({ "nodes": members.len() })))
 }
 
@@ -321,6 +350,7 @@ pub async fn resync(
     caller.audit("fabric.resync", &target, Some(c.workspace_id), json!({ "server_id": node })).await;
     let s = state.clone();
     tokio::spawn(async move { reconcile_cluster(&s, id).await });
+
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -336,20 +366,25 @@ pub async fn delete(
     let c = state.store.get_cluster(id).await?;
     let applied = state.store.get_fabric(id).await?.is_some_and(|r| r.status.get("applied_by").is_some());
     let mut left = Vec::new();
+
     if applied {
         let iface = forge_catalog::fabric::interface_name(&id.to_string());
+
         for m in authorize_members(&state, &caller, id).await? {
             let op = json!({ "type": "fabric", "op": { "op": "remove", "iface": iface } });
             let ok = m.status == forge_core::model::AgentStatus::Online
                 && super::sites::run_on_node(&state, &caller, m.id, op, std::time::Duration::from_secs(60))
                     .await
                     .is_ok_and(|r| r["status"] == "succeeded");
+
             if !ok {
                 left.push(m.display_name.clone().unwrap_or(m.hostname.clone()));
             }
         }
     }
+
     state.store.delete_fabric(id).await?;
     caller.audit("fabric.delete", &target, Some(c.workspace_id), json!({ "not_cleaned": left })).await;
+
     Ok(Json(json!({ "not_cleaned": left })))
 }

@@ -33,6 +33,7 @@ pub async fn subscribe(
     if !crate::request_origin::origin_header_ok(&state, &origin, &headers) {
         return Err(ApiError::forbidden("origin not allowed"));
     }
+
     Ok(ws.max_message_size(64 * 1024).on_upgrade(move |socket| stream(state, caller, socket)))
 }
 
@@ -44,6 +45,7 @@ async fn stream(state: AppState, caller: Caller, mut socket: WebSocket) {
     let deadline = tokio::time::Instant::now() + MAX_LIFETIME;
     let mut recheck = tokio::time::interval(RECHECK);
     recheck.tick().await;
+
     loop {
         let event = tokio::select! {
             () = tokio::time::sleep_until(deadline) => break,
@@ -64,6 +66,7 @@ async fn stream(state: AppState, caller: Caller, mut socket: WebSocket) {
                 _ => continue,
             },
         };
+
         let event = match event {
             Ok(e) => e,
             Err(RecvError::Lagged(n)) => {
@@ -72,17 +75,21 @@ async fn stream(state: AppState, caller: Caller, mut socket: WebSocket) {
             }
             Err(RecvError::Closed) => break,
         };
+
         let resource = match &event {
             ServerEvent::Job(j) => EntityRef::new(EntityKind::Job, j.job_id),
             ServerEvent::Server { server_id, .. } => EntityRef::new(EntityKind::Server, server_id),
         };
+
         if !caller.can(Action::View, resource).await {
             continue;
         }
+
         let Ok(text) = serde_json::to_string(&event) else { continue };
         if socket.send(Message::Text(text.into())).await.is_err() {
             break;
         }
     }
+
     let _ = socket.send(Message::Close(None)).await;
 }

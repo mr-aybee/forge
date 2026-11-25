@@ -6,15 +6,17 @@
 
 use std::time::Duration;
 
-use crate::common::*;
 use forge_agent::enroll::{HostFacts, enroll};
 use forge_agent::{Agent, AgentConfig, StatePaths};
 use reqwest::StatusCode;
 use serde_json::json;
 
+use crate::common::*;
+
 async fn token(admin: &Client) -> String {
     let (s, body) = admin.post("/api/v1/enrollment-tokens", json!({"ttl_minutes": 10})).await;
     assert_eq!(s, StatusCode::CREATED, "{body}");
+
     body["token"].as_str().unwrap().to_owned()
 }
 
@@ -26,18 +28,22 @@ fn run(paths: StatePaths) -> tokio::sync::watch::Sender<bool> {
     let agent = Agent::load(paths).unwrap();
     let (stop, rx) = tokio::sync::watch::channel(false);
     tokio::spawn(agent.run(rx));
+
     stop
 }
 
 /// Polls `check` until it holds or `secs` pass.
 async fn until(secs: u64, what: &str, mut check: impl AsyncFnMut() -> bool) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
+
     while tokio::time::Instant::now() < deadline {
         if check().await {
             return;
         }
+
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+
     panic!("timed out waiting for {what}");
 }
 
@@ -66,6 +72,7 @@ async fn an_agent_enrolls_and_links_by_an_address_the_certificate_does_not_name(
     let dir = tempfile::tempdir().unwrap();
     let paths = StatePaths::new(dir.path());
     let id = enroll(&paths, AgentConfig::new(h.agent_url.clone()), &t, facts("anywhere")).await.unwrap();
+
     // Pinned: the current and next keys of the hub and of the analytics
     // worker's listener (its own key, never the hub's).
     let set = forge_agent::pins::load(&paths.pins()).unwrap();
@@ -79,6 +86,7 @@ async fn an_agent_enrolls_and_links_by_an_address_the_certificate_does_not_name(
     let _stop = run(paths);
     until(20, "the agent online", async || online(&admin, &id.server_id).await).await;
     ping(&admin, &id.server_id).await;
+
     // Its heartbeats acknowledge both keys.
     let next = listed[1].clone();
     until(10, "the acknowledgement", async || {
@@ -102,6 +110,7 @@ async fn an_agent_enrolls_and_links_by_an_address_the_certificate_does_not_name(
 async fn an_agent_enrolled_before_pins_the_key_announced_over_its_link() {
     let h = start().await;
     let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+
     // A token without the key, as before D-167; the server name matches.
     let t = token(&admin).await;
     let p = forge_pki::enrollment::parse(&t).unwrap();
@@ -109,11 +118,13 @@ async fn an_agent_enrolled_before_pins_the_key_announced_over_its_link() {
     let dir = tempfile::tempdir().unwrap();
     let paths = StatePaths::new(dir.path());
     let id = enroll(&paths, AgentConfig::new(h.agent_url.clone()), &legacy, facts("veteran")).await.unwrap();
+
     // Enrolled before pins existed: no pin file.
     std::fs::remove_file(paths.pins()).unwrap();
 
     let _stop = run(paths.clone());
     until(20, "the agent online", async || online(&admin, &id.server_id).await).await;
+
     // The first heartbeat reply announces the keys; the agent pins them
     // and keeps working over the pinned link.
     let current = h.app.state.agent_keys.current_fingerprint();
@@ -131,6 +142,7 @@ async fn a_key_mismatch_is_reported_and_fixed_by_pinning_without_re_enrolling() 
     let dir = tempfile::tempdir().unwrap();
     let paths = StatePaths::new(dir.path());
     let id = enroll(&paths, AgentConfig::new(h.agent_url.clone()), &token(&admin).await, facts("moved")).await.unwrap();
+
     // The node pins only some other key.
     let mut wrong = forge_agent::pins::PinSet::default();
     wrong.add(&"ab".repeat(32), "manual", 0).unwrap();
@@ -160,6 +172,7 @@ async fn an_unreadable_pin_file_fails_closed() {
     let id =
         enroll(&paths, AgentConfig::new(h.agent_url.clone()), &token(&admin).await, facts("closed")).await.unwrap();
     let good = std::fs::read_to_string(paths.pins()).unwrap();
+
     // At start: refused with a message that says what to do.
     std::fs::write(paths.pins(), "server_keys = 7").unwrap();
     let err = format!("{:#}", Agent::load(paths.clone()).unwrap_err());
@@ -170,12 +183,14 @@ async fn an_unreadable_pin_file_fails_closed() {
     let _stop = run(paths.clone());
     until(20, "the agent online", async || online(&admin, &id.server_id).await).await;
     std::fs::write(paths.pins(), vec![b'#'; 70 * 1024]).unwrap();
+
     // A switch changes the announcement; pinning it reads the broken file.
     h.app.state.agent_keys.rotate(h.app.state.clock.now(), forge_server::agent_keys::RotateMode::Now).await.unwrap();
     until(60, "the pin-file report", async || {
         std::fs::read_to_string(paths.link_error()).is_ok_and(|e| e.contains("cannot be used"))
     })
     .await;
+
     // Fixed: the agent links again.
     std::fs::write(paths.pins(), &good).unwrap();
     until(90, "the link back", async || !paths.link_error().exists()).await;

@@ -111,9 +111,11 @@ impl Client {
         if !matches!(cfg.endpoint.scheme(), "http" | "https") || cfg.endpoint.host_str().is_none() {
             return Err(S3Error::Invalid("endpoint must be http(s)://host[:port]".into()));
         }
+
         if cfg.region.is_empty() || cfg.access_key.is_empty() || cfg.secret_key.is_empty() {
             return Err(S3Error::Invalid("region, access key and secret key are required".into()));
         }
+
         Ok(Self { cfg, http })
     }
 
@@ -122,6 +124,7 @@ impl Client {
         let mut url = self.cfg.endpoint.clone();
         let base = url.path().trim_end_matches('/').to_owned();
         let mut path = base;
+
         if !bucket.is_empty() {
             if self.cfg.path_style {
                 path.push('/');
@@ -131,23 +134,29 @@ impl Client {
                 url.set_host(Some(&format!("{bucket}.{host}"))).map_err(|e| S3Error::Invalid(e.to_string()))?;
             }
         }
+
         if !key.is_empty() {
             path.push('/');
             path.push_str(&sigv4::encode(key, false));
         }
+
         if path.is_empty() {
             path.push('/');
         }
+
         // Already encoded: set without re-encoding.
         url.set_path(&path);
+
         // The parser must not have changed the path (dot segments, also in
         // percent-encoded form): a request is only ever signed for, and sent
         // to, the bucket and key asked for.
         if url.path() != path {
             return Err(S3Error::Invalid("object key: not a valid path".into()));
         }
+
         let q = sigv4::canonical_query(query);
         url.set_query(if q.is_empty() { None } else { Some(&q) });
+
         Ok(url)
     }
 
@@ -160,9 +169,11 @@ impl Client {
             SystemTime::now(),
         );
         let mut rb = self.http.request(method, url);
+
         for (k, v) in headers {
             rb = rb.header(k, v);
         }
+
         rb
     }
 
@@ -171,12 +182,14 @@ impl Client {
         if resp.status().is_success() {
             return Ok(resp);
         }
+
         Err(service_error(resp).await)
     }
 
     async fn send_empty(&self, method: Method, bucket: &str, key: &str, query: &[(&str, &str)]) -> S3Result<String> {
         let url = self.url(bucket, key, query)?;
         let resp = self.send(self.request(method, url, sigv4::EMPTY_SHA256)).await?;
+
         read_capped(resp, MAX_RESPONSE).await
     }
 
@@ -190,6 +203,7 @@ impl Client {
         if !valid_bucket(bucket) {
             return Err(S3Error::Invalid(format!("bucket name `{bucket}`")));
         }
+
         // AWS needs the region outside us-east-1; others ignore or accept it.
         let body = if self.cfg.region == "us-east-1" || self.cfg.path_style {
             String::new()
@@ -199,9 +213,11 @@ impl Client {
                 self.cfg.region
             )
         };
+
         let url = self.url(bucket, "", &[])?;
         let hash = sigv4::sha256_hex(body.as_bytes());
         self.send(self.request(Method::PUT, url, &hash).body(body)).await?;
+
         Ok(())
     }
 
@@ -210,6 +226,7 @@ impl Client {
         if !valid_bucket(bucket) {
             return Err(S3Error::Invalid(format!("bucket name `{bucket}`")));
         }
+
         self.send_empty(Method::DELETE, bucket, "", &[]).await.map(|_| ())
     }
 
@@ -224,12 +241,16 @@ impl Client {
         if !valid_bucket(bucket) {
             return Err(S3Error::Invalid(format!("bucket name `{bucket}`")));
         }
+
         let max = max_keys.clamp(1, 1000).to_string();
         let mut q = vec![("list-type", "2"), ("delimiter", "/"), ("max-keys", max.as_str()), ("prefix", prefix)];
+
         if let Some(t) = token {
             q.push(("continuation-token", t));
         }
+
         let body = self.send_empty(Method::GET, bucket, "", &q).await?;
+
         xml::objects(&body)
     }
 
@@ -237,6 +258,7 @@ impl Client {
         check(bucket, key)?;
         let url = self.url(bucket, key, &[])?;
         let resp = self.send(self.request(Method::HEAD, url, sigv4::EMPTY_SHA256)).await?;
+
         Ok(head(&resp))
     }
 
@@ -245,6 +267,7 @@ impl Client {
         check(bucket, key)?;
         let url = self.url(bucket, key, &[])?;
         let resp = self.send(self.request(Method::GET, url, sigv4::EMPTY_SHA256)).await?;
+
         Ok((head(&resp), resp))
     }
 
@@ -264,6 +287,7 @@ impl Client {
             .header(reqwest::header::CONTENT_LENGTH, len)
             .header(reqwest::header::CONTENT_TYPE, content_type)
             .body(body);
+
         self.send(rb).await.map(|_| ())
     }
 
@@ -287,10 +311,13 @@ impl Client {
         let body = body.unwrap_or_default();
         let hash = sigv4::sha256_hex(body.as_bytes());
         let mut rb = self.request(method, url, &hash);
+
         if !body.is_empty() {
             rb = rb.header(reqwest::header::CONTENT_TYPE, "application/json").body(body);
         }
+
         let resp = self.send(rb).await?;
+
         read_capped(resp, MAX_RESPONSE).await
     }
 
@@ -319,6 +346,7 @@ impl Client {
         let text = self.admin(Method::GET, "list-service-accounts", &[], None).await?;
         let v: serde_json::Value =
             serde_json::from_str(&text).map_err(|_| S3Error::Transport("unexpected admin response".into()))?;
+
         Ok(v.get("accounts").and_then(serde_json::Value::as_array).cloned().unwrap_or_default())
     }
 
@@ -326,6 +354,7 @@ impl Client {
         if access_key.is_empty() || access_key.len() > 128 || !access_key.bytes().all(|b| b.is_ascii_alphanumeric()) {
             return Err(S3Error::Invalid("access key".into()));
         }
+
         self.admin(Method::DELETE, "delete-service-accounts", &[("accessKey", access_key)], None).await.map(|_| ())
     }
 }
@@ -334,9 +363,11 @@ impl Client {
 #[must_use]
 pub fn bucket_policy(bucket: &str, write: bool) -> serde_json::Value {
     let mut object = vec!["s3:GetObject"];
+
     if write {
         object.extend(["s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]);
     }
+
     serde_json::json!({
         "Version": "2012-10-17",
         "Statement": [
@@ -351,9 +382,11 @@ fn check(bucket: &str, key: &str) -> S3Result<()> {
     if !valid_bucket(bucket) {
         return Err(S3Error::Invalid(format!("bucket name `{bucket}`")));
     }
+
     if !valid_key(key) {
         return Err(S3Error::Invalid("object key: 1-1024 bytes, no control characters".into()));
     }
+
     Ok(())
 }
 
@@ -371,6 +404,7 @@ fn head(resp: &reqwest::Response) -> ObjectHead {
 /// but keeps messages short).
 fn transport_message(e: &reqwest::Error) -> String {
     let host = e.url().map(|u| format!("{}://{}", u.scheme(), u.host_str().unwrap_or_default()));
+
     let kind = if e.is_timeout() {
         "timed out"
     } else if e.is_connect() {
@@ -380,13 +414,17 @@ fn transport_message(e: &reqwest::Error) -> String {
     } else {
         "request failed"
     };
+
     let mut detail = String::new();
     let mut src = std::error::Error::source(e);
+
     while let Some(s) = src {
         detail = s.to_string();
         src = s.source();
     }
+
     let detail = if detail.is_empty() { String::new() } else { format!(" ({detail})") };
+
     match host {
         Some(h) => format!("{h}: {kind}{detail}"),
         None => format!("{kind}{detail}"),
@@ -405,13 +443,17 @@ async fn read_capped(mut resp: reqwest::Response, cap: usize) -> S3Result<String
     if resp.content_length().is_some_and(|l| l > cap as u64) {
         return Err(S3Error::Transport("the store's response is too large".into()));
     }
+
     let mut buf = Vec::new();
+
     while let Some(chunk) = resp.chunk().await.map_err(|e| S3Error::Transport(transport_message(&e)))? {
         if buf.len() + chunk.len() > cap {
             return Err(S3Error::Transport("the store's response is too large".into()));
         }
+
         buf.extend_from_slice(&chunk);
     }
+
     String::from_utf8(buf).map_err(|_| S3Error::Transport("the store's response is not UTF-8".into()))
 }
 
@@ -424,8 +466,10 @@ async fn service_error(resp: reqwest::Response) -> S3Error {
             StatusCode::FORBIDDEN => "AccessDenied",
             _ => "Error",
         };
+
         (code.to_owned(), status.canonical_reason().unwrap_or("request failed").to_owned())
     });
+
     S3Error::Service { status: status.as_u16(), code, message }
 }
 
@@ -441,9 +485,11 @@ mod tests {
         for key in ["../rustfs/admin/v3/list-service-accounts", "a/../../x", "./a", "a/.", "..", "a/.."] {
             assert!(!valid_key(key), "{key} must be refused");
         }
+
         for key in ["a..b", "..a/b", "dir/.hidden", "a/b...", "x/y.tar.gz"] {
             assert!(valid_key(key), "{key} is a normal key");
         }
+
         let virtual_host = Client::new(
             S3Config {
                 endpoint: Url::parse("https://s3.example.com").unwrap(),
@@ -455,6 +501,7 @@ mod tests {
             reqwest::Client::new(),
         )
         .unwrap();
+
         for c in [client(true), virtual_host] {
             assert!(c.url("bucket", "../rustfs/admin/v3/info", &[]).is_err());
             let encoded = c.url("bucket", "a/%2e%2e/x", &[]).map(|u| u.path().to_owned());
@@ -477,6 +524,7 @@ mod tests {
                 let _ = s.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n").await;
                 let chunk = vec![b'a'; 64 * 1024];
                 let mut sent = 0;
+
                 while sent < body_len {
                     let head = format!("{:x}\r\n", chunk.len());
                     if s.write_all(head.as_bytes()).await.is_err()
@@ -485,11 +533,14 @@ mod tests {
                     {
                         break;
                     }
+
                     sent += chunk.len();
                 }
+
                 let _ = s.write_all(b"0\r\n\r\n").await;
             }
         });
+
         format!("http://{addr}")
     }
 
@@ -529,9 +580,11 @@ mod tests {
     fn bucket_and_key_rules() {
         assert!(valid_bucket("media-01"));
         assert!(valid_bucket("a.b.c"));
+
         for bad in ["ab", "Media", "-a1", "a1-", "a..b", "a_b", &"a".repeat(64)] {
             assert!(!valid_bucket(bad), "{bad}");
         }
+
         assert!(valid_key("photos/2026/a b.jpg"));
         assert!(!valid_key(""));
         assert!(!valid_key("a\nb"));

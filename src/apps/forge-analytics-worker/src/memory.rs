@@ -32,6 +32,7 @@ fn push_all<T: Clone>(q: &mut VecDeque<T>, rows: &[T]) {
         if q.len() >= MAX_ROWS {
             q.pop_front();
         }
+
         q.push_back(r.clone());
     }
 }
@@ -129,6 +130,7 @@ fn matches(e: &LogEvent, q: &LogQuery) -> bool {
         let n = needle.to_lowercase();
         e.message.to_lowercase().contains(&n) || e.exception.as_deref().is_some_and(|x| x.to_lowercase().contains(&n))
     };
+
     scoped
         && (q.nodes.is_empty() || e.server_id.is_some_and(|n| q.nodes.contains(&n)))
         && q.container.as_deref().is_none_or(|c| {
@@ -212,6 +214,7 @@ impl AnalyticsStore for MemoryStore {
                 (p.rx, p.tx, p.load1) = (m.rx, m.tx, m.load1);
             }
         });
+
         Ok(points.into_values().collect())
     }
 
@@ -247,11 +250,14 @@ impl AnalyticsStore for MemoryStore {
             }
         });
         let mut out: Vec<ProcessUsage> = groups.into_values().collect();
+
         match by {
             TopBy::Cpu => out.sort_by(|a, b| b.cpu_avg.total_cmp(&a.cpu_avg)),
             TopBy::Mem => out.sort_by_key(|a| std::cmp::Reverse(a.mem_avg)),
         }
+
         out.truncate(limit as usize);
+
         Ok(out)
     }
 
@@ -300,6 +306,7 @@ impl AnalyticsStore for MemoryStore {
                 });
             }
         });
+
         Ok(series.into_values().take(limit as usize).collect())
     }
 
@@ -307,6 +314,7 @@ impl AnalyticsStore for MemoryStore {
         self.writes.fetch_add(1, Ordering::AcqRel);
         self.wait_gate().await;
         self.with(|t| push_all(&mut t.logs, events));
+
         Ok(())
     }
 
@@ -314,6 +322,7 @@ impl AnalyticsStore for MemoryStore {
         let mut hits: Vec<LogEvent> = self.with(|t| t.logs.iter().filter(|e| matches(e, q)).cloned().collect());
         hits.sort_by_key(|a| std::cmp::Reverse((a.ts, a.id)));
         let limit = q.limit as usize;
+
         Ok(match q.page {
             LogPage::Older(None) => hits.into_iter().take(limit).collect(),
             LogPage::Older(Some(c)) => hits.into_iter().filter(|e| (e.ts.0, e.id) < (c.ts, c.id)).take(limit).collect(),
@@ -335,6 +344,7 @@ impl AnalyticsStore for MemoryStore {
                 *counts.entry((e.ts.0 - e.ts.0.rem_euclid(step), e.level)).or_default() += 1;
             }
         });
+
         Ok(counts.into_iter().map(|((t, level), count)| LogBucket { t, level, count }).collect())
     }
 }
@@ -342,9 +352,10 @@ impl AnalyticsStore for MemoryStore {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // reason: tests
 mod tests {
-    use super::*;
     use forge_core::ServiceId;
     use forge_core::logs::{IngestContext, LogFilter, SearchLimits, parse_batch};
+
+    use super::*;
 
     #[tokio::test]
     async fn logs_are_scoped_filtered_and_paged() {

@@ -25,6 +25,7 @@ fn valid_name(name: &str) -> ApiResult<String> {
     let n = name.trim();
     let ok =
         !n.is_empty() && n.len() <= 63 && n.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+
     if ok {
         Ok(n.to_owned())
     } else {
@@ -78,13 +79,16 @@ fn summary(ns: &Environment) -> EnvironmentSummary {
 async fn view(state: &AppState, caller: &Caller, g: Project) -> ApiResult<ProjectView> {
     let mut environments = Vec::new();
     let mut service_count = 0;
+
     for ns in state.store.list_environments_in_group(g.workspace_id, g.id).await? {
         if !caller.can(Action::View, EntityRef::new(EntityKind::Environment, ns.id)).await {
             continue;
         }
+
         service_count += state.store.list_services(Some(ns.id)).await?.len();
         environments.push(summary(&ns));
     }
+
     Ok(ProjectView {
         id: g.id,
         workspace_id: g.workspace_id,
@@ -101,11 +105,13 @@ pub async fn list(State(state): State<AppState>, caller: Caller, Ws(ws): Ws) -> 
     // Filtered per group, like `GET /environments`: a developer bound to one
     // project sees that group without `view` on the workspace.
     let mut out = Vec::new();
+
     for g in state.store.list_projects(ws).await? {
         if caller.can(Action::View, group_ref(g.id)).await {
             out.push(view(&state, &caller, g).await?);
         }
     }
+
     Ok(Json(out))
 }
 
@@ -134,6 +140,7 @@ pub async fn create(
     };
     state.store.create_project(&g).await.map_err(name_taken)?;
     caller.audit("project.create", &group_ref(g.id), Some(ws), json!({ "name": g.name })).await;
+
     Ok((StatusCode::CREATED, Json(view(&state, &caller, g).await?)))
 }
 
@@ -145,6 +152,7 @@ pub async fn get(
 ) -> ApiResult<Json<ProjectView>> {
     caller.authorize(Action::View, group_ref(id)).await?;
     let g = state.store.get_project(id).await?;
+
     Ok(Json(view(&state, &caller, g).await?))
 }
 
@@ -166,14 +174,18 @@ pub async fn update(
     caller.authorize(Action::WorkspaceManage, group_ref(id)).await?;
     let mut g = state.store.get_project(id).await?;
     let from = g.name.clone();
+
     if let Some(n) = &req.name {
         g.name = valid_name(n)?;
     }
+
     if let Some(d) = &req.description {
         g.description = valid_description(d);
     }
+
     state.store.update_project(id, &g.name, &g.description).await.map_err(name_taken)?;
     caller.audit("project.update", &group_ref(id), Some(g.workspace_id), json!({ "from": from, "name": g.name })).await;
+
     Ok(Json(view(&state, &caller, g).await?))
 }
 
@@ -189,8 +201,10 @@ pub async fn delete(State(state): State<AppState>, caller: Caller, Path(id): Pat
             names.join(", ")
         )));
     }
+
     state.store.delete_project(id).await?;
     caller.audit("project.delete", &group_ref(id), Some(g.workspace_id), json!({ "name": g.name })).await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -201,6 +215,7 @@ mod tests {
     #[test]
     fn names_are_lower_case_slugs() {
         assert_eq!(valid_name(" shop-2 ").ok().as_deref(), Some("shop-2"));
+
         for bad in ["", "Shop", "shop_2", "shop 2", "a.b", &"x".repeat(64)] {
             assert!(valid_name(bad).is_err(), "{bad:?}");
         }

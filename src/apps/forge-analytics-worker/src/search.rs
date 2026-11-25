@@ -54,6 +54,7 @@ pub fn fold_histogram(from: i64, to: i64, step: i64, rows: &[LogBucket]) -> Vec<
         .take_while(|t| *t < to)
         .map(|t| HistogramBucket { t, counts: HashMap::new() })
         .collect();
+
     for r in rows {
         if let Ok(i) = usize::try_from((r.t - start).div_euclid(step))
             && let Some(b) = buckets.get_mut(i)
@@ -61,6 +62,7 @@ pub fn fold_histogram(from: i64, to: i64, step: i64, rows: &[LogBucket]) -> Vec<
             *b.counts.entry(r.level).or_default() += r.count;
         }
     }
+
     buckets
 }
 
@@ -92,9 +94,11 @@ impl Search {
         let max = self.tuning.borrow().search_max_concurrent as usize;
         let running = self.running.fetch_add(1, Ordering::AcqRel);
         let slot = SearchSlot(&self.running);
+
         if running >= max.max(1) {
             return Err(WorkerError::SearchBusy);
         }
+
         Ok(slot)
     }
 
@@ -103,21 +107,26 @@ impl Search {
     fn limited(&self, mut q: LogQuery, now: Timestamp) -> LogQuery {
         let t = *self.tuning.borrow();
         q.limits = t.search_limits();
+
         if t.search_max_lookback_days > 0 {
             let earliest = now.0 - i64::from(t.search_max_lookback_days) * DAY_MS;
             q.from = Some(Timestamp(q.from.map_or(earliest, |f| f.0.max(earliest))));
         }
+
         q
     }
 
     /// One page of events.
     pub async fn query(&self, q: LogQuery, now: Timestamp) -> Result<Vec<LogEvent>, WorkerError> {
         let store = self.analytics.usable()?;
+
         if q.is_empty() {
             return Ok(Vec::new());
         }
+
         let _slot = self.slot()?;
         let q = self.limited(q, now);
+
         store.query_logs(&q).await.map_err(|e| WorkerError::Unavailable { reason: e.to_string() })
     }
 
@@ -129,26 +138,31 @@ impl Search {
         if to <= from || to - from > MAX_HISTOGRAM_WINDOW_MS {
             return Err(WorkerError::Invalid { reason: "`from` must be before `to`, at most 31 days apart".into() });
         }
+
         let _slot = self.slot()?;
         let mut q = self.limited(q, now);
+
         // The lookback may move the start later.
         let from = q.from.map_or(from, |f| f.0.max(from)).min(to - 1);
         let step = histogram_step(to - from);
         q.from = Some(Timestamp(from - from.rem_euclid(step)));
         q.to = Some(Timestamp(to));
+
         let rows = if q.is_empty() {
             Vec::new()
         } else {
             store.log_histogram(&q, step).await.map_err(|e| WorkerError::Unavailable { reason: e.to_string() })?
         };
+
         Ok(Histogram { from, to, step_ms: step, buckets: fold_histogram(from, to, step, &rows) })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use forge_core::logs::LogLevel;
+
+    use super::*;
 
     #[test]
     fn picks_readable_steps() {

@@ -110,6 +110,7 @@ fn run_agent(paths: StatePaths, stop: tokio::sync::watch::Receiver<bool>) -> any
     if let Ok(mut config) = paths.load_config() {
         let offered_before = config.offered_commands.len();
         let added = config.offer_new_commands();
+
         if config.offered_commands.len() != offered_before {
             match paths.save_config(&config) {
                 Ok(()) if !added.is_empty() => tracing::info!(added = %added.join(", "), "new command kinds allowed"),
@@ -118,13 +119,16 @@ fn run_agent(paths: StatePaths, stop: tokio::sync::watch::Receiver<bool>) -> any
             }
         }
     }
+
     let agent = Agent::load(paths)?;
     tracing::info!(server_id = agent.server_id(), "agent starting");
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     rt.block_on(agent.run(stop));
+
     // Dropping a runtime waits for its blocking tasks without limit; a stop
     // must not hang on a slow command.
     rt.shutdown_timeout(std::time::Duration::from_secs(5));
+
     Ok(())
 }
 
@@ -138,12 +142,14 @@ fn log_to_file(state_dir: &std::path::Path) -> anyhow::Result<()> {
     if std::fs::metadata(&path).is_ok_and(|m| m.len() > 10 * 1024 * 1024) {
         let _ = std::fs::rename(&path, dir.join("forge-agent.log.1"));
     }
+
     let file = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
     tracing_subscriber::fmt()
         .with_ansi(false)
         .with_writer(std::sync::Mutex::new(file))
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
+
     Ok(())
 }
 
@@ -169,12 +175,15 @@ fn service(cmd: ServiceCmd, state_dir: Option<PathBuf>) -> anyhow::Result<()> {
             }
             ServiceCmd::Run => {
                 let dir = state_dir.unwrap_or_else(StatePaths::default_dir);
+
                 // Again at every start, in case the ACL was loosened since.
                 let locked = forge_agent::config::lock_windows_data(&dir);
                 log_to_file(&dir)?;
+
                 if let Err(e) = locked {
                     tracing::warn!(error = %e, "could not restrict access to the data folder");
                 }
+
                 winservice::run(dir, run_agent)?;
             }
         }
@@ -199,18 +208,22 @@ fn init_console_log() {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
     // The Windows service logs to a file and has no async main.
     let command = match cli.command {
         Cmd::Service(cmd) => {
             if !matches!(cmd, ServiceCmd::Run) {
                 init_console_log();
             }
+
             return service(cmd, cli.state_dir);
         }
         other => other,
     };
+
     init_console_log();
     let paths = StatePaths::new(cli.state_dir.unwrap_or_else(StatePaths::default_dir));
+
     if matches!(command, Cmd::Run) {
         let (tx, rx) = tokio::sync::watch::channel(false);
         let ctrl_c = std::thread::spawn(move || {
@@ -220,15 +233,18 @@ fn main() -> anyhow::Result<()> {
                     let _ = tokio::signal::ctrl_c().await;
                 });
             }
+
             let _ = tx.send(true);
         });
         let r = run_agent(paths, rx);
         drop(ctrl_c);
+
         return r;
     }
 
     // A single-threaded runtime keeps the idle footprint small.
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+
     rt.block_on(async move {
         match command {
             Cmd::Enroll { server, token, hostname, terminal_account } => {
@@ -236,9 +252,11 @@ fn main() -> anyhow::Result<()> {
                 #[cfg(windows)]
                 forge_agent::config::lock_windows_data(&paths.dir)?;
                 let mut facts = HostFacts::detect();
+
                 if let Some(h) = hostname {
                     facts.hostname = h;
                 }
+
                 let id =
                     enroll_with(&paths, AgentConfig::new(server), &token, facts, terminal_account.as_deref()).await?;
                 println!("enrolled as server {}", id.server_id);
@@ -261,12 +279,14 @@ fn main() -> anyhow::Result<()> {
                 let id = paths.load_identity()?;
                 println!("{}", serde_json::to_string_pretty(&id)?);
                 print_pins(&paths)?;
+
                 if let Ok(e) = std::fs::read_to_string(paths.link_error()) {
                     println!("link error: {}", e.trim());
                 }
             }
             Cmd::Pins(cmd) => pins(&paths, cmd).await?,
         }
+
         Ok(())
     })
 }
@@ -277,13 +297,16 @@ fn print_pins(paths: &StatePaths) -> anyhow::Result<()> {
     if set.is_empty() {
         println!("pinned keys: none ({}); the control plane is checked by its CA and host name", path.display());
     }
+
     for r in &set.revoked {
         println!("revoked: sha256:{r}");
     }
+
     for p in &set.server_keys {
         let retired = p.retired_ms.map(|r| format!("  retired {r}")).unwrap_or_default();
         println!("sha256:{}  {}  added {}{retired}", p.sha256, p.label, p.added_ms);
     }
+
     Ok(())
 }
 
@@ -304,6 +327,7 @@ async fn pins(paths: &StatePaths, cmd: PinsCmd) -> anyhow::Result<()> {
     use forge_core::Clock;
     let path = paths.pins();
     let now = forge_core::SystemClock.now().0;
+
     let (fp, label, add, force) = match cmd {
         PinsCmd::List => return print_pins(paths),
         PinsCmd::Add { sha256, label, force } => (sha256, label.unwrap_or_else(|| LABEL_MANUAL.into()), true, force),
@@ -311,27 +335,34 @@ async fn pins(paths: &StatePaths, cmd: PinsCmd) -> anyhow::Result<()> {
         PinsCmd::Reset { yes } => return reset_pins(paths, yes, now),
         PinsCmd::Fetch { server, yes } => {
             require_root(paths)?;
+
             let url = match server {
                 Some(s) => s,
                 None => paths.load_config()?.server_url,
             };
+
             let endpoint = forge_agent::link::Endpoint::parse(&url)?;
             let fp = forge_agent::tls::presented_key(&endpoint.host, endpoint.port).await?;
             println!("{} presents key sha256:{fp}", endpoint.authority());
             println!("Compare it with 'forge-server agent-key show' on the server before you pin it.");
+
             if !yes && !confirm("Pin this key? [y/N] ")? {
                 anyhow::bail!("not pinned");
             }
+
             (fp, LABEL_MANUAL.to_owned(), true, false)
         }
     };
+
     require_root(paths)?;
+
     // Under the pin file's lock: the root helper may apply an announcement
     // at the same time.
     let (changed, ()) = p::update(&path, |set| {
         if add && set.is_revoked(&fp) {
             eprintln!("warning: Forge revoked {fp}; a revoked key may be in an attacker's hands");
         }
+
         Ok((if add { set.add_checked(&fp, &label, now, force)? } else { set.remove(&fp)? }, ()))
     })?;
     let verb = if add { "pinned" } else { "removed" };
@@ -341,6 +372,7 @@ async fn pins(paths: &StatePaths, cmd: PinsCmd) -> anyhow::Result<()> {
         if changed { verb } else { "unchanged:" },
         if changed { "; the agent uses it from its next connection attempt" } else { "" }
     );
+
     Ok(())
 }
 
@@ -348,6 +380,7 @@ async fn pins(paths: &StatePaths, cmd: PinsCmd) -> anyhow::Result<()> {
 fn reset_pins(paths: &StatePaths, yes: bool, now: i64) -> anyhow::Result<()> {
     let path = paths.pins();
     require_root(paths)?;
+
     match forge_agent::pins::load(&path) {
         Ok(_) => {
             println!("{} is readable; nothing to reset. Use 'forge-agent pins remove' to drop a key.", path.display());
@@ -355,10 +388,13 @@ fn reset_pins(paths: &StatePaths, yes: bool, now: i64) -> anyhow::Result<()> {
         }
         Err(e) => println!("{} cannot be used: {e}", path.display()),
     }
+
     println!("Resetting moves it aside and leaves no pinned keys until you run 'forge-agent pins fetch'.");
+
     if !yes && !confirm("Reset the pin file? [y/N] ")? {
         anyhow::bail!("not reset");
     }
+
     match forge_agent::pins::reset(&path, now)? {
         Some(backup) => {
             tracing::warn!(backup = %backup.display(), "unreadable pin file reset by hand");
@@ -366,6 +402,7 @@ fn reset_pins(paths: &StatePaths, yes: bool, now: i64) -> anyhow::Result<()> {
         }
         None => println!("nothing to reset"),
     }
+
     Ok(())
 }
 
@@ -375,6 +412,7 @@ fn confirm(prompt: &str) -> anyhow::Result<bool> {
     std::io::stdout().flush()?;
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
+
     Ok(matches!(line.trim(), "y" | "Y" | "yes"))
 }
 
@@ -397,20 +435,24 @@ mod docs_coverage {
             if matches!(id, "help" | "version") {
                 continue;
             }
+
             let shown = match a.get_long() {
                 Some(l) => format!("--{l}"),
                 None => format!("<{}>", id.to_uppercase()),
             };
+
             let alt = format!("[{}]", id.to_uppercase());
             if !doc.contains(&shown) && !doc.contains(&alt) {
                 missing.push(format!("{path}: {shown}"));
             }
         }
+
         for sub in cmd.get_subcommands().filter(|s| s.get_name() != "help") {
             let p = format!("{path} {}", sub.get_name());
             if !doc.contains(&format!("## {p}\n")) && !doc.contains(&format!("### {p}\n")) {
                 missing.push(format!("heading `## {p}`"));
             }
+
             walk(sub, &p, doc, missing);
         }
     }

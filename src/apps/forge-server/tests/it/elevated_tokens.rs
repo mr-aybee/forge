@@ -2,9 +2,10 @@
 //! `enroll-token` helper (D-099).
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::*;
 
 /// An MFA-guarded call: probing a node needs `server.enroll` with MFA.
 async fn guarded(c: &Client) -> (StatusCode, Value) {
@@ -14,6 +15,7 @@ async fn guarded(c: &Client) -> (StatusCode, Value) {
 fn key_client(h: &Harness, secret: &Value) -> Client {
     let mut c = Client::anonymous(&h.base);
     c.bearer = Some(secret.as_str().unwrap().to_owned());
+
     c
 }
 
@@ -21,6 +23,7 @@ fn key_client(h: &Harness, secret: &Value) -> Client {
 async fn an_elevated_key_passes_the_mfa_guardrail_and_a_normal_one_does_not() {
     let h = start().await;
     let mut admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+
     // Creating an elevated key needs an MFA-verified session.
     let (s, e) = admin.post("/api/v1/api-keys", json!({"name": "ci", "elevated": true})).await;
     assert_eq!((s, e["title"].as_str()), (StatusCode::FORBIDDEN, Some("step_up_required")), "{e}");
@@ -103,6 +106,7 @@ async fn the_local_enroll_token_creates_the_cluster() {
     let ws = st.store.list_workspaces().await.unwrap()[0].id;
     let clusters = st.store.list_clusters(ws).await.unwrap();
     assert_eq!(clusters.iter().filter(|c| c.name == "edge").count(), 1);
+
     // Again: the cluster is reused.
     forge_server::bootstrap::local_enroll_token(st, "edge", "lab-a", 15).await.unwrap();
     assert_eq!(st.store.list_clusters(ws).await.unwrap().iter().filter(|c| c.name == "edge").count(), 1);

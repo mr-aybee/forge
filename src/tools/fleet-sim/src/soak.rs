@@ -188,6 +188,7 @@ impl Stats {
             ..Totals::default()
         };
         let now = now_ms();
+
         for s in spools {
             let st = s.status(now);
             t.files_uploaded += st.uploaded_files;
@@ -195,6 +196,7 @@ impl Stats {
             t.files_waiting += st.files;
             t.bytes_waiting += st.bytes;
         }
+
         t
     }
 
@@ -216,15 +218,18 @@ pub struct ServerSample {
 fn parse_vm_rss_mb(status: &str) -> Option<f64> {
     let line = status.lines().find(|l| l.starts_with("VmRSS:"))?;
     let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+
     Some(kb as f64 / 1024.0)
 }
 
 #[cfg(target_os = "linux")]
 fn read_server(pid: u32) -> ServerSample {
     let proc = PathBuf::from(format!("/proc/{pid}"));
+
     // A process that is gone or unreadable has no sample: `None` is shown.
     let rss_mb = std::fs::read_to_string(proc.join("status")).ok().and_then(|s| parse_vm_rss_mb(&s));
     let fds = std::fs::read_dir(proc.join("fd")).ok().map(|d| d.count() as u64);
+
     ServerSample { rss_mb, fds }
 }
 
@@ -248,6 +253,7 @@ fn report(agents: u32, elapsed: f64, secs: f64, before: Totals, now: Totals, mut
     lat.sort_by(f64::total_cmp);
     let d = |a: u64, b: u64| a.saturating_sub(b);
     let per_sec = |n: u64| if secs > 0.0 { n as f64 / secs } else { 0.0 };
+
     Report {
         elapsed_secs: elapsed,
         agents,
@@ -286,6 +292,7 @@ impl Rng {
         x ^= x >> 7;
         x ^= x << 17;
         self.0 = x;
+
         x
     }
 
@@ -313,6 +320,7 @@ impl LogState {
         self.owed += self.rate * secs;
         let new = self.owed.floor() as u64;
         self.owed -= new as f64;
+
         new
     }
 }
@@ -337,9 +345,11 @@ impl Files {
         let lines = std::mem::take(&mut self.unsealed);
         self.pending.insert(stem, lines);
         let mut forgotten = 0;
+
         while self.pending.len() > MAX_TRACKED_FILES {
             forgotten += self.pending.pop_first().map_or(0, |(_, n)| n);
         }
+
         forgotten
     }
 
@@ -354,8 +364,10 @@ impl Files {
         let mut drops = dropped_now.saturating_sub(self.dropped_seen);
         self.dropped_seen = dropped_now;
         let (mut acked, mut dropped) = (0, 0);
+
         for stem in gone {
             let n = self.pending.remove(&stem).unwrap_or(0);
+
             if drops > 0 {
                 drops -= 1;
                 dropped += n;
@@ -363,6 +375,7 @@ impl Files {
                 acked += n;
             }
         }
+
         (acked, dropped)
     }
 }
@@ -487,15 +500,18 @@ impl SimNode {
         let gib = 1u64 << 30;
         let minute = MinuteBucket::minute_of(now);
         let mut rows = Vec::new();
+
         match &mut self.bucket {
             Some(b) if b.minute() == minute => {}
             other => {
                 if let Some(b) = other.take() {
                     rows.push(Row::NodeMinute(b.close()));
                 }
+
                 *other = Some(MinuteBucket::new(minute));
             }
         }
+
         if let Some(b) = &mut self.bucket {
             b.add(&NodeSample {
                 cpu: m.cpu_percent,
@@ -509,10 +525,13 @@ impl SimNode {
                 load1: m.load1,
             });
         }
+
         if minute == self.last_minute {
             return rows;
         }
+
         self.last_minute = minute;
+
         for p in 0..10u32 {
             rows.push(Row::TopProcess(TopProcessRow {
                 minute,
@@ -524,6 +543,7 @@ impl SimNode {
                 cmd: format!("/usr/bin/proc-{p} --serve"),
             }));
         }
+
         for k in 0..self.containers {
             rows.push(Row::ContainerMinute(ContainerMinuteRow {
                 minute,
@@ -541,6 +561,7 @@ impl SimNode {
                 restarts: 0,
             }));
         }
+
         rows
     }
 
@@ -551,8 +572,10 @@ impl SimNode {
         tokio::task::spawn_blocking(move || {
             spool.tick(now)?;
             let mut w = Written::default();
+
             for r in &rows {
                 let line = matches!(r, Row::ContainerLog(_));
+
                 match spool.append(r, now) {
                     Ok(()) if line => w.lines += 1,
                     Ok(()) => {}
@@ -561,6 +584,7 @@ impl SimNode {
                     Err(_) => {}
                 }
             }
+
             w.stem = spool.seal_named(now)?;
             Ok(w)
         })
@@ -585,6 +609,7 @@ impl SimNode {
         let minute = self.minute_rows(m, now);
         let samples = minute.iter().filter(|r| matches!(r, Row::ContainerMinute(_))).count() as u64;
         rows.extend(minute);
+
         match self.write(rows, now).await {
             Ok(w) => {
                 stats.lines_sent.fetch_add(w.lines, Ordering::Relaxed);
@@ -601,6 +626,7 @@ impl SimNode {
                 stats.lines_dropped.fetch_add(generated, Ordering::Relaxed);
             }
         }
+
         self.settle_files(stats);
     }
 
@@ -623,26 +649,33 @@ impl SimNode {
         let t = Instant::now();
         let r = self.link.request(http::Method::POST, forge_proto::paths::HEARTBEAT, hb.encode_to_vec()).await;
         let rtt = t.elapsed();
+
         let Ok(body) = r else {
             self.results = results;
             stats.failed.fetch_add(1, Ordering::Relaxed);
+
             return false;
         };
+
         let Ok(resp) = HeartbeatResponse::decode(body.as_slice()) else {
             stats.failed.fetch_add(1, Ordering::Relaxed);
             return false;
         };
+
         stats.heartbeats.fetch_add(1, Ordering::Relaxed);
         self.follow_worker(&resp);
+
         if resp.commands.is_empty() && rtt + Duration::from_millis(500) >= hold {
             let ms = rtt.saturating_sub(hold).as_secs_f64() * 1000.0;
             stats.latency.lock().unwrap_or_else(PoisonError::into_inner).push(ms);
         } else {
             stats.early.fetch_add(1, Ordering::Relaxed);
         }
+
         // Refuse every command, like fleet-sim's other agents: the
         // simulator never changes the host.
         self.results = refusals(&resp);
+
         true
     }
 
@@ -652,12 +685,14 @@ impl SimNode {
         if self.fixed_url {
             return;
         }
+
         let Some(url) = resp.analytics.as_ref().map(|a| a.url.clone()).filter(|u| !u.is_empty()) else { return };
         self.target.send_if_modified(|t| {
             let same = t.as_ref().is_some_and(|t| t.url == url);
             if !same {
                 *t = Some(Target { url, generation: 0 });
             }
+
             !same
         });
     }
@@ -666,12 +701,15 @@ impl SimNode {
     async fn run(mut self, stats: Arc<Stats>, hold: Duration, mut stop: watch::Receiver<bool>) -> Self {
         let mut last = Instant::now();
         let mut failures: u32 = 0;
+
         loop {
             if *stop.borrow() {
                 return self;
             }
+
             let since = last.elapsed().as_secs_f64();
             last = Instant::now();
+
             // A heartbeat in flight finishes (the server holds it).
             let ok = self.beat(&stats, hold, since).await;
             let wait = if ok {
@@ -679,10 +717,12 @@ impl SimNode {
                 Duration::ZERO
             } else {
                 failures = failures.saturating_add(1);
+
                 // Full jitter, 1 s doubling to 60 s, like the agent.
                 let cap = 2u64.saturating_pow(failures.min(6)).min(60);
                 Duration::from_millis(self.rng.below(cap * 1000).max(100))
             };
+
             tokio::select! {
                 () = tokio::time::sleep(wait) => {}
                 _ = stop.changed() => return self,
@@ -723,6 +763,7 @@ async fn node(api: &Api, agent_url: &str, dir: &Path, i: u32, a: &SoakArgs) -> a
         cfg.allowed_commands = vec!["ping".into()];
         enroll(&paths, cfg, tok["token"].as_str().context("token")?, facts).await?;
     }
+
     let p = paths.clone();
     let (config, tls, spool) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let identity = p.load_identity()?;
@@ -739,6 +780,7 @@ async fn node(api: &Api, agent_url: &str, dir: &Path, i: u32, a: &SoakArgs) -> a
     })
     .await??;
     let url = a.worker_url.clone().or(config.analytics_url).filter(|u| !u.is_empty());
+
     Ok(Loaded {
         node: SimNode {
             idx: i,
@@ -781,6 +823,7 @@ impl spool_upload::Sink for CountingSink {
                 eprintln!("{}", json!({ "upload_failed": reason }));
             }
         }
+
         out
     }
 }
@@ -816,6 +859,7 @@ pub async fn run(a: SoakArgs) -> anyhow::Result<Report> {
     let mut tasks = Vec::new();
     let mut uploads = Vec::new();
     let mut spools = Vec::new();
+
     for l in loaded {
         let Loaded { node, make } = l?;
         let make = counting(make, stats.clone());
@@ -828,10 +872,12 @@ pub async fn run(a: SoakArgs) -> anyhow::Result<Report> {
         )));
         tasks.push(tokio::spawn(node.run(stats.clone(), a.hold, rx.clone())));
     }
+
     let start = Instant::now();
     let (mut before, mut at) = (stats.totals(&spools), Instant::now());
     let mut all = Vec::new();
     let mut peak: Option<f64> = None;
+
     while start.elapsed() < a.duration {
         let left = a.duration.saturating_sub(start.elapsed());
         tokio::time::sleep(a.report_every.min(left)).await;
@@ -845,27 +891,34 @@ pub async fn run(a: SoakArgs) -> anyhow::Result<Report> {
         eprintln!("{}", serde_json::to_string(&r)?);
         (before, at) = (now, Instant::now());
     }
+
     let secs = start.elapsed().as_secs_f64();
     let _ = stop.send(true);
     let mut nodes = Vec::new();
+
     for t in tasks {
         match t.await {
             Ok(n) => nodes.push(n),
             Err(e) => tracing::warn!(error = %e, "a node task failed"),
         }
     }
+
     // Uploads keep running while the server settles, so the spools drain.
     tokio::time::sleep(a.settle).await;
+
     for n in &mut nodes {
         n.settle_files(&stats);
     }
+
     let after = sample_server(a.server_pid).await;
     let _ = stop_uploads.send(true);
+
     for u in uploads {
         if let Err(e) = u.await {
             tracing::warn!(error = %e, "an upload task failed");
         }
     }
+
     all.extend(stats.take_latency());
     let end = stats.totals(&spools);
     let mut total = report(a.agents, secs, secs, Totals::default(), end, all);
@@ -876,6 +929,7 @@ pub async fn run(a: SoakArgs) -> anyhow::Result<Report> {
     total.server_rss_mb_after = after.rss_mb;
     total.server_fds_after = after.fds;
     total.spool_files_after = Some(end.files_waiting);
+
     Ok(total)
 }
 
@@ -916,6 +970,7 @@ mod tests {
         let tls = forge_agent::tls::ca_bootstrap().unwrap();
         let (spool, _) =
             Spool::open(dir, uuid::Uuid::now_v7(), Limits::default(), Arc::new(SystemFreeDisk), now_ms()).unwrap();
+
         SimNode {
             idx: 3,
             link: Link::new(Endpoint::parse("https://127.0.0.1:1").unwrap(), tls, REQUEST_TIMEOUT),
@@ -1007,17 +1062,21 @@ mod tests {
     #[test]
     fn files_that_leave_are_acked_or_dropped_oldest_first() {
         let mut f = Files::default();
+
         for (stem, lines) in [("a", 10), ("b", 20), ("c", 30)] {
             f.unsealed = lines;
             assert_eq!(f.sealed(Some(stem.into())), 0);
         }
+
         assert_eq!(f.sealed(None), 0, "an empty seal records nothing");
+
         // "a" and "b" left; one file was dropped: the oldest.
         assert_eq!(f.settle(|s| s == "c", 1), (20, 10));
         assert_eq!(f.settle(|_| false, 1), (30, 0), "no new drop");
         assert!(f.pending.is_empty());
 
         let mut f = Files::default();
+
         for i in 0..=MAX_TRACKED_FILES {
             f.unsealed = 1;
             let forgotten = f.sealed(Some(format!("{i:08}")));

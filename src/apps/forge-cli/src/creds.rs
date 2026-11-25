@@ -53,6 +53,7 @@ fn file_path(context: &str) -> Result<std::path::PathBuf> {
 /// Saves tokens; returns where they went.
 pub fn save(context: &str, t: &Tokens) -> Result<Store> {
     let json = serde_json::to_string(t)?;
+
     if preferred() == Store::Keyring {
         match keyring::Entry::new(SERVICE, context).and_then(|e| e.set_password(&json)) {
             Ok(()) => {
@@ -60,6 +61,7 @@ pub fn save(context: &str, t: &Tokens) -> Result<Store> {
                 if let Ok(p) = file_path(context) {
                     let _ = std::fs::remove_file(p);
                 }
+
                 return Ok(Store::Keyring);
             }
             Err(e) => {
@@ -67,7 +69,9 @@ pub fn save(context: &str, t: &Tokens) -> Result<Store> {
             }
         }
     }
+
     write_private(&file_path(context)?, json.as_bytes())?;
+
     Ok(Store::File)
 }
 
@@ -78,6 +82,7 @@ pub fn load(context: &str) -> Result<Option<Tokens>> {
     {
         return Ok(Some(serde_json::from_str(&json)?));
     }
+
     match std::fs::read(file_path(context)?) {
         Ok(b) => Ok(Some(serde_json::from_slice(&b)?)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -90,6 +95,7 @@ pub fn delete(context: &str) -> Result<()> {
     if let Ok(e) = keyring::Entry::new(SERVICE, context) {
         let _ = e.delete_credential();
     }
+
     match std::fs::remove_file(file_path(context)?) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),

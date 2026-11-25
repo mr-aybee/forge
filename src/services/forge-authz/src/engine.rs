@@ -16,6 +16,7 @@ use crate::{GUARDRAILS_SRC, ROLE_TEMPLATES_SRC, SCHEMA_SRC};
 
 const NAMESPACE: &str = "Forge";
 
+/// Errors from loading or evaluating Cedar policies.
 #[derive(Debug, Error)]
 pub enum AuthzError {
     #[error("cedar schema error: {0}")]
@@ -76,11 +77,14 @@ impl PolicyEngine {
 
         let mut set = PolicySet::new();
         let templates = PolicySet::from_str(ROLE_TEMPLATES_SRC).map_err(|e| AuthzError::Policy(e.to_string()))?;
+
         for t in templates.templates() {
             let id = annotated_id(t.annotation("id"))?;
             set.add_template(t.new_id(id)).map_err(|e| AuthzError::Policy(e.to_string()))?;
         }
+
         let guards = PolicySet::from_str(GUARDRAILS_SRC).map_err(|e| AuthzError::Policy(e.to_string()))?;
+
         for p in guards.policies() {
             let id = annotated_id(p.annotation("id"))?;
             set.add(p.new_id(id)).map_err(|e| AuthzError::Policy(e.to_string()))?;
@@ -111,15 +115,18 @@ impl PolicyEngine {
             (SlotId::resource(), entity_uid(&binding.scope)?),
         ]);
         let mut set = self.policies.write().map_err(|_| AuthzError::Policy("lock poisoned".into()))?;
+
         set.link(template, link_id, vals).map_err(|e| AuthzError::Policy(e.to_string()))
     }
 
     /// Replaces every group membership (start-up).
     pub fn set_memberships(&self, pairs: &[(GroupId, UserId)]) {
         let mut map: HashMap<UserId, HashSet<GroupId>> = HashMap::new();
+
         for (g, u) in pairs {
             map.entry(*u).or_default().insert(*g);
         }
+
         *self.memberships.write().unwrap_or_else(std::sync::PoisonError::into_inner) = map;
     }
 
@@ -138,6 +145,7 @@ impl PolicyEngine {
         let mut m = self.memberships.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(gs) = m.get_mut(&user) {
             gs.remove(&group);
+
             if gs.is_empty() {
                 m.remove(&user);
             }
@@ -147,9 +155,11 @@ impl PolicyEngine {
     /// Forgets a deleted group: no user is a member any more.
     pub fn drop_group(&self, group: GroupId) {
         let mut m = self.memberships.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+
         for gs in m.values_mut() {
             gs.remove(&group);
         }
+
         m.retain(|_, gs| !gs.is_empty());
     }
 
@@ -171,6 +181,7 @@ impl PolicyEngine {
         let entities = self.schema.action_entities().map_err(|e| AuthzError::Schema(e.to_string()))?;
         let group = action_group_uid(role.as_str())?;
         let mut out = Vec::new();
+
         for a in Action::ALL {
             let uid = action_uid(a)?;
             let in_group = entities.ancestors(&uid).is_some_and(|mut it| it.any(|g| *g == group));
@@ -178,7 +189,9 @@ impl PolicyEngine {
                 out.push(a);
             }
         }
+
         out.sort_by_key(|a| a.as_str());
+
         Ok(out)
     }
 
@@ -206,6 +219,7 @@ impl PolicyEngine {
         if actions.is_empty() {
             return Err(AuthzError::Policy("a profile needs at least one action".into()));
         }
+
         let id = Self::profile_template_id(profile, revision);
         let entities: Vec<serde_json::Value> = actions
             .iter()
@@ -223,6 +237,7 @@ impl PolicyEngine {
         if set.template(&id).is_some() {
             return Ok(());
         }
+
         let mut probe = PolicySet::new();
         probe.add_template(template.clone()).map_err(|e| AuthzError::Policy(e.to_string()))?;
         let result = Validator::new(self.schema.clone()).validate(&probe, ValidationMode::Strict);
@@ -230,6 +245,7 @@ impl PolicyEngine {
             let msgs: Vec<String> = result.validation_errors().map(ToString::to_string).collect();
             return Err(AuthzError::Validation(msgs.join("; ")));
         }
+
         set.add_template(template).map_err(|e| AuthzError::Policy(e.to_string()))
     }
 
@@ -239,25 +255,31 @@ impl PolicyEngine {
     pub fn link_assignment(&self, assignment: &ProfileAssignment, revision: u32) -> Result<(), AuthzError> {
         let template = Self::profile_template_id(assignment.profile_id, revision);
         let link_id = Self::assignment_link_id(assignment.id);
+
         let who = match assignment.assignee() {
             Some(Assignee::User(u)) => principal_uid(&Principal::User(u))?,
             Some(Assignee::Group(g)) => group_uid(g)?,
             None => return Err(AuthzError::Policy("an assignment names exactly one user or group".into())),
         };
+
         let vals = HashMap::from([(SlotId::principal(), who), (SlotId::resource(), entity_uid(&assignment.scope)?)]);
+
         if assignment.expires_at.is_some_and(|e| e <= self.clock.now()) {
             return self.unlink_assignment(assignment.id);
         }
+
         {
             let mut set = self.policies.write().map_err(|_| AuthzError::Policy("lock poisoned".into()))?;
             let _ = set.unlink(link_id.clone());
             set.link(template, link_id, vals).map_err(|e| AuthzError::Policy(e.to_string()))?;
         }
+
         if let Some(at) = assignment.expires_at {
             let mut ex = self.expiries.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             ex.retain(|_, id| *id != assignment.id);
             ex.insert((at.0, assignment.id.to_string()), assignment.id);
         }
+
         Ok(())
     }
 
@@ -269,11 +291,14 @@ impl PolicyEngine {
             if first > now {
                 return;
             }
+
             let later = ex.split_off(&(now.saturating_add(1), String::new()));
             let due = std::mem::replace(&mut *ex, later);
             due.into_values().collect()
         };
+
         let mut set = self.policies.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+
         for id in due {
             let _ = set.unlink(Self::assignment_link_id(id));
         }
@@ -284,6 +309,7 @@ impl PolicyEngine {
         self.expiries.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|_, x| *x != id);
         let mut set = self.policies.write().map_err(|_| AuthzError::Policy("lock poisoned".into()))?;
         let _ = set.unlink(Self::assignment_link_id(id));
+
         Ok(())
     }
 
@@ -320,6 +346,7 @@ impl PolicyEngine {
         let set = self.policies.read().map_err(|_| AuthzError::Policy("lock poisoned".into()))?;
         let response = self.engine.is_authorized(&request, &set, &entities);
         let errors: Vec<String> = response.diagnostics().errors().map(ToString::to_string).collect();
+
         Ok(Decision {
             allowed: response.decision() == CedarDecision::Allow && errors.is_empty(),
             reasons: response.diagnostics().reason().map(ToString::to_string).collect(),
@@ -350,6 +377,7 @@ impl PolicyEngine {
         let set = self.policies.read().map_err(|_| AuthzError::Policy("lock poisoned".into()))?;
         let response = self.engine.is_authorized(&request, &set, &entities);
         let errors: Vec<String> = response.diagnostics().errors().map(ToString::to_string).collect();
+
         Ok(Decision {
             allowed: response.decision() == CedarDecision::Allow && errors.is_empty(),
             reasons: response.diagnostics().reason().map(ToString::to_string).collect(),
@@ -372,11 +400,13 @@ impl PolicyEngine {
         let a_uid = action_uid(action)?;
         let mut merged: Vec<(EntityRef, Vec<EntityRef>)> = Vec::new();
         let mut seen: std::collections::HashMap<EntityRef, usize> = std::collections::HashMap::new();
+
         for r in resources {
             for (node, parents) in &r.parents {
                 match seen.get(node) {
                     Some(&i) => {
                         let ps: &mut Vec<EntityRef> = &mut merged[i].1;
+
                         for p in parents {
                             if !ps.contains(p) {
                                 ps.push(p.clone());
@@ -390,15 +420,18 @@ impl PolicyEngine {
                 }
             }
         }
+
         let graph = ResourceRef { entity: EntityRef::platform(), ancestors: vec![], parents: merged };
         let entities = self.entities_for(principal, &p_uid, &graph)?;
         let set = self.policies.read().map_err(|_| AuthzError::Policy("lock poisoned".into()))?;
         let mut out = Vec::with_capacity(resources.len());
+
         for r in resources {
             let context = Context::from_pairs([("mfa".to_owned(), RestrictedExpression::new_bool(ctx.mfa))])
                 .map_err(|e| AuthzError::Request(e.to_string()))?;
             let request =
                 Request::new(p_uid.clone(), a_uid.clone(), entity_uid(&r.entity)?, context, Some(&self.schema));
+
             let Ok(request) = request else {
                 out.push(Decision {
                     allowed: false,
@@ -407,6 +440,7 @@ impl PolicyEngine {
                 });
                 continue;
             };
+
             let response = self.engine.is_authorized(&request, &set, &entities);
             let errors: Vec<String> = response.diagnostics().errors().map(ToString::to_string).collect();
             out.push(Decision {
@@ -415,6 +449,7 @@ impl PolicyEngine {
                 errors,
             });
         }
+
         Ok(out)
     }
 
@@ -429,27 +464,35 @@ impl PolicyEngine {
         resource: &ResourceRef,
     ) -> Result<Entities, AuthzError> {
         let platform = EntityRef::platform();
+
         let groups = match who {
             Principal::User(u) => self.groups_of(*u),
         };
+
         let mut entities = Vec::with_capacity(resource.parents.len() + groups.len() + 2);
         let group_uids = groups.into_iter().map(group_uid).collect::<Result<HashSet<_>, _>>()?;
+
         for g in &group_uids {
             entities.push(Entity::new_no_attrs(g.clone(), HashSet::new()));
         }
+
         entities.push(Entity::new_no_attrs(principal.clone(), group_uids));
         let mut has_platform = false;
+
         for (node, parents) in &resource.parents {
             has_platform |= node.kind == EntityKind::Platform;
             let mut ps = parents.iter().map(entity_uid).collect::<Result<HashSet<_>, _>>()?;
             if ps.is_empty() && node.kind != EntityKind::Platform {
                 ps.insert(entity_uid(&platform)?);
             }
+
             entities.push(Entity::new_no_attrs(entity_uid(node)?, ps));
         }
+
         if !has_platform {
             entities.push(Entity::new_no_attrs(entity_uid(&platform)?, HashSet::new()));
         }
+
         Entities::from_entities(entities, Some(&self.schema)).map_err(|e| AuthzError::Request(e.to_string()))
     }
 }

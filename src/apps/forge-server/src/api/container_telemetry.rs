@@ -64,6 +64,7 @@ pub async fn node_metrics(
 ) -> ApiResult<Json<ContainerHistory>> {
     caller.authorize(Action::View, server_ref(id)).await?;
     let limit = q.limit.unwrap_or(MAX_HISTORY_CONTAINERS);
+
     Ok(Json(state.analytics.container_history(id, None, window(&state, &q), limit).await?))
 }
 
@@ -75,9 +76,11 @@ pub async fn container_metrics(
     Query(q): Query<ContainerMetricsQuery>,
 ) -> ApiResult<Json<ContainerHistory>> {
     caller.authorize(Action::View, server_ref(id)).await?;
+
     if name.is_empty() || name.len() > 256 || name.chars().any(char::is_control) {
         return Err(ApiError::bad_request("a container name is 1 to 256 characters"));
     }
+
     Ok(Json(state.analytics.container_history(id, Some(name), window(&state, &q), 1).await?))
 }
 
@@ -89,6 +92,7 @@ pub async fn get_settings(
 ) -> ApiResult<Json<ContainerTelemetrySettings>> {
     caller.authorize(Action::View, server_ref(id)).await?;
     state.store.get_server(id).await?;
+
     Ok(Json(state.container_telemetry.settings(id).await.map_err(telemetry_error)?))
 }
 
@@ -123,7 +127,9 @@ pub async fn put_settings(
     caller
         .audit(AUDIT_SETTINGS_UPDATE, &server_ref(id), Some(server.workspace_id), json!({ "from": old, "to": new }))
         .await;
+
     // The node picks the change up with its next heartbeat answer.
     state.hub.notifier(id).notify_one();
+
     Ok(Json(new))
 }

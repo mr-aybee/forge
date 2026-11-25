@@ -34,6 +34,7 @@ static SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(PARALLE
 pub async fn verify_blocking(password: &str, phc: &str) -> bool {
     let (password, phc) = (password.to_owned(), phc.to_owned());
     let Ok(_slot) = SLOTS.acquire().await else { return false };
+
     tokio::task::spawn_blocking(move || verify(&password, &phc)).await.unwrap_or(false)
 }
 
@@ -41,6 +42,7 @@ pub async fn verify_blocking(password: &str, phc: &str) -> bool {
 pub async fn hash_blocking(password: &str) -> Result<String, String> {
     let password = password.to_owned();
     let _slot = SLOTS.acquire().await.map_err(|e| e.to_string())?;
+
     tokio::task::spawn_blocking(move || hash(&password)).await.map_err(|e| e.to_string())?
 }
 
@@ -49,6 +51,7 @@ pub fn validate(password: &str) -> Result<(), String> {
     if password.chars().count() < MIN_LENGTH {
         return Err(format!("password must be at least {MIN_LENGTH} characters"));
     }
+
     Ok(())
 }
 

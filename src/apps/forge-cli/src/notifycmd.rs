@@ -521,42 +521,54 @@ fn email_body(stored: Option<EmailBody>, f: &EmailFlags, password: Option<String
             _ => return Err(CliError::usage(NEW_EMAIL_NEEDS)),
         },
     };
+
     if let Some(h) = &f.smtp_host {
         e.smtp_host.clone_from(h);
     }
+
     if let Some(t) = f.tls {
         // A new mode without a new port takes the mode's usual port.
         if f.smtp_port.is_none() && t != e.tls {
             e.smtp_port = None;
         }
+
         e.tls = t;
     }
+
     if let Some(p) = f.smtp_port {
         e.smtp_port = Some(p);
     }
+
     if f.no_smtp_user {
         e.username = None;
     } else if let Some(u) = &f.smtp_user {
         e.username = Some(u.clone());
     }
+
     e.password = password;
+
     if e.password.is_some() && e.username.is_none() {
         return Err(CliError::usage("--smtp-password needs --smtp-user"));
     }
+
     if e.tls == TlsMode::None && e.username.is_some() {
         return Err(CliError::usage(
             "a password is never sent without TLS: use --tls starttls or --tls tls, or pass --no-smtp-user",
         ));
     }
+
     if let Some(from) = &f.from {
         e.from.clone_from(from);
     }
+
     if !f.to.is_empty() {
         e.to = dedup(&f.to);
     }
+
     if let Some(p) = &f.subject_prefix {
         e.subject_prefix = Some(p.trim().to_owned()).filter(|p| !p.is_empty());
     }
+
     Ok(e)
 }
 
@@ -583,11 +595,13 @@ pub struct Resolved {
 /// new one).
 pub fn channel_body(stored: Option<ChannelBody>, f: &ChannelFlags, r: Resolved) -> Result<ChannelBody> {
     let Resolved { url, secret_item, smtp_password } = r;
+
     let mut body = match stored {
         Some(b) => {
             if !f.any() {
                 return Err(CliError::usage(NO_CHANNEL_CHANGE));
             }
+
             b
         }
         None => match (&f.name, f.kind, &url) {
@@ -605,22 +619,28 @@ pub fn channel_body(stored: Option<ChannelBody>, f: &ChannelFlags, r: Resolved) 
             _ => return Err(CliError::usage(NEW_CHANNEL_NEEDS)),
         },
     };
+
     if let Some(n) = &f.name {
         body.name.clone_from(n);
     }
+
     if let Some(k) = f.kind {
         body.kind = k;
     }
+
     if let Some(on) = switch(f.enabled, f.disabled) {
         body.enabled = on;
     }
+
     // Absent: the server keeps the stored URL.
     body.url = url;
+
     if f.no_secret_item {
         body.secret_item = None;
     } else if secret_item.is_some() {
         body.secret_item = secret_item;
     }
+
     if body.kind == Kind::Slack && body.secret_item.is_some() {
         return Err(CliError::usage(if f.secret_item.is_some() {
             "a slack channel is not signed (its URL is the secret): leave out --secret-item"
@@ -628,10 +648,12 @@ pub fn channel_body(stored: Option<ChannelBody>, f: &ChannelFlags, r: Resolved) 
             "a slack channel is not signed (its URL is the secret): pass --no-secret-item"
         }));
     }
+
     if body.kind == Kind::Email {
         if body.url.is_some() {
             return Err(CliError::usage("an email channel has no URL: leave out --url"));
         }
+
         if body.secret_item.is_some() {
             return Err(CliError::usage(if f.secret_item.is_some() {
                 "an email channel is not signed: leave out --secret-item"
@@ -639,15 +661,18 @@ pub fn channel_body(stored: Option<ChannelBody>, f: &ChannelFlags, r: Resolved) 
                 "an email channel is not signed: pass --no-secret-item"
             }));
         }
+
         body.email = Some(email_body(body.email.take(), &f.email, smtp_password)?);
     } else {
         if f.email.any() {
             return Err(CliError::usage("the SMTP flags (--smtp-host, --from, --to, …) are for --kind email only"));
         }
+
         if body.email.take().is_some() && body.url.is_none() {
             return Err(CliError::usage("an email channel becomes a webhook or slack channel only with a new --url"));
         }
     }
+
     Ok(body)
 }
 
@@ -705,6 +730,7 @@ pub fn parse_repeat(s: &str) -> Result<Option<u32>> {
             "--repeat {t}: use a duration from 5m to 7d (such as 30m, 4h or 1d), seconds (300 to 604800), or `never`"
         ))
     };
+
     let secs = if !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()) {
         t.parse::<u64>().map_err(|_| bad())?
     } else {
@@ -713,16 +739,19 @@ pub fn parse_repeat(s: &str) -> Result<Option<u32>> {
             Some(minutes) => minutes.checked_mul(60).ok_or_else(bad)?,
         }
     };
+
     u32::try_from(secs).ok().filter(|s| REPEAT_SECS.contains(s)).map(Some).ok_or_else(bad)
 }
 
 fn dedup<T: PartialEq + Clone>(items: &[T]) -> Vec<T> {
     let mut out: Vec<T> = Vec::with_capacity(items.len());
+
     for i in items {
         if !out.contains(i) {
             out.push(i.clone());
         }
     }
+
     out
 }
 
@@ -737,25 +766,31 @@ pub fn apply_people(body: &mut PolicyBody, f: &PolicyFlags, people: &People) -> 
         if !f.email_users.is_empty() {
             body.email_users = dedup(&people.users);
         }
+
         if !f.email_roles.is_empty() {
             body.email_roles = dedup(&f.email_roles);
         }
+
         if let Some(c) = &people.channel {
             body.email_channel = Some(c.clone());
         }
     }
+
     let has_people = !body.email_users.is_empty() || !body.email_roles.is_empty();
     if has_people && body.email_channel.is_none() {
         return Err(CliError::usage(
             "--email-user and --email-role need --email-channel: the email channel (SMTP server) that sends",
         ));
     }
+
     if !has_people {
         body.email_channel = None;
     }
+
     if body.channels.is_empty() && !has_people {
         return Err(CliError::usage("a policy needs at least one --channel, --email-user or --email-role"));
     }
+
     Ok(())
 }
 
@@ -769,11 +804,13 @@ pub fn policy_body(
     scope_ids: &[String],
 ) -> Result<PolicyBody> {
     let repeat = f.repeat.as_deref().map(parse_repeat).transpose()?;
+
     let mut body = match stored {
         Some(b) => {
             if !f.any() {
                 return Err(CliError::usage(NO_POLICY_CHANGE));
             }
+
             b
         }
         None => match (&f.name, f.min_severity) {
@@ -799,26 +836,33 @@ pub fn policy_body(
             }
         },
     };
+
     if let Some(n) = &f.name {
         body.name.clone_from(n);
     }
+
     if let Some(s) = f.min_severity {
         body.min_severity = s;
     }
+
     if let Some(on) = switch(f.enabled, f.disabled) {
         body.enabled = on;
     }
+
     if !f.events.is_empty() {
         body.events = dedup(&f.events);
     }
+
     if !channels.is_empty() {
         body.channels = dedup(channels);
     }
+
     if f.all_rules {
         body.rules.clear();
     } else if !f.rules.is_empty() {
         body.rules = dedup(&f.rules);
     }
+
     match f.scope {
         None => {}
         Some(ScopeKind::Servers) => body.scope = Some(Scope::Servers { ids: dedup(scope_ids) }),
@@ -828,14 +872,17 @@ pub fn policy_body(
             return Err(CliError::usage("--scope all takes no --scope-id: it covers every resource"));
         }
     }
+
     if let Some(r) = repeat {
         body.repeat_interval_secs = r;
     }
+
     if body.repeat_interval_secs.is_some() && !body.events.contains(&Event::Fired) {
         return Err(CliError::usage(
             "reminders (--repeat) need --event fired: pass it, or turn reminders off with --repeat never",
         ));
     }
+
     Ok(body)
 }
 
@@ -919,6 +966,7 @@ fn secret_from_flag(which: SecretFlag, spec: Option<&str>) -> Result<Option<Stri
                     which.flag()
                 )));
             }
+
             Ok(std::io::read_to_string(std::io::stdin())?)
         })
     })
@@ -931,6 +979,7 @@ async fn resolve_flags(api: &mut Api, flags: &ChannelFlags) -> Result<Resolved> 
     if flags.url.as_deref() == Some("@-") && flags.email.smtp_password.as_deref() == Some("@-") {
         return Err(CliError::usage("only one of --url and --smtp-password can read stdin (`@-`)"));
     }
+
     Ok(Resolved {
         url: secret_from_flag(SecretFlag::Url, flags.url.as_deref())?,
         smtp_password: secret_from_flag(SecretFlag::SmtpPassword, flags.email.smtp_password.as_deref())?,
@@ -1000,6 +1049,7 @@ fn policy_row(policy: &Value, channels: &Value) -> Value {
         .collect();
     let mut row = policy.clone();
     row["channel_names"] = json!(names.join(", "));
+
     row
 }
 
@@ -1009,14 +1059,17 @@ fn delivery_text(view: &Value) -> String {
     let mut delivery = view.clone();
     let attempts = delivery.as_object_mut().and_then(|d| d.remove("attempts")).unwrap_or(Value::Null);
     let mut text = out::render_human(&delivery, None);
+
     if attempts.as_array().is_some_and(|a| !a.is_empty()) {
         text.push_str("attempts:\n");
+
         for line in out::render_human(&attempts, Some(ATTEMPT_COLS)).lines() {
             text.push_str("  ");
             text.push_str(line);
             text.push('\n');
         }
     }
+
     text
 }
 
@@ -1035,14 +1088,18 @@ pub fn test_outcome(channel: &str, view: &Value) -> Result<()> {
     if status == "sent" {
         return Ok(());
     }
+
     let mut why = format!("status {status}");
+
     if let Some(code) = view["last_http_status"].as_u64() {
         let proto = if view["last_error"] == "smtp_reply" { "SMTP" } else { "HTTP" };
         why.push_str(&format!(", {proto} {code}"));
     }
+
     if let Some(class) = view["last_error"].as_str() {
         why.push_str(&format!(", error {class}"));
     }
+
     Err(CliError::new(
         Exit::JobFailed,
         format!(
@@ -1067,6 +1124,7 @@ async fn resolve(api: &mut Api, base: &str, what: &str, needle: &str) -> Result<
     if looks_like_id(needle) {
         return api.get(&format!("{base}/{}", enc(needle))).await;
     }
+
     pick(&api.get(base).await?, &["name"], what, needle)
 }
 
@@ -1083,7 +1141,9 @@ async fn channel_ids(api: &mut Api, channels: &[String]) -> Result<Vec<String>> 
     if channels.iter().all(|c| looks_like_id(c)) {
         return Ok(channels.to_vec());
     }
+
     let all = api.get(CHANNELS).await?;
+
     channels.iter().map(|c| pick(&all, &["name"], "notification channel", c).map(|c| id_of(&c).to_owned())).collect()
 }
 
@@ -1106,6 +1166,7 @@ async fn people_ids(api: &mut Api, f: &PolicyFlags) -> Result<People> {
         Some(c) => channel_ids(api, std::slice::from_ref(c)).await?.pop(),
         None => None,
     };
+
     let users = if f.email_users.iter().all(|u| looks_like_id(u)) {
         f.email_users.clone()
     } else {
@@ -1121,6 +1182,7 @@ async fn people_ids(api: &mut Api, f: &PolicyFlags) -> Result<People> {
             })
             .collect::<Result<Vec<_>>>()?
     };
+
     Ok(People { channel, users })
 }
 
@@ -1129,10 +1191,13 @@ async fn scope_ids(api: &mut Api, f: &PolicyFlags) -> Result<Vec<String>> {
     if f.scope != Some(ScopeKind::Servers) {
         return Ok(f.scope_ids.clone());
     }
+
     let mut ids = Vec::with_capacity(f.scope_ids.len());
+
     for s in &f.scope_ids {
         ids.push(if looks_like_id(s) { s.clone() } else { node_id(api, s).await? });
     }
+
     Ok(ids)
 }
 
@@ -1159,9 +1224,11 @@ pub async fn channels(g: &Global, server: &str, api: &mut Api, cmd: ChannelsCmd)
                 Some(_) => flags.url.is_some(),
                 None => false,
             };
+
             if flags.name.is_none() || !complete {
                 return Err(CliError::usage(NEW_CHANNEL_NEEDS));
             }
+
             let resolved = resolve_flags(api, &flags).await?;
             let body = channel_body(None, &flags, resolved)?;
             let v = api.post(CHANNELS, &serde_json::to_value(&body)?).await?;
@@ -1172,6 +1239,7 @@ pub async fn channels(g: &Global, server: &str, api: &mut Api, cmd: ChannelsCmd)
             if !flags.any() {
                 return Err(CliError::usage(NO_CHANNEL_CHANGE));
             }
+
             let cur = resolve(api, CHANNELS, "notification channel", &channel).await?;
             let resolved = resolve_flags(api, &flags).await?;
             let body = channel_body(Some(stored("channel", &cur)?), &flags, resolved)?;
@@ -1193,10 +1261,12 @@ pub async fn channels(g: &Global, server: &str, api: &mut Api, cmd: ChannelsCmd)
             let cur = resolve(api, CHANNELS, "notification channel", &channel).await?;
             let view = api.post(&format!("{CHANNELS}/{}/test", enc(id_of(&cur))), &json!({})).await?;
             let outcome = test_outcome(name_of(&cur, &channel), &view);
+
             // One document on stdout in machine formats: the delivery, or the error.
             if outcome.is_ok() || !g.output.is_machine() {
                 show_delivery(g, &view);
             }
+
             outcome
         }
     }
@@ -1234,6 +1304,7 @@ pub async fn policies(g: &Global, server: &str, api: &mut Api, cmd: PoliciesCmd)
             if !flags.any() {
                 return Err(CliError::usage(NO_POLICY_CHANGE));
             }
+
             let cur = resolve(api, POLICIES, "notification policy", &policy).await?;
             let channels = channel_ids(api, &flags.channels).await?;
             let ids = scope_ids(api, &flags).await?;
@@ -1265,22 +1336,28 @@ pub async fn deliveries(g: &Global, api: &mut Api, cmd: DeliveriesCmd) -> Result
     match cmd {
         DeliveriesCmd::List { alarm, channel, status, workspace, paging } => {
             let page: out::Page = paging.into();
+
             // The server caps a request at 500 deliveries.
             let fetch = page.fetch().unwrap_or(500).min(500);
             let mut q = format!("{DELIVERIES}?limit={fetch}");
+
             if let Some(w) = workspace {
                 q.push_str(&format!("&workspace={}", enc(&w)));
             }
+
             if let Some(a) = alarm {
                 q.push_str(&format!("&alarm={}", enc(&a)));
             }
+
             if let Some(c) = channel {
                 let ids = channel_ids(api, std::slice::from_ref(&c)).await?;
                 q.push_str(&format!("&channel={}", enc(ids.first().map_or(c.as_str(), String::as_str))));
             }
+
             if let Some(s) = status {
                 q.push_str(&format!("&status={}", s.as_str()));
             }
+
             let rows = crate::cmds::rows_of(api.get(&q).await?);
             let total = if rows.len() >= fetch { out::Total::AtLeast } else { out::Total::Rows };
             out::list(g.output, rows, Some(DELIVERY_COLS), page, total);
@@ -1307,6 +1384,7 @@ mod tests {
     fn parse(args: &[&str]) -> AlertsCmd {
         let mut all = vec!["forge", "alerts"];
         all.extend_from_slice(args);
+
         match Cli::try_parse_from(all).map(|c| c.cmd) {
             Ok(Cmd::Alerts(c)) => c,
             other => panic!("{other:?}"),
@@ -1316,12 +1394,14 @@ mod tests {
     fn refused(args: &[&str]) -> bool {
         let mut all = vec!["forge", "alerts"];
         all.extend_from_slice(args);
+
         Cli::try_parse_from(all).is_err()
     }
 
     fn channel_flags(args: &[&str]) -> ChannelFlags {
         let mut all = vec!["channels", "create"];
         all.extend_from_slice(args);
+
         match parse(&all) {
             AlertsCmd::Channels(ChannelsCmd::Create { flags }) => flags,
             other => panic!("{other:?}"),
@@ -1331,6 +1411,7 @@ mod tests {
     fn policy_flags(args: &[&str]) -> PolicyFlags {
         let mut all = vec!["policies", "create"];
         all.extend_from_slice(args);
+
         match parse(&all) {
             AlertsCmd::Policies(PoliciesCmd::Create { flags }) => flags,
             other => panic!("{other:?}"),
@@ -1386,6 +1467,7 @@ mod tests {
         assert_eq!(f.email_users, ["ana", "ana", "bo@example.com"]);
         assert_eq!(f.email_roles, [EmailRole::Operator, EmailRole::WorkspaceAdmin]);
         assert_eq!(f.email_channel.as_deref(), Some("Ops mail"));
+
         // No --channel is needed when people are emailed.
         let mut body = policy_body(None, &f, &[], &[]).unwrap_or_else(|e| panic!("{e}"));
         let people = People { channel: Some("c9".into()), users: ids(&["u1", "u1", "u2"]) };
@@ -1426,6 +1508,7 @@ mod tests {
             (Some("Ops webhook"), Some(Kind::Webhook), Some("@url.txt"))
         );
         assert!(f.disabled && !f.enabled && f.secret_item.is_none());
+
         match parse(&["channels", "update", "ops", "--secret-item", "hmac-key", "--enabled", "--yes"]) {
             AlertsCmd::Channels(ChannelsCmd::Update { channel, flags, yes }) => {
                 assert_eq!(
@@ -1435,6 +1518,7 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+
         assert!(matches!(parse(&["channels", "get", "ops"]), AlertsCmd::Channels(ChannelsCmd::Show { .. })));
         assert!(matches!(parse(&["channels", "test", "ops"]), AlertsCmd::Channels(ChannelsCmd::Test { .. })));
         assert!(matches!(
@@ -1450,12 +1534,14 @@ mod tests {
     fn a_url_is_read_from_a_file_or_stdin_and_never_from_the_command_line() {
         assert_eq!(url_source("@-").ok(), Some(SecretSource::Stdin));
         assert_eq!(url_source("@hook.txt").ok(), Some(SecretSource::File(PathBuf::from("hook.txt"))));
+
         for literal in [URL, "@", ""] {
             let e = url_source(literal).err().map(|e| (e.exit, e.code, e.message));
             let Some((exit, code, message)) = e else { panic!("{literal} accepted") };
             assert_eq!((exit, code.as_str()), (Exit::Usage, "secret_on_command_line"));
             assert!(!message.contains("hooks.example.com"), "the refusal does not repeat the URL");
         }
+
         // Stdin: the trailing newline of `echo` goes.
         assert_eq!(read_secret(SecretFlag::Url, "@-", || Ok(format!("{URL}\r\n"))).ok().as_deref(), Some(URL));
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
@@ -1491,6 +1577,7 @@ mod tests {
             serde_json::to_value(&body).ok(),
             Some(json!({ "name": "Chat", "kind": "slack", "enabled": false, "url": URL }))
         );
+
         // Missing pieces, and a signed slack channel.
         assert!(channel_body(None, &f, r(None, None)).is_err_and(|e| e.exit == Exit::Usage));
         let no_kind = channel_flags(&["--name", "x", "--url", "@u"]);
@@ -1519,6 +1606,7 @@ mod tests {
             let AlertsCmd::Channels(ChannelsCmd::Update { flags, .. }) = parse(&all) else { panic!("update") };
             channel_body(Some(cur.clone()), &flags, r(url, secret))
         };
+
         // Off: name, kind and secret stay; no URL is sent, so the stored one stays.
         let body = update(&["--disabled"], None, None).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(
@@ -1531,10 +1619,12 @@ mod tests {
         assert_eq!(body.secret_item, None);
         let body = update(&["--secret-item", "other"], None, Some("item-2")).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(body.secret_item.as_deref(), Some("item-2"));
+
         // A signed channel cannot become a slack one without dropping the secret.
         assert!(update(&["--kind", "slack"], None, None).is_err_and(|e| e.message.contains("--no-secret-item")));
         assert!(update(&["--kind", "slack", "--no-secret-item"], None, None).is_ok());
         assert!(update(&[], None, None).is_err_and(|e| e.exit == Exit::Usage));
+
         // A kind this build does not know is an error, not a guess.
         let unknown = stored::<ChannelBody>("channel", &json!({ "name": "Pager", "kind": "sms" }));
         assert!(unknown.is_err_and(|e| e.code == "unknown_value"));
@@ -1578,12 +1668,14 @@ mod tests {
             }))
         );
         assert!(!format!("{body:?}").contains("Sm7p"), "Debug hides the password");
+
         // Missing SMTP pieces, a URL, a signature, SMTP flags on a webhook.
         let partial = channel_flags(&["--name", "m", "--kind", "email", "--smtp-host", "smtp.example.com"]);
         assert!(channel_body(None, &partial, r(None, None)).is_err_and(|e| e.message.contains("--from")));
         assert!(channel_body(None, &f, r(Some(URL), None)).is_err());
         let hook = channel_flags(&["--name", "h", "--kind", "webhook", "--url", "@u", "--to", "ops@example.com"]);
         assert!(channel_body(None, &hook, r(Some(URL), None)).is_err_and(|e| e.message.contains("--kind email")));
+
         // A user name never goes without TLS; a password needs a user name.
         let plain = channel_flags(&[
             "--name",
@@ -1618,11 +1710,13 @@ mod tests {
         ]);
         let pw = Resolved { smtp_password: Some("x".into()), ..Resolved::default() };
         assert!(channel_body(None, &orphan, pw).is_err_and(|e| e.message.contains("--smtp-user")));
+
         // A password on the command line is refused like a URL.
         let e = secret_source(SecretFlag::SmtpPassword, "hunter2").err().map(|e| (e.code, e.message));
         let Some((code, message)) = e else { panic!("accepted") };
         assert_eq!(code, "secret_on_command_line");
         assert!(message.contains("--smtp-password") && !message.contains("hunter2"), "{message}");
+
         // A password keeps its spaces; only the line break goes.
         assert_eq!(read_secret(SecretFlag::SmtpPassword, "@-", || Ok(" p w \n".into())).ok().as_deref(), Some(" p w "));
     }
@@ -1651,6 +1745,7 @@ mod tests {
         let e = body.email.unwrap_or_else(|| panic!("email"));
         assert_eq!((e.to.len(), e.username.as_deref(), e.password.as_deref()), (2, Some("forge"), None));
         assert_eq!(e.smtp_port, Some(587));
+
         // A new TLS mode takes its usual port unless one is given.
         let e = update(&["--tls", "tls"], Resolved::default()).unwrap_or_else(|e| panic!("{e}")).email;
         assert_eq!(e.map(|e| (e.tls, e.smtp_port)), Some((TlsMode::Tls, None)));
@@ -1658,6 +1753,7 @@ mod tests {
         assert_eq!(e.and_then(|e| e.username), None);
         let e = update(&["--subject-prefix", ""], Resolved::default()).unwrap_or_else(|e| panic!("{e}")).email;
         assert_eq!(e.and_then(|e| e.subject_prefix), None);
+
         // Away from email only with a URL.
         assert!(update(&["--kind", "webhook"], Resolved::default()).is_err());
         let to_hook =
@@ -1675,6 +1771,7 @@ mod tests {
         assert_eq!(parse_repeat("1h30m").ok(), Some(Some(5400)));
         assert_eq!(parse_repeat("7d").ok(), Some(Some(604_800)));
         assert_eq!(parse_repeat("1w").ok(), Some(Some(604_800)));
+
         for bad in ["", "299", "4m", "8d", "604801", "soon", "1.5h", "-300", "99999999999999999999"] {
             assert!(parse_repeat(bad).is_err_and(|e| e.exit == Exit::Usage && e.message.contains("--repeat")), "{bad}");
         }
@@ -1750,6 +1847,7 @@ mod tests {
                 "repeat_interval_secs": 1800, "channels": ["c1"],
             }))
         );
+
         // The smallest policy: no scope and no reminder fields at all.
         let f = policy_flags(&["--name", "All", "--min-severity", "info", "--event", "resolved", "--channel", "ops"]);
         let body = policy_body(None, &f, &ids(&["c1"]), &[]).unwrap_or_else(|e| panic!("{e}"));
@@ -1760,6 +1858,7 @@ mod tests {
                 "events": ["resolved"], "channels": ["c1"],
             }))
         );
+
         // What a new policy needs, and what cannot be combined.
         for missing in [
             &["--min-severity", "info", "--event", "fired", "--channel", "c"][..],
@@ -1770,6 +1869,7 @@ mod tests {
             let f = policy_flags(missing);
             assert!(policy_body(None, &f, &f.channels, &[]).is_err_and(|e| e.message.contains("a new policy needs")));
         }
+
         let f = policy_flags(&[
             "--name",
             "x",
@@ -1828,12 +1928,14 @@ mod tests {
         assert_eq!(b, PolicyBody { enabled: false, ..stored_policy() }, "everything else stays");
         let b = ok(&["--min-severity", "warning", "--name", "Warnings"], &[], &[]);
         assert_eq!((b.min_severity, b.name.as_str(), b.channels.len()), (Severity::Warning, "Warnings", 2));
+
         // Lists are replaced as a whole.
         let b = ok(&["--channel", "chat"], &["c9"], &[]);
         assert_eq!((b.channels, b.rules, b.events.len()), (ids(&["c9"]), ids(&["r1"]), 2));
         let b = ok(&["--rule", "r7", "--rule", "r8"], &[], &[]);
         assert_eq!(b.rules, ids(&["r7", "r8"]));
         assert!(ok(&["--all-rules"], &[], &[]).rules.is_empty());
+
         // Scope: another kind, all of a kind, or none.
         assert_eq!(
             ok(&["--scope", "services", "--scope-id", "a1"], &[], &["a1"]).scope,
@@ -1841,6 +1943,7 @@ mod tests {
         );
         assert_eq!(ok(&["--scope", "servers"], &[], &[]).scope, Some(Scope::Servers { ids: Vec::new() }));
         assert_eq!(ok(&["--scope", "all"], &[], &[]).scope, None);
+
         // Reminders: changed, turned off, and tied to `fired`.
         assert_eq!(ok(&["--repeat", "600"], &[], &[]).repeat_interval_secs, Some(600));
         assert_eq!(ok(&["--repeat", "never"], &[], &[]).repeat_interval_secs, None);
@@ -1859,6 +1962,7 @@ mod tests {
             "created_by": { "type": "user", "id": "u1" }, "created_at": 1, "updated_at": 2,
         });
         assert_eq!(stored::<PolicyBody>("policy", &p).ok(), Some(stored_policy()));
+
         // `scope` and `repeat_interval_secs` are left out when unset.
         let bare =
             json!({ "name": "All", "enabled": false, "min_severity": "info", "events": ["fired"], "channels": ["c1"] });
@@ -1879,12 +1983,15 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+
         assert!(matches!(parse(&["deliveries", "show", "d1"]), AlertsCmd::Deliveries(DeliveriesCmd::Show { .. })));
         assert!(refused(&["deliveries", "list", "--status", "lost"]));
+
         for s in [Status::Pending, Status::Sending, Status::Sent, Status::Failed, Status::Cancelled, Status::Suppressed]
         {
             assert_eq!(s.to_possible_value().map(|v| v.get_name().to_owned()).as_deref(), Some(s.as_str()));
         }
+
         assert_eq!(with_workspace(CHANNELS, Some("w 1")), "/api/v1/notification-channels?workspace=w+1");
     }
 
@@ -1921,6 +2028,7 @@ mod tests {
         assert!(text.contains("attempts:\n  NUMBER  AT  OK  HTTP  ERROR        DURATION (MS)\n"), "{text}");
         assert!(text.contains("  1       0   no  503   http_status  12\n"), "{text}");
         assert!(text.contains("  2       0   no  -     timeout      15000\n"), "{text}");
+
         // No attempts yet: no empty table.
         assert!(!delivery_text(&json!({ "id": "d2", "status": "pending", "attempts": [] })).contains("attempts"));
     }

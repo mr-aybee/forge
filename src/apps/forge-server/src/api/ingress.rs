@@ -51,19 +51,23 @@ async fn members(state: &AppState, cluster: ClusterId) -> ApiResult<Vec<Server>>
 /// (which only works where the control plane can resolve it).
 pub async fn node_address(state: &AppState, s: &Server) -> String {
     use forge_core::tags::FactsRepository;
+
     if let Ok(Some(e)) = state.store.get_ssh_endpoint(s.id).await
         && !e.host.is_empty()
     {
         return e.host;
     }
+
     if let Some(ip) = crate::facts::live_address(s.id) {
         return ip;
     }
+
     if let Ok(all) = state.store.all_facts().await
         && let Some(ip) = all.get(&s.id).and_then(|(f, _)| f["address"].as_str())
     {
         return ip.to_owned();
     }
+
     s.hostname.clone()
 }
 
@@ -71,6 +75,7 @@ pub async fn load_profile(state: &AppState, cluster: ClusterId) -> ApiResult<Opt
     let Some(rec) = state.store.get_cluster_profile(cluster).await? else { return Ok(None) };
     let p = serde_json::from_value(rec.profile)
         .map_err(|e| ApiError::bad_request(format!("stored cluster profile is invalid: {e}")))?;
+
     Ok(Some((p, rec.status)))
 }
 
@@ -82,6 +87,7 @@ async fn authorize_custom(caller: &Caller, profile: &ClusterProfile) -> ApiResul
             caller.authorize(Action::ServerCommand, server_ref(e)).await?;
         }
     }
+
     Ok(())
 }
 
@@ -98,6 +104,7 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Path(id): Path<C
     caller.authorize(Action::View, cluster_ref(id)).await?;
     let cluster = state.store.get_cluster(id).await?;
     let mut out_members = Vec::new();
+
     for s in members(&state, id).await? {
         out_members.push(json!({
             "id": s.id,
@@ -109,16 +116,19 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Path(id): Path<C
             "address": node_address(&state, &s).await,
         }));
     }
+
     let (profile, status) = match load_profile(&state, id).await? {
         Some((p, mut st)) => {
             if let Some(o) = st.as_object_mut() {
                 o.remove("vrrp_auth");
                 o.remove("applied_by");
             }
+
             (Some(p), st)
         }
         None => (None, json!({})),
     };
+
     Ok(Json(json!({ "cluster": cluster, "profile": profile, "status": status, "members": out_members })))
 }
 
@@ -135,11 +145,13 @@ pub async fn put(
     if let Some(bad) = edge_ids(&profile)?.into_iter().find(|e| !ids.contains(e)) {
         return Err(ApiError::bad_request(format!("node {bad} is not a member of this cluster")));
     }
+
     authorize_custom(&caller, &profile).await?;
     let mut status = state.store.get_cluster_profile(id).await?.map_or_else(|| json!({}), |r| r.status);
     if status.get("vrrp_auth").and_then(Value::as_str).is_none() {
         status["vrrp_auth"] = json!(forge_secrets::crypto::random_token::<6>());
     }
+
     status["dirty"] = json!(true);
     state
         .store
@@ -153,6 +165,7 @@ pub async fn put(
     caller
         .audit("cluster.profile.update", &cluster_ref(id), Some(cluster.workspace_id), json!({ "profile": profile }))
         .await;
+
     Ok(Json(json!({ "saved": true })))
 }
 
@@ -168,13 +181,17 @@ async fn edges_op(
     if ids.is_empty() {
         return Err(ApiError::bad_request("this profile has no edge nodes"));
     }
+
     for e in &ids {
         caller.authorize(Action::ProxyManage, server_ref(*e)).await?;
     }
+
     if !remove {
         authorize_custom(caller, profile).await?;
     }
+
     let mut out = serde_json::Map::new();
+
     for (index, e) in ids.iter().enumerate() {
         let op = if remove {
             IngressOp::Remove
@@ -186,6 +203,7 @@ async fn edges_op(
                     .then(|| Box::new(KeepalivedNode { spec: ingress.clone(), index, auth: auth.to_owned() })),
             }
         };
+
         let r = run_on_node(
             state,
             caller,
@@ -194,17 +212,20 @@ async fn edges_op(
             Duration::from_secs(120),
         )
         .await?;
+
         let status = match (remove, r["status"].as_str()) {
             (_, Some("failed")) => "failed",
             (false, Some("succeeded")) => "applied",
             (true, Some("succeeded")) => "removed",
             _ => "pending",
         };
+
         out.insert(
             e.to_string(),
             json!({ "status": status, "error": r["error"], "job_id": r["job_id"], "updated_at": state.clock.now().0 }),
         );
     }
+
     Ok(Value::Object(out))
 }
 
@@ -236,6 +257,7 @@ pub async fn apply(State(state): State<AppState>, caller: Caller, Path(id): Path
     status["edges"] = edges.clone();
     status["dirty"] = json!(false);
     status["applied_at"] = json!(state.clock.now().0);
+
     // DNS: publish now; the health loop keeps it current as this caller.
     let mut dns = Value::Null;
     if profile.ingress.as_ref().is_some_and(|i| i.dns.is_some()) {
@@ -248,6 +270,7 @@ pub async fn apply(State(state): State<AppState>, caller: Caller, Path(id): Path
         dns = super::ingress_dns::publish(&state, id, &profile, &status, &by).await;
         status["dns"] = dns.clone();
     }
+
     save_status(&state, id, &profile, status).await?;
     caller
         .audit(
@@ -257,6 +280,7 @@ pub async fn apply(State(state): State<AppState>, caller: Caller, Path(id): Path
             json!({ "cluster": cluster.name }),
         )
         .await;
+
     Ok(Json(json!({ "edges": edges, "dns": dns })))
 }
 
@@ -267,6 +291,7 @@ fn release_removed(mut profile: ClusterProfile, results: &Value) -> ClusterProfi
     if let Some(ingress) = profile.ingress.as_mut() {
         ingress.edges.retain(|e| results[&e.server_id]["status"].as_str() != Some("removed"));
     }
+
     profile
 }
 
@@ -280,6 +305,7 @@ pub async fn remove(
     let (profile, mut status) =
         load_profile(&state, id).await?.ok_or_else(|| ApiError::bad_request("this cluster has no profile"))?;
     let edges = edges_op(&state, &caller, &profile, "", true).await?;
+
     // Issue #25: an edge the profile was taken off holds no ingress role any
     // more, so it can leave the cluster. Edges whose removal failed or is
     // still pending keep the role, so the operator can retry the removal.
@@ -295,22 +321,27 @@ pub async fn remove(
             json!({ "cluster": cluster.name }),
         )
         .await;
+
     Ok(Json(json!({ "edges": edges })))
 }
 
 /// Live state. Read-only commands; nodes the caller cannot manage are skipped.
 pub async fn live(State(state): State<AppState>, caller: Caller, Path(id): Path<ClusterId>) -> ApiResult<Json<Value>> {
     caller.authorize(Action::View, cluster_ref(id)).await?;
+
     let Some((profile, _)) = load_profile(&state, id).await? else {
         return Ok(Json(json!({ "edges": {} })));
     };
+
     let vips: Vec<String> =
         profile.ingress.as_ref().and_then(|i| i.vrrp.as_ref()).map(|v| v.vips.clone()).unwrap_or_default();
     let mut edges = serde_json::Map::new();
+
     for e in edge_ids(&profile)? {
         if !caller.can(Action::ServerManage, server_ref(e)).await {
             continue;
         }
+
         let op = IngressOp::Status { vips: vips.clone() };
         let r = run_on_node(
             &state,
@@ -322,6 +353,7 @@ pub async fn live(State(state): State<AppState>, caller: Caller, Path(id): Path<
         .await?;
         edges.insert(e.to_string(), json!({ "status": r["status"], "error": r["error"], "state": r["result"] }));
     }
+
     Ok(Json(json!({ "edges": edges })))
 }
 

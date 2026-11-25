@@ -28,6 +28,7 @@ impl IdentityService {
     pub fn with_connectors(mut self, repo: Arc<dyn ConnectorRepository>, enabled: bool) -> Self {
         self.connectors = Some(repo);
         self.connectors_enabled = enabled;
+
         self
     }
 
@@ -46,17 +47,21 @@ impl IdentityService {
     ) -> Result<OAuthClientRecord, IdentityError> {
         let repo = self.connector_repo()?;
         let name = clean_name(name)?;
+
         if redirect_uris.is_empty() || redirect_uris.len() > MAX_REDIRECT_URIS {
             return Err(invalid_redirect(format!("between 1 and {MAX_REDIRECT_URIS} redirect_uris are required")));
         }
+
         for uri in redirect_uris {
             validate_redirect_uri(uri)?;
         }
+
         let now = self.clock.now();
         let since = Timestamp(now.0 - 3_600_000);
         if repo.count_clients_since(since).await? >= hourly_cap {
             return Err(IdentityError::Throttled);
         }
+
         let client = OAuthClientRecord {
             client_id: format!("mcp_{}", random_token::<18>()),
             name,
@@ -67,6 +72,7 @@ impl IdentityService {
             last_used_at: None,
         };
         repo.create_client(&client).await?;
+
         Ok(client)
     }
 
@@ -98,9 +104,11 @@ impl IdentityService {
         if !client.redirect_uris.iter().any(|u| u == redirect_uri) {
             return Err(IdentityError::InvalidRequest("redirect_uri not registered".into()));
         }
+
         if code_challenge_method != "S256" || code_challenge.len() != 43 {
             return Err(IdentityError::InvalidRequest("PKCE S256 code_challenge required".into()));
         }
+
         Ok(client)
     }
 
@@ -146,6 +154,7 @@ impl IdentityService {
                 connection_id: Some(connection.id.clone()),
             })
             .await?;
+
         Ok((connection, code))
     }
 
@@ -153,15 +162,19 @@ impl IdentityService {
     pub(crate) async fn active_connection(&self, id: &str) -> Result<Option<AgentConnection>, IdentityError> {
         let Some(repo) = self.connectors.as_ref() else { return Ok(None) };
         let Some(c) = repo.get_connection(id).await?.filter(|c| c.revoked_at.is_none()) else { return Ok(None) };
+
         // A revoked client ends its connections, even one approved meanwhile.
         let client_ok = repo.get_client(&c.client_id).await?.is_some_and(|cl| cl.revoked_at.is_none());
+
         Ok(client_ok.then_some(c))
     }
 
+    /// Lists agent connections, optionally for one user.
     pub async fn list_connections(&self, user: Option<UserId>) -> Result<Vec<AgentConnection>, IdentityError> {
         Ok(self.connector_repo()?.list_connections(user).await?)
     }
 
+    /// One agent connection by id.
     pub async fn get_connection(&self, id: &str) -> Result<Option<AgentConnection>, IdentityError> {
         Ok(self.connector_repo()?.get_connection(id).await?)
     }
@@ -171,6 +184,7 @@ impl IdentityService {
         Ok(self.connector_repo()?.revoke_connection(id, self.clock.now()).await?)
     }
 
+    /// Lists registered OAuth clients.
     pub async fn list_clients(&self) -> Result<Vec<OAuthClientRecord>, IdentityError> {
         Ok(self.connector_repo()?.list_clients().await?)
     }
@@ -186,6 +200,7 @@ impl IdentityService {
         if c.last_used_at.is_some_and(|t| now.0 - t.0 < Duration::from_secs(60).as_millis() as i64) {
             return;
         }
+
         if let Some(repo) = self.connectors.as_ref() {
             let _ = repo.touch_connection(&c.id, now).await;
         }
@@ -211,6 +226,7 @@ fn clean_name(name: &str) -> Result<String, IdentityError> {
             "client_name is required (up to {MAX_NAME_LEN} characters)"
         )));
     }
+
     Ok(n)
 }
 
@@ -221,10 +237,12 @@ pub fn validate_redirect_uri(uri: &str) -> Result<(), IdentityError> {
     if uri.len() > MAX_URI_LEN || uri.contains('*') || uri.contains('#') || uri.chars().any(char::is_whitespace) {
         return Err(invalid_redirect(format!("invalid redirect URI `{}`", short(uri))));
     }
+
     let u = url::Url::parse(uri).map_err(|_| invalid_redirect(format!("invalid redirect URI `{}`", short(uri))))?;
     if !u.username().is_empty() || u.password().is_some() {
         return Err(invalid_redirect("redirect URIs may not contain user info"));
     }
+
     match u.scheme() {
         "https" if u.host_str().is_some_and(|h| !h.is_empty()) => Ok(()),
         "http" if matches!(u.host_str(), Some("127.0.0.1" | "[::1]" | "localhost")) => Ok(()),
@@ -250,6 +268,7 @@ pub fn redirect_host(uri: &str) -> String {
                 (Some(h), None) => h.to_owned(),
                 _ => String::new(),
             };
+
             if matches!(u.scheme(), "http" | "https") { host } else { format!("{}://{host}", u.scheme()) }
         }
         Err(_) => String::new(),
@@ -277,6 +296,7 @@ mod tests {
         ] {
             assert!(validate_redirect_uri(ok).is_ok(), "{ok}");
         }
+
         for bad in [
             "https://*.example.com/cb",
             "https://example.com/cb#frag",

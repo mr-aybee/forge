@@ -10,6 +10,7 @@ use serde_json::json;
 async fn store() -> (Store, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let s = Store::open_sqlite(&dir.path().join("forge.db")).await.unwrap();
+
     (s, dir)
 }
 
@@ -128,6 +129,7 @@ async fn policy_people_and_delivery_recipients_round_trip() {
     p.email_roles = vec![Role::Operator, Role::WorkspaceAdmin];
     s.put_policy(&p).await.unwrap();
     assert_eq!(s.get_policy(p.id).await.unwrap(), Some(p.clone()));
+
     // Without people the stored recipients are cleared.
     p.email_users.clear();
     p.email_roles.clear();
@@ -141,6 +143,7 @@ async fn policy_people_and_delivery_recipients_round_trip() {
     let mut d = delivery(&a, DeliveryEvent::Fired, &p, &c, 10);
     d.dedupe_key = people_dedupe_key(a.id, DeliveryEvent::Fired, 0, p.id, c.id);
     d.recipients = Some(DeliveryRecipients { count: 1, to: vec!["p@example.com".into()], skipped: vec![skipped] });
+
     // A delivery that resolved to nobody is added already cancelled.
     let mut nobody = delivery(&a, DeliveryEvent::Fired, &p, &c, 10);
     nobody.status = DeliveryStatus::Cancelled;
@@ -152,6 +155,7 @@ async fn policy_people_and_delivery_recipients_round_trip() {
     assert_eq!((got.status, got.detail.as_deref()), (DeliveryStatus::Cancelled, Some("no recipients")));
     assert_eq!(got.finished_at, Some(Timestamp(10)));
     assert_eq!(got.recipients, nobody.recipients);
+
     // Only the pending one is due.
     let due: Vec<DeliveryId> =
         s.due_deliveries(Timestamp(20), 10, 10).await.unwrap().into_iter().map(|x| x.id).collect();
@@ -199,6 +203,7 @@ async fn alarm_changes_write_their_transition_in_the_same_transaction() {
     let ws = WorkspaceId::new();
     let a = alarm(ws, "fp-1", 10);
     s.open_alarm(&a, &ev(&a, "fired", 10)).await.unwrap();
+
     // A refused duplicate leaves no transition behind.
     let dup = alarm(ws, "fp-1", 11);
     assert!(s.open_alarm(&dup, &ev(&dup, "fired", 11)).await.is_err());
@@ -213,6 +218,7 @@ async fn alarm_changes_write_their_transition_in_the_same_transaction() {
     assert_eq!(s.unplanned_transitions(10).await.unwrap().len(), 1);
 
     assert!(s.close_alarm(a.id, AlarmState::Resolved, Timestamp(20), None, &ev(&a, "resolved", 20)).await.unwrap());
+
     // A second close changes nothing and records nothing.
     assert!(!s.close_alarm(a.id, AlarmState::Ended, Timestamp(21), Some("x"), &ev(&a, "ended", 21)).await.unwrap());
     let kinds: Vec<TransitionKind> = s.unplanned_transitions(10).await.unwrap().into_iter().map(|t| t.kind).collect();
@@ -242,6 +248,7 @@ async fn planning_a_transition_twice_adds_nothing() {
     // The same transition again, with fresh delivery ids: already planned.
     let again = vec![delivery(&a, DeliveryEvent::Fired, &p, &c, 12), delivery(&a, DeliveryEvent::Fired, &p, &c2, 12)];
     assert_eq!(s.plan_transition(&t, &again, Timestamp(12)).await.unwrap(), 0);
+
     // And outside a transition the dedupe key refuses a copy.
     assert_eq!(s.add_deliveries(&again).await.unwrap(), 0);
     let all =
@@ -298,6 +305,7 @@ async fn a_delivery_is_claimed_once_retried_and_finished() {
         error: None,
         duration_ms: 3,
     };
+
     // The second attempt (lease lost) reports late: it no longer holds the
     // delivery, so nothing changes and no attempt row is written.
     let late = DeliveryAttempt { number: 2, at: Timestamp(261), ok: true, http_status: Some(200), ..fail.clone() };
@@ -307,12 +315,14 @@ async fn a_delivery_is_claimed_once_retried_and_finished() {
     assert_eq!(s.delivery_attempts(d.id).await.unwrap(), vec![fail.clone()]);
 
     assert!(s.finish_attempt(&ok, AttemptResult::Sent).await.unwrap());
+
     // A repeat of the finished attempt is refused too: it is no longer sending.
     assert!(!s.finish_attempt(&ok, AttemptResult::Failed).await.unwrap());
     let got = s.get_delivery(d.id).await.unwrap().unwrap();
     assert_eq!((got.status, got.attempts, got.finished_at), (DeliveryStatus::Sent, 3, Some(Timestamp(261))));
     assert_eq!((got.last_error, got.last_http_status), (None, Some(204)));
     assert_eq!(s.delivery_attempts(d.id).await.unwrap(), vec![fail, ok]);
+
     // Final: nothing claims or cancels it any more.
     assert!(!s.claim_delivery(d.id, Timestamp(9999), Timestamp(99_999)).await.unwrap());
     s.cancel_delivery(d.id, "late", Timestamp(300)).await.unwrap();
@@ -369,6 +379,7 @@ async fn a_transition_that_cannot_be_planned_is_given_up_after_the_limit() {
     assert_eq!(s.unplanned_transitions(10).await.unwrap().len(), 1, "still waiting");
     assert!(s.fail_transition(&t, 3, "alarm unreadable", Timestamp(13)).await.unwrap());
     assert!(s.unplanned_transitions(10).await.unwrap().is_empty(), "given up: out of the queue");
+
     // Given up is final: no later failure or plan changes it.
     assert!(!s.fail_transition(&t, 3, "again", Timestamp(14)).await.unwrap());
     let c = channel(ws);
@@ -383,12 +394,15 @@ async fn due_deliveries_take_a_few_per_channel_longest_due_first() {
     let ws = WorkspaceId::new();
     let (busy, quiet) = (channel(ws), channel(ws));
     let p = policy(ws, vec![busy.id, quiet.id]);
+
     // Twenty deliveries wait on one channel; one, planned last, on another.
     let mut backlog = Vec::new();
+
     for i in 0..20 {
         let a = alarm(ws, &format!("fp-{i}"), 10);
         backlog.push(delivery(&a, DeliveryEvent::Fired, &p, &busy, 100 + i));
     }
+
     let a = alarm(ws, "fp-quiet", 10);
     let other = delivery(&a, DeliveryEvent::Fired, &p, &quiet, 500);
     s.add_deliveries(&backlog).await.unwrap();
@@ -397,6 +411,7 @@ async fn due_deliveries_take_a_few_per_channel_longest_due_first() {
     let due: Vec<DeliveryId> =
         s.due_deliveries(Timestamp(1000), 2, 10).await.unwrap().into_iter().map(|d| d.id).collect();
     assert_eq!(due, [backlog[0].id, backlog[1].id, other.id], "two of the backlog, and the other channel is seen");
+
     // Postponed deliveries move back in their lane.
     s.postpone_delivery(backlog[0].id, Timestamp(900)).await.unwrap();
     let due: Vec<DeliveryId> =
@@ -424,6 +439,7 @@ async fn an_email_channel_keeps_its_smtp_settings() {
     });
     s.put_channel(&c).await.unwrap();
     assert_eq!(s.get_channel(c.id).await.unwrap(), Some(c.clone()));
+
     // Back to a webhook: the settings go.
     c.kind = ChannelKind::Webhook;
     c.email = None;

@@ -1,9 +1,10 @@
 //! Strongly typed identifiers. Every id is a UUIDv7 (time-ordered) wrapped in
 //! its own type so an `WorkspaceId` can never be passed where a `ServerId` is due.
 
-use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
+
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 macro_rules! typed_id {

@@ -86,16 +86,20 @@ pub fn document(server_url: &str) -> Value {
     let mut settings = schemars::generate::SchemaSettings::draft2020_12();
     settings.definitions_path = "/components/schemas/".into();
     let mut generator = settings.into_generator();
+
     for (i, r) in ROUTES.iter().enumerate() {
         let [req_schema, query_schema, resp_schema] = route_schemas(i, &mut generator);
+
         if paths.get(r.path).is_some_and(|m| m.contains_key(&r.method.to_lowercase())) {
             continue; // registered twice (see DUPLICATE_ROUTES)
         }
+
         let mut id = format!("{}.{}", r.module, r.handler);
         if !ids.insert(id.clone()) {
             id = format!("{id}.{}", r.method.to_lowercase());
             ids.insert(id.clone());
         }
+
         let action = r.action.and_then(action_name);
         let needs_mfa = action.is_some_and(|a| mfa.contains(a))
             || MFA_HANDLERS.contains(&format!("{}::{}", r.module, r.handler).as_str());
@@ -122,8 +126,10 @@ pub fn document(server_url: &str) -> Value {
             "x-forge-transport": r.transport,
             "x-forge-schema": schema_state(r, req_schema.is_some(), query_schema.is_some(), resp_schema.is_some()),
         });
+
         if let Some(o) = op.as_object_mut() {
             let body_needed = r.request.is_some_and(|t| !is_value(t));
+
             match (req_schema, r.request) {
                 (Some(s), _) => {
                     o.insert(
@@ -145,11 +151,13 @@ pub fn document(server_url: &str) -> Value {
                 }
                 (None, None) => {}
             }
+
             if let Some(q) = query_schema
                 && let Some(params) = o.get_mut("parameters").and_then(Value::as_array_mut)
             {
                 params.extend(query_params(&q, &generator));
             }
+
             if let Some(s) = resp_schema {
                 o.insert(
                     "responses".into(),
@@ -163,8 +171,10 @@ pub fn document(server_url: &str) -> Value {
                 );
             }
         }
+
         paths.entry(r.path).or_default().insert(r.method.to_lowercase(), op);
     }
+
     json!({
         "openapi": "3.1.0",
         "info": {
@@ -218,6 +228,7 @@ fn query_params(schema: &schemars::Schema, generator: &schemars::SchemaGenerator
         .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
+
     resolved
         .get("properties")
         .and_then(Value::as_object)
@@ -226,9 +237,11 @@ fn query_params(schema: &schemars::Schema, generator: &schemars::SchemaGenerator
                 .iter()
                 .map(|(name, s)| {
                     let mut p = json!({ "name": name, "in": "query", "required": required.contains(name.as_str()), "schema": s });
+
                     if let Some(d) = s.get("description") {
                         p["description"] = d.clone();
                     }
+
                     p
                 })
                 .collect()
@@ -251,6 +264,7 @@ fn schemas_with_problem(defs: serde_json::Map<String, Value>) -> Value {
             }
         }),
     );
+
     Value::Object(all)
 }
 
@@ -268,6 +282,7 @@ mod tests {
         assert!(ROUTES.len() > 50, "the scan found only {} routes", ROUTES.len());
         let doc = document("http://x");
         let paths = doc["paths"].as_object().unwrap_or(&Map::new()).clone();
+
         // Known routes are present with the right metadata.
         assert!(paths.contains_key("/api/v1/me"));
         assert!(paths.contains_key("/oauth/token"));
@@ -276,8 +291,10 @@ mod tests {
         assert_eq!(me["operationId"], "session.me");
         assert_ne!(me["security"], json!([]));
         assert_eq!(paths["/api/version"]["get"]["security"], json!([]));
+
         // Unique operation ids, every handler resolved.
         let mut seen = HashSet::new();
+
         for (p, item) in &paths {
             for (m, op) in item.as_object().into_iter().flatten() {
                 assert!(
@@ -296,19 +313,23 @@ mod tests {
     fn every_route_is_classified_for_the_cli() {
         let parity: Value = serde_json::from_str(include_str!("../../../forge-cli/parity.json")).unwrap_or(Value::Null);
         let mut classified = HashSet::new();
+
         for class in ["command", "api", "excluded"] {
             for (k, v) in parity[class].as_object().into_iter().flatten() {
                 assert!(v.as_str().is_some_and(|s| !s.trim().is_empty()), "{k}: no command or reason");
                 assert!(classified.insert(k.clone()), "{k} is classified twice");
             }
         }
+
         let doc = document("http://x");
         let mut live = HashSet::new();
+
         for (p, item) in doc["paths"].as_object().into_iter().flatten() {
             for m in item.as_object().into_iter().flatten().map(|(m, _)| m.to_uppercase()) {
                 live.insert(format!("{m} {p}"));
             }
         }
+
         let mut missing: Vec<&String> = live.difference(&classified).collect();
         missing.sort();
         assert!(
@@ -333,11 +354,13 @@ mod tests {
     fn json_request_bodies_are_typed() {
         let mut g = schemars::generate::SchemaSettings::draft2020_12().into_generator();
         let (mut missing, mut stale) = (Vec::new(), Vec::new());
+
         for (i, r) in ROUTES.iter().enumerate() {
             let Some(t) = r.request else { continue };
             if is_value(t) {
                 continue;
             }
+
             let typed = route_schemas(i, &mut g)[0].is_some();
             let key = format!("{} {}", r.method, r.path);
             let listed = UNTYPED_BODIES.contains(&key.as_str());
@@ -347,8 +370,10 @@ mod tests {
                 stale.push(key);
             }
         }
+
         assert!(missing.is_empty(), "derive JsonSchema for these request bodies: {missing:?}");
         assert!(stale.is_empty(), "typed now; remove from UNTYPED_BODIES: {stale:?}");
+
         // The document still builds with the schemas in components, and a
         // typed body refers to its component.
         let doc = document("http://x");
@@ -359,6 +384,7 @@ mod tests {
         let name = r.strip_prefix("#/components/schemas/").unwrap_or_default();
         let def = &doc["components"]["schemas"][name];
         assert!(def["properties"].is_object(), "{r}: {def}");
+
         // Ids are plain strings; enums keep their values.
         let jobs = &doc["paths"]["/api/v1/jobs"]["get"]["parameters"];
         let status = jobs.as_array().into_iter().flatten().find(|p| p["name"] == "status");
@@ -378,6 +404,7 @@ mod tests {
         assert!(set.contains("terminal.open"));
         assert!(set.contains("secret.read"));
         assert!(!set.contains("view"));
+
         // Every MFA action name is a real action.
         for a in set {
             assert!(Action::ALL.iter().any(|x| x.as_str() == a), "unknown action {a} in guardrails");

@@ -81,6 +81,7 @@ pub async fn list(State(state): State<AppState>, caller: Caller) -> ApiResult<Js
             created_at: r.pin.created_at,
         })
         .collect();
+
     Ok(Json(PinList { items }))
 }
 
@@ -95,12 +96,15 @@ pub async fn add(
     let visible = caller.can_many(Action::View, vec![target.entity.clone()]).await;
     if !visible.first().copied().unwrap_or(false) {
         caller.audit_denied(AUDIT_PIN_ADD, &target.entity, None, "caller cannot view the entity").await;
+
         // Same answer as a missing entity, so pinning does not reveal what exists.
         return Err(PinError::NotFound(kind).into());
     }
+
     if state.pins.add(caller.session.user.id, kind, &id).await? {
         caller.audit(AUDIT_PIN_ADD, &me(&caller), None, json!({ "kind": kind, "id": id })).await;
     }
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -114,6 +118,7 @@ pub async fn remove(
     if state.pins.remove(caller.session.user.id, kind, &id).await? {
         caller.audit(AUDIT_PIN_REMOVE, &me(&caller), None, json!({ "kind": kind, "id": id })).await;
     }
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -128,5 +133,6 @@ pub async fn reorder(
     let wanted: Vec<(PinKind, String)> = body.items.into_iter().take(4 * MAX_PINS).map(|p| (p.kind, p.id)).collect();
     state.pins.reorder(caller.session.user.id, &wanted).await?;
     caller.audit(AUDIT_PIN_REORDER, &me(&caller), None, json!({ "count": wanted.len() })).await;
+
     Ok(StatusCode::NO_CONTENT)
 }

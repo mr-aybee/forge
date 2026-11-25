@@ -54,6 +54,7 @@ impl AuditRecorder for MemAudit {
         let label =
             if matches!(e.outcome, AuditOutcome::Denied) { format!("denied:{}", e.action) } else { e.action.clone() };
         self.0.lock().unwrap().push(label);
+
         Ok(AuditEntry {
             seq: 0,
             id: String::new(),
@@ -98,6 +99,7 @@ async fn fx() -> Fx {
     store.create_workspace(&org).await.unwrap();
     let org2 = Workspace { id: WorkspaceId::new(), name: "o2".into(), slug: "o2".into(), created_at: Timestamp(0) };
     store.create_workspace(&org2).await.unwrap();
+
     for (hostname, status) in [("web-01", AgentStatus::Online), ("db-01", AgentStatus::Offline)] {
         store
             .create_server(&Server {
@@ -151,6 +153,7 @@ async fn fx() -> Fx {
         Arc::new(SystemClock),
         PluginHostConfig { artifacts_dir: dir.path().join("plugins"), api_version: "0.1.0".into(), fault_threshold: 3 },
     );
+
     Fx { host, key, admin, operator, stranger, outsider, org: workspace_ref, org2: org2_ref, audit, _dir: dir }
 }
 
@@ -169,6 +172,7 @@ fn all_requested() -> Vec<String> {
 async fn install_enabled(f: &Fx, manifest: &str, wat: &str, approved: Vec<String>) -> String {
     let r = f.host.install(&f.admin, MFA, package(&f.key, manifest, wat), approved).await.unwrap();
     f.host.enable(&f.admin, MFA, &r.plugin_id).await.unwrap();
+
     r.plugin_id
 }
 
@@ -210,6 +214,7 @@ async fn only_platform_admin_with_mfa_manages_plugins() {
         Err(DomainError::Denied(_))
     ));
     assert!(f.host.install(&f.admin, MFA, pkg(), all_requested()).await.is_ok());
+
     // Security review: denials are audited too (CLAUDE.md rule 3).
     let denied = f.audit.0.lock().unwrap().iter().filter(|a| *a == "denied:plugin.manage").count();
     assert_eq!(denied, 2, "both refused installs are in the audit log");
@@ -226,10 +231,12 @@ async fn cannot_approve_unrequested_permission() {
 #[tokio::test]
 async fn effective_permission_is_user_intersect_plugin() {
     let f = fx().await;
+
     // Plugin approved for log only: server-online is refused even for an admin.
     let id = install_enabled(&f, &variant("orbyn.narrow"), SAMPLE_WAT, vec!["host:log".into()]).await;
     let err = f.host.invoke(&f.admin, MFA, &id, EntityRef::platform(), 0).await.unwrap_err();
     assert!(matches!(err, DomainError::Denied(_)), "{err:?}");
+
     // A refused host call is not a plugin fault.
     assert_eq!(f.host.get(&id).await.unwrap().state, PluginState::Enabled);
 
@@ -242,6 +249,7 @@ async fn effective_permission_is_user_intersect_plugin() {
 async fn plugin_sees_only_what_the_user_can_see() {
     let f = fx().await;
     let id = install_enabled(&f, SAMPLE_MANIFEST, SAMPLE_WAT, all_requested()).await;
+
     // A developer of another org may invoke the plugin in their org, but the
     // plugin cannot use them to observe web-01 in the first org.
     let out = f.host.invoke(&f.outsider, AuthzContext::default(), &id, f.org2.clone(), 0).await.unwrap();
@@ -261,6 +269,7 @@ async fn plugin_exceeding_fuel_is_stopped_and_quarantined() {
     assert_eq!(rec.state, PluginState::Quarantined);
     assert!(rec.quarantine_reason.unwrap().contains("FuelExhausted"));
     assert!(f.audit.0.lock().unwrap().contains(&"plugin.quarantine".to_owned()));
+
     // Quarantined plugins cannot run until re-enabled.
     assert!(matches!(f.host.invoke(&f.admin, MFA, &id, EntityRef::platform(), 0).await, Err(DomainError::Conflict(_))));
 }

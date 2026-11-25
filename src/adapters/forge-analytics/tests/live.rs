@@ -13,6 +13,7 @@ async fn writes_and_reads_node_history() {
         eprintln!("FORGE_TEST_CLICKHOUSE_URL not set; skipped");
         return;
     };
+
     let pw = std::env::var("FORGE_TEST_CLICKHOUSE_PASSWORD").ok();
     let ch = ClickHouse::new(ClickHouseTarget::from_url(&url, pw.as_deref(), "clickhouse").unwrap()).unwrap();
     let r = Retention { node_metrics_days: 7, top_processes_days: 7, node_rollup_days: 365, app_logs_days: 30 };
@@ -84,6 +85,7 @@ async fn writes_and_reads_node_history() {
     assert_eq!(cpu[0].name, "a");
     let mem = ch.top_processes(s, Timestamp(base), to, TopBy::Mem, 10).await.unwrap();
     assert_eq!(mem[0].name, "b");
+
     // Another node's data is never returned.
     assert!(ch.node_series(ServerId::new(), Timestamp(base), to, Resolution::Minute).await.unwrap().is_empty());
 }
@@ -92,10 +94,12 @@ async fn writes_and_reads_node_history() {
 async fn writes_pages_and_filters_logs() {
     use forge_core::ServiceId;
     use forge_core::logs::{IngestContext, LogFilter, LogLevel, LogPage, LogQuery, parse_batch};
+
     let Ok(url) = std::env::var("FORGE_TEST_CLICKHOUSE_URL") else {
         eprintln!("FORGE_TEST_CLICKHOUSE_URL not set; skipped");
         return;
     };
+
     let pw = std::env::var("FORGE_TEST_CLICKHOUSE_PASSWORD").ok();
     let ch = ClickHouse::new(ClickHouseTarget::from_url(&url, pw.as_deref(), "clickhouse").unwrap()).unwrap();
     ch.migrate(Retention { node_metrics_days: 7, top_processes_days: 7, node_rollup_days: 365, app_logs_days: 30 })
@@ -161,6 +165,7 @@ async fn writes_pages_and_filters_logs() {
     let total: u64 = h.iter().map(|b| b.count).sum();
     assert_eq!(total, 25);
     assert!(h.iter().any(|b| b.level == LogLevel::Error));
+
     // Another service's events are never returned.
     let mut other = q(LogPage::Older(None), vec![], "", 100);
     other.services = vec![ServiceId::new()];
@@ -202,10 +207,12 @@ async fn writes_pages_and_filters_logs() {
 #[tokio::test]
 async fn writes_and_reads_container_metrics() {
     use forge_core::analytics::ContainerMinute;
+
     let Ok(url) = std::env::var("FORGE_TEST_CLICKHOUSE_URL") else {
         eprintln!("FORGE_TEST_CLICKHOUSE_URL not set; skipped");
         return;
     };
+
     let pw = std::env::var("FORGE_TEST_CLICKHOUSE_PASSWORD").ok();
     let ch = ClickHouse::new(ClickHouseTarget::from_url(&url, pw.as_deref(), "clickhouse").unwrap()).unwrap();
     ch.migrate(Retention { node_metrics_days: 7, top_processes_days: 7, node_rollup_days: 365, app_logs_days: 30 })
@@ -281,21 +288,25 @@ async fn spool_files_are_stored_once_per_table() {
     use forge_analytics::ClickHouseSpoolWriter;
     use forge_core::analytics::{FileWrite, SpoolFileWriter, SpoolRows};
     use forge_core::logs::{IngestContext, parse_batch};
+
     let Ok(base) = std::env::var("FORGE_TEST_CLICKHOUSE_URL") else {
         eprintln!("FORGE_TEST_CLICKHOUSE_URL not set; skipped");
         return;
     };
+
     let url = format!("{}_{}", base.trim_end_matches('/'), uuid::Uuid::new_v4().simple());
     let pw = std::env::var("FORGE_TEST_CLICKHOUSE_PASSWORD").ok();
     let ch = ClickHouse::new(ClickHouseTarget::from_url(&url, pw.as_deref(), "clickhouse").unwrap()).unwrap();
     ch.migrate(Retention { node_metrics_days: 7, top_processes_days: 7, node_rollup_days: 365, app_logs_days: 30 })
         .await
         .unwrap();
+
     // No merges: the replacing and aggregating tables would fold duplicates
     // away and hide them from the counts.
     for t in ["app_logs", "node_metrics_1m", "node_metrics_1h"] {
         run_sql(&url, pw.as_deref(), &format!("SYSTEM STOP MERGES {t}")).await;
     }
+
     let s = ServerId::new();
     let now =
         i64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()).unwrap();
@@ -344,17 +355,21 @@ async fn spool_files_are_stored_once_per_table() {
     assert_eq!(w.write_spool_file(file(&id)).await.unwrap(), FileWrite::Stored);
     let first = counts().await;
     assert_eq!(first, (3, 2, 1));
+
     // The worker restarted: a new writer remembers nothing, the token holds.
     let w = ClickHouseSpoolWriter::start(ch.clone(), 20_000);
     assert_eq!(w.write_spool_file(file(&id)).await.unwrap(), FileWrite::Stored);
     assert_eq!(counts().await, first, "the same file again: no rows added, rollups included");
+
     // Another file id is new data.
     assert_eq!(w.write_spool_file(file(&format!("{:032x}", now + 1))).await.unwrap(), FileWrite::Stored);
     assert_eq!(counts().await, (6, 4, 2));
+
     // Rows without a file id (the worker's own buffers) are written as before.
     let more = parse_batch("{\"@mt\":\"four\"}", cx).unwrap();
     ch.write_logs(&more).await.unwrap();
     assert_eq!(counts().await, (7, 4, 2));
+
     // Migrations stay idempotent with the deduplication window applied.
     ch.migrate(Retention { node_metrics_days: 7, top_processes_days: 7, node_rollup_days: 365, app_logs_days: 30 })
         .await

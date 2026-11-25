@@ -93,6 +93,7 @@ pub enum SendOutcome {
 /// time and the answer it reads.
 #[async_trait]
 pub trait Transport: Send + Sync + std::fmt::Debug {
+    /// Sends one request.
     async fn send(&self, request: &Outbound) -> SendOutcome;
 }
 
@@ -144,6 +145,7 @@ pub trait MailTransport: Send + Sync + std::fmt::Debug {
     /// Checks one address (`ops@example.com` or `Ops <ops@example.com>`)
     /// and returns it as it is sent. `Invalid` when it is not one.
     fn mailbox(&self, raw: &str) -> DomainResult<String>;
+    /// Sends one mail.
     async fn send(&self, mail: &OutboundMail) -> SendOutcome;
 }
 
@@ -152,6 +154,7 @@ pub trait MailTransport: Send + Sync + std::fmt::Debug {
 pub trait ChannelSecrets: Send + Sync + std::fmt::Debug {
     /// Seals a URL so it can only be opened for this channel.
     fn seal_url(&self, channel: ChannelId, url: &str) -> DomainResult<String>;
+    /// Opens a URL sealed for this channel.
     fn open_url(&self, channel: ChannelId, sealed: &str) -> DomainResult<String>;
     /// The signing secret behind a vault item of this workspace.
     /// `NotFound` when the item is gone or belongs to another workspace.
@@ -161,6 +164,7 @@ pub trait ChannelSecrets: Send + Sync + std::fmt::Debug {
 /// Display names of resources, for messages people read.
 #[async_trait]
 pub trait ResourceNames: Send + Sync + std::fmt::Debug {
+    /// The display name of `resource`, if it has one.
     async fn name(&self, resource: &EntityRef) -> Option<String>;
 }
 
@@ -342,6 +346,7 @@ impl ChannelPauses {
         let mut map = self.lock();
         let entry = map.entry(channel).or_insert((0, Timestamp(0)));
         entry.0 += 1;
+
         if entry.0 >= limit.max(1) {
             *entry = (0, until);
         }
@@ -499,6 +504,7 @@ pub fn retry_delay(retry: Backoff, attempts: u32, id: DeliveryId) -> Duration {
     let bytes = id.0.as_bytes();
     let spread = f64::from(u16::from_be_bytes([bytes[14], bytes[15]])) / 65_536.0;
     let ceiling = retry.ceiling(attempts.saturating_sub(1));
+
     ceiling / 2 + (ceiling / 2).mul_f64(spread)
 }
 
@@ -507,6 +513,7 @@ fn clean_name(name: &str) -> DomainResult<String> {
     if n.is_empty() || n.chars().count() > MAX_NAME || n.chars().any(char::is_control) {
         return Err(DomainError::Invalid(format!("name: 1 to {MAX_NAME} characters, without control characters")));
     }
+
     Ok(n.to_owned())
 }
 
@@ -535,10 +542,12 @@ pub struct Notifier {
 impl Notifier {
     // ---- channels --------------------------------------------------------
 
+    /// Lists the channels of a workspace.
     pub async fn channels(&self, workspace: WorkspaceId) -> DomainResult<Vec<Channel>> {
         self.store.list_channels(workspace).await
     }
 
+    /// One channel by id.
     pub async fn channel(&self, id: ChannelId) -> DomainResult<Channel> {
         self.store.get_channel(id).await?.ok_or_else(|| DomainError::NotFound("notification channel".into()))
     }
@@ -550,6 +559,7 @@ impl Notifier {
                     .into(),
             ));
         }
+
         match (input.kind, &input.email) {
             (ChannelKind::Email, None) => {
                 return Err(DomainError::Invalid("email: required for an email channel".into()));
@@ -565,6 +575,7 @@ impl Notifier {
             }
             _ => {}
         }
+
         clean_name(&input.name)
     }
 
@@ -577,6 +588,7 @@ impl Notifier {
         if port == 0 {
             return Err(bad("smtp_port: 1 to 65535".into()));
         }
+
         let host =
             parse_smtp_host(&input.smtp_host, port, self.config.rules).map_err(|e| bad(format!("smtp_host: {e}")))?;
         let username = input.username.as_deref().map(str::trim).filter(|u| !u.is_empty());
@@ -585,39 +597,49 @@ impl Notifier {
         {
             return Err(bad(format!("username: at most {MAX_SMTP_USERNAME} bytes, without control characters")));
         }
+
         if input.tls == SmtpTls::None {
             if !self.config.rules.allow_http {
                 return Err(bad("tls: `none` sends mail unencrypted; use `starttls` or `tls` (an operator can allow unencrypted targets with [alerts] webhook_allow_http)".into()));
             }
+
             if username.is_some() {
                 return Err(bad("username: a password is never sent without TLS; use `starttls` or `tls`".into()));
             }
         }
+
         if let Some(p) = &input.password {
             if username.is_none() {
                 return Err(bad("password: needs a username".into()));
             }
+
             if p.is_empty() || p.len() > MAX_SMTP_PASSWORD || p.contains(['\r', '\n', '\0']) {
                 return Err(bad(format!("password: 1 to {MAX_SMTP_PASSWORD} bytes, one line")));
             }
         }
+
         let from = self.address("from", &input.from)?;
+
         if input.to.is_empty() || input.to.len() > MAX_EMAIL_RECIPIENTS {
             return Err(bad(format!("to: 1 to {MAX_EMAIL_RECIPIENTS} recipients")));
         }
+
         let mut to: Vec<String> = Vec::with_capacity(input.to.len());
+
         for raw in &input.to {
             let a = self.address("to", raw)?;
             if !to.contains(&a) {
                 to.push(a);
             }
         }
+
         let subject_prefix = input.subject_prefix.as_deref().map(str::trim).filter(|p| !p.is_empty());
         if let Some(p) = subject_prefix
             && (p.chars().count() > MAX_SUBJECT_PREFIX || p.chars().any(char::is_control))
         {
             return Err(bad(format!("subject_prefix: at most {MAX_SUBJECT_PREFIX} characters, one line")));
         }
+
         let sealed = match (&input.password, username) {
             (_, None) => self.secrets.seal_url(id, "")?,
             (Some(p), Some(_)) => self.secrets.seal_url(id, p)?,
@@ -645,8 +667,10 @@ impl Notifier {
                 }
             },
         };
+
         let scheme = if input.tls == SmtpTls::Tls { "smtps" } else { "smtp" };
         let shown = if host.contains(':') { format!("[{host}]") } else { host.clone() };
+
         Ok(CheckedEmail {
             target: format!("{scheme}://{shown}:{port}"),
             settings: EmailSettings {
@@ -668,6 +692,7 @@ impl Notifier {
         if raw.is_empty() || raw.len() > MAX_EMAIL_ADDRESS {
             return Err(DomainError::Invalid(format!("{field}: an address of 1 to {MAX_EMAIL_ADDRESS} bytes")));
         }
+
         self.mail.mailbox(raw).map_err(|_| DomainError::Invalid(format!("{field}: `{raw}` is not an email address")))
     }
 
@@ -678,14 +703,17 @@ impl Notifier {
             DomainError::NotFound(_) => DomainError::Invalid("secret_item: no such vault item".into()),
             other => other,
         })?;
+
         if secret.len() < MIN_SIGNING_SECRET {
             return Err(DomainError::Invalid(format!(
                 "secret_item: the vault item's password is shorter than {MIN_SIGNING_SECRET} bytes; use a longer, random one"
             )));
         }
+
         Ok(())
     }
 
+    /// Creates a notification channel.
     pub async fn create_channel(
         &self,
         workspace: WorkspaceId,
@@ -694,6 +722,7 @@ impl Notifier {
     ) -> DomainResult<Channel> {
         let name = Self::check_channel(&input)?;
         let id = ChannelId::new();
+
         let (target, sealed_url, email) = match &input.email {
             Some(e) => {
                 let c = self.check_email(id, e, None)?;
@@ -706,10 +735,13 @@ impl Notifier {
                 (t.display, sealed, None)
             }
         };
+
         self.check_secret(workspace, input.secret_item).await?;
+
         if self.store.list_channels(workspace).await?.len() >= MAX_CHANNELS {
             return Err(DomainError::Conflict(format!("a workspace has at most {MAX_CHANNELS} notification channels")));
         }
+
         let now = self.clock.now();
         let channel = Channel {
             id,
@@ -726,13 +758,16 @@ impl Notifier {
             updated_at: now,
         };
         self.store.put_channel(&channel).await?;
+
         Ok(channel)
     }
 
+    /// Replaces a channel's settings.
     pub async fn update_channel(&self, id: ChannelId, input: ChannelInput) -> DomainResult<Channel> {
         let old = self.channel(id).await?;
         let name = Self::check_channel(&input)?;
         self.check_secret(old.workspace_id, input.secret_item).await?;
+
         let (target, sealed_url, email) = match (&input.email, input.url.as_deref()) {
             (Some(e), _) => {
                 let c = self.check_email(id, e, Some(&old))?;
@@ -749,6 +784,7 @@ impl Notifier {
             }
             (None, None) => (old.target.clone(), old.sealed_url.clone(), None),
         };
+
         let channel = Channel {
             name,
             kind: input.kind,
@@ -761,6 +797,7 @@ impl Notifier {
             ..old
         };
         self.store.put_channel(&channel).await?;
+
         Ok(channel)
     }
 
@@ -775,13 +812,16 @@ impl Notifier {
             .filter(|p| p.channels.contains(&id) || p.email_channel == Some(id))
             .map(|p| p.name)
             .collect();
+
         if !users.is_empty() {
             return Err(DomainError::Conflict(format!(
                 "the channel is used by {}: remove it from the policy first",
                 users.join(", ")
             )));
         }
+
         self.store.delete_channel(id).await?;
+
         Ok(channel)
     }
 
@@ -794,6 +834,7 @@ impl Notifier {
         if !channel.enabled {
             return Err(DomainError::Conflict("the channel is turned off".into()).into());
         }
+
         let now = self.clock.now();
         let recent = DeliveryFilter { channel: Some(id), ..DeliveryFilter::default() };
         let cooldown = ms(self.config.test_cooldown);
@@ -805,10 +846,12 @@ impl Notifier {
             .filter(|d| d.event == DeliveryEvent::Test)
             .map(|d| d.created_at.0)
             .max();
+
         if let Some(at) = last_test.filter(|at| now.0 - at < cooldown) {
             let wait = (cooldown - (now.0 - at) + 999) / 1000;
             return Err(TestError::Cooldown(u64::try_from(wait).unwrap_or(1)));
         }
+
         let did = DeliveryId::new();
         let d = Delivery {
             id: did,
@@ -841,15 +884,18 @@ impl Notifier {
         };
         self.store.add_deliveries(std::slice::from_ref(&d)).await?;
         self.dispatch_one(d).await?;
+
         Ok(self.delivery(did).await?)
     }
 
     // ---- policies --------------------------------------------------------
 
+    /// Lists the notification policies of a workspace.
     pub async fn policies(&self, workspace: WorkspaceId) -> DomainResult<Vec<NotificationPolicy>> {
         self.store.list_policies(Some(workspace)).await
     }
 
+    /// One notification policy by id.
     pub async fn policy(&self, id: NotificationPolicyId) -> DomainResult<NotificationPolicy> {
         self.store.get_policy(id).await?.ok_or_else(|| DomainError::NotFound("notification policy".into()))
     }
@@ -858,14 +904,17 @@ impl Notifier {
     async fn check_policy(&self, workspace: WorkspaceId, input: PolicyInput) -> DomainResult<PolicyInput> {
         let name = clean_name(&input.name)?;
         let mut events = Vec::new();
+
         for e in &input.events {
             if !events.contains(e) {
                 events.push(*e);
             }
         }
+
         if events.is_empty() {
             return Err(DomainError::Invalid("events: at least one of fired, resolved".into()));
         }
+
         if let Some(secs) = input.repeat_interval_secs {
             if !REPEAT_RANGE_SECS.contains(&secs) {
                 return Err(DomainError::Invalid(format!(
@@ -874,31 +923,39 @@ impl Notifier {
                     REPEAT_RANGE_SECS.end()
                 )));
             }
+
             if !events.contains(&PolicyEvent::Fired) {
                 return Err(DomainError::Invalid("repeat_interval_secs: reminders need the fired event".into()));
             }
         }
+
         let mut channels = Vec::new();
+
         for c in &input.channels {
             if !channels.contains(c) {
                 channels.push(*c);
             }
         }
+
         let mut email_users = input.email_users.clone();
         email_users.sort();
         email_users.dedup();
         let mut email_roles: Vec<Role> = Vec::new();
+
         for r in &input.email_roles {
             if !email_roles.contains(r) {
                 email_roles.push(*r);
             }
         }
+
         if email_users.len() > MAX_POLICY_EMAIL_USERS {
             return Err(DomainError::Invalid(format!("email_users: at most {MAX_POLICY_EMAIL_USERS}")));
         }
+
         if email_roles.len() > MAX_POLICY_EMAIL_ROLES {
             return Err(DomainError::Invalid(format!("email_roles: at most {MAX_POLICY_EMAIL_ROLES}")));
         }
+
         let people = !email_users.is_empty() || !email_roles.is_empty();
         let email_channel = match (input.email_channel, people) {
             (None, true) => {
@@ -910,16 +967,20 @@ impl Notifier {
             (_, false) => None,
             (Some(c), true) => Some(c),
         };
+
         if channels.len() > MAX_POLICY_CHANNELS || (channels.is_empty() && !people) {
             return Err(DomainError::Invalid(format!(
                 "channels: 1 to {MAX_POLICY_CHANNELS} (or none when the policy emails users or roles)"
             )));
         }
+
         let known: HashMap<ChannelId, ChannelKind> =
             self.store.list_channels(workspace).await?.into_iter().map(|c| (c.id, c.kind)).collect();
+
         if let Some(missing) = channels.iter().find(|c| !known.contains_key(c)) {
             return Err(DomainError::Invalid(format!("channels: no channel {missing}")));
         }
+
         if let Some(c) = email_channel {
             match known.get(&c) {
                 Some(ChannelKind::Email) => {}
@@ -927,26 +988,33 @@ impl Notifier {
                 None => return Err(DomainError::Invalid(format!("email_channel: no channel {c}"))),
             }
         }
+
         if !email_users.is_empty() {
             self.people.check_members(workspace, &email_users).await?;
         }
+
         let mut rules = input.rules.clone();
         rules.sort();
         rules.dedup();
+
         if rules.len() > MAX_POLICY_RULES {
             return Err(DomainError::Invalid(format!("rules: at most {MAX_POLICY_RULES}")));
         }
+
         if !rules.is_empty() {
             let known: HashSet<AlertRuleId> =
                 self.alerts.list_rules(Some(workspace)).await?.into_iter().map(|r| r.id).collect();
+
             if let Some(missing) = rules.iter().find(|r| !known.contains(r)) {
                 return Err(DomainError::Invalid(format!("rules: no alert rule {missing}")));
             }
         }
+
         let scope_size = input.scope.as_ref().map_or(0, RuleScope::len);
         if scope_size > 500 {
             return Err(DomainError::Invalid("scope: at most 500 ids".into()));
         }
+
         Ok(PolicyInput { name, events, channels, rules, email_channel, email_users, email_roles, ..input })
     }
 
@@ -962,9 +1030,11 @@ impl Notifier {
         all.sort();
         all.dedup();
         let missing: HashSet<UserId> = self.people.without_email(&all).await?.into_iter().collect();
+
         Ok(ps.iter().map(|p| p.email_users.iter().copied().filter(|u| missing.contains(u)).collect()).collect())
     }
 
+    /// Creates a notification policy in a workspace.
     pub async fn create_policy(
         &self,
         workspace: WorkspaceId,
@@ -972,9 +1042,11 @@ impl Notifier {
         by: Principal,
     ) -> DomainResult<NotificationPolicy> {
         let input = self.check_policy(workspace, input).await?;
+
         if self.store.list_policies(Some(workspace)).await?.len() >= MAX_POLICIES {
             return Err(DomainError::Conflict(format!("a workspace has at most {MAX_POLICIES} notification policies")));
         }
+
         let now = self.clock.now();
         let policy = NotificationPolicy {
             id: NotificationPolicyId::new(),
@@ -995,9 +1067,11 @@ impl Notifier {
             updated_at: now,
         };
         self.store.put_policy(&policy).await?;
+
         Ok(policy)
     }
 
+    /// Replaces a notification policy's settings.
     pub async fn update_policy(
         &self,
         id: NotificationPolicyId,
@@ -1021,24 +1095,30 @@ impl Notifier {
             ..old
         };
         self.store.put_policy(&policy).await?;
+
         Ok(policy)
     }
 
+    /// Deletes a notification policy and returns it.
     pub async fn delete_policy(&self, id: NotificationPolicyId) -> DomainResult<NotificationPolicy> {
         let policy = self.policy(id).await?;
         self.store.delete_policy(id).await?;
+
         Ok(policy)
     }
 
     // ---- history ---------------------------------------------------------
 
+    /// Lists deliveries matching `filter`, at most `limit`.
     pub async fn deliveries(&self, filter: &DeliveryFilter, limit: u32) -> DomainResult<Vec<Delivery>> {
         self.store.list_deliveries(filter, limit).await
     }
 
+    /// One delivery with its attempts.
     pub async fn delivery(&self, id: DeliveryId) -> DomainResult<(Delivery, Vec<DeliveryAttempt>)> {
         let d = self.store.get_delivery(id).await?.ok_or_else(|| DomainError::NotFound("delivery".into()))?;
         let attempts = self.store.delivery_attempts(id).await?;
+
         Ok((d, attempts))
     }
 
@@ -1096,29 +1176,35 @@ impl Notifier {
         now: Timestamp,
     ) -> DomainResult<Vec<Delivery>> {
         let mut out = Vec::new();
+
         for p in policies.iter().filter(|p| p.emails_people()) {
             let Some(c) =
                 p.email_channel.and_then(|id| channels.get(&id)).filter(|c| c.enabled && c.kind == ChannelKind::Email)
             else {
                 continue;
             };
+
             let key = people_dedupe_key(alarm.id, event, occurrence, p.id, c.id);
             if event == DeliveryEvent::Reminder && self.planned(alarm.id, c.id, &key).await? {
                 // Planning runs every few seconds: resolving people again
                 // for a reminder that exists would only cost reads.
                 continue;
             }
+
             let recipients = self.people.resolve(p, alarm, |raw| self.mail.mailbox(raw).ok()).await?;
             let mut d = Self::new_delivery(alarm, event, occurrence, p, c, now);
             d.dedupe_key = key;
+
             if recipients.to.is_empty() {
                 d.status = DeliveryStatus::Cancelled;
                 d.detail = Some(NO_RECIPIENTS.to_owned());
                 d.finished_at = Some(now);
             }
+
             d.recipients = Some(recipients);
             out.push(d);
         }
+
         Ok(out)
     }
 
@@ -1142,6 +1228,7 @@ impl Notifier {
     ) -> Vec<Delivery> {
         let mut seen: HashSet<ChannelId> = HashSet::new();
         let mut out = Vec::new();
+
         for p in policies {
             for c in p.channels.iter().filter_map(|id| channels.get(id)).filter(|c| c.enabled) {
                 if seen.insert(c.id) {
@@ -1149,6 +1236,7 @@ impl Notifier {
                 }
             }
         }
+
         out
     }
 
@@ -1165,6 +1253,7 @@ impl Notifier {
         transitions?;
         report.after_silence = after_silence?;
         report.reminders = reminders?;
+
         Ok(report)
     }
 
@@ -1185,6 +1274,7 @@ impl Notifier {
         let ended = self.store.ended_suppressions(now, self.config.batch.max(1) * 4).await?;
         let mut alarms: Vec<AlarmId> = Vec::new();
         let mut orphans: Vec<DeliveryId> = Vec::new();
+
         for d in &ended {
             match d.alarm_id {
                 Some(a) if !alarms.contains(&a) => alarms.push(a),
@@ -1192,10 +1282,13 @@ impl Notifier {
                 None => orphans.push(d.id),
             }
         }
+
         if !orphans.is_empty() {
             self.store.release_suppressed(&orphans, &[], now).await?;
         }
+
         let mut added = 0;
+
         for alarm_id in alarms {
             // One alarm that cannot be settled must not hold up the others;
             // it is found again on the next pass.
@@ -1204,6 +1297,7 @@ impl Notifier {
                 Err(e) => tracing::warn!(alarm = %alarm_id, error = %e, "suppressed deliveries not settled this pass"),
             }
         }
+
         Ok(added)
     }
 
@@ -1213,28 +1307,36 @@ impl Notifier {
         // decision below is made once per alarm and channel.
         let held = self.store.unsettled_suppressions(alarm_id).await?;
         let ids: Vec<DeliveryId> = held.iter().map(|d| d.id).collect();
+
         let alarm = match self.alerts.get_alarm(alarm_id).await {
             Ok(a) => a,
             // The alarm is gone: nothing to say about it.
             Err(DomainError::NotFound(_)) => return self.store.release_suppressed(&ids, &[], now).await,
             Err(e) => return Err(e),
         };
+
         if let Some(s) = self.silences.covering_one(&alarm, now).await? {
             let moved: Vec<DeliveryId> = held.iter().filter(|d| d.silence_id != Some(s.id)).map(|d| d.id).collect();
             self.store.hold_suppressed(&moved, s.id, &silenced_detail(&s)).await?;
+
             return Ok(0);
         }
+
         let mut by_lane: Vec<(Lane, Vec<&Delivery>)> = Vec::new();
+
         for d in &held {
             match by_lane.iter_mut().find(|(l, _)| *l == Lane::of(d)) {
                 Some((_, group)) => group.push(d),
                 None => by_lane.push((Lane::of(d), vec![d])),
             }
         }
+
         let mut follow_ups = Vec::new();
+
         for (lane, group) in by_lane {
             // Oldest first: the newest of a kind is the last one.
             let newest = |event: fn(DeliveryEvent) -> bool| group.iter().rev().find(|d| event(d.event)).copied();
+
             let stands_for = if alarm.state == AlarmState::Firing {
                 newest(|e| e == DeliveryEvent::Fired).or_else(|| newest(|e| e == DeliveryEvent::Reminder))
             } else {
@@ -1243,10 +1345,12 @@ impl Notifier {
                     _ => None,
                 }
             };
+
             if let Some(d) = stands_for {
                 follow_ups.push(Self::after_silence(d, now));
             }
         }
+
         self.store.release_suppressed(&ids, &follow_ups, now).await
     }
 
@@ -1254,6 +1358,7 @@ impl Notifier {
     /// has ended.
     fn after_silence(held: &Delivery, now: Timestamp) -> Delivery {
         let id = DeliveryId::new();
+
         let dedupe_key = match (held.alarm_id, held.silence_id, Lane::of(held).people_of) {
             (Some(alarm), Some(silence), None) => after_silence_key(alarm, held.event, silence, held.channel_id),
             // A policy's people keep their own message, with the addresses
@@ -1264,6 +1369,7 @@ impl Notifier {
             // Not reachable for a suppressed alarm delivery; still unique.
             _ => format!("after-silence|{id}"),
         };
+
         Delivery {
             id,
             dedupe_key,
@@ -1296,6 +1402,7 @@ impl Notifier {
                     TransitionKind::Fired => PolicyEvent::Fired,
                     TransitionKind::Resolved | TransitionKind::Ended => PolicyEvent::Resolved,
                 };
+
                 let matching: Vec<&NotificationPolicy> =
                     policies.iter().filter(|p| p.events.contains(&wanted) && policy_matches(p, &alarm)).collect();
                 let mut out = Self::fan_out(&alarm, t.kind.into(), 0, &matching, channels, now);
@@ -1306,6 +1413,7 @@ impl Notifier {
             Err(DomainError::NotFound(_)) => Vec::new(),
             Err(e) => return Err(e),
         };
+
         self.store.plan_transition(t, &deliveries, now).await
     }
 
@@ -1314,12 +1422,15 @@ impl Notifier {
         let mut policies: HashMap<WorkspaceId, Vec<NotificationPolicy>> = HashMap::new();
         let mut channels: HashMap<WorkspaceId, HashMap<ChannelId, Channel>> = HashMap::new();
         let workspaces: HashSet<WorkspaceId> = transitions.iter().map(|t| t.workspace_id).collect();
+
         for ws in workspaces {
             policies.insert(ws, self.store.list_policies(Some(ws)).await?);
             let list = self.store.list_channels(ws).await?;
             channels.insert(ws, list.into_iter().map(|c| (c.id, c)).collect());
         }
+
         let none = HashMap::new();
+
         for t in &transitions {
             let known_policies = policies.get(&t.workspace_id).map_or(&[][..], Vec::as_slice);
             let known_channels = channels.get(&t.workspace_id).unwrap_or(&none);
@@ -1354,6 +1465,7 @@ impl Notifier {
                 }
             }
         }
+
         Ok(())
     }
 
@@ -1370,19 +1482,24 @@ impl Notifier {
             .filter(|p| p.enabled && p.repeat_interval_secs.is_some() && p.events.contains(&PolicyEvent::Fired))
             .collect();
         let mut by_workspace: HashMap<WorkspaceId, Vec<NotificationPolicy>> = HashMap::new();
+
         for p in repeating {
             by_workspace.entry(p.workspace_id).or_default().push(p);
         }
+
         let mut added = 0;
+
         for (ws, policies) in by_workspace {
             let channels: HashMap<ChannelId, Channel> =
                 self.store.list_channels(ws).await?.into_iter().map(|c| (c.id, c)).collect();
             let filter = AlarmFilter { workspaces: Some(vec![ws]), active: true, ..AlarmFilter::default() };
             let firing = self.alerts.list_alarms(&filter, 1000).await?;
             let mut due = Vec::new();
+
             for alarm in firing.iter().filter(|a| a.acknowledged_at.is_none()) {
                 // Policies by reminder number, so each number fans out once.
                 let mut by_number: HashMap<i64, Vec<&NotificationPolicy>> = HashMap::new();
+
                 for p in policies.iter().filter(|p| policy_matches(p, alarm)) {
                     let every = i64::from(p.repeat_interval_secs.unwrap_or(u32::MAX)) * 1000;
                     let n = (now.0 - alarm.fired_at.0) / every;
@@ -1390,8 +1507,10 @@ impl Notifier {
                         by_number.entry(n).or_default().push(p);
                     }
                 }
+
                 for (n, matching) in by_number {
                     due.extend(Self::fan_out(alarm, DeliveryEvent::Reminder, n, &matching, &channels, now));
+
                     // One alarm whose people cannot be resolved must not
                     // hold up the other reminders; it is tried next pass.
                     match self.people_deliveries(alarm, DeliveryEvent::Reminder, n, &matching, &channels, now).await {
@@ -1402,10 +1521,12 @@ impl Notifier {
                     }
                 }
             }
+
             if !due.is_empty() {
                 added += self.store.add_deliveries(&due).await?;
             }
         }
+
         Ok(added)
     }
 
@@ -1423,32 +1544,39 @@ impl Notifier {
         let now = self.clock.now();
         let due = self.store.due_deliveries(now, self.config.per_channel, self.config.batch).await?;
         let mut lanes: Vec<(ChannelId, Vec<Delivery>)> = Vec::new();
+
         for d in due {
             if self.pauses.paused(d.channel_id, now) {
                 continue;
             }
+
             match lanes.iter_mut().find(|(c, _)| *c == d.channel_id) {
                 Some((_, lane)) => lane.push(d),
                 None => lanes.push((d.channel_id, vec![d])),
             }
         }
+
         let outcomes: Vec<Vec<Outcome>> = futures::stream::iter(lanes)
             .map(|(channel, lane)| self.dispatch_lane(channel, lane))
             .buffer_unordered(self.config.concurrency.max(1))
             .collect()
             .await;
         let mut report = DispatchReport::default();
+
         for o in outcomes.into_iter().flatten() {
             report.count(o);
         }
+
         Ok(report)
     }
 
     /// One channel's due deliveries, in order, until the first timeout.
     async fn dispatch_lane(&self, channel: ChannelId, lane: Vec<Delivery>) -> Vec<Outcome> {
         let mut outcomes = Vec::new();
+
         for d in lane {
             let id = d.id;
+
             let done = match self.dispatch_one(d).await {
                 Ok(done) => done,
                 Err(e) => {
@@ -1456,17 +1584,23 @@ impl Notifier {
                     Done::idle(Outcome::Skipped)
                 }
             };
+
             outcomes.push(done.outcome);
+
             if !done.attempted {
                 continue;
             }
+
             if done.error == Some(FailureClass::Timeout) {
                 let until = Timestamp(self.clock.now().0 + ms(self.config.channel_pause));
                 self.pauses.timed_out(channel, self.config.pause_after_timeouts, until);
+
                 break;
             }
+
             self.pauses.answered(channel);
         }
+
         outcomes
     }
 
@@ -1476,6 +1610,7 @@ impl Notifier {
         let before = Timestamp(self.clock.now().0 - ms(self.config.retention));
         let deliveries = self.store.prune_deliveries(before).await?;
         self.silences.prune(before).await?;
+
         Ok(deliveries)
     }
 
@@ -1491,15 +1626,18 @@ impl Notifier {
             let stale = d.event == DeliveryEvent::Test && self.clock.now() >= d.next_attempt_at;
             return Ok(if stale { Gate::Cancel("the test was interrupted") } else { Gate::Send });
         };
+
         let applies = if d.event.is_firing() {
             if alarm.state != AlarmState::Firing {
                 return Ok(Gate::Cancel("the alarm is no longer firing"));
             }
+
             // Acknowledging and silencing are independent: either one stops
             // a reminder, neither implies the other.
             if d.event == DeliveryEvent::Reminder && alarm.acknowledged_at.is_some() {
                 return Ok(Gate::Cancel("the alarm was acknowledged"));
             }
+
             Gate::Send
         } else {
             match self.recovery_gate(alarm.id, Lane::of(d)).await? {
@@ -1507,6 +1645,7 @@ impl Notifier {
                 other => other,
             }
         };
+
         match self.silences.covering_one(alarm, self.clock.now()).await? {
             Some(s) => Ok(Gate::Suppress(Box::new(s))),
             None => Ok(applies),
@@ -1525,15 +1664,19 @@ impl Notifier {
             .into_iter()
             .filter(|s| s.event.is_firing() && Lane::of(s) == lane)
             .collect();
+
         if firing.is_empty() || firing.iter().any(|s| s.status == DeliveryStatus::Sent) {
             return Ok(Gate::Send);
         }
+
         if firing.iter().any(|s| !s.status.is_final()) {
             return Ok(Gate::Wait);
         }
+
         if firing.iter().any(|s| s.status == DeliveryStatus::Suppressed) {
             return Ok(Gate::Cancel("the firing notification was silenced, so there is nothing to recover from"));
         }
+
         Ok(Gate::Cancel("the firing notification was never delivered"))
     }
 
@@ -1543,9 +1686,11 @@ impl Notifier {
             Some(a) => self.names.name(&a.resource).await,
             None => None,
         };
+
         let base = self.config.public_url.get();
         let doc =
             payload::build(payload::Context { delivery: d, alarm, resource_name: name.as_deref(), public_url: &base });
+
         match channel.kind {
             // Turned into another kind after it was planned: people are
             // reached by email only.
@@ -1560,12 +1705,15 @@ impl Notifier {
     /// The email of an email channel's delivery.
     fn mail_request(&self, d: &Delivery, channel: &Channel, doc: &payload::Payload) -> Result<OutboundMail, Refusal> {
         let e = channel.email.as_ref().ok_or(Refusal::fatal(FailureClass::Config))?;
+
         // The rules may be stricter now than when the channel was saved.
         let host = parse_smtp_host(&e.smtp_host, e.smtp_port, self.config.rules)
             .map_err(|_| Refusal::fatal(FailureClass::BlockedTarget))?;
+
         if e.tls == SmtpTls::None && (!self.config.rules.allow_http || e.username.is_some()) {
             return Err(Refusal::fatal(FailureClass::BlockedTarget));
         }
+
         let password = if e.password_set {
             let p = self
                 .secrets
@@ -1575,9 +1723,11 @@ impl Notifier {
         } else {
             None
         };
+
         if e.username.is_some() && password.is_none() {
             return Err(Refusal::fatal(FailureClass::Secret));
         }
+
         // A policy's people get blind copies at the addresses planned with
         // the delivery; the channel's own recipients are not added.
         let (to, bcc) = match &d.recipients {
@@ -1585,6 +1735,7 @@ impl Notifier {
             Some(r) => (Vec::new(), r.to.clone()),
             None => (e.to.clone(), Vec::new()),
         };
+
         Ok(OutboundMail {
             host,
             port: e.smtp_port,
@@ -1606,18 +1757,22 @@ impl Notifier {
     async fn http_request(&self, d: &Delivery, channel: &Channel, doc: &payload::Payload) -> Result<Outbound, Refusal> {
         let url =
             self.secrets.open_url(channel.id, &channel.sealed_url).map_err(|_| Refusal::fatal(FailureClass::Config))?;
+
         // The rules may be stricter now than when the channel was saved.
         let target = parse_target(&url, self.config.rules).map_err(|_| Refusal::fatal(FailureClass::BlockedTarget))?;
+
         let body = match channel.kind {
             ChannelKind::Slack => serde_json::to_vec(&payload::SlackBody { text: payload::text(doc) }),
             ChannelKind::Webhook | ChannelKind::Email => serde_json::to_vec(doc),
         }
         .map_err(|_| Refusal::fatal(FailureClass::Config))?;
+
         let mut headers = vec![
             ("content-type", "application/json".to_owned()),
             (payload::HEADER_EVENT, d.event.as_str().to_owned()),
             (payload::HEADER_DELIVERY, d.id.to_string()),
         ];
+
         if let Some(item) = channel.secret_item {
             let secret = self.secrets.signing_secret(channel.workspace_id, item).await.map_err(|e| Refusal {
                 class: FailureClass::Secret,
@@ -1625,28 +1780,34 @@ impl Notifier {
                 // read right now is worth another try.
                 retry: !matches!(e, DomainError::NotFound(_)),
             })?;
+
             // The item's password may have been changed since the channel
             // was saved: never sign with a guessable key, never send unsigned.
             if secret.len() < MIN_SIGNING_SECRET {
                 return Err(Refusal::fatal(FailureClass::Secret));
             }
+
             let at = self.clock.now().0 / 1000;
             headers.push((payload::HEADER_TIMESTAMP, at.to_string()));
             headers.push((payload::HEADER_SIGNATURE, payload::sign(&secret, at, &body)));
         }
+
         Ok(Outbound { url: target.url, headers, body })
     }
 
     async fn dispatch_one(&self, d: Delivery) -> DomainResult<Done> {
         let now = self.clock.now();
+
         let channel = match self.store.get_channel(d.channel_id).await? {
             Some(c) if c.enabled => c,
             other => {
                 let why = if other.is_some() { "the channel is turned off" } else { "the channel was deleted" };
                 self.store.cancel_delivery(d.id, why, now).await?;
+
                 return Ok(Done::idle(Outcome::Cancelled));
             }
         };
+
         let alarm = match d.alarm_id {
             Some(id) => match self.alerts.get_alarm(id).await {
                 Ok(a) => Some(a),
@@ -1658,6 +1819,7 @@ impl Notifier {
             },
             None => None,
         };
+
         match self.gate(&d, alarm.as_ref()).await? {
             Gate::Send => {}
             Gate::Cancel(why) => {
@@ -1673,14 +1835,17 @@ impl Notifier {
                 return Ok(Done::idle(Outcome::Suppressed));
             }
         }
+
         // A test is claimed by its own request ahead of its due time.
         let claim_at = if d.event == DeliveryEvent::Test { Timestamp(now.0.max(d.next_attempt_at.0)) } else { now };
         if !self.store.claim_delivery(d.id, claim_at, Timestamp(now.0 + ms(self.config.lease))).await? {
             return Ok(Done::idle(Outcome::Skipped));
         }
+
         let number = d.attempts + 1;
         let limit = if d.event == DeliveryEvent::Test { 1 } else { self.config.max_attempts.max(1) };
         let mut attempted = false;
+
         let (ok, http_status, error, retry) = if number > limit {
             // Every allowed attempt was started and the last one never
             // reported back (its lease ran out): no further send.
@@ -1690,10 +1855,12 @@ impl Notifier {
                 Err(refusal) => (false, None, Some(refusal.class), refusal.retry),
                 Ok(message) => {
                     attempted = true;
+
                     let outcome = match &message {
                         Message::Http(request) => self.transport.send(request).await,
                         Message::Mail(mail) => self.mail.send(mail).await,
                     };
+
                     match outcome {
                         SendOutcome::Status(s) | SendOutcome::Smtp(s) if (200..300).contains(&s) => {
                             (true, Some(s), None, false)
@@ -1705,6 +1872,7 @@ impl Notifier {
                 }
             }
         };
+
         let done = self.clock.now();
         let attempt = DeliveryAttempt {
             delivery_id: d.id,
@@ -1715,6 +1883,7 @@ impl Notifier {
             error,
             duration_ms: (done.0 - now.0).max(0),
         };
+
         let (result, outcome) = if ok {
             (AttemptResult::Sent, Outcome::Sent)
         } else if retry && number < limit {
@@ -1723,12 +1892,14 @@ impl Notifier {
         } else {
             (AttemptResult::Failed, Outcome::Failed)
         };
+
         if !self.store.finish_attempt(&attempt, result).await? {
             // The lease ran out and a later attempt holds the delivery: this
             // one's result is not recorded and changes nothing.
             tracing::warn!(delivery = %d.id, attempt = number, "notification attempt finished after its lease was lost");
             return Ok(Done { outcome: Outcome::Skipped, error, attempted });
         }
+
         Ok(Done { outcome, error, attempted })
     }
 }

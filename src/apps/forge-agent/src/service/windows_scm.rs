@@ -34,29 +34,36 @@ fn open(name: &str, access: u32) -> Result<Option<(Handle, Handle)>, String> {
     if !valid_service_name(name) {
         return Err(format!("invalid service name `{name}`"));
     }
+
     // SAFETY: null machine/database names select the local SCM; the result is checked.
     let scm = Handle(unsafe { OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CONNECT) });
     if scm.0.is_null() {
         return Err(std::io::Error::last_os_error().to_string());
     }
+
     let wname = wide(name);
+
     // SAFETY: `wname` is a NUL-terminated UTF-16 buffer that outlives the call.
     let svc = Handle(unsafe { OpenServiceW(scm.0, wname.as_ptr(), access) });
     if svc.0.is_null() {
         let err = std::io::Error::last_os_error();
+
         // ERROR_SERVICE_DOES_NOT_EXIST = 1060
         return if err.raw_os_error() == Some(1060) { Ok(None) } else { Err(err.to_string()) };
     }
+
     Ok(Some((scm, svc)))
 }
 
 fn query(svc: &Handle) -> Result<u32, String> {
     // SAFETY: SERVICE_STATUS is plain data; zeroed is a valid initial value.
     let mut status: SERVICE_STATUS = unsafe { std::mem::zeroed() };
+
     // SAFETY: `svc` is a valid service handle with SERVICE_QUERY_STATUS access.
     if unsafe { QueryServiceStatus(svc.0, &mut status) } == 0 {
         return Err(std::io::Error::last_os_error().to_string());
     }
+
     Ok(status.dwCurrentState)
 }
 
@@ -87,18 +94,23 @@ impl ServiceManager for Scm {
         tokio::task::spawn_blocking(move || {
             let (_scm, svc) =
                 open(&name, SERVICE_QUERY_STATUS | SERVICE_STOP | SERVICE_START)?.ok_or("service not found")?;
+
             if query(&svc)? != SERVICE_STOPPED {
                 // SAFETY: SERVICE_STATUS is plain data; zeroed is valid.
                 let mut st: SERVICE_STATUS = unsafe { std::mem::zeroed() };
+
                 // SAFETY: valid handle with SERVICE_STOP access.
                 unsafe { ControlService(svc.0, SERVICE_CONTROL_STOP, &mut st) };
+
                 for _ in 0..60 {
                     if query(&svc)? == SERVICE_STOPPED {
                         break;
                     }
+
                     std::thread::sleep(std::time::Duration::from_millis(500));
                 }
             }
+
             // SAFETY: valid handle with SERVICE_START access; no arguments.
             if unsafe { StartServiceW(svc.0, 0, std::ptr::null()) } == 0 {
                 return Err(std::io::Error::last_os_error().to_string());

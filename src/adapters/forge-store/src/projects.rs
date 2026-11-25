@@ -66,9 +66,11 @@ impl ProjectRepository for Store {
             .execute(self.pool())
             .await
             .map_err(db_err)?;
+
         if r.rows_affected() == 0 {
             return Err(not_found(id));
         }
+
         Ok(())
     }
 
@@ -78,9 +80,11 @@ impl ProjectRepository for Store {
             .execute(self.pool())
             .await
             .map_err(db_err)?;
+
         if r.rows_affected() == 0 {
             return Err(not_found(id));
         }
+
         Ok(())
     }
 }

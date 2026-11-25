@@ -64,9 +64,11 @@ fn write_file(path: &str, content: &str) -> Result<(), String> {
             .open(path)
             .map_err(|e| format!("{path}: {e}"))?;
         f.set_permissions(std::fs::Permissions::from_mode(0o640)).map_err(|e| format!("{path}: {e}"))?;
+
         // Without nginx's group the workers could not read the file.
         let gid = nginx_group().ok_or("neither the www-data nor the nginx group exists; is Nginx installed?")?;
         std::os::unix::fs::fchown(&f, Some(0), Some(gid)).map_err(|e| format!("{path}: {e}"))?;
+
         return f.write_all(content.as_bytes()).map_err(|e| format!("{path}: {e}"));
     }
     #[cfg(unix)]
@@ -80,8 +82,10 @@ fn write_file(path: &str, content: &str) -> Result<(), String> {
             .mode(0o600)
             .open(path)
             .map_err(|e| format!("{path}: {e}"))?;
+
         // An existing file keeps its mode on open: tighten it explicitly.
         f.set_permissions(std::fs::Permissions::from_mode(0o600)).map_err(|e| format!("{path}: {e}"))?;
+
         return f.write_all(content.as_bytes()).map_err(|e| format!("{path}: {e}"));
     }
     std::fs::write(path, content).map_err(|e| format!("{path}: {e}"))
@@ -106,6 +110,7 @@ async fn swap_with(nginx: &Nginx<'_>, files: &[(String, Option<String>)]) -> Res
     for d in nginx.dirs {
         std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
     }
+
     #[cfg(unix)]
     if nginx.dirs.contains(&TLS_DIR) {
         use std::os::unix::fs::PermissionsExt;
@@ -122,16 +127,20 @@ async fn swap_with(nginx: &Nginx<'_>, files: &[(String, Option<String>)]) -> Res
                 }
             }
         }
+
         Ok(())
     };
     apply(files)?;
+
     if let Err(e) = run(nginx.bin, &["-t"]).await {
         apply(&previous)?;
         return Err(format!("nginx -t failed; previous configuration restored:\n{e}"));
     }
+
     if nginx.reload {
         reload(nginx.bin).await?;
     }
+
     Ok("nginx configuration test passed; reloaded".into())
 }
 
@@ -141,6 +150,7 @@ async fn swap_with(nginx: &Nginx<'_>, files: &[(String, Option<String>)]) -> Res
 async fn tail(path: &str) -> Result<Value, String> {
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
     const MAX: u64 = 512 * 1024;
+
     let mut f = match tokio::fs::File::open(path).await {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -148,15 +158,18 @@ async fn tail(path: &str) -> Result<Value, String> {
         }
         Err(e) => return Err(format!("{path}: {e}")),
     };
+
     let size = f.metadata().await.map_err(|e| format!("{path}: {e}"))?.len();
     f.seek(std::io::SeekFrom::Start(size.saturating_sub(MAX))).await.map_err(|e| format!("{path}: {e}"))?;
     let mut buf = Vec::new();
     f.take(MAX).read_to_end(&mut buf).await.map_err(|e| format!("{path}: {e}"))?;
     let text = String::from_utf8_lossy(&buf);
     let lines: Vec<&str> = text.lines().collect();
+
     // A cut-off first line is dropped when the read started mid-file.
     let skip = usize::from(size > MAX && lines.len() > 1);
     let from = lines.len().saturating_sub(1000).max(skip);
+
     Ok(json!({ "path": path, "size": size, "log": lines[from..].join("\n") }))
 }
 
@@ -164,11 +177,13 @@ async fn tail(path: &str) -> Result<Value, String> {
 /// fetched again from the upstreams).
 async fn clear_cache(dir: &str) -> Result<Value, String> {
     let mut removed = 0u64;
+
     let mut entries = match tokio::fs::read_dir(dir).await {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(json!({ "state": "cleared", "removed": 0 })),
         Err(e) => return Err(format!("{dir}: {e}")),
     };
+
     while let Some(e) = entries.next_entry().await.map_err(|e| format!("{dir}: {e}"))? {
         let p = e.path();
         let kind = e.file_type().await.map_err(|e| format!("{}: {e}", p.display()))?;
@@ -177,8 +192,10 @@ async fn clear_cache(dir: &str) -> Result<Value, String> {
         } else {
             tokio::fs::remove_file(&p).await.map_err(|e| format!("{}: {e}", p.display()))?;
         }
+
         removed += 1;
     }
+
     Ok(json!({ "state": "cleared", "removed": removed }))
 }
 
@@ -187,6 +204,7 @@ async fn issue(spec: &SiteSpec, force: bool) -> Result<String, String> {
     if !Path::new("/usr/bin/certbot").exists() {
         return Err("TLS needs Certbot on this node (App Store → Certbot)".into());
     }
+
     let name = cert_name(spec);
     let mut args = vec![
         "certonly",
@@ -200,15 +218,19 @@ async fn issue(spec: &SiteSpec, force: bool) -> Result<String, String> {
         "-m",
         &spec.acme_email,
     ];
+
     if force {
         args.push("--force-renewal");
     }
+
     for d in &spec.domains {
         args.push("-d");
         args.push(d);
     }
+
     let out =
         run("certbot", &args).await.map_err(|e| format!("certbot failed (is DNS pointing at this node?):\n{e}"))?;
+
     Ok(out.lines().rev().take(4).collect::<Vec<_>>().join("\n"))
 }
 
@@ -236,16 +258,19 @@ pub(crate) fn parse_expiry(out: &str) -> Option<(String, i64)> {
     let (date, tail) = rest.split_once(" (").unwrap_or((rest, ""));
     let days =
         if tail.contains("EXPIRED") { -1 } else { tail.split_whitespace().find_map(|w| w.parse::<i64>().ok())? };
+
     Some((date.trim().to_owned(), days))
 }
 
 async fn site(action: &str, spec: &SiteSpec) -> Result<Value, String> {
     spec.validate()?;
+
     match action {
         "apply" => {
             std::fs::create_dir_all(format!("{ACME_ROOT}/.well-known/acme-challenge")).map_err(|e| e.to_string())?;
             let custom = (spec.custom_path(), Some(spec.render_custom()));
             let htpasswd = (spec.htpasswd_path(), spec.access.htpasswd());
+
             if spec.tls == Tls::Uploaded {
                 let m = spec.material.as_ref().ok_or("the uploaded certificate was not sent with the command")?;
                 let (crt, key) = spec.cert_files();
@@ -257,28 +282,36 @@ async fn site(action: &str, spec: &SiteSpec) -> Result<Value, String> {
                     custom,
                 ])
                 .await?;
+
                 return Ok(json!({ "state": "applied", "https": true, "log": log }));
             }
+
             let has_cert = Path::new(&format!("{}/fullchain.pem", spec.cert_dir())).exists();
             let tls = spec.tls == Tls::Acme;
+
             // HTTP first (serves the ACME challenge), then the certificate, then HTTPS.
             let mut log =
                 swap(&[htpasswd, (spec.site_path(), Some(spec.render(tls && has_cert))), custom.clone()]).await?;
+
             if tls && !has_cert {
                 if !Path::new("/usr/bin/certbot").exists() {
                     return Err("TLS needs Certbot on this node (App Store → Certbot)".into());
                 }
+
                 log.push_str(&format!("\n{}", issue(spec, false).await?));
                 log.push_str(&format!("\n{}", swap(&[(spec.site_path(), Some(spec.render(true))), custom]).await?));
             }
+
             Ok(json!({ "state": "applied", "https": tls, "log": log }))
         }
         "remove" => {
             let (crt, key) = spec.cert_files();
             let mut files = vec![(spec.site_path(), None), (spec.custom_path(), None), (spec.htpasswd_path(), None)];
+
             if spec.tls == Tls::Uploaded {
                 files.extend([(crt, None), (key, None)]);
             }
+
             let log = swap(&files).await?;
             Ok(json!({ "state": "removed", "log": log }))
         }
@@ -286,6 +319,7 @@ async fn site(action: &str, spec: &SiteSpec) -> Result<Value, String> {
             if spec.tls != Tls::Acme {
                 return Err("only Let's Encrypt certificates are renewed by Forge".into());
             }
+
             let mut log = issue(spec, true).await?;
             let nginx = nginx_bin()?;
             run(nginx, &["-t"]).await.map_err(|e| format!("nginx -t failed after renewal:\n{e}"))?;
@@ -332,32 +366,41 @@ fn fqdn_ok(n: &str) -> bool {
 }
 
 impl DnsOp {
+    /// Checks the zone and record names before the operation runs.
     pub fn validate(&self) -> Result<(), String> {
         let zone_ok = |z: &str| if fqdn_ok(z) { Ok(()) } else { Err(format!("invalid zone `{z}` (use example.com.)")) };
+
         match self {
             Self::Zones => Ok(()),
             Self::CreateZone { zone, nameservers } => {
                 zone_ok(zone)?;
+
                 if nameservers.iter().any(|n| !fqdn_ok(n)) {
                     return Err("name servers must be fully qualified (ns1.example.com.)".into());
                 }
+
                 Ok(())
             }
             Self::DeleteZone { zone } | Self::Records { zone } => zone_ok(zone),
             Self::SetRecords { zone, name, rtype, ttl, contents } => {
                 zone_ok(zone)?;
+
                 if !fqdn_ok(name) || !name.ends_with(zone.as_str()) {
                     return Err(format!("`{name}` must be a fully qualified name inside {zone}"));
                 }
+
                 if !RTYPES.contains(&rtype.as_str()) {
                     return Err(format!("record type {rtype} is not supported"));
                 }
+
                 if *ttl < 30 || *ttl > 604_800 || contents.is_empty() || contents.len() > 50 {
                     return Err("ttl 30–604800 and 1–50 values".into());
                 }
+
                 if contents.iter().any(|c| c.is_empty() || c.len() > 1024 || c.contains(['\n', '\r', '\0'])) {
                     return Err("record values must be single lines".into());
                 }
+
                 Ok(())
             }
             Self::DeleteRecords { zone, name, rtype } => {
@@ -374,6 +417,7 @@ fn pdns_env() -> Result<(String, String), String> {
     let get = |k: &str| text.lines().find_map(|l| l.strip_prefix(&format!("{k}=")).map(str::to_owned));
     let url = get("FORGE_PKG_POWERDNS_API_URL").ok_or("PowerDNS API URL missing")?;
     let key = get("FORGE_PKG_POWERDNS_API_KEY").ok_or("PowerDNS API key missing")?;
+
     Ok((url.trim_start_matches("http://").to_owned(), key))
 }
 
@@ -396,17 +440,20 @@ async fn pdns(method: &str, path: &str, body: Option<Value>) -> Result<Value, St
         let status = resp.status().as_u16();
         let bytes = resp.into_body().collect().await.map_err(|e| e.to_string())?.to_bytes();
         let v: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+
         if (200..300).contains(&status) {
             Ok(v)
         } else {
             Err(format!("PowerDNS: {} (HTTP {status})", v["error"].as_str().unwrap_or("request failed")))
         }
     };
+
     tokio::time::timeout(Duration::from_secs(20), run).await.map_err(|_| "PowerDNS did not respond".to_owned())?
 }
 
 async fn dns(op: &DnsOp) -> Result<Value, String> {
     op.validate()?;
+
     match op {
         DnsOp::Zones => {
             let v = pdns("GET", "/zones", None).await?;
@@ -462,6 +509,7 @@ pub async fn site_action(action: &str, spec: &SiteSpec) -> Result<Value, String>
     site(action, spec).await
 }
 
+/// Runs one DNS operation for the helper.
 pub async fn dns_action(op: &DnsOp) -> Result<Value, String> {
     dns(op).await
 }
@@ -482,6 +530,7 @@ mod tests {
         );
         std::fs::write(&bin, script).unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
         bin.display().to_string()
     }
 
@@ -499,6 +548,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(std::fs::read_to_string(&site).unwrap(), "good 1");
+
         // A failing test restores both files as they were.
         let err =
             super::swap_with(&nginx, &[(site.clone(), Some("good 2".into())), (custom.clone(), Some("BAD".into()))])
@@ -507,6 +557,7 @@ mod tests {
         assert!(err.contains("previous configuration restored") && err.contains("BAD"), "{err}");
         assert_eq!(std::fs::read_to_string(&site).unwrap(), "good 1");
         assert_eq!(std::fs::read_to_string(&custom).unwrap(), "c1");
+
         // A new file that fails is removed again; a removal that passes stays removed.
         let extra = conf.join("extra.conf").display().to_string();
         assert!(super::swap_with(&nginx, &[(extra.clone(), Some("BAD".into()))]).await.is_err());

@@ -118,6 +118,7 @@ pub fn parse_release(doc: &Value) -> Option<Release> {
     if !forge_catalog::versions::valid_build(&version) {
         return None;
     }
+
     let assets = doc
         .get("assets")
         .and_then(Value::as_array)
@@ -129,6 +130,7 @@ pub fn parse_release(doc: &Value) -> Option<Release> {
                 .collect()
         })
         .unwrap_or_default();
+
     Some(Release {
         version,
         notes: doc.get("body").and_then(Value::as_str).unwrap_or_default().chars().take(20_000).collect(),
@@ -159,7 +161,9 @@ pub fn releases_url(feed: &str, configured: Option<&str>) -> String {
     if let Some(u) = configured.map(str::trim).filter(|u| !u.is_empty()) {
         return u.to_owned();
     }
+
     let f = feed.trim_end_matches('/');
+
     f.strip_suffix("/latest").unwrap_or(f).to_owned()
 }
 
@@ -180,6 +184,7 @@ pub fn select_releases(docs: &[Value], current: &str) -> Vec<Release> {
         .collect();
     out.sort_by(|a, b| compare_release(&b.version, &a.version));
     out.dedup_by(|a, b| a.version == b.version);
+
     out
 }
 
@@ -202,6 +207,7 @@ pub async fn list_releases(list_url: &str) -> Result<Vec<Release>, String> {
     let sep = if list_url.contains('?') { '&' } else { '?' };
     let doc = get_json(&format!("{list_url}{sep}per_page=50")).await?;
     let docs = doc.as_array().ok_or("the release feed did not return a list of releases")?;
+
     Ok(select_releases(docs, crate::VERSION))
 }
 
@@ -210,11 +216,13 @@ pub async fn release_by_tag(list_url: &str, version: &str) -> Result<Release, St
     if !forge_catalog::versions::valid_build(version) {
         return Err(format!("`{version}` is not a version"));
     }
+
     let doc = get_json(&format!("{}/tags/v{version}", list_url.trim_end_matches('/'))).await?;
     let rel = parse_release(&doc).ok_or("the release feed returned no usable release")?;
     if rel.version != version {
         return Err(format!("the release feed returned {} for {version}", rel.version));
     }
+
     Ok(rel)
 }
 
@@ -232,6 +240,7 @@ pub async fn check(feed: &str, now_ms: i64) -> Result<Status, String> {
         .await
         .map_err(|e| e.to_string())?;
     let rel = parse_release(&doc).ok_or("the release feed returned no usable release")?;
+
     Ok(with(|s| {
         s.available = is_newer(&rel.version);
         s.latest = Some(rel);
@@ -256,22 +265,27 @@ fn plan(rel: &Release, exe: &Path, dist: &Path) -> Result<Vec<(String, PathBuf)>
     if t == "unsupported" {
         return Err("self-update is not available for this platform".into());
     }
+
     let dir = exe.parent().ok_or("cannot locate the server binary")?;
     let mut files = vec![
         (format!("forge-server-{t}{EXE}"), exe.to_path_buf()),
         (format!("forge-plugin-runner-{t}{EXE}"), dir.join(format!("forge-plugin-runner{EXE}"))),
         (format!("forge-analytics-worker-{t}{EXE}"), dir.join(format!("forge-analytics-worker{EXE}"))),
     ];
+
     // Agent binaries handed to new and updated nodes.
     for name in rel.assets.keys().filter(|n| n.starts_with("forge-agent-")) {
         files.push((name.clone(), dist.join(name)));
     }
+
     for (asset, _) in &files[..1] {
         if !rel.assets.contains_key(asset) {
             return Err(format!("release {} has no {asset}", rel.version));
         }
     }
+
     files.retain(|(a, _)| rel.assets.contains_key(a));
+
     Ok(files)
 }
 
@@ -325,9 +339,11 @@ pub fn installed_path(running: &Path) -> PathBuf {
     if let Some(t) = s.strip_suffix(" (deleted)") {
         s = t.to_owned();
     }
+
     while let Some(t) = s.strip_suffix(".prev") {
         s = t.to_owned();
     }
+
     PathBuf::from(s)
 }
 
@@ -364,6 +380,7 @@ pub fn remember_install_path() {
 fn prev(p: &Path) -> PathBuf {
     let mut s = p.as_os_str().to_owned();
     s.push(".prev");
+
     PathBuf::from(s)
 }
 
@@ -377,9 +394,11 @@ fn swap_in(src: &Path, dest: &Path) -> Result<(), String> {
         // No earlier copy: a stale `.prev` must not be restored on rollback.
         let _ = std::fs::remove_file(prev(dest));
     }
+
     if std::fs::rename(src, dest).is_err() {
         std::fs::copy(src, dest).map_err(|e| format!("{}: {e}", dest.display()))?;
     }
+
     Ok(())
 }
 
@@ -398,6 +417,7 @@ fn dist_file_allowed(name: &str) -> bool {
 fn restore_previous(a: &Applied, exe: &Path, dist: &Path) -> Vec<String> {
     let dir = exe.parent().map(Path::to_path_buf).unwrap_or_default();
     let mut failed = Vec::new();
+
     for f in [
         exe.to_path_buf(),
         dir.join(format!("forge-plugin-runner{EXE}")),
@@ -407,11 +427,13 @@ fn restore_previous(a: &Applied, exe: &Path, dist: &Path) -> Vec<String> {
             failed.push(f.display().to_string());
         }
     }
+
     for name in &a.dist_files {
         if !dist_file_allowed(name) {
             failed.push(format!("{name} (not an agent-folder file)"));
             continue;
         }
+
         let f = dist.join(name);
         let r = if prev(&f).exists() {
             std::fs::rename(prev(&f), &f)
@@ -421,10 +443,12 @@ fn restore_previous(a: &Applied, exe: &Path, dist: &Path) -> Vec<String> {
                 _ => Ok(()),
             }
         };
+
         if r.is_err() {
             failed.push(f.display().to_string());
         }
     }
+
     failed
 }
 
@@ -443,6 +467,7 @@ pub async fn apply(
     if public_key.contains("PLACEHOLDER") {
         return Err("this build has no release signing key; install updates by hand".into());
     }
+
     let exe = install_exe()?;
     let files = plan(rel, &exe, dist)?;
     let c = client()?;
@@ -458,6 +483,7 @@ pub async fn apply(
     let stage = data_dir.join("updates").join(&rel.version);
     std::fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
     let mut staged = Vec::new();
+
     for (asset, dest) in &files {
         set_state("downloading", Some(format!("Downloading {asset}")));
         let bytes = download(&c, &rel.assets[asset]).await?;
@@ -465,6 +491,7 @@ pub async fn apply(
         if &sha256_hex(&bytes) != want {
             return Err(format!("{asset}: checksum mismatch"));
         }
+
         let p = stage.join(asset);
         std::fs::write(&p, &bytes).map_err(|e| format!("{}: {e}", p.display()))?;
         #[cfg(unix)]
@@ -486,10 +513,13 @@ pub async fn apply(
     if !out.status.success() || !printed.contains(&rel.version) {
         return Err(format!("the new server reports `{}`, not {}", printed.trim(), rel.version));
     }
+
     let mut cfg = std::process::Command::new(new_server);
+
     if let Some(p) = config_path {
         cfg.arg("--config").arg(p);
     }
+
     let out = cfg.arg("config").output().map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err(format!(
@@ -497,12 +527,15 @@ pub async fn apply(
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
+
     // It must know every migration the database has applied, or it would
     // refuse to start after the swap (D-098).
     let mut mig = std::process::Command::new(new_server);
+
     if let Some(p) = config_path {
         mig.arg("--config").arg(p);
     }
+
     let out = mig.arg("check-migrations").output().map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err(format!(
@@ -526,6 +559,7 @@ pub async fn apply(
             Some((name.clone(), sums.get(&name)?.clone()))
         })
         .collect();
+
     let dist_meta = if agent_sums.is_empty() {
         None
     } else {
@@ -540,23 +574,28 @@ pub async fn apply(
 
     set_state("installing", Some("Installing".into()));
     let mut dist_files = Vec::new();
+
     for (src, dest) in &staged {
         if let Some(d) = dest.parent() {
             std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
         }
+
         swap_in(src, dest)?;
+
         if dest.starts_with(dist)
             && let Some(name) = dest.file_name()
         {
             dist_files.push(name.to_string_lossy().into_owned());
         }
     }
+
     if let Some(meta) = &dist_meta {
         for name in [crate::install::MANIFEST, "SHA256SUMS"] {
             swap_in(&meta.join(name), &dist.join(name))?;
             dist_files.push(name.to_owned());
         }
     }
+
     let applied = Applied {
         from: crate::VERSION.to_owned(),
         to: rel.version.clone(),
@@ -570,6 +609,7 @@ pub async fn apply(
     std::fs::write(&ap, serde_json::to_vec_pretty(&applied).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_dir_all(&stage);
     set_state("restarting", Some(format!("Restarting into {}", rel.version)));
+
     Ok(applied)
 }
 
@@ -607,16 +647,21 @@ pub fn startup_guard(data_dir: &Path, dist: &Path) {
     if a.to != crate::VERSION {
         return; // already rolled back, or replaced by hand
     }
+
     a.attempts += 1;
     let _ = std::fs::write(&ap, serde_json::to_vec_pretty(&a).unwrap_or_default());
+
     if a.attempts <= 3 {
         return;
     }
+
     eprintln!("forge-server: {} failed to start {} times; restoring {}", a.to, a.attempts - 1, a.from);
     let Ok(exe) = install_exe() else { return };
+
     for f in restore_previous(&a, &exe, dist) {
         eprintln!("forge-server: could not restore {f}");
     }
+
     let _ = std::fs::rename(&ap, ap.with_file_name("rolled-back.json"));
     restart_into_self(&exe);
 }
@@ -628,7 +673,9 @@ pub fn mark_serving(data_dir: &Path) -> Option<Applied> {
     if a.to != crate::VERSION {
         return None;
     }
+
     let _ = std::fs::rename(&ap, ap.with_file_name("last-applied.json"));
+
     Some(a)
 }
 
@@ -643,11 +690,13 @@ pub fn detect_stale_restart(data_dir: &Path) -> Option<Applied> {
     if a.to == crate::VERSION || a.from != crate::VERSION {
         return None;
     }
+
     let _ = std::fs::rename(&ap, ap.with_file_name("failed.json"));
     fail(format!(
         "{} was installed, but the server restarted into {}. Restart the forge-server service to start {}.",
         a.to, a.from, a.to
     ));
+
     Some(a)
 }
 
@@ -666,6 +715,7 @@ pub mod keys {
         let rng = ring::rand::SystemRandom::new();
         let pkcs8 = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).map_err(|_| "key generation failed")?;
         let kp = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).map_err(|_| "key generation failed")?;
+
         Ok((
             base64::engine::general_purpose::STANDARD.encode(pkcs8.as_ref()),
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(kp.public_key().as_ref()),
@@ -680,6 +730,7 @@ pub mod keys {
             .map_err(|_| "the key is not base64")?;
         let kp =
             ring::signature::Ed25519KeyPair::from_pkcs8(&raw).map_err(|_| "the key is not an Ed25519 PKCS#8 key")?;
+
         Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(kp.public_key().as_ref()))
     }
 
@@ -690,6 +741,7 @@ pub mod keys {
             .map_err(|_| "the key is not base64")?;
         let kp =
             ring::signature::Ed25519KeyPair::from_pkcs8(&raw).map_err(|_| "the key is not an Ed25519 PKCS#8 key")?;
+
         Ok(base64::engine::general_purpose::STANDARD.encode(kp.sign(data).as_ref()))
     }
 }
@@ -713,6 +765,7 @@ mod tests {
     #[test]
     fn local_dev_builds_order_below_their_version_and_after_each_other() {
         use std::cmp::Ordering::{Greater, Less};
+
         // Dev builds are stamped <next version>-dev.<yyyyMMdd.HHmmss>: below
         // that release, above the one before it.
         assert_eq!(compare_release("0.1.1-dev.20261112.153000", "0.1.1"), Less);
@@ -736,6 +789,7 @@ mod tests {
             "assets": [{ "name": "SHA256SUMS", "browser_download_url": "https://x/SHA256SUMS" }]
         });
         let r = parse_release(&doc).unwrap();
+
         // Security review: a feed cannot hand the console a script link.
         let mut evil = doc.clone();
         evil["html_url"] = serde_json::json!("javascript:alert(document.cookie)");
@@ -765,10 +819,12 @@ mod tests {
         let docs = vec![rel("v1.2.0"), rel("v1.0.0"), rel("v2.0.0"), rel("v0.9.0"), draft, pre, rel("v1.10.0")];
         let v: Vec<String> = select_releases(&docs, "1.2.0").into_iter().map(|r| r.version).collect();
         assert_eq!(v, ["2.0.0", "1.10.0", "1.2.0"], "older never offered; drafts and prereleases dropped");
+
         // A release candidate sees the final release of its version.
         let rc = vec![rel("v1.0.0"), rel("v1.0.0-rc-02"), rel("v1.0.0-rc-01"), rel("v0.9.0")];
         let v: Vec<String> = select_releases(&rc, "1.0.0-rc-01").into_iter().map(|r| r.version).collect();
         assert_eq!(v, ["1.0.0", "1.0.0-rc-02", "1.0.0-rc-01"]);
+
         // A dev build sees dev builds.
         let dev = vec![
             rel("v0.1.0-dev.20261112.153000"),
@@ -794,6 +850,7 @@ mod tests {
             dist_files: Vec::new(),
         };
         std::fs::write(applied_path(dir.path()), serde_json::to_vec(&a).unwrap()).unwrap();
+
         // Another version's record is left alone.
         startup_guard(dir.path(), &dir.path().join("dist"));
         let back: Applied = serde_json::from_slice(&std::fs::read(applied_path(dir.path())).unwrap()).unwrap();
@@ -811,13 +868,16 @@ mod tests {
         w(&exe, "old server");
         let agent = dist.join("forge-agent-linux-x86_64");
         w(&agent, "old agent");
+
         // An update over a folder without a manifest: the binaries and the
         // server are swapped, the manifest is new.
         let staged = dir.path().join("staged");
         std::fs::create_dir_all(&staged).unwrap();
+
         for (name, body) in [("server", "new server"), ("agent", "new agent"), ("manifest", "{}")] {
             w(&staged.join(name), body);
         }
+
         swap_in(&staged.join("server"), &exe).unwrap();
         swap_in(&staged.join("agent"), &agent).unwrap();
         let manifest = dist.join(crate::install::MANIFEST);
@@ -837,6 +897,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&agent).unwrap(), "old agent");
         assert!(!manifest.exists(), "a manifest the update added is removed: the old agents are the old server's");
         assert!(!prev(&agent).exists());
+
         // A tampered record cannot reach outside the agent folder.
         let victim = dir.path().join("victim");
         w(&victim, "keep");
@@ -866,6 +927,7 @@ mod tests {
             let e = restart_path(bad).unwrap_err();
             assert!(e.contains("restart the forge-server service"), "{e}");
         }
+
         let abs = std::env::temp_dir().join("forge-server");
         assert_eq!(restart_path(Some(abs.clone())).unwrap(), abs);
     }

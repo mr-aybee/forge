@@ -81,17 +81,21 @@ pub fn push(key: &str, step: &str, lines: &[String]) {
     if all.len() >= MAX_CONSOLES && !all.contains_key(key) {
         // Drop the oldest consoles.
         all.retain(|_, c| c.touched.is_some_and(|t| t.elapsed() < KEEP));
+
         if all.len() >= MAX_CONSOLES
             && let Some(oldest) = all.iter().min_by_key(|(_, c)| c.touched).map(|(k, _)| k.clone())
         {
             all.remove(&oldest);
         }
     }
+
     let c = all.entry(key.to_owned()).or_default();
     let t = now_ms();
+
     for l in lines {
         c.lines.push(Line { t, step: step.to_owned(), line: l.chars().take(400).collect() });
     }
+
     let excess = c.lines.len().saturating_sub(MAX_LINES);
     c.lines.drain(..excess);
     c.touched = Some(Instant::now());
@@ -120,14 +124,17 @@ pub async fn progress(State(state): State<AppState>, headers: HeaderMap, body: B
     else {
         return StatusCode::UNAUTHORIZED;
     };
+
     if body.len() > MAX_REPORT {
         return StatusCode::PAYLOAD_TOO_LARGE;
     }
+
     let hash = forge_pki::enrollment::hash_secret(&token.secret);
     let Ok(Some(t)) = state.store.find_token_by_hash(&hash).await else { return StatusCode::UNAUTHORIZED };
     if state.clock.now().0 > t.expires_at.0 + 3_600_000 {
         return StatusCode::UNAUTHORIZED;
     }
+
     let text = String::from_utf8_lossy(&body).replace(&token.secret, "********");
     let clean: Vec<String> = text
         .lines()
@@ -138,7 +145,9 @@ pub async fn progress(State(state): State<AppState>, headers: HeaderMap, body: B
     if lines(&key).is_some_and(|l| l.len() >= MAX_LINES) {
         return StatusCode::TOO_MANY_REQUESTS;
     }
+
     push(&key, "installer", &clean);
+
     StatusCode::NO_CONTENT
 }
 
@@ -161,16 +170,20 @@ pub async fn console(
     if let Some(id) = q.job_id {
         caller.authorize(Action::View, EntityRef::new(EntityKind::Job, id)).await?;
         let job = state.store.get_job(id).await?;
+
         // Live lines while running; the job's own copy otherwise.
         let live = lines(&job_key(id));
         let stored: Vec<Line> =
             job.state.get("log").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+
         let out = match live {
             Some(l) if l.len() >= stored.len() => l,
             _ => stored,
         };
+
         return Ok(Json(json!({ "status": job.status, "error": job.last_error, "lines": out })));
     }
+
     let tid = q.token_id.ok_or_else(|| ApiError::bad_request("job_id or token_id"))?;
     let t = state
         .store
@@ -182,6 +195,7 @@ pub async fn console(
     let l = lines(&token_key(&t.id)).unwrap_or_default();
     let failed = l.iter().any(|x| x.line.starts_with("installer failed") || x.line.starts_with("error: "));
     let done = l.iter().any(|x| x.line == "installer finished");
+
     let status = if failed {
         "failed"
     } else if done || t.server_id.is_some() {
@@ -189,6 +203,7 @@ pub async fn console(
     } else {
         "running"
     };
+
     Ok(Json(json!({ "status": status, "server_id": t.server_id, "lines": l })))
 }
 
@@ -201,10 +216,12 @@ pub async fn list(State(state): State<AppState>, caller: Caller, Ws(ws): Ws) -> 
         jobs.into_iter().filter(|j| j.kind == "node.bootstrap" && j.created_at.0 >= since).collect();
     let refs = bootstrap.iter().map(|j| EntityRef::new(EntityKind::Job, j.id)).collect();
     let visible = caller.can_many(Action::View, refs).await;
+
     for (j, ok) in bootstrap.iter().zip(visible) {
         if !ok {
             continue;
         }
+
         let p = &j.payload;
         out.push(json!({
             "kind": "assisted",
@@ -220,6 +237,7 @@ pub async fn list(State(state): State<AppState>, caller: Caller, Ws(ws): Ws) -> 
             "active": matches!(j.status, JobStatus::Queued | JobStatus::Running),
         }));
     }
+
     if caller.can(Action::ServerEnroll, EntityRef::new(EntityKind::Workspace, ws)).await {
         let keys: Vec<(String, u64)> = consoles()
             .lock()
@@ -231,11 +249,13 @@ pub async fn list(State(state): State<AppState>, caller: Caller, Ws(ws): Ws) -> 
                     .collect()
             })
             .unwrap_or_default();
+
         for (tid, last) in keys {
             let Ok(Some(t)) = state.store.get_token(&tid).await else { continue };
             if t.workspace_id != ws {
                 continue;
             }
+
             let target = state.store.get_enrollment_target(&tid).await.ok().flatten();
             let l = lines(&token_key(&tid)).unwrap_or_default();
             let failed = l.iter().any(|x| x.line.starts_with("installer failed") || x.line.starts_with("error: "));
@@ -252,5 +272,6 @@ pub async fn list(State(state): State<AppState>, caller: Caller, Ws(ws): Ws) -> 
             }));
         }
     }
+
     Ok(Json(out))
 }

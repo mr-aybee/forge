@@ -121,6 +121,7 @@ impl RemoteSessions {
         // Hex, so an id never starts with `-` (it is a CLI argument).
         let id = hex::encode(forge_secrets::crypto::random_bytes::<16>());
         let (tx, rx) = watch::channel(false);
+
         if let Ok(mut m) = self.inner.lock() {
             m.insert(
                 id.clone(),
@@ -137,6 +138,7 @@ impl RemoteSessions {
                 },
             );
         }
+
         Registration { id, revoked: rx, sessions: self.clone() }
     }
 
@@ -146,10 +148,12 @@ impl RemoteSessions {
     pub fn end_matching(&self, pred: impl Fn(&str, UserId) -> bool) -> usize {
         let Ok(m) = self.inner.lock() else { return 0 };
         let mut n = 0;
+
         for e in m.values().filter(|e| pred(&e.credential, e.user_id)) {
             let _ = e.revoke.send(true);
             n += 1;
         }
+
         n
     }
 
@@ -159,6 +163,7 @@ impl RemoteSessions {
     pub fn count_open(&self, kind: &str, user: UserId, server: ServerId) -> (usize, usize) {
         let Ok(m) = self.inner.lock() else { return (0, 0) };
         let Ok(r) = self.reserved.lock() else { return (0, 0) };
+
         Self::count(&m, &r, kind, user, server)
     }
 
@@ -172,6 +177,7 @@ impl RemoteSessions {
         let entries = m.values().filter(|e| e.kind == kind).map(|e| (e.user_id, e.server_id));
         let holds = r.values().filter(|h| h.kind == kind).map(|h| (h.user_id, h.server_id));
         let all: Vec<(UserId, ServerId)> = entries.chain(holds).collect();
+
         (all.iter().filter(|(u, _)| *u == user).count(), all.iter().filter(|(_, s)| *s == server).count())
     }
 
@@ -192,11 +198,14 @@ impl RemoteSessions {
         if mine >= limits.per_user {
             return Err(Refusal::PerUser(limits.per_user));
         }
+
         if on_node >= limits.per_node {
             return Err(Refusal::PerNode(limits.per_node));
         }
+
         let id = self.next_hold.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         r.insert(id, Hold { kind, user_id: user, server_id: server });
+
         Ok(Reservation { id, sessions: self.clone() })
     }
 
@@ -244,10 +253,12 @@ pub async fn list(State(state): State<AppState>, caller: Caller, Query(q): Query
     if q.all {
         caller.authorize(Action::UserManage, EntityRef::platform()).await?;
     }
+
     let me = caller.session.user.id;
     let mut items: Vec<(String, Entry)> =
         state.remote_sessions.snapshot().into_iter().filter(|(_, e)| q.all || e.user_id == me).collect();
     items.sort_by_key(|(_, e)| std::cmp::Reverse(e.started_at.0));
+
     Ok(Json(json!({ "sessions": items.iter().map(|(id, e)| view(id, e)).collect::<Vec<_>>() })))
 }
 
@@ -258,6 +269,7 @@ pub async fn revoke(State(state): State<AppState>, caller: Caller, Path(id): Pat
         // Someone else's session: do not reveal that it exists.
         return Err(ApiError::not_found("no open session with this id"));
     }
+
     let _ = entry.revoke.send(true);
     let resource = EntityRef::new(EntityKind::Server, entry.server_id);
     caller
@@ -268,6 +280,7 @@ pub async fn revoke(State(state): State<AppState>, caller: Caller, Path(id): Pat
             json!({ "session": id, "owner": entry.user, "login": entry.login, "kind": entry.kind }),
         )
         .await;
+
     Ok(Json(json!({ "revoked": true, "session": view(&id, &entry) })))
 }
 
@@ -311,6 +324,7 @@ mod tests {
         let b1 = reg.reserve("container", bob, node, limits).unwrap();
         assert_eq!(reg.reserve("container", bob, node, limits).unwrap_err(), Refusal::PerNode(3));
         assert!(reg.reserve("terminal", bob, node, limits).is_ok(), "other kinds are counted apart");
+
         // Registering then releasing keeps the place taken.
         let open = reg.register(NewSession {
             user_id: alice,

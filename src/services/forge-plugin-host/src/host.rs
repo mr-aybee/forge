@@ -25,6 +25,7 @@ pub struct PluginPackage {
     pub signature: String,
 }
 
+/// Settings for the plugin host.
 #[derive(Debug, Clone)]
 pub struct PluginHostConfig {
     pub artifacts_dir: PathBuf,
@@ -34,6 +35,7 @@ pub struct PluginHostConfig {
     pub fault_threshold: u32,
 }
 
+/// The result of one plugin invocation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InvokeOutcome {
     pub output: u32,
@@ -63,6 +65,7 @@ fn invalid(msg: impl Into<String>) -> DomainError {
 }
 
 impl PluginHost {
+    /// Creates the plugin host.
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
@@ -78,10 +81,12 @@ impl PluginHost {
         Self { repo, authz, audit, runner, functions, trust, clock, config, concurrency: Mutex::new(HashMap::new()) }
     }
 
+    /// Lists installed plugins.
     pub async fn list(&self) -> DomainResult<Vec<PluginRecord>> {
         self.repo.list_plugins().await
     }
 
+    /// One installed plugin by id.
     pub async fn get(&self, id: &str) -> DomainResult<PluginRecord> {
         self.repo.get_plugin(id).await?.ok_or_else(|| DomainError::NotFound(format!("plugin {id}")))
     }
@@ -102,6 +107,7 @@ impl PluginHost {
         if self.repo.get_plugin(&manifest.plugin.id).await?.is_some() {
             return Err(DomainError::Conflict(format!("{} is already installed; use upgrade", manifest.plugin.id)));
         }
+
         let sha = self.store_artifact(&manifest, &package.artifact).await?;
         let now = self.clock.now();
         let record = PluginRecord {
@@ -120,14 +126,17 @@ impl PluginHost {
         };
         self.repo.upsert_plugin(&record).await?;
         self.audit_ok(principal, "plugin.install", &record).await;
+
         Ok(record)
     }
 
+    /// Enables a plugin.
     pub async fn enable(&self, principal: &Principal, ctx: AuthzContext, id: &str) -> DomainResult<PluginRecord> {
         self.transition(principal, ctx, id, "plugin.enable", |r| {
             if r.state == PluginState::Enabled {
                 return Err(DomainError::Conflict("already enabled".into()));
             }
+
             r.state = PluginState::Enabled;
             r.fault_count = 0;
             r.quarantine_reason = None;
@@ -136,17 +145,20 @@ impl PluginHost {
         .await
     }
 
+    /// Disables a plugin.
     pub async fn disable(&self, principal: &Principal, ctx: AuthzContext, id: &str) -> DomainResult<PluginRecord> {
         self.transition(principal, ctx, id, "plugin.disable", |r| {
             if r.state != PluginState::Enabled {
                 return Err(DomainError::Conflict("plugin is not enabled".into()));
             }
+
             r.state = PluginState::Disabled;
             Ok(())
         })
         .await
     }
 
+    /// Pins or unpins a plugin.
     pub async fn set_pinned(
         &self,
         principal: &Principal,
@@ -177,17 +189,20 @@ impl PluginHost {
         if current.pinned {
             return Err(DomainError::Conflict(format!("{id} is pinned at {}", current.version)));
         }
+
         if manifest.plugin.publisher != current.publisher {
             return Err(DomainError::Denied(format!(
                 "{id} is published by {}; an upgrade must come from the same publisher",
                 current.publisher
             )));
         }
+
         let new_v = manifest.version().map_err(|e| invalid(e.to_string()))?;
         let old_v = semver::Version::parse(&current.version).map_err(DomainError::internal)?;
         if new_v <= old_v {
             return Err(invalid(format!("upgrade must increase version ({old_v} → {new_v})")));
         }
+
         let manifest = self.verify_package(&package, &approved).await?;
         let sha = self.store_artifact(&manifest, &package.artifact).await?;
         let old_version = std::mem::replace(&mut current.version, manifest.plugin.version.clone());
@@ -198,6 +213,7 @@ impl PluginHost {
         self.repo.upsert_plugin(&current).await?;
         let _ = tokio::fs::remove_file(self.artifact_path(&id, &old_version)).await;
         self.audit_ok(principal, "plugin.upgrade", &current).await;
+
         Ok(current)
     }
 
@@ -208,6 +224,7 @@ impl PluginHost {
         if record.state == PluginState::Enabled {
             return Err(DomainError::Conflict("disable the plugin before uninstalling".into()));
         }
+
         let dependents: Vec<String> = self
             .repo
             .list_plugins()
@@ -217,12 +234,15 @@ impl PluginHost {
             .filter(|p| Manifest::parse(&p.manifest_toml).is_ok_and(|m| m.dependencies.contains_key(id)))
             .map(|p| p.plugin_id)
             .collect();
+
         if !dependents.is_empty() {
             return Err(DomainError::Conflict(format!("required by: {}", dependents.join(", "))));
         }
+
         self.repo.delete_plugin(id).await?;
         let _ = tokio::fs::remove_dir_all(self.config.artifacts_dir.join(id)).await;
         self.audit_ok(principal, "plugin.uninstall", &record).await;
+
         Ok(())
     }
 
@@ -242,6 +262,7 @@ impl PluginHost {
         if record.state != PluginState::Enabled {
             return Err(DomainError::Conflict(format!("plugin is {}", record.state.as_str())));
         }
+
         let manifest = Manifest::parse(&record.manifest_toml).map_err(DomainError::internal)?;
         let _permit = self.acquire_slot(id, manifest.budgets.concurrency)?;
 
@@ -299,6 +320,7 @@ impl PluginHost {
                 manifest.plugin.forge_api, self.config.api_version
             )));
         }
+
         self.trust
             .verify(&manifest.plugin.publisher, package.manifest_toml.as_bytes(), &package.artifact, &package.signature)
             .map_err(|e| DomainError::Denied(e.to_string()))?;
@@ -306,6 +328,7 @@ impl PluginHost {
         if let Some(extra) = approved.iter().find(|p| !requested.contains(p)) {
             return Err(invalid(format!("cannot approve `{extra}`: not requested by the plugin")));
         }
+
         for (dep, req) in &manifest.dependencies {
             let installed =
                 self.repo.get_plugin(dep).await?.ok_or_else(|| invalid(format!("missing dependency {dep}")))?;
@@ -315,6 +338,7 @@ impl PluginHost {
                 return Err(invalid(format!("dependency {dep} {v} does not satisfy {req}")));
             }
         }
+
         Ok(manifest)
     }
 
@@ -327,7 +351,9 @@ impl PluginHost {
         if let Some(dir) = path.parent() {
             tokio::fs::create_dir_all(dir).await.map_err(DomainError::internal)?;
         }
+
         tokio::fs::write(&path, bytes).await.map_err(DomainError::internal)?;
+
         Ok(forge_secrets::crypto::sha256_hex(bytes))
     }
 
@@ -348,10 +374,12 @@ impl PluginHost {
         if let Err(e) = &result {
             let ev = AuditEvent::new(principal, audit_action, resource, AuditOutcome::Denied)
                 .with_details(serde_json::json!({ "reason": e.to_string() }));
+
             if let Err(e) = self.audit.record(ev).await {
                 tracing::error!(error = %e, "audit write failed");
             }
         }
+
         result
     }
 
@@ -369,6 +397,7 @@ impl PluginHost {
         record.updated_at = self.clock.now();
         self.repo.upsert_plugin(&record).await?;
         self.audit_ok(principal, action, &record).await;
+
         Ok(record)
     }
 
@@ -379,6 +408,7 @@ impl PluginHost {
                 .or_insert_with(|| Arc::new(Semaphore::new(usize::try_from(limit.max(1)).unwrap_or(1))))
                 .clone()
         };
+
         sem.try_acquire_owned().map_err(|_| DomainError::Conflict("plugin concurrency limit reached".into()))
     }
 
@@ -387,12 +417,16 @@ impl PluginHost {
             // A refused host call is the sandbox working, not a plugin fault.
             return Ok(());
         }
+
         let mut r = self.get(&record.plugin_id).await?;
         r.fault_count += 1;
+
         if kind.is_budget_violation() || r.fault_count >= self.config.fault_threshold {
             return self.quarantine(&r, &format!("{kind:?}: {message}")).await;
         }
+
         r.updated_at = self.clock.now();
+
         self.repo.upsert_plugin(&r).await
     }
 
@@ -406,9 +440,11 @@ impl PluginHost {
         tracing::warn!(plugin = %r.plugin_id, reason, "plugin quarantined");
         let ev = AuditEvent::new("system", "plugin.quarantine", plugin_ref(&r.plugin_id), AuditOutcome::Success)
             .with_details(serde_json::json!({ "reason": r.quarantine_reason, "version": r.version }));
+
         if let Err(e) = self.audit.record(ev).await {
             tracing::error!(error = %e, "audit write failed");
         }
+
         Ok(())
     }
 
@@ -416,6 +452,7 @@ impl PluginHost {
         let ev = AuditEvent::new(principal, action, plugin_ref(&r.plugin_id), AuditOutcome::Success).with_details(
             serde_json::json!({ "version": r.version, "state": r.state.as_str(), "approved": r.approved_permissions }),
         );
+
         if let Err(e) = self.audit.record(ev).await {
             tracing::error!(error = %e, "audit write failed");
         }

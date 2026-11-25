@@ -52,6 +52,7 @@ impl From<FileError> for SftpError {
             FileError::Unavailable(_) => StatusCode::NoConnection,
             _ => StatusCode::Failure,
         };
+
         err(code, e.to_string())
     }
 }
@@ -124,6 +125,7 @@ fn root_name(label: &str, id: &str, kind: RootKind, taken: &[String]) -> String 
             .take(40)
             .collect()
     };
+
     let base = if base.is_empty() { id.to_owned() } else { base };
     if taken.contains(&base) { format!("{base}-{}", &id[id.len().saturating_sub(6)..]) } else { base }
 }
@@ -131,6 +133,7 @@ fn root_name(label: &str, id: &str, kind: RootKind, taken: &[String]) -> String 
 /// Lexically normalises a client path to `/a/b` (no `.`, `..` or `//`).
 fn normalize(p: &str) -> String {
     let mut parts: Vec<&str> = Vec::new();
+
     for c in p.split('/') {
         match c {
             "" | "." => {}
@@ -140,6 +143,7 @@ fn normalize(p: &str) -> String {
             c => parts.push(c),
         }
     }
+
     format!("/{}", parts.join("/"))
 }
 
@@ -154,8 +158,10 @@ fn attrs(e: &FileEntry) -> FileAttributes {
         EntryKind::File => 0o100_000,
         EntryKind::Other => 0o100_000,
     };
+
     let perm = e.mode.unwrap_or(if e.kind == EntryKind::Dir { 0o755 } else { 0o644 }) & 0o7777;
     let mtime = u32::try_from(e.modified_ms / 1000).ok();
+
     FileAttributes {
         size: Some(e.size),
         permissions: Some(kind | perm),
@@ -172,14 +178,17 @@ impl SftpSession {
         let (server, write, delete) = (grant.server_id, grant.write, grant.delete);
         let bandwidth = grant.bandwidth_kbps.map(|k| u64::from(k) * 1024);
         let ids = grant.roots.clone();
+
         // Labels from the roots the grant covers and its creator still sees.
         let known = files.roots(&actor, server).await.map(|(_, r)| r).unwrap_or_default();
         let mut roots: Vec<RootView> = Vec::new();
+
         for id in ids {
             let Some(r) = known.iter().find(|r| r.id == id) else { continue };
             let taken: Vec<String> = roots.iter().map(|x| x.name.clone()).collect();
             roots.push(RootView { name: root_name(&r.label, &r.id, r.kind, &taken), id: r.id.clone(), kind: r.kind });
         }
+
         Some(Self {
             files,
             actor,
@@ -203,6 +212,7 @@ impl SftpSession {
             self.roots.iter().find(|r| r.name == first).ok_or_else(|| err(StatusCode::NoSuchFile, "no such folder"))?;
         let rest = it.next().unwrap_or("");
         let path = FilePath::parse(&format!("/{rest}")).map_err(|e| err(StatusCode::Failure, e))?;
+
         Ok(Some((root.id.clone(), path, root.kind)))
     }
 
@@ -219,9 +229,11 @@ impl SftpSession {
         if path.is_root() {
             return Ok(dir_attrs());
         }
+
         let out = self.run(&root, FileOp::Stat { root: RootSpec::Node, path }).await?;
         let e: FileEntry =
             serde_json::from_value(out["entry"].clone()).map_err(|_| err(StatusCode::Failure, "bad node answer"))?;
+
         Ok(attrs(&e))
     }
 
@@ -229,6 +241,7 @@ impl SftpSession {
         self.next_handle += 1;
         let h = format!("h{}", self.next_handle);
         self.handles.insert(h.clone(), open);
+
         h
     }
 
@@ -245,6 +258,7 @@ impl SftpSession {
 
     async fn record_usage(&mut self, bytes: u64, force: bool) {
         self.unrecorded += bytes;
+
         if self.unrecorded > 0 && (force || self.unrecorded >= USAGE_EVERY) {
             self.files.grant_usage(&self.actor, self.unrecorded).await;
             self.unrecorded = 0;
@@ -261,6 +275,7 @@ impl SftpSession {
             self.files.upload_chunks(&self.actor, &up.id, up.sent, &chunks).await?;
             up.sent += take as u64;
         }
+
         Ok(())
     }
 
@@ -277,6 +292,7 @@ impl SftpSession {
             })
             .collect();
         let mut out = Vec::new();
+
         for (i, r) in self.files.run_many(&self.actor, self.server, root, ops).await.into_iter().enumerate() {
             let v = match r {
                 Ok(v) => v,
@@ -284,15 +300,18 @@ impl SftpSession {
                 Err(_) if i > 0 => break,
                 Err(e) => return Err(e.into()),
             };
+
             let data = base64::engine::general_purpose::STANDARD
                 .decode(v["content_b64"].as_str().unwrap_or_default())
                 .map_err(|_| err(StatusCode::Failure, "bad node answer"))?;
             let short = data.len() < MAX_READ_BYTES as usize;
             out.extend_from_slice(&data);
+
             if short {
                 break;
             }
         }
+
         Ok(out)
     }
 }
@@ -305,6 +324,7 @@ fn slice_ahead(at: u64, buf: &[u8], offset: u64, want: usize) -> Option<Vec<u8>>
     if start >= buf.len() {
         return None;
     }
+
     Some(buf[start..buf.len().min(start + want)].to_vec())
 }
 
@@ -343,6 +363,7 @@ impl russh_sftp::server::Handler for SftpSession {
             Some(Open::Dir { .. }) => dir_attrs(),
             None => return Err(err(StatusCode::Failure, "invalid handle")),
         };
+
         Ok(Attrs { id, attrs })
     }
 
@@ -366,7 +387,9 @@ impl russh_sftp::server::Handler for SftpSession {
                 return Err(err(StatusCode::Failure, "not a directory"));
             }
         }
+
         let handle = self.handle(Open::Dir { listed: false, path: norm });
+
         Ok(Handle { id, handle })
     }
 
@@ -376,17 +399,21 @@ impl russh_sftp::server::Handler for SftpSession {
                 if *listed {
                     return Err(err(StatusCode::Eof, ""));
                 }
+
                 *listed = true;
                 path.clone()
             }
             _ => return Err(err(StatusCode::Failure, "invalid handle")),
         };
+
         let Some((root, p, _)) = self.locate(&path)? else {
             let files = self.roots.iter().map(|r| File::new(r.name.clone(), dir_attrs())).collect();
             return Ok(Name { id, files });
         };
+
         let mut files = Vec::new();
         let mut offset = 0u32;
+
         loop {
             let op = FileOp::List { root: RootSpec::Node, path: p.clone(), offset, limit: PAGE, hidden: true };
             let out = self.run(&root, op).await?;
@@ -394,12 +421,15 @@ impl russh_sftp::server::Handler for SftpSession {
             let n = entries.len();
             files.extend(entries.iter().filter(|e| !e.protected).map(|e| File::new(e.name.clone(), attrs(e))));
             offset += u32::try_from(n).unwrap_or(PAGE);
+
             if n == 0 || u64::from(offset) >= out["total"].as_u64().unwrap_or(0) || files.len() >= MAX_ENTRIES {
                 break;
             }
         }
+
         self.audit("file.list", json!({ "root": root, "path": p.to_string(), "entries": files.len(), "via": "sftp" }))
             .await;
+
         Ok(Name { id, files })
     }
 
@@ -414,24 +444,30 @@ impl russh_sftp::server::Handler for SftpSession {
         if path.is_root() {
             return Err(err(StatusCode::Failure, "not a file"));
         }
+
         let writing = pflags.intersects(OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::APPEND);
         if !writing {
             let out = self.run(&root, FileOp::Stat { root: RootSpec::Node, path: path.clone() }).await?;
             if out.pointer("/entry/kind").and_then(Value::as_str) != Some("file") {
                 return Err(err(StatusCode::Failure, "not a regular file"));
             }
+
             let size = out.pointer("/entry/size").and_then(Value::as_u64).unwrap_or(0);
             let version = out["version"].as_str().unwrap_or_default().to_owned();
             let handle =
                 self.handle(Open::Read { root, path, size, version, sent: 0, started: Instant::now(), ahead: None });
+
             return Ok(Handle { id, handle });
         }
+
         if !self.write {
             return Err(err(StatusCode::PermissionDenied, "this access is read-only"));
         }
+
         if pflags.contains(OpenFlags::APPEND) {
             return Err(err(StatusCode::OpUnsupported, "appending is not supported; upload the whole file"));
         }
+
         // Replacing an existing file needs the delete permission too.
         let overwrite =
             if pflags.contains(OpenFlags::EXCLUDE) || !self.delete { Overwrite::Never } else { Overwrite::Always };
@@ -448,6 +484,7 @@ impl russh_sftp::server::Handler for SftpSession {
             sent: 0,
             hash: ring::digest::Context::new(&ring::digest::SHA256),
         })));
+
         Ok(Handle { id, handle })
     }
 
@@ -455,9 +492,11 @@ impl russh_sftp::server::Handler for SftpSession {
         let Some(Open::Read { root, path, size, version, ahead, .. }) = self.handles.get(&handle) else {
             return Err(err(StatusCode::Failure, "invalid handle"));
         };
+
         if offset >= *size {
             return Err(err(StatusCode::Eof, ""));
         }
+
         let want = usize::try_from(len.clamp(1, MAX_READ_BYTES)).unwrap_or(32 * 1024);
         let data = match ahead.as_ref().and_then(|(at, buf)| slice_ahead(*at, buf, offset, want)) {
             Some(d) => d,
@@ -465,25 +504,34 @@ impl russh_sftp::server::Handler for SftpSession {
                 let (root, path, version) = (root.clone(), path.clone(), version.clone());
                 let fetched = self.read_ahead(&root, &path, &version, offset).await?;
                 let served = fetched[..fetched.len().min(want)].to_vec();
+
                 if let Some(Open::Read { ahead, .. }) = self.handles.get_mut(&handle) {
                     *ahead = Some((offset, fetched));
                 }
+
                 served
             }
         };
+
         let Some(Open::Read { started, sent, .. }) = self.handles.get(&handle) else {
             return Err(err(StatusCode::Failure, "invalid handle"));
         };
+
         let (started, total) = (*started, *sent);
+
         if data.is_empty() {
             return Err(err(StatusCode::Eof, ""));
         }
+
         let n = data.len() as u64;
+
         if let Some(Open::Read { sent, .. }) = self.handles.get_mut(&handle) {
             *sent += n;
         }
+
         self.pace(started, total + n).await;
         self.record_usage(n, false).await;
+
         Ok(Data { id, data })
     }
 
@@ -491,10 +539,12 @@ impl russh_sftp::server::Handler for SftpSession {
         let Some(Open::Write(mut up)) = self.handles.remove(&handle) else {
             return Err(err(StatusCode::Failure, "invalid handle"));
         };
+
         if offset != up.next {
             self.handles.insert(handle, Open::Write(up));
             return Err(err(StatusCode::Failure, "only sequential writes are supported"));
         }
+
         up.hash.update(&data);
         up.next += data.len() as u64;
         up.buf.extend_from_slice(&data);
@@ -503,6 +553,7 @@ impl russh_sftp::server::Handler for SftpSession {
         self.handles.insert(handle, Open::Write(up));
         r?;
         self.record_usage(n, false).await;
+
         Ok(ok(id))
     }
 
@@ -516,9 +567,11 @@ impl russh_sftp::server::Handler for SftpSession {
                     Ok::<(), SftpError>(())
                 }
                 .await;
+
                 if result.is_err() {
                     let _ = self.files.abort_upload(&self.actor, &up.id).await;
                 }
+
                 self.record_usage(0, true).await;
                 result?;
                 self.audit(
@@ -529,6 +582,7 @@ impl russh_sftp::server::Handler for SftpSession {
             }
             Some(Open::Read { root, path, sent, .. }) => {
                 self.record_usage(0, true).await;
+
                 if sent > 0 {
                     self.audit("file.sftp.download", json!({ "root": root, "path": path.to_string(), "bytes": sent }))
                         .await;
@@ -537,15 +591,18 @@ impl russh_sftp::server::Handler for SftpSession {
             Some(Open::Dir { .. }) => {}
             None => return Err(err(StatusCode::Failure, "invalid handle")),
         }
+
         Ok(ok(id))
     }
 
     async fn remove(&mut self, id: u32, filename: String) -> Result<Status, Self::Error> {
         let (root, path, kind) =
             self.locate(&filename)?.ok_or_else(|| err(StatusCode::PermissionDenied, "cannot remove a root"))?;
+
         // Removed files go to the trash (containers have none).
         let op = FileOp::Delete { root: RootSpec::Node, path, permanent: kind == RootKind::Container };
         self.files.run(&self.actor, self.server, &root, op, Audit::Record).await?;
+
         Ok(ok(id))
     }
 
@@ -560,6 +617,7 @@ impl russh_sftp::server::Handler for SftpSession {
                 Audit::Record,
             )
             .await?;
+
         Ok(ok(id))
     }
 
@@ -570,8 +628,10 @@ impl russh_sftp::server::Handler for SftpSession {
         if self.run(&root, list).await?["total"].as_u64().unwrap_or(1) > 0 {
             return Err(err(StatusCode::Failure, "the directory is not empty"));
         }
+
         let op = FileOp::Delete { root: RootSpec::Node, path, permanent: kind == RootKind::Container };
         self.files.run(&self.actor, self.server, &root, op, Audit::Record).await?;
+
         Ok(ok(id))
     }
 
@@ -580,11 +640,14 @@ impl russh_sftp::server::Handler for SftpSession {
             self.locate(&oldpath)?.ok_or_else(|| err(StatusCode::PermissionDenied, "cannot rename a root"))?;
         let (r2, to, _) =
             self.locate(&newpath)?.ok_or_else(|| err(StatusCode::PermissionDenied, "cannot rename a root"))?;
+
         if r1 != r2 {
             return Err(err(StatusCode::OpUnsupported, "move files within one folder tree; copy across them"));
         }
+
         let op = FileOp::Rename { root: RootSpec::Node, from, to, overwrite: false };
         self.files.run(&self.actor, self.server, &r1, op, Audit::Record).await?;
+
         Ok(ok(id))
     }
 }
@@ -602,6 +665,7 @@ mod tests {
         let buf: Vec<u8> = (0..=255u8).cycle().take(1000).collect();
         assert_eq!(slice_ahead(100, &buf, 100, 10).as_deref(), Some(&buf[0..10]));
         assert_eq!(slice_ahead(100, &buf, 600, 32).as_deref(), Some(&buf[500..532]));
+
         // A short tail: the client asks again for the rest.
         assert_eq!(slice_ahead(100, &buf, 1090, 32).as_deref(), Some(&buf[990..1000]));
         assert_eq!(slice_ahead(100, &buf, 1100, 32), None, "past the buffer");

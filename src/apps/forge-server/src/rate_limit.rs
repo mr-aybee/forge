@@ -29,20 +29,26 @@ impl<K: std::hash::Hash + Eq + Clone> Windows<K> {
     pub fn allow(&self, key: &K, limit: usize, window: Duration) -> bool {
         let Ok(mut hits) = self.hits.lock() else { return false };
         let now = Instant::now();
+
         if hits.len() >= MAX_KEYS && !hits.contains_key(key) {
             hits.retain(|_, v| v.last().is_some_and(|t| now.duration_since(*t) < window));
+
             if hits.len() >= MAX_KEYS {
                 // Full of active keys (a flood from many addresses): refuse
                 // newcomers until windows expire; known keys keep working.
                 return false;
             }
         }
+
         let v = hits.entry(key.clone()).or_default();
         v.retain(|t| now.duration_since(*t) < window);
+
         if v.len() >= limit {
             return false;
         }
+
         v.push(now);
+
         true
     }
 }

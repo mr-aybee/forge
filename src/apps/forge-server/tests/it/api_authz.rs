@@ -1,9 +1,10 @@
 //! API-level enforcement: authentication, CSRF, Cedar authorization, audit.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::*;
 use reqwest::{Method, StatusCode};
 use serde_json::json;
+
+use crate::common::*;
 
 #[tokio::test]
 async fn version_and_capabilities_are_public() {
@@ -41,6 +42,7 @@ async fn cookie_sessions_require_csrf_for_mutations() {
     assert_eq!(admin.post("/api/v1/tenants", json!({"name": "Bad CSRF"})).await.0, StatusCode::FORBIDDEN);
     admin.csrf = csrf;
     assert_eq!(admin.post("/api/v1/tenants", json!({"name": "Good CSRF"})).await.0, StatusCode::CREATED);
+
     // Safe methods need no CSRF token.
     admin.csrf = None;
     assert_eq!(admin.get("/api/v1/workspace").await.0, StatusCode::OK);
@@ -91,6 +93,7 @@ async fn org_admin_cannot_escalate() {
         )
         .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
+
     // Granting needs an MFA-verified session (#13 inventory) …
     let grant =
         json!({"email": "victim@example.com", "role": "operator", "scope": format!("workspace:{}", h.default_org)});
@@ -100,6 +103,7 @@ async fn org_admin_cannot_escalate() {
         admin.post("/api/v1/users", json!({"email": "x@example.com", "display_name": "x", "password": PASSWORD})).await;
     assert_eq!((s, e["title"].as_str()), (StatusCode::FORBIDDEN, Some("step_up_required")), "{e}");
     step_up(&mut oa).await;
+
     // … then granting inside their own org is fine.
     let (s, _) = oa
         .post(
@@ -136,9 +140,11 @@ async fn mutating_actions_are_audited_and_chain_verifies() {
     admin.post("/api/v1/tenants", json!({"name": "Audited"})).await;
     let (_, entries) = admin.get("/api/v1/audit").await;
     let actions: Vec<&str> = entries.as_array().unwrap().iter().filter_map(|e| e["action"].as_str()).collect();
+
     for expected in ["platform.init", "auth.login", "tenant.create"] {
         assert!(actions.contains(&expected), "missing {expected} in {actions:?}");
     }
+
     let (s, report) = admin.get("/api/v1/audit/verify").await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(report["ok"], true, "{report}");
@@ -198,6 +204,7 @@ async fn oauth_pkce_gives_apps_a_bearer_token() {
     let (s, me) = bearer.get("/api/v1/me").await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(me["session_kind"], "bearer");
+
     // Bearer clients need no CSRF token.
     assert_eq!(bearer.post("/api/v1/tenants", json!({"name": "From App"})).await.0, StatusCode::CREATED);
 }
@@ -264,6 +271,7 @@ async fn node_onboarding_requires_an_mfa_session() {
         )
         .await;
     assert_eq!(s, StatusCode::FORBIDDEN);
+
     // Nothing was written to the vault.
     let (_, secrets) = admin.get("/api/v1/secrets").await;
     assert_eq!(secrets, json!([]));
@@ -278,6 +286,7 @@ async fn installer_is_public_and_contains_no_secrets() {
     let script = body.as_str().unwrap();
     assert!(script.starts_with("#!/bin/sh"));
     assert!(script.contains("FORGE_ENROLL_TOKEN:?"), "manual installer must not embed a token");
+
     // An empty `?hostname=` is no override (it used to become `--hostname ''`).
     let (_, empty) = c.get("/install.sh?hostname=").await;
     assert!(!empty.as_str().unwrap().contains("--hostname"), "an empty hostname adds no flag");
@@ -345,9 +354,11 @@ async fn app_store_lists_catalog_and_guards_installs() {
     let (s, cat) = admin.get("/api/v1/catalog").await;
     assert_eq!(s, StatusCode::OK);
     let ids: Vec<&str> = cat["packages"].as_array().unwrap().iter().filter_map(|p| p["id"].as_str()).collect();
+
     for id in ["php", "postgresql", "redis", "docker", "rustfs", "nginx", "powerdns", "dotnet"] {
         assert!(ids.contains(&id), "{id} missing from catalog");
     }
+
     assert!(cat["packages"][0].get("recipe").is_none(), "recipes are never sent to clients");
 
     let id = forge_core::ServerId::new();
@@ -420,6 +431,7 @@ async fn services_seal_secrets_and_validate_env() {
         .await
         .unwrap();
     assert!(!raw.contains("s3cr3t-value"), "sealed at rest");
+
     // Updating without a value keeps the stored secret.
     let mut upd = body(json!([{"key": "MODE", "value": "uat"}, {"key": "API_TOKEN", "value": null, "secret": true}]));
     upd.as_object_mut().unwrap().remove("name");
@@ -462,6 +474,7 @@ async fn api_keys_expire_by_default_and_admins_can_revoke_them() {
     assert_eq!(list.as_array().unwrap().len(), 2);
     assert!(!list.to_string().contains("secret_hash"), "no hashes in lists");
     let one = k["id"].as_str().unwrap();
+
     // No MFA needed to revoke.
     let (s, _) = admin.call(Method::DELETE, &format!("/api/v1/users/{dev_id}/api-keys/{one}"), None).await;
     assert_eq!(s, StatusCode::NO_CONTENT);
@@ -534,6 +547,7 @@ async fn sites_validate_preview_and_need_mfa_to_apply() {
         created_at: forge_core::Timestamp(0),
     };
     forge_core::ports::ServerRepository::create_server(&h.app.state.store, &server).await.unwrap();
+
     // No custom block: saving one needs server.command (MFA), see edge_security.rs.
     let site = json!({"name": "shop", "domains": ["shop.example.com"], "upstreams": ["10.0.0.5:8000"], "edges": [edge],
                       "custom": ""});
@@ -594,9 +608,11 @@ async fn node_metrics_and_connectivity() {
     let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
     let control = test_node(&h, "cp", NodeRole::Control, AgentStatus::Online);
     let worker = test_node(&h, "w1", NodeRole::Worker, AgentStatus::Offline);
+
     for s in [&control, &worker] {
         forge_core::ports::ServerRepository::create_server(&h.app.state.store, s).await.unwrap();
     }
+
     let m = forge_proto::messages::NodeMetrics {
         cpu_percent: 12.5,
         mem_total_bytes: 100,
@@ -794,9 +810,11 @@ async fn cluster_profiles_validate_scope_and_feed_ingress_endpoints() {
     let outsider = test_node(&h, "other", NodeRole::Worker, AgentStatus::Online);
     a.cluster_id = Some(cid.parse().unwrap());
     b.cluster_id = Some(cid.parse().unwrap());
+
     for s in [&a, &b, &outsider] {
         forge_core::ports::ServerRepository::create_server(&h.app.state.store, s).await.unwrap();
     }
+
     let profile = |edges: serde_json::Value, vips: serde_json::Value| {
         json!({
             "orchestrator": "swarm",
@@ -810,6 +828,7 @@ async fn cluster_profiles_validate_scope_and_feed_ingress_endpoints() {
         json!([{"server_id": a.id, "role": "primary"}, {"server_id": b.id, "role": "backup"}]),
         json!(["10.0.0.100"]),
     );
+
     // Validation: two VIPs for active-standby, and a node outside the cluster.
     let two = profile(
         json!([{"server_id": a.id, "role": "primary"}, {"server_id": b.id, "role": "backup"}]),
@@ -863,6 +882,7 @@ async fn cluster_profiles_validate_scope_and_feed_ingress_endpoints() {
         updated_at: now,
     };
     forge_core::ports::ServiceRepository::put_service(store, &app).await.unwrap();
+
     for (node, role) in [(&b, "active"), (&a, "standby")] {
         forge_core::ports::ServiceRepository::put_instance(
             store,
@@ -910,6 +930,7 @@ async fn cluster_profiles_validate_scope_and_feed_ingress_endpoints() {
     let ups = svc["upstreams"].as_array().unwrap();
     assert_eq!(ups.len(), 2);
     let addr_of = |id: &str| ups.iter().find(|u| u["server_id"] == id).unwrap()["address"].as_str().unwrap().to_owned();
+
     // edge-a's mesh is not up: it cannot reach edge-b's mesh address.
     assert_eq!(addr_of(&b.id.to_string()), "edge-b:9000", "{routing}");
     assert_eq!(addr_of(&a.id.to_string()), "edge-a:9000", "mesh not up on edge-a: its own address");
@@ -925,6 +946,7 @@ async fn cluster_profiles_validate_scope_and_feed_ingress_endpoints() {
         .find(|t| t["target"]["kind"] == "app")
         .unwrap()
         .clone();
+
     for u in svc["upstreams"].as_array().unwrap() {
         assert!(u["address"].as_str().unwrap().starts_with("10.64."), "{routing}");
     }
@@ -973,6 +995,7 @@ async fn fabric_suggests_allocates_pins_and_rejects_overlap() {
     let spec = json!({"subnet": "10.64.0.0/16", "mode": "mesh", "domain": "lab.forge.internal"});
     let viewer = user_with_role(&h, &admin, "v@example.com", "customer", &format!("workspace:{ws}")).await;
     assert_eq!(viewer.call(Method::PUT, &url, Some(json!({"spec": spec}))).await.0, StatusCode::FORBIDDEN);
+
     // Routed mode is retired: refused on save; a stored one shows as mesh.
     let routed = json!({"spec": {"subnet": "10.64.0.0/16", "mode": "routed", "domain": "lab.forge.internal"}});
     assert_eq!(admin.call(Method::PUT, &url, Some(routed)).await.0, StatusCode::BAD_REQUEST);
@@ -1007,6 +1030,7 @@ async fn fabric_suggests_allocates_pins_and_rejects_overlap() {
     // Applying changes host networking on the members: server.command needs MFA.
     assert_eq!(admin.post(&format!("{url}/apply"), json!({})).await.0, StatusCode::FORBIDDEN);
     assert_eq!(viewer.post(&format!("{url}/apply"), json!({})).await.0, StatusCode::FORBIDDEN);
+
     // A plan that was never applied can be deleted without touching nodes.
     let (s, body) = admin.call(Method::DELETE, &url, None).await;
     assert_eq!(s, StatusCode::OK, "{body}");
@@ -1024,6 +1048,7 @@ async fn moving_a_node_resyncs_every_member_of_both_fabrics() {
     let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
     let store = &h.app.state.store;
     let mut ids = Vec::new();
+
     for (name, subnet) in [("lab", "10.64.0.0/16"), ("uat", "10.65.0.0/16")] {
         let (_, c) = admin.post("/api/v1/clusters", json!({"name": name})).await;
         let cid: forge_core::ClusterId = c["id"].as_str().unwrap().parse().unwrap();
@@ -1032,21 +1057,27 @@ async fn moving_a_node_resyncs_every_member_of_both_fabrics() {
         assert_eq!(s, StatusCode::OK, "{b}");
         ids.push(cid);
     }
+
     let (lab, uat) = (ids[0], ids[1]);
+
     // Offline members: the background pass leaves their schedules alone.
     let mut nodes = Vec::new();
+
     for (name, c) in [("a", lab), ("b", lab), ("c", uat), ("d", uat)] {
         let mut n = test_node(&h, name, NodeRole::Worker, AgentStatus::Offline);
         n.cluster_id = Some(c);
         store.create_server(&n).await.unwrap();
         nodes.push(n);
     }
+
     for c in [lab, uat] {
         let mut rec = store.get_fabric(c).await.unwrap().unwrap();
         let mut st = serde_json::Map::new();
+
         for n in nodes.iter().filter(|n| n.cluster_id == Some(c)) {
             st.insert(n.id.to_string(), json!({"state": "ok", "next_at": i64::MAX / 2, "public_key": "K"}));
         }
+
         rec.status = json!({ "nodes": st });
         rec.leases = json!([]);
         store.put_fabric(&rec).await.unwrap();
@@ -1059,6 +1090,7 @@ async fn moving_a_node_resyncs_every_member_of_both_fabrics() {
 
     for (c, members) in [(lab, vec![&nodes[0], &nodes[1]]), (uat, vec![&nodes[3]])] {
         let rec = store.get_fabric(c).await.unwrap().unwrap();
+
         for n in members {
             assert_eq!(
                 rec.status["nodes"][n.id.to_string()]["next_at"],
@@ -1069,6 +1101,7 @@ async fn moving_a_node_resyncs_every_member_of_both_fabrics() {
             );
         }
     }
+
     let leases = store.get_fabric(lab).await.unwrap().unwrap().leases.to_string();
     assert!(leases.contains(&moved.id.to_string()), "the new member has an address in lab: {leases}");
     let leases = store.get_fabric(uat).await.unwrap().unwrap().leases.to_string();
@@ -1085,6 +1118,7 @@ async fn vault_is_platform_admin_only_and_reveal_needs_step_up() {
 
     let item = json!({"name": "db root", "username": "root", "password": "s3cr3t-P@ss", "url": "ssh://db1",
                       "tags": ["Prod", "db"], "links": [{"kind": "cluster", "id": cid}]});
+
     // Writing to the vault goes through Cedar (`secret.manage`): MFA (#13 inventory).
     let other_admin = user_with_role(&h, &admin, "pa2@example.com", "platform_admin", "platform:root").await;
     let (s, e) = other_admin.post("/api/v1/vault/items", item.clone()).await;
@@ -1134,6 +1168,7 @@ async fn vault_is_platform_admin_only_and_reveal_needs_step_up() {
     let (_, audit) = admin.get("/api/v1/audit?limit=200").await;
     let text = audit.to_string();
     assert!(text.contains("vault.reveal"));
+
     // Secrets with `-`, `@` and `!` cannot occur by chance in the base64
     // signatures and hex hashes the audit JSON carries.
     assert!(!text.contains("n3w-P@ss") && !text.contains("s3cr3t-P@ss"), "no secret in the audit log");

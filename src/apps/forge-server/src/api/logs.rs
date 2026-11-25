@@ -15,6 +15,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{delete, get};
 use axum::{Json, Router};
+use forge_core::analytics::Histogram;
 use forge_core::logs::{LogCursor, LogFilter, LogKey, LogLevel, LogPage, LogQuery, LogSource, LogStream};
 use forge_core::{Action, EntityKind, EntityRef, LogKeyId, Principal, ServerId, ServiceId, Timestamp};
 use serde::{Deserialize, Serialize};
@@ -24,7 +25,6 @@ use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
 use crate::logs::{AUDIT_KEY_CREATE, AUDIT_KEY_REVOKE, CreatedKey, LogsError};
 use crate::state::AppState;
-use forge_core::analytics::Histogram;
 
 /// Default and largest page.
 const DEFAULT_LIMIT: u32 = 100;
@@ -129,6 +129,7 @@ fn id_list<T: std::str::FromStr>(s: Option<&str>, what: &'static str) -> ApiResu
     if parts.len() > MAX_SELECTED {
         return Err(ApiError::bad_request(format!("`{what}` names at most {MAX_SELECTED} entries")));
     }
+
     parts
         .into_iter()
         .map(|p| p.parse().map_err(|_| ApiError::bad_request(format!("`{what}`: invalid id `{p}`"))))
@@ -168,12 +169,14 @@ fn cursor(s: Option<&str>) -> ApiResult<Option<LogCursor>> {
 
 fn levels(s: Option<&str>) -> ApiResult<Vec<LogLevel>> {
     let mut out = Vec::new();
+
     for part in s.unwrap_or_default().split(',').map(str::trim).filter(|p| !p.is_empty()) {
         let l = part.parse::<LogLevel>().map_err(ApiError::bad_request)?;
         if !out.contains(&l) {
             out.push(l);
         }
     }
+
     Ok(out)
 }
 
@@ -182,11 +185,14 @@ async fn readable(state: &AppState, caller: &Caller, one: Option<ServiceId>) -> 
     if let Some(id) = one {
         caller.authorize(Action::LogRead, app_ref(id)).await?;
     }
+
     let apps = state.logs.services(one).await.map_err(logs_error)?;
     if one.is_some() && apps.is_empty() {
         return Err(ApiError::not_found("service not found"));
     }
+
     let allowed = caller.can_many(Action::LogRead, apps.iter().map(|a| app_ref(a.id)).collect()).await;
+
     Ok(apps.into_iter().zip(allowed).filter(|(_, ok)| *ok).map(|(a, _)| (a.id, a.name)).collect())
 }
 
@@ -198,6 +204,7 @@ fn text_filter(s: Option<&str>, what: &'static str) -> ApiResult<Option<String>>
     if v.len() > MAX_FILTER || v.chars().any(char::is_control) {
         return Err(ApiError::bad_request(format!("`{what}` is at most {MAX_FILTER} characters")));
     }
+
     Ok(Some(v.to_owned()))
 }
 
@@ -215,6 +222,7 @@ async fn open_nodes(state: &AppState, caller: &Caller, only: &[ServerId]) -> Api
         if only.is_empty() { state.logs.node_ids().await.map_err(logs_error)? } else { only.to_vec() };
     let allowed =
         caller.can_many(Action::View, ids.iter().map(|id| EntityRef::new(EntityKind::Server, *id)).collect()).await;
+
     Ok(open_scope(true, ids, &allowed))
 }
 
@@ -225,10 +233,12 @@ fn open_scope(everything: bool, candidates: Vec<ServerId>, allowed: &[bool]) -> 
     if !everything {
         return Vec::new();
     }
+
     let mut out: Vec<ServerId> =
         candidates.into_iter().zip(allowed.iter()).filter(|(_, ok)| **ok).map(|(id, _)| id).collect();
     out.sort_unstable();
     out.dedup();
+
     out
 }
 
@@ -240,17 +250,21 @@ async fn build_query(
     let mut whole: Vec<ServiceId> = id_list(q.services.as_deref(), "services")?;
     whole.extend(q.service);
     let instances = instance_list(q.instances.as_deref())?;
+
     // A single named service keeps the old behaviour (403 when not allowed).
     let one = match (whole.as_slice(), instances.is_empty()) {
         ([id], true) => Some(*id),
         _ => None,
     };
+
     let names = readable(state, caller, one).await?;
+
     // Every named service must be one the caller may read; the answer is the
     // same as for a service that does not exist.
     if whole.iter().chain(instances.iter().map(|(a, _)| a)).any(|a| !names.contains_key(a)) {
         return Err(ApiError::not_found("service not found"));
     }
+
     let before = cursor(q.before.as_deref())?;
     let after = cursor(q.after.as_deref())?;
     let page = match (before, after) {
@@ -258,7 +272,9 @@ async fn build_query(
         (b, None) => LogPage::Older(b),
         (None, Some(a)) => LogPage::Newer(a),
     };
+
     let nodes: Vec<ServerId> = id_list(q.node.as_deref(), "node")?;
+
     // Unattributed container lines join only a query that names no service.
     let everything = whole.is_empty() && instances.is_empty();
     let open = if everything { open_nodes(state, caller, &nodes).await? } else { Vec::new() };
@@ -268,6 +284,7 @@ async fn build_query(
     let mut instances = instances;
     instances.sort_unstable();
     instances.dedup();
+
     Ok((
         LogQuery {
             services,
@@ -299,10 +316,12 @@ pub async fn events(
     let (query, names) = build_query(&state, &caller, &q).await?;
     let events = state.analytics.query_logs(&query).await?;
     let full = u32::try_from(events.len()).unwrap_or(u32::MAX) >= query.limit;
+
     let next = match query.page {
         LogPage::Older(_) if full => events.last().map(|e| e.cursor().to_string()),
         _ => None,
     };
+
     let newest = events.first().map(|e| e.cursor().to_string()).or_else(|| match query.page {
         // An empty tail keeps the caller's position.
         LogPage::Newer(c) => Some(c.to_string()),
@@ -338,6 +357,7 @@ pub async fn events(
             stream: e.stream,
         })
         .collect();
+
     Ok(Json(LogPageView { events, next, newest }))
 }
 
@@ -387,6 +407,7 @@ pub async fn create_key(
             json!({ "service": app.name, "key_id": created.key.id, "name": created.key.name, "prefix": created.key.prefix }),
         )
         .await;
+
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -409,6 +430,7 @@ pub async fn revoke_key(
             json!({ "key_id": key.id, "name": key.name, "prefix": key.prefix }),
         )
         .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -429,6 +451,7 @@ pub async fn ingest(
 ) -> ApiResult<(StatusCode, Json<IngestResponse>)> {
     let token = headers.get("x-seq-apikey").and_then(|v| v.to_str().ok()).unwrap_or_default().trim();
     state.logs.ingest(token, &body).await.map_err(logs_error)?;
+
     Ok((StatusCode::CREATED, Json(IngestResponse { minimum_level_accepted: None })))
 }
 

@@ -220,20 +220,25 @@ fn check_path(path: &str) -> Result<(), MatchError> {
     if !path.starts_with('/') {
         return Err(MatchError::BadPath("must start with /"));
     }
+
     if path.len() > 1024 {
         return Err(MatchError::BadPath("too long"));
     }
+
     if path.bytes().any(|b| b.is_ascii_control() || matches!(b, b'?' | b'#' | b'\\' | b' ')) {
         return Err(MatchError::BadPath("unexpected character"));
     }
+
     let lower = path.to_ascii_lowercase();
     if lower.contains("%2f") || lower.contains("%2e") || lower.contains("%5c") || lower.contains("%00") {
         return Err(MatchError::BadPath("encoded separator"));
     }
+
     let segments: Vec<&str> = path[1..].split('/').collect();
     if path.len() > 1 && segments.iter().any(|s| s.is_empty() || *s == "." || *s == "..") {
         return Err(MatchError::BadPath("empty or dot segment"));
     }
+
     Ok(())
 }
 
@@ -266,14 +271,17 @@ pub fn lookup(method: &str, path: &str) -> Result<Matched, MatchError> {
         }
         _ => None,
     };
+
     let bare = format!("/{}", segments.join("/"));
     let method = method.to_ascii_uppercase();
+
     // Exact (no wildcard) entries first, so `/images/json` is a list, not an
     // inspect of an image called `json`.
     let exact = ENDPOINTS.iter().find(|e| e.method == method && !e.path.contains("{*}") && matches(e.path, &segments));
     let found = exact.or_else(|| {
         ENDPOINTS.iter().find(|e| e.method == method && e.path.contains("{*}") && matches(e.path, &segments))
     });
+
     found
         .map(|endpoint| Matched { endpoint: *endpoint, path: bare.clone(), version })
         .ok_or(MatchError::Unknown { method, path: bare })
@@ -286,12 +294,14 @@ pub fn redact_env(inspect: &mut serde_json::Value) -> bool {
     let Some(env) = inspect.pointer_mut("/Config/Env").and_then(serde_json::Value::as_array_mut) else {
         return false;
     };
+
     for v in env.iter_mut() {
         if let Some(s) = v.as_str() {
             let key = s.split_once('=').map_or(s, |(k, _)| k);
             *v = serde_json::Value::String(format!("{key}=<redacted>"));
         }
     }
+
     true
 }
 
@@ -322,6 +332,7 @@ mod tests {
     fn unknown_and_unsafe_paths_are_refused() {
         assert!(matches!(lookup("GET", "/containers/abc/secret"), Err(MatchError::Unknown { .. })));
         assert!(matches!(lookup("PATCH", "/containers/json"), Err(MatchError::Unknown { .. })));
+
         for bad in ["/containers/../info", "/images/a%2Fb/json", "//info", "/info?x", "/containers/a b/json", "info"] {
             assert!(matches!(lookup("GET", bad), Err(MatchError::BadPath(_))), "{bad}");
         }
@@ -341,6 +352,7 @@ mod tests {
         ] {
             assert_eq!(lookup(m, p).unwrap().endpoint.class, Class::Admin, "{m} {p}");
         }
+
         assert_eq!(lookup("POST", "/containers/x/exec").unwrap().endpoint.class, Class::Exec);
         assert_eq!(lookup("GET", "/containers/x/archive").unwrap().endpoint.class, Class::Exec);
     }
@@ -348,11 +360,13 @@ mod tests {
     #[test]
     fn every_entry_is_well_formed_and_unique() {
         let mut seen = std::collections::HashSet::new();
+
         for e in ENDPOINTS {
             assert!(e.path.starts_with('/'), "{}", e.path);
             assert!(seen.insert((e.method, e.path)), "duplicate {} {}", e.method, e.path);
             assert!(matches!(e.method, "GET" | "HEAD" | "POST" | "PUT" | "DELETE"));
         }
+
         assert!(ENDPOINTS.len() >= 100, "{}", ENDPOINTS.len());
     }
 

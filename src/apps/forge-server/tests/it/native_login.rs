@@ -3,11 +3,12 @@
 //! whole bearer session (access and refresh token).
 #![allow(clippy::unwrap_used)]
 
-use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+
+use crate::common::{ADMIN_EMAIL, Client, PASSWORD, start};
 
 #[tokio::test]
 async fn pkce_login_bearer_use_and_logout_revokes_the_session() {
@@ -55,6 +56,7 @@ async fn pkce_login_bearer_use_and_logout_revokes_the_session() {
     ])
     .await;
     assert!(!bad.status().is_success());
+
     // The code is single use: start again for the real exchange.
     let resp = web
         .http
@@ -96,6 +98,7 @@ async fn pkce_login_bearer_use_and_logout_revokes_the_session() {
     assert_eq!(s, StatusCode::NO_CONTENT);
     let (s, _) = cli.get("/api/v1/me").await;
     assert_eq!(s, StatusCode::UNAUTHORIZED, "access token must stop working after logout");
+
     // ...including its refresh token.
     let r = token(vec![("grant_type", "refresh_token".into()), ("refresh_token", refresh)]).await;
     assert!(!r.status().is_success(), "refresh token must be revoked with the session");

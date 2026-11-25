@@ -14,6 +14,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 pub fn random_bytes<const N: usize>() -> [u8; N] {
     let mut buf = [0u8; N];
     SystemRandom::new().fill(&mut buf).expect("system RNG unavailable");
+
     buf
 }
 
@@ -35,6 +36,7 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     let d = ring::digest::digest(&ring::digest::SHA256, data);
     let mut out = [0u8; 32];
     out.copy_from_slice(d.as_ref());
+
     out
 }
 
@@ -45,10 +47,12 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && bool::from(a.ct_eq(b))
 }
 
+/// Encodes bytes as unpadded base64url.
 pub fn b64url(data: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(data)
 }
 
+/// Decodes unpadded base64url; `None` when it is not valid.
 pub fn b64url_decode(s: &str) -> Option<Vec<u8>> {
     URL_SAFE_NO_PAD.decode(s).ok()
 }

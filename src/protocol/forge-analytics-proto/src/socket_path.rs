@@ -33,21 +33,25 @@ pub fn short(path: &Path) -> io::Result<SocketPath> {
     if path.as_os_str().len() <= MAX_DIRECT {
         return Ok(SocketPath { path: path.to_path_buf(), _dir: None });
     }
+
     via_fd(path)
 }
 
 #[cfg(target_os = "linux")]
 fn via_fd(path: &Path) -> io::Result<SocketPath> {
     use std::os::fd::AsRawFd;
+
     let (dir, name) = match (path.parent(), path.file_name()) {
         (Some(d), Some(n)) => (d, n),
         _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "socket path has no directory")),
     };
+
     let dir = File::open(dir)?;
     let short = PathBuf::from(format!("/proc/self/fd/{}", dir.as_raw_fd())).join(name);
     if short.as_os_str().len() > MAX_DIRECT {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "socket file name too long"));
     }
+
     Ok(SocketPath { path: short, _dir: Some(dir) })
 }
 

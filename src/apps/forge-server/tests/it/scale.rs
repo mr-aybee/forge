@@ -13,13 +13,14 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use crate::common::*;
 use forge_core::model::{AgentStatus, Cluster, Environment, Installation, NodeRole, Server, Service, ServiceInstance};
 use forge_core::ports::{
     ClusterRepository, InstallationRepository, ServerRepository, ServiceRepository, TenancyRepository,
 };
 use forge_core::*;
 use serde_json::json;
+
+use crate::common::*;
 
 fn env_usize(k: &str, d: usize) -> usize {
     std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
@@ -28,6 +29,7 @@ fn env_usize(k: &str, d: usize) -> usize {
 async fn time(admin: &Client, path: &str, runs: usize) -> (Duration, Duration, usize) {
     let mut v = Vec::with_capacity(runs);
     let mut size = 0;
+
     for _ in 0..runs {
         let t = Instant::now();
         let (s, body) = admin.get(path).await;
@@ -35,7 +37,9 @@ async fn time(admin: &Client, path: &str, runs: usize) -> (Duration, Duration, u
         assert!(s.is_success(), "{path}: {s} {body}");
         size = body.as_array().map_or(1, Vec::len);
     }
+
     v.sort();
+
     (v[v.len() / 2], v[(v.len() * 99 / 100).min(v.len() - 1)], size)
 }
 
@@ -55,6 +59,7 @@ async fn api_stays_fast_with_1000_nodes_and_15000_apps() {
 
     let mut cluster_ids = Vec::new();
     let mut environments = Vec::new();
+
     for c in 0..clusters {
         let cl = Cluster {
             id: ClusterId::new(),
@@ -68,6 +73,7 @@ async fn api_stays_fast_with_1000_nodes_and_15000_apps() {
             created_at: now,
         };
         s.create_cluster(&cl).await.unwrap();
+
         for n in 0..ns_per_cluster {
             let ns = Environment {
                 id: EnvironmentId::new(),
@@ -81,10 +87,12 @@ async fn api_stays_fast_with_1000_nodes_and_15000_apps() {
             s.create_environment(&ns).await.unwrap();
             environments.push(ns.id);
         }
+
         cluster_ids.push(cl.id);
     }
 
     let mut server_ids = Vec::new();
+
     for i in 0..nodes {
         let cl = cluster_ids[i % cluster_ids.len()];
         let sv = Server {
@@ -106,6 +114,7 @@ async fn api_stays_fast_with_1000_nodes_and_15000_apps() {
         };
         s.create_server(&sv).await.unwrap();
         s.assign_server(sv.id, Some(cl), None).await.unwrap();
+
         for pkg in ["nginx", "redis", "python"] {
             s.put_installation(&Installation {
                 id: InstallationId::new(),
@@ -127,6 +136,7 @@ async fn api_stays_fast_with_1000_nodes_and_15000_apps() {
             .await
             .unwrap();
         }
+
         server_ids.push(sv.id);
     }
 
@@ -146,6 +156,7 @@ async fn api_stays_fast_with_1000_nodes_and_15000_apps() {
             updated_at: now,
         };
         s.put_service(&app).await.unwrap();
+
         for k in 0..2 {
             s.put_instance(&ServiceInstance {
                 service_id: app.id,
@@ -161,6 +172,7 @@ async fn api_stays_fast_with_1000_nodes_and_15000_apps() {
             .unwrap();
         }
     }
+
     println!(
         "seeded {nodes} nodes, {clusters} clusters, {} environments, {apps} apps, {} placements, {} installs in {:.1}s",
         environments.len(),
@@ -212,6 +224,7 @@ async fn api_stays_fast_with_1000_nodes_and_15000_apps() {
         "SELECT * FROM clusters WHERE workspace_id = 'x' ORDER BY name",
     ];
     let mut scans = Vec::new();
+
     for q in plans {
         let rows = sqlx::query(&format!("EXPLAIN QUERY PLAN {q}")).fetch_all(s.pool()).await.unwrap();
         let plan: Vec<String> = rows.iter().map(|r| sqlx::Row::get::<String, _>(r, "detail")).collect();
@@ -222,10 +235,12 @@ async fn api_stays_fast_with_1000_nodes_and_15000_apps() {
             if full { "SCAN " } else { "index" },
             plan.join(" | ")
         );
+
         if full {
             scans.push(q);
         }
     }
+
     assert!(scans.is_empty(), "full table scans: {scans:?}");
 
     let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
@@ -245,6 +260,7 @@ async fn api_stays_fast_with_1000_nodes_and_15000_apps() {
     ];
     println!("{:<60} {:>9} {:>9} {:>7}  budget", "endpoint", "p50 ms", "p99 ms", "items");
     let mut over = Vec::new();
+
     for (path, budget_ms) in &checks {
         let (p50, p99, n) = time(&admin, path, 10).await;
         println!(
@@ -254,9 +270,11 @@ async fn api_stays_fast_with_1000_nodes_and_15000_apps() {
             p99.as_secs_f64() * 1e3,
             n
         );
+
         if p50 > Duration::from_millis(*budget_ms) {
             over.push(format!("{path}: p50 {:.0} ms > {budget_ms} ms", p50.as_secs_f64() * 1e3));
         }
     }
+
     assert!(over.is_empty(), "over budget:\n{}", over.join("\n"));
 }

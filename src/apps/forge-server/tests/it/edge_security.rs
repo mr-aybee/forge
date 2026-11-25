@@ -2,10 +2,11 @@
 //! endpoint and node-move authorization fixes.
 #![allow(clippy::unwrap_used)]
 
-use crate::common::{ADMIN_EMAIL, Client, Harness, PASSWORD, start, user_with_role};
 use forge_core::model::{AgentStatus, NodeRole, Server};
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
+
+use crate::common::{ADMIN_EMAIL, Client, Harness, PASSWORD, start, user_with_role};
 
 fn node(h: &Harness, hostname: &str, status: AgentStatus) -> Server {
     Server {
@@ -30,6 +31,7 @@ fn node(h: &Harness, hostname: &str, status: AgentStatus) -> Server {
 async fn add_node(h: &Harness, hostname: &str, status: AgentStatus) -> Server {
     let n = node(h, hostname, status);
     forge_core::ports::ServerRepository::create_server(&h.app.state.store, &n).await.unwrap();
+
     n
 }
 
@@ -89,10 +91,12 @@ async fn sites_are_scoped_to_their_workspace() {
     assert_eq!(admin.get(path).await.0, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(admin.put(path, site("foreign", &edge, "")).await.0, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(admin.call(Method::DELETE, path, None).await.0, StatusCode::SERVICE_UNAVAILABLE);
+
     for action in ["apply", "remove", "renew"] {
         let (s, _) = admin.post(&format!("{path}/{action}"), json!({})).await;
         assert!(matches!(s, StatusCode::SERVICE_UNAVAILABLE | StatusCode::NOT_FOUND), "{action}: {s}");
     }
+
     assert!(store.get_site("foreign-site").await.unwrap().is_some(), "untouched");
 }
 
@@ -105,6 +109,7 @@ async fn custom_blocks_need_server_command_and_the_allowlist() {
     // Without a custom block: workspace.manage is enough to save.
     let (s, b) = admin.post("/api/v1/sites", site("plain", &edge, "")).await;
     assert_eq!(s, StatusCode::CREATED, "{b}");
+
     // A non-empty custom block needs server.command (MFA) on the edge.
     let (s, e) = admin.post("/api/v1/sites", site("custom", &edge, "add_header X-A 1;")).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "{e}");
@@ -112,6 +117,7 @@ async fn custom_blocks_need_server_command_and_the_allowlist() {
     step_up(&mut admin).await;
     let (s, b) = admin.post("/api/v1/sites", site("custom", &edge, "add_header X-A 1;")).await;
     assert_eq!(s, StatusCode::CREATED, "{b}");
+
     for bad in [
         "log_format x '$http_x';\naccess_log /etc/cron.d/x x;",
         "location /a { alias /etc/; }",
@@ -174,6 +180,7 @@ async fn ssh_endpoints_need_mfa_and_cannot_point_at_another_node() {
     step_up(&mut admin).await;
     let (s, e) = admin.put(&p, body).await;
     assert_eq!(s, StatusCode::OK, "{e}");
+
     // Node A cannot borrow node B's host key or endpoint.
     let (p, body) = put(a.id, "10.0.0.99", 22, "SHA256:bbbb");
     assert_eq!(admin.put(&p, body).await.0, StatusCode::BAD_REQUEST);
@@ -253,10 +260,12 @@ async fn apply_and_remove_without_edges_change_nothing() {
         updated_at: forge_core::Timestamp(0),
     };
     store.put_site(&empty).await.unwrap();
+
     for action in ["apply", "remove"] {
         let (s, e) = viewer.post(&format!("/api/v1/sites/no-edges/{action}"), json!({})).await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{action}: {e}");
     }
+
     let after = store.get_site("no-edges").await.unwrap().unwrap();
     assert_eq!(after.edge_status, json!({}), "no _applied_by written");
 
@@ -265,10 +274,12 @@ async fn apply_and_remove_without_edges_change_nothing() {
     let cid = c["id"].as_str().unwrap();
     let (s, b) = admin.put(&format!("/api/v1/clusters/{cid}/profile"), json!({"ingress": null})).await;
     assert_eq!(s, StatusCode::OK, "{b}");
+
     for action in ["apply", "remove"] {
         let (s, e) = viewer.post(&format!("/api/v1/clusters/{cid}/profile/{action}"), json!({})).await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{action}: {e}");
     }
+
     let (_, p) = admin.get(&format!("/api/v1/clusters/{cid}/profile")).await;
     assert!(p["status"].get("applied_at").is_none(), "{p}");
 }
@@ -302,11 +313,13 @@ async fn uploaded_keys_go_only_to_the_sites_own_edges() {
     let admin = store.find_user_by_email(ADMIN_EMAIL).await.unwrap().unwrap();
     let wait = |id| async move {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+
         loop {
             let j = store.get_job(id).await.unwrap();
             if matches!(j.status, JobStatus::Failed | JobStatus::Succeeded | JobStatus::Cancelled) {
                 return j;
             }
+
             assert!(std::time::Instant::now() < deadline, "job did not finish");
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
@@ -349,6 +362,7 @@ async fn attach_job(
         })
         .await
         .unwrap();
+
     job.id
 }
 

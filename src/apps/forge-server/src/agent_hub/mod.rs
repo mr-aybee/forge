@@ -68,6 +68,7 @@ pub async fn serve(state: AppState, listener: TcpListener, mut shutdown: watch::
     let acceptor = tls::acceptor(&state)?;
     let app = router(state);
     tracing::info!(addr = %listener.local_addr()?, "agent hub listening (mTLS, HTTP/2)");
+
     loop {
         let (tcp, addr): (_, SocketAddr) = tokio::select! {
             r = listener.accept() => match r {
@@ -80,6 +81,7 @@ pub async fn serve(state: AppState, listener: TcpListener, mut shutdown: watch::
         let app = app.clone();
         tokio::spawn(async move {
             let _ = tcp.set_nodelay(true);
+
             let tls = match tokio::time::timeout(std::time::Duration::from_secs(10), acceptor.accept(tcp)).await {
                 Ok(Ok(s)) => s,
                 Ok(Err(e)) => {
@@ -88,6 +90,7 @@ pub async fn serve(state: AppState, listener: TcpListener, mut shutdown: watch::
                 }
                 Err(_) => return,
             };
+
             let peer = tls
                 .get_ref()
                 .1
@@ -103,10 +106,12 @@ pub async fn serve(state: AppState, listener: TcpListener, mut shutdown: watch::
                 .initial_connection_window_size(4 * 1024 * 1024)
                 .keep_alive_interval(std::time::Duration::from_secs(60))
                 .serve_connection(TokioIo::new(tls), svc);
+
             if let Err(e) = conn.await {
                 tracing::debug!(%addr, error = %e, "agent connection ended");
             }
         });
     }
+
     Ok(())
 }

@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use bytes::Bytes;
+use forge_analytics_proto::WorkerError;
 use forge_core::analytics::FileWrite;
 use forge_core::spool::{FILE_ID_HEADER, FileName, MAX_FILE_BYTES};
 use forge_core::{Clock, ServerId};
@@ -39,7 +40,6 @@ use tokio_rustls::TlsAcceptor;
 
 use super::seen::SeenLog;
 use super::{ImportError, Ingest};
-use forge_analytics_proto::WorkerError;
 
 /// Most agent connections held at once.
 const MAX_CONNECTIONS: usize = 20_000;
@@ -50,9 +50,11 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 pub fn acceptor(ca_pem: &str, cert_pem: &str, key_pem: &str) -> anyhow::Result<TlsAcceptor> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let mut roots = RootCertStore::empty();
+
     for c in CertificateDer::pem_slice_iter(ca_pem.as_bytes()) {
         roots.add(c?)?;
     }
+
     let verifier = WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider.clone()).build()?;
     let mut chain = CertificateDer::pem_slice_iter(cert_pem.as_bytes()).collect::<Result<Vec<_>, _>>()?;
     chain.extend(CertificateDer::pem_slice_iter(ca_pem.as_bytes()).collect::<Result<Vec<_>, _>>()?);
@@ -62,6 +64,7 @@ pub fn acceptor(ca_pem: &str, cert_pem: &str, key_pem: &str) -> anyhow::Result<T
         .with_client_cert_verifier(verifier)
         .with_single_cert(chain, key)?;
     cfg.alpn_protocols = vec![b"h2".to_vec()];
+
     Ok(TlsAcceptor::from(Arc::new(cfg)))
 }
 
@@ -102,6 +105,7 @@ impl ListenerTls {
         anyhow::ensure!(id.not_before <= now && now < id.not_after, "the certificate is not valid now");
         let next = acceptor(&self.ca_pem, cert_pem, key_pem)?;
         *self.current.write().unwrap_or_else(PoisonError::into_inner) = next;
+
         Ok(())
     }
 }
@@ -118,6 +122,7 @@ pub struct Uploads {
 fn reply(status: StatusCode, body: impl Into<Bytes>) -> Response<Full<Bytes>> {
     let mut r = Response::new(Full::new(body.into()));
     *r.status_mut() = status;
+
     r
 }
 
@@ -126,6 +131,7 @@ fn refused(e: &WorkerError) -> Response<Full<Bytes>> {
         WorkerError::Busy => StatusCode::TOO_MANY_REQUESTS,
         _ => StatusCode::SERVICE_UNAVAILABLE,
     };
+
     reply(status, e.to_string())
 }
 
@@ -142,6 +148,7 @@ impl Uploads {
             seen.lock().unwrap_or_else(PoisonError::into_inner).compact(Some(&active.active))
         })
         .await;
+
         if let Ok(Err(e)) | Err(e) = r.map_err(std::io::Error::other) {
             tracing::warn!(error = %e, "compacting the spool id log failed");
         }
@@ -152,43 +159,53 @@ impl Uploads {
         if req.uri().path() != forge_proto::paths::SPOOL {
             return reply(StatusCode::NOT_FOUND, "not found");
         }
+
         if req.method() != Method::POST {
             return reply(StatusCode::METHOD_NOT_ALLOWED, "POST only");
         }
+
         let Some((node, serial)) =
             peer.and_then(|p| Some((p.common_name.parse::<ServerId>().ok()?, p.serial_hex.as_str())))
         else {
             return reply(StatusCode::FORBIDDEN, "not an agent certificate");
         };
+
         // The node is active and this is its current certificate: one
         // replaced at renewal, or revoked, is refused (D-145).
         if !self.ingest.maps().get().admits(node, serial) {
             return reply(StatusCode::FORBIDDEN, "unknown or revoked node, or a replaced certificate");
         }
+
         let name = req.headers().get(FILE_ID_HEADER).and_then(|v| v.to_str().ok()).and_then(FileName::parse);
         let Some(name) = name else { return reply(StatusCode::BAD_REQUEST, "missing or malformed file id") };
         if name.node.to_string() != node.to_string() {
             return reply(StatusCode::FORBIDDEN, "the file belongs to another node");
         }
+
         let stem = name.stem();
         let ack = |rows: u64, duplicate: bool| {
             reply(StatusCode::OK, SpoolAck { file_id: stem.clone(), rows, duplicate }.encode_to_vec())
         };
+
         if self.seen.lock().unwrap_or_else(PoisonError::into_inner).contains(node, &name.id) {
             return ack(0, true);
         }
+
         // Over the import limit: refuse at once, hold nothing.
         let Ok(_slot) = self.slots.clone().try_acquire_owned() else {
             return reply(StatusCode::TOO_MANY_REQUESTS, "the analytics worker is busy");
         };
+
         let too_big = req
             .headers()
             .get(http::header::CONTENT_LENGTH)
             .and_then(|v| v.to_str().ok()?.parse::<u64>().ok())
             .is_some_and(|n| n > MAX_FILE_BYTES);
+
         if too_big {
             return reply(StatusCode::PAYLOAD_TOO_LARGE, "file too large");
         }
+
         let cap = usize::try_from(MAX_FILE_BYTES).unwrap_or(usize::MAX);
         let body = match Limited::new(req.into_body(), cap).collect().await {
             Ok(b) => b.to_bytes(),
@@ -197,6 +214,7 @@ impl Uploads {
             }
             Err(e) => return reply(StatusCode::BAD_REQUEST, format!("reading the body: {e}")),
         };
+
         let imported = match self.ingest.spool_file(node, &name.id, self.clock.now(), body).await {
             Ok(i) => i,
             Err(ImportError::Refused(e)) => return refused(&e),
@@ -205,18 +223,22 @@ impl Uploads {
                 return reply(StatusCode::UNPROCESSABLE_ENTITY, e.to_string());
             }
         };
+
         if imported.skipped > 0 {
             tracing::debug!(node = %node, file = %stem, skipped = imported.skipped, "spool rows skipped");
         }
+
         let (seen, id) = (self.seen.clone(), name.id.clone());
         let r =
             tokio::task::spawn_blocking(move || seen.lock().unwrap_or_else(PoisonError::into_inner).insert(node, &id))
                 .await;
+
         if let Ok(Err(e)) | Err(e) = r.map_err(std::io::Error::other) {
             // Stored but not remembered here: a store without file ids
             // would store a resend again (D-142); DuckDB still skips it.
             tracing::warn!(error = %e, "recording a spool file id failed");
         }
+
         match imported.write {
             FileWrite::Stored => ack(imported.rows, false),
             FileWrite::AlreadyStored => ack(0, true),
@@ -232,9 +254,11 @@ pub async fn serve(
     mut shutdown: watch::Receiver<bool>,
 ) {
     let conns = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+
     if let Ok(a) = listener.local_addr() {
         tracing::info!(addr = %a, "agent upload listener (mTLS, HTTP/2)");
     }
+
     loop {
         let (tcp, addr): (_, SocketAddr) = tokio::select! {
             r = listener.accept() => match r {
@@ -251,10 +275,12 @@ pub async fn serve(
         let (acceptor, uploads, mut stop) = (tls.acceptor(), uploads.clone(), shutdown.clone());
         tokio::spawn(async move {
             let _permit = permit;
+
             let Ok(Ok(tls)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, acceptor.accept(tcp)).await else {
                 tracing::debug!(%addr, "agent TLS handshake failed");
                 return;
             };
+
             let peer = tls
                 .get_ref()
                 .1

@@ -11,6 +11,7 @@ async fn seeded() -> (Store, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let s = Store::open_sqlite(&dir.path().join("forge.db")).await.unwrap();
     let actions = ["auth.login", "stack.deploy", "files.upload", "auth.logout", "stack.remove"];
+
     for seq in 1..=25_i64 {
         let action = actions[(seq as usize - 1) % actions.len()];
         let outcome = if seq % 4 == 0 { AuditOutcome::Denied } else { AuditOutcome::Success };
@@ -30,6 +31,7 @@ async fn seeded() -> (Store, tempfile::TempDir) {
         };
         s.insert_entry(&e).await.unwrap();
     }
+
     // A literal `%` must not act as a wildcard.
     let odd = AuditEntry {
         seq: 26,
@@ -46,6 +48,7 @@ async fn seeded() -> (Store, tempfile::TempDir) {
         signature: "s".into(),
     };
     s.insert_entry(&odd).await.unwrap();
+
     (s, dir)
 }
 
@@ -95,15 +98,19 @@ async fn keyset_pages_cover_every_entry_once() {
     let (s, _d) = seeded().await;
     let mut f = AuditFilter { actions: vec!["stack.".into()], limit: 4, ..Default::default() };
     let mut seen = Vec::new();
+
     loop {
         let page = s.search_entries(&f).await.unwrap();
         if page.is_empty() {
             break;
         }
+
         seen.extend(seqs(&page));
         f.before = page.last().map(|e| e.seq);
     }
+
     assert_eq!(seen, vec![25, 22, 20, 17, 15, 12, 10, 7, 5, 2]);
+
     // The count ignores the cursor.
     assert_eq!(s.count_entries(&f).await.unwrap(), 10);
 }
@@ -124,9 +131,11 @@ async fn distinct_actions_are_sorted_with_counts() {
 #[tokio::test]
 async fn free_text_matches_action_actor_or_resource() {
     let (s, _d) = seeded().await;
+
     // Action.
     let f = AuditFilter { text: Some("LOGOUT".into()), limit: 500, ..Default::default() };
     assert_eq!(seqs(&s.search_entries(&f).await.unwrap()), vec![24, 19, 14, 9, 4]);
+
     // Actor or resource, with the other filters ANDed.
     let f = AuditFilter {
         text: Some("alice".into()),
@@ -137,6 +146,7 @@ async fn free_text_matches_action_actor_or_resource() {
     assert_eq!(seqs(&s.search_entries(&f).await.unwrap()), vec![24, 20, 16, 12, 8, 4]);
     let f = AuditFilter { text: Some("platform:".into()), limit: 500, ..Default::default() };
     assert_eq!(seqs(&s.search_entries(&f).await.unwrap()), vec![26]);
+
     // LIKE metacharacters stay literal.
     let f = AuditFilter { text: Some("100%".into()), limit: 500, ..Default::default() };
     assert_eq!(s.count_entries(&f).await.unwrap(), 1);
@@ -145,15 +155,18 @@ async fn free_text_matches_action_actor_or_resource() {
 #[tokio::test]
 async fn bucket_counts_group_by_step_and_outcome() {
     let (s, _d) = seeded().await;
+
     // Entries are at 1 s .. 26 s; 10 s buckets from 0.
     let got = s.bucket_counts(&AuditFilter::default(), 0, 10_000).await.unwrap();
     let total: i64 = got.iter().map(|b| b.count).sum();
     assert_eq!(total, 26);
     let denied: Vec<(i64, i64)> =
         got.iter().filter(|b| b.outcome == AuditOutcome::Denied).map(|b| (b.bucket, b.count)).collect();
+
     // Denied: 4, 8 | 12, 16 | 20, 24.
     assert_eq!(denied, vec![(0, 2), (1, 2), (2, 2)]);
     assert!(got.iter().any(|b| b.bucket == 2 && b.outcome == AuditOutcome::Failure && b.count == 1));
+
     // `from` excludes earlier entries, and the other filters apply.
     let f = AuditFilter { actions: vec!["auth.".into()], ..Default::default() };
     let got = s.bucket_counts(&f, 10_000, 5_000).await.unwrap();
