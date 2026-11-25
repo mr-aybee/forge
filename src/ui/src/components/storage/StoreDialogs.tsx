@@ -3,12 +3,13 @@ import { Loader2, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 import { useInstallations, useServers } from "../../api/hooks";
-import { ADOPTED_DATA, isAdopted, useAdoptStore, useConnectStore, useInstallStore, useObjectStores, useStoreAction } from "../../api/storage";
-import type { Job, ObjectStore, Server, StoreTopology } from "../../api/types";
+import { ADOPTED_DATA, isAdopted, useAdoptStore, useConnectStore, useDockerOnNodes, useInstallStore, useObjectStores, useStoreAction } from "../../api/storage";
+import type { DiscoveredContainer, DockerVolume, Job, ObjectStore, Server, StoreTopology } from "../../api/types";
 import { errorText, useToast } from "../../app/toast";
 import { NodeJobTabs } from "../JobLog";
 import { JobDetail } from "../JobsDrawer";
 import { Button, ErrorNote, Field, IconButton, Input, Modal, Select } from "../ui";
+import { DockerFields, type DockerDraft, type Kv, KvRows, REGION, VOLUME_NAME, dockerBody, dockerDraft, dockerProblems, optProblems } from "./DockerOptions";
 import { EnvironmentField, StoreOwner } from "./StoreOwner";
 
 export const PROVIDERS: { id: string; label: string }[] = [
@@ -71,6 +72,28 @@ interface InstallForm {
   members: MemberDraft[];
   /** The environment the store belongs to; "" for a shared store. */
   environment_id: string;
+  region: string;
+  console: boolean;
+  docker: DockerDraft;
+  /** Per drive index, the same on every node. */
+  volumes: VolumeDraft[];
+}
+
+interface VolumeDraft {
+  kind: "bind" | "named";
+  name: string;
+  driver: string;
+  options: Kv[];
+}
+
+const bindVolume = (): VolumeDraft => ({ kind: "bind", name: "", driver: "", options: [] });
+
+/** Why Docker cannot be used on a node, or null. `unknown` (older server, failed scan) does not block. */
+export function dockerBlocked(state?: string): string | null {
+  if (state === "not_installed") return "Docker not installed";
+  if (state === "unreachable") return "Docker unreachable";
+  if (state === "unsupported_os") return "Docker not supported on this OS";
+  return null;
 }
 
 let memberSeq = 0;
@@ -88,6 +111,10 @@ const fresh = (): InstallForm => ({
   drives: 1,
   members: [draft(1)],
   environment_id: "",
+  region: "us-east-1",
+  console: false,
+  docker: dockerDraft(),
+  volumes: [bindVolume()],
 });
 
 function defaultPath(win: boolean, slug: string, drive: number, drives: number) {
@@ -118,12 +145,14 @@ export function InstallStoreDialog({ open, onOpenChange, onDone }: { open: boole
   const [f, setF] = useState<InstallForm>(fresh);
   const [step, setStep] = useState<Step>("topology");
   const [result, setResult] = useState<{ store?: ObjectStore; job?: Job; jobs?: Job[] }>();
+  const [advanced, setAdvanced] = useState(false);
 
   useEffect(() => {
     if (open) {
       setF(fresh());
       setStep("topology");
       setResult(undefined);
+      setAdvanced(false);
       install.reset();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -139,7 +168,21 @@ export function InstallStoreDialog({ open, onOpenChange, onDone }: { open: boole
   const lead = f.members[0];
   const first = byId(lead?.server_id ?? "");
   const win = !distributed && isWindows(first);
+  const dockerState = useDockerOnNodes(
+    f.members.map((m) => m.server_id),
+    open && step !== "topology",
+  );
+  const dockerWhy = f.members
+    .map((m) => {
+      const why = dockerBlocked(dockerState[m.server_id]?.docker);
+      const n = byId(m.server_id);
+      return why && n ? `${why} on ${nodeName(n)}` : null;
+    })
+    .filter(Boolean)
+    .join("; ");
+  const dockerChecking = f.members.some((m) => m.server_id && dockerState[m.server_id]?.docker === "checking");
   const runtime = win ? "native" : f.runtime;
+  const isDocker = runtime === "docker";
 
   const resolved = f.members.map((m) => {
     const node = byId(m.server_id);
@@ -153,7 +196,7 @@ export function InstallStoreDialog({ open, onOpenChange, onDone }: { open: boole
   });
 
   const s3 = Number(f.s3_port);
-  const consolePort = f.console_port.trim() ? Number(f.console_port) : undefined;
+  const consolePort = f.console && f.console_port.trim() ? Number(f.console_port) : undefined;
   const portsOk = s3 >= 1024 && s3 <= 65535 && (consolePort === undefined || (consolePort >= 1024 && consolePort <= 65535 && consolePort !== s3));
   const chosen = resolved.filter((m) => m.node);
   const totalDrives = chosen.reduce((a, m) => a + m.paths.length, 0);
@@ -161,6 +204,20 @@ export function InstallStoreDialog({ open, onOpenChange, onDone }: { open: boole
 
   const problems: string[] = [];
   if (!portsOk) problems.push("Ports must be 1024–65535 and differ from each other.");
+  if (f.console && !f.console_port.trim()) problems.push("Enter a console port, or turn the console off.");
+  if (!REGION.test(f.region.trim())) problems.push("Region: lowercase letters, digits and hyphens, e.g. us-east-1.");
+  if (isDocker && dockerWhy) problems.push(`${dockerWhy}. Install Docker on the node or choose Native.`);
+  if (isDocker) {
+    problems.push(...dockerProblems(f.docker, { containerName: true }));
+    f.volumes.forEach((v, i) => {
+      if (v.kind !== "named") return;
+      if (!VOLUME_NAME.test(v.name.trim())) problems.push(`Drive ${i + 1}: volume name is 1–64 letters, digits, _ . - (letter or digit first).`);
+      if (v.driver.trim() && !/^[a-zA-Z0-9][a-zA-Z0-9_.:/-]{0,127}$/.test(v.driver.trim())) problems.push(`Drive ${i + 1}: driver name is not valid.`);
+      problems.push(...optProblems(v.options, `Drive ${i + 1} driver options`));
+    });
+    const names = f.volumes.filter((v) => v.kind === "named").map((v) => v.name.trim());
+    if (new Set(names).size !== names.length) problems.push("Each named volume must be different.");
+  }
   if (resolved.some((m) => !m.node)) problems.push(distributed ? "Choose a node for every row, or remove the row." : "Choose a node.");
   if (win && !isX64(first)) problems.push("RustFS on Windows needs an x86_64 node.");
   if (win && (lead?.paths.length ?? 1) !== 1) problems.push("Windows stores use exactly one data path.");
@@ -178,7 +235,7 @@ export function InstallStoreDialog({ open, onOpenChange, onDone }: { open: boole
 
   const setDrives = (n: number) => {
     const d = Math.max(1, Math.min(MAX_DRIVES_PER_NODE, Math.floor(n) || 1));
-    setF((o) => ({ ...o, drives: d, members: o.members.map((m) => ({ ...m, paths: Array.from({ length: d }, (_, i) => m.paths[i] ?? null) })) }));
+    setF((o) => ({ ...o, drives: d, volumes: Array.from({ length: d }, (_, i) => o.volumes[i] ?? bindVolume()), members: o.members.map((m) => ({ ...m, paths: Array.from({ length: d }, (_, i) => m.paths[i] ?? null) })) }));
   };
 
   const chooseTopology = (t: StoreTopology) =>
@@ -187,8 +244,17 @@ export function InstallStoreDialog({ open, onOpenChange, onDone }: { open: boole
       const head = o.members[0] ?? draft(drives);
       const keep = { ...head, paths: Array.from({ length: drives }, (_, i) => head.paths[i] ?? null) };
       const members = t === "distributed" ? [keep, ...(o.members.length > 1 ? o.members.slice(1) : [draft(drives)])] : [keep];
-      return { ...o, topology: t, drives, members };
+      return { ...o, topology: t, drives, members, volumes: Array.from({ length: drives }, (_, i) => o.volumes[i] ?? bindVolume()) };
     });
+
+  const volumeBody = (v: VolumeDraft): DockerVolume =>
+    v.kind === "named" ? { kind: "named", name: v.name.trim(), driver: v.driver.trim() || undefined, options: Object.fromEntries(v.options.filter((o) => o.key.trim()).map((o) => [o.key.trim(), o.value])) } : { kind: "bind" };
+  const dockerInstallBody = () => {
+    const d = dockerBody(f.docker);
+    const volumes = f.volumes.slice(0, f.drives).map(volumeBody);
+    return { ...d, network: distributed ? ("host" as const) : d.network, volumes: volumes.some((v) => v.kind === "named") ? volumes : undefined };
+  };
+  const setVolume = (i: number, p: Partial<VolumeDraft>) => set({ volumes: f.volumes.map((v, j) => (j === i ? { ...v, ...p } : v)) });
 
   const submit = () => {
     const members = resolved.map((m) => ({ server_id: m.server_id, data_paths: m.paths, endpoint_host: m.endpoint_host.trim() || undefined }));
@@ -205,6 +271,8 @@ export function InstallStoreDialog({ open, onOpenChange, onDone }: { open: boole
         console_port: consolePort,
         members,
         environment_id: f.environment_id || undefined,
+        region: f.region.trim() || undefined,
+        docker: isDocker ? dockerInstallBody() : undefined,
       },
       {
         onSuccess: (r) => {
@@ -292,18 +360,44 @@ export function InstallStoreDialog({ open, onOpenChange, onDone }: { open: boole
             <Field label="Release" hint="latest or exact, e.g. 1.0.5">
               <Input required className="font-mono" value={f.version} pattern="latest|[0-9A-Za-z.\-]+" onChange={(e) => set({ version: e.target.value })} />
             </Field>
-            <Field label="Runtime" hint={win ? "Windows: native only (scheduled task)." : distributed && runtime === "docker" ? "Docker with host networking on every node." : "Native: systemd. Docker: rustfs/rustfs."}>
+            <Field
+              label="Runtime"
+              hint={
+                win
+                  ? "Windows: native only (scheduled task)."
+                  : dockerWhy
+                    ? `${dockerWhy}.`
+                    : dockerChecking
+                      ? "Checking Docker on the node…"
+                      : distributed && isDocker
+                        ? "Docker with host networking on every node."
+                        : "Native: systemd. Docker: rustfs/rustfs."
+              }
+            >
               <Select value={runtime} disabled={win} onChange={(e) => set({ runtime: e.target.value === "docker" ? "docker" : "native" })}>
                 <option value="native">Native</option>
-                <option value="docker">Docker</option>
+                <option value="docker" disabled={!!dockerWhy} title={dockerWhy || undefined}>
+                  Docker{dockerWhy ? ` (${dockerWhy})` : ""}
+                </option>
               </Select>
             </Field>
             <Field label="S3 port" hint={distributed ? "Same on every node." : undefined}>
               <Input required type="number" min={1024} max={65535} className="font-mono" value={f.s3_port} onChange={(e) => set({ s3_port: e.target.value })} />
             </Field>
-            <Field label="Console port" hint="Optional web console">
-              <Input type="number" min={1024} max={65535} className="font-mono" value={f.console_port} placeholder="—" onChange={(e) => set({ console_port: e.target.value })} />
+            <Field label="Region" hint="Reported to S3 clients.">
+              <Input required className="font-mono" value={f.region} pattern="[a-z0-9\-]{1,32}" onChange={(e) => set({ region: e.target.value })} />
             </Field>
+            <div className="sm:col-span-2">
+              <Field label="Web console" hint={f.console ? "The RustFS web console on its own port." : "Off: only the S3 API is reachable."}>
+                <div className="flex items-center gap-2">
+                  <label className="flex shrink-0 items-center gap-1.5 text-[13px]">
+                    <input type="checkbox" checked={f.console} onChange={(e) => set({ console: e.target.checked, console_port: e.target.checked && !f.console_port ? "9001" : f.console_port })} />
+                    On
+                  </label>
+                  <Input aria-label="Console port" type="number" min={1024} max={65535} className="font-mono" disabled={!f.console} value={f.console ? f.console_port : ""} placeholder="—" onChange={(e) => set({ console_port: e.target.value })} />
+                </div>
+              </Field>
+            </div>
           </div>
           <EnvironmentField value={f.environment_id} onChange={(v) => set({ environment_id: v })} />
 
@@ -406,6 +500,43 @@ export function InstallStoreDialog({ open, onOpenChange, onDone }: { open: boole
             )
           )}
 
+          {isDocker && (
+            <details className="rounded-md border border-line" open={advanced} onToggle={(e) => setAdvanced((e.target as HTMLDetailsElement).open)}>
+              <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted select-none hover:text-fg">Advanced (Docker)</summary>
+              <div className="space-y-4 border-t border-line px-3 py-3">
+                <DockerFields value={f.docker} onChange={(docker) => set({ docker })} slug={slug} forceHost={distributed} />
+                <section aria-label="Drive volumes" className="space-y-2">
+                  <div className="text-xs font-medium text-muted">Drive volumes</div>
+                  <p className="text-[11px] text-faint">
+                    Per drive{distributed ? ", the same on every node" : ""}: the data path as a bind mount (with Require a dedicated mount, as below), or a Docker named volume. A named volume ignores the data path.
+                  </p>
+                  {f.volumes.slice(0, f.drives).map((v, i) => (
+                    <div key={i} className="space-y-1.5 border-l-2 border-line pl-2">
+                      <div className="flex flex-wrap items-center gap-2 text-[13px]">
+                        <span className="w-14 shrink-0 font-mono text-[11px] text-muted">drive {i + 1}</span>
+                        <Select aria-label={`Drive ${i + 1} volume`} className="!w-auto" value={v.kind} onChange={(e) => setVolume(i, { kind: e.target.value === "named" ? "named" : "bind" })}>
+                          <option value="bind">Host path (bind)</option>
+                          <option value="named">Named volume</option>
+                        </Select>
+                        {v.kind === "named" && (
+                          <>
+                            <Input aria-label={`Drive ${i + 1} volume name`} className="min-w-0 flex-1 font-mono !text-xs" value={v.name} placeholder={`${slug}-d${i + 1}`} onChange={(e) => setVolume(i, { name: e.target.value })} />
+                            <Input aria-label={`Drive ${i + 1} volume driver`} className="!w-28 font-mono !text-xs" value={v.driver} placeholder="local" onChange={(e) => setVolume(i, { driver: e.target.value })} />
+                          </>
+                        )}
+                      </div>
+                      {v.kind === "named" && (
+                        <div className="pl-16">
+                          <KvRows rows={v.options} onChange={(options) => setVolume(i, { options })} label={`drive ${i + 1} driver option`} addLabel="Driver option" />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </section>
+              </div>
+            </details>
+          )}
+
           <label className="flex items-start gap-2 text-[13px]">
             <input type="checkbox" className="mt-0.5" checked={f.require_mount} onChange={(e) => set({ require_mount: e.target.checked })} />
             <span>
@@ -444,7 +575,21 @@ export function InstallStoreDialog({ open, onOpenChange, onDone }: { open: boole
               {runtime === "docker" ? "Docker" : "Native"} <span className="ml-1 font-mono text-[11px] text-muted">RustFS {f.version || "latest"}</span>
             </dd>
             <dt className="text-muted">Instance</dt>
-            <dd className="font-mono text-xs">forge-objstore-{slug}</dd>
+            <dd className="font-mono text-xs">{(isDocker && f.docker.container_name.trim()) || `forge-objstore-${slug}`}</dd>
+            <dt className="text-muted">Region</dt>
+            <dd className="font-mono text-xs">{f.region.trim()}</dd>
+            {isDocker && (
+              <>
+                <dt className="text-muted">Docker</dt>
+                <dd className="font-mono text-[11px] text-muted tabular-nums">
+                  {f.docker.image.trim() || "rustfs/rustfs"}:{f.version || "latest"} · restart {f.docker.restart} · {distributed ? "host" : f.docker.network} network
+                  {f.docker.memory_mb.trim() ? ` · ${f.docker.memory_mb} MB` : ""}
+                  {f.docker.cpus.trim() ? ` · ${f.docker.cpus} CPU` : ""}
+                  {f.docker.env.filter((e) => e.key).length ? ` · ${f.docker.env.filter((e) => e.key).length} env` : ""}
+                  {f.volumes.slice(0, f.drives).some((v) => v.kind === "named") ? ` · volumes ${f.volumes.slice(0, f.drives).map((v) => (v.kind === "named" ? v.name : "bind")).join(", ")}` : ""}
+                </dd>
+              </>
+            )}
             <dt className="text-muted">Ports</dt>
             <dd className="font-mono text-xs tabular-nums">
               S3 {s3}
@@ -489,7 +634,7 @@ export function InstallStoreDialog({ open, onOpenChange, onDone }: { open: boole
               <li>A root credential is generated and stored in the vault as “{f.name.trim()} (object store root)”.</li>
               <li>
                 {runtime === "docker"
-                  ? `rustfs/rustfs:${f.version || "latest"} is pulled and started as a container`
+                  ? `${f.docker.image.trim() || "rustfs/rustfs"}:${f.version || "latest"} is pulled and started as a container`
                   : win
                     ? "rustfs.exe is downloaded, checksum-verified and registered as a SYSTEM scheduled task"
                     : "The release is downloaded, checksum-verified and installed as a systemd service"}
@@ -541,9 +686,9 @@ export function InstallStoreDialog({ open, onOpenChange, onDone }: { open: boole
 }
 
 /** One install job per member (distributed), with per-node tabs; a single job shows its full detail. */
-function InstallJobs({ result, nodeLabel }: { result?: { job?: Job; jobs?: Job[] }; nodeLabel: (serverId: string) => string }) {
+export function InstallJobs({ result, nodeLabel, submitted = "Install submitted." }: { result?: { job?: Job; jobs?: Job[] }; nodeLabel: (serverId: string) => string; submitted?: string }) {
   const jobs = (Array.isArray(result?.jobs) && result.jobs.length ? result.jobs : result?.job ? [result.job] : []).filter((j) => j?.id);
-  if (!jobs.length) return <p className="text-muted">Install submitted.</p>;
+  if (!jobs.length) return <p className="text-muted">{submitted}</p>;
   if (jobs.length === 1 && jobs[0]) return <JobDetail id={jobs[0].id} />;
   return (
     <NodeJobTabs
@@ -558,7 +703,7 @@ function InstallJobs({ result, nodeLabel }: { result?: { job?: Job; jobs?: Job[]
 // ------------------------------------------------------------------ adopt
 
 /** Take over the App Store `rustfs` container on a Linux node as a managed store, without recreating it. */
-export function AdoptStoreDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+export function AdoptStoreDialog({ open, onOpenChange, container }: { open: boolean; onOpenChange: (o: boolean) => void; container?: DiscoveredContainer | null }) {
   const servers = useServers();
   const installations = useInstallations();
   const stores = useObjectStores();
@@ -569,11 +714,15 @@ export function AdoptStoreDialog({ open, onOpenChange }: { open: boolean; onOpen
   const [host, setHost] = useState("");
   const [environmentId, setEnvironmentId] = useState("");
   const [result, setResult] = useState<{ store?: ObjectStore; job?: Job } | null>(null);
+  const [s3Port, setS3Port] = useState("");
+  const [consolePort, setConsolePort] = useState("");
 
   useEffect(() => {
     if (open) {
-      setServerId("");
-      setName("");
+      setServerId(container?.server_id ?? "");
+      setName(container ? (container.forge_label ?? container.name.replace(/^forge-objstore-/, "")) : "");
+      setS3Port("");
+      setConsolePort("");
       setHost("");
       setEnvironmentId("");
       setResult(null);
@@ -606,13 +755,22 @@ export function AdoptStoreDialog({ open, onOpenChange }: { open: boolean; onOpen
       });
   }, [servers.data, installations.data, adopted]);
 
-  const chosen = candidates.find((c) => c.inst.server_id === serverId);
-  const port = chosen?.inst.params?.port || "9000";
+  const chosen = container ? undefined : candidates.find((c) => c.inst.server_id === serverId);
+  const published = container?.ports.map((p) => /:(\d+)->/.exec(p)?.[1]).filter(Boolean) ?? [];
+  const hostNet = container?.network === "host" || (!!container && !published.length);
+  const port = container ? s3Port || published[0] || "9000" : chosen?.inst.params?.port || "9000";
+  const portBad = [s3Port, consolePort].some((p) => p.trim() && !(Number(p) >= 1 && Number(p) <= 65535 && Number.isInteger(Number(p))));
   const endpoint = `http://${host.trim() || "<node address>"}:${port}`;
   const loading = servers.isLoading || installations.isLoading;
 
   return (
-    <Modal open={open} onOpenChange={onOpenChange} title="Adopt App Store RustFS" description="Manage an App Store RustFS installation as an object store." wide>
+    <Modal
+      open={open}
+      onOpenChange={onOpenChange}
+      title={container ? `Adopt ${container.name}` : "Adopt App Store RustFS"}
+      description={container ? `Manage this RustFS container on ${container.hostname} as an object store.` : "Manage an App Store RustFS installation as an object store."}
+      wide
+    >
       {result ? (
         <div className="space-y-3">
           {result.job?.id ? <JobDetail id={result.job.id} /> : <p className="text-muted">Adoption submitted.</p>}
@@ -633,7 +791,15 @@ export function AdoptStoreDialog({ open, onOpenChange }: { open: boolean; onOpen
           onSubmit={(e) => {
             e.preventDefault();
             adopt.mutate(
-              { name: name.trim(), server_id: serverId, endpoint_host: host.trim() || undefined, environment_id: environmentId || undefined },
+              {
+                name: name.trim(),
+                server_id: serverId,
+                endpoint_host: host.trim() || undefined,
+                environment_id: environmentId || undefined,
+                container: container?.name || undefined,
+                s3_port: container && s3Port.trim() ? Number(s3Port) : undefined,
+                console_port: container && consolePort.trim() ? Number(consolePort) : undefined,
+              },
               {
                 onSuccess: (r) => {
                   setResult(r ?? {});
@@ -644,6 +810,48 @@ export function AdoptStoreDialog({ open, onOpenChange }: { open: boolean; onOpen
             );
           }}
         >
+          {container ? (
+            <>
+              <dl className="grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-[13px]">
+                <dt className="text-muted">Node</dt>
+                <dd className="truncate">
+                  <Link to="/nodes/$nodeId" params={{ nodeId: container.server_id }} className="hover:text-accent" onClick={() => onOpenChange(false)}>
+                    {container.hostname}
+                  </Link>
+                </dd>
+                <dt className="text-muted">Container</dt>
+                <dd className="truncate font-mono text-xs select-all" title={container.id}>
+                  {container.name} <span className="text-faint">{container.id.slice(0, 12)}</span>
+                </dd>
+                <dt className="text-muted">Image</dt>
+                <dd className="truncate font-mono text-xs" title={container.image}>
+                  {container.image || "—"}
+                </dd>
+                <dt className="text-muted">Ports</dt>
+                <dd className="truncate font-mono text-[11px] tabular-nums" title={container.ports.join(", ")}>
+                  {container.ports.join(", ") || (container.network === "host" ? "host network" : "—")}
+                </dd>
+              </dl>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Name">
+                  <Input required autoFocus maxLength={64} value={name} onChange={(e) => setName(e.target.value)} placeholder="media" />
+                </Field>
+                <Field label="Endpoint host (optional)" hint={`Reachable from the control plane: ${endpoint}`}>
+                  <Input className="font-mono" value={host} placeholder="node address (automatic)" onChange={(e) => setHost(e.target.value)} />
+                </Field>
+                <Field label={`S3 port${hostNet ? "" : " (optional)"}`} hint={hostNet ? "Host network: Forge cannot read the ports; enter them if they are not 9000/9001." : "Override only if the published port is wrong."}>
+                  <Input type="number" min={1} max={65535} className="font-mono" value={s3Port} placeholder={published[0] ?? "9000"} onChange={(e) => setS3Port(e.target.value)} />
+                </Field>
+                <Field label="Console port (optional)">
+                  <Input type="number" min={1} max={65535} className="font-mono" value={consolePort} placeholder={published[1] ?? "—"} onChange={(e) => setConsolePort(e.target.value)} />
+                </Field>
+                <div className="sm:col-span-2">
+                  <EnvironmentField value={environmentId} onChange={setEnvironmentId} />
+                </div>
+              </div>
+            </>
+          ) : (
+          <>
           <p className="rounded-md border border-line px-3 py-2 text-xs text-muted">
             Forge takes over the running <span className="font-mono text-[11px] text-fg">forge-rustfs</span> container without recreating it. Its data and key stay; the key moves into the Credential vault, and the
             App Store stops managing the container.
@@ -684,12 +892,18 @@ export function AdoptStoreDialog({ open, onOpenChange }: { open: boolean; onOpen
               </div>
             </div>
           )}
+          </>
+          )}
           <div className="text-xs text-muted">
             <div className="mb-1 font-medium text-fg">What happens</div>
             <ol className="list-decimal space-y-0.5 pl-4">
               <li>Forge reads the container's key on the node and seals it in the Credential vault as the store's root credential.</li>
               <li>The container keeps running; nothing is pulled, recreated or moved.</li>
-              <li>The App Store entry for RustFS on that node is removed. Start, stop, restart and uninstall now happen on the store page.</li>
+              {container ? (
+                <li>Start, stop, restart and uninstall now happen on the store page.</li>
+              ) : (
+                <li>The App Store entry for RustFS on that node is removed. Start, stop, restart and uninstall now happen on the store page.</li>
+              )}
               <li>Repair is not available: Forge cannot reinstall a container it did not create.</li>
             </ol>
           </div>
@@ -698,7 +912,7 @@ export function AdoptStoreDialog({ open, onOpenChange }: { open: boolean; onOpen
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button variant="primary" disabled={adopt.isPending || !serverId || !name.trim() || !!chosen?.why}>
+            <Button variant="primary" disabled={adopt.isPending || !serverId || !name.trim() || !!chosen?.why || portBad}>
               {adopt.isPending && <Loader2 className="size-4 animate-spin" />}
               Adopt
             </Button>
