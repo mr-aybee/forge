@@ -22,6 +22,8 @@ mod agent_rollout;
 mod alert_templates;
 mod alerts;
 mod analytics_settings;
+// Every test in this module is Unix-only; its helpers are dead code elsewhere.
+#[cfg(unix)]
 mod analytics_worker;
 mod any_address;
 mod api_authz;

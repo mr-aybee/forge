@@ -845,6 +845,7 @@ pub async fn watchdog(agent_dir: PathBuf) {
 // ------------------------------------------------------------ capability
 
 /// Folder of the installed binaries.
+#[cfg(target_os = "linux")]
 const BIN_DIR: &str = "/usr/local/bin";
 
 /// What the helper sees on this host, for [`assess`]. Plain values, so the

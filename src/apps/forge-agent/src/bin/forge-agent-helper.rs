@@ -47,6 +47,7 @@ fn data(r: Result<serde_json::Value, String>) -> HelperResponse {
 /// file, once Forge's signature checks out against the helper's own pin.
 /// A helper without a pin (a node set up before D-068) refuses: the agent
 /// then keeps checking the CA and host name.
+#[cfg(unix)]
 async fn server_pins(pin: Option<helper_trust::Pin>, keys: String) -> HelperResponse {
     let Some(pin) = pin else {
         return HelperResponse::failed("refused: this helper has no pin of Forge's command key to check the keys with");
