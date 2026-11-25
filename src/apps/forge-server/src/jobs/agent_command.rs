@@ -103,7 +103,7 @@ pub fn parse_command(v: &Value) -> Result<Command, String> {
         }
         Some("site") => {
             let action = v.get("action").and_then(Value::as_str).unwrap_or_default();
-            if !matches!(action, "apply" | "remove" | "status" | "renew") {
+            if !matches!(action, "apply" | "remove" | "status" | "renew" | "clear_cache" | "access_log" | "error_log") {
                 return Err(format!("unsupported site action `{action}`"));
             }
             let spec: forge_catalog::SiteSpec = serde_json::from_value(v.get("spec").cloned().unwrap_or(Value::Null))
@@ -144,6 +144,19 @@ fn split_transient(payload: &Value, output: &mut Value) -> Option<Value> {
     }
     let env = output.as_object_mut()?.remove("env")?;
     Some(json!({ "env": env }))
+}
+
+/// Top-level payload field set only by the endpoint flow (`api/sites.rs`)
+/// after its own checks (approved roots for static directories): the id of
+/// the endpoint. Commands sent through `POST /servers/{id}/commands` never
+/// carry it.
+pub const FROM_ENDPOINT: &str = "from_endpoint";
+
+/// Whether a site spec serves a static directory (default or path rule).
+fn has_static(spec: Option<&Value>) -> bool {
+    let Some(spec) = spec else { return false };
+    let is_static = |v: &Value| v.get("kind").and_then(Value::as_str) == Some("static");
+    is_static(spec) || spec.get("rules").and_then(Value::as_array).is_some_and(|r| r.iter().any(is_static))
 }
 
 /// Top-level payload field set only by the endpoint flow (`POST /sites/{id}/apply`)
@@ -278,8 +291,8 @@ pub fn required_action(payload: &Value) -> Action {
             _ => Action::ProxyManage,
         },
         Some("site") => match payload.pointer("/command/action").and_then(Value::as_str) {
-            Some("status") => Action::ServerManage,
-            Some("remove") => Action::ProxyManage,
+            Some("status" | "access_log" | "error_log") => Action::ServerManage,
+            Some("remove" | "clear_cache") => Action::ProxyManage,
             // The uploaded key leaves the vault: `certificate.use` (admins,
             // MFA), which also covers `server.command` and `proxy.manage`.
             Some("apply") if payload.pointer("/command/spec/tls").and_then(Value::as_str) == Some("uploaded") => {
@@ -287,6 +300,12 @@ pub fn required_action(payload: &Value) -> Action {
             }
             // A custom block runs as root inside nginx.
             _ if has_custom(payload.pointer("/command/spec/custom")) => Action::ServerCommand,
+            // A static directory is served by nginx (root): the endpoint flow
+            // checked it is inside an approved file root on this edge; any
+            // other caller needs `server.command`.
+            _ if has_static(payload.pointer("/command/spec")) && payload.get(FROM_ENDPOINT).is_none() => {
+                Action::ServerCommand
+            }
             _ => Action::ProxyManage,
         },
         Some("ingress") => match payload.pointer("/command/op/op").and_then(Value::as_str) {
@@ -400,6 +419,18 @@ mod tests {
         assert_eq!(site("renew", json!({ "custom": "add_header X 1;" })), Action::ServerCommand);
         assert_eq!(site("apply", json!({ "tls": "uploaded", "custom": "x" })), Action::CertificateUse);
         assert_eq!(site("remove", json!({ "tls": "uploaded", "custom": "x" })), Action::ProxyManage);
+        // Static directories: only the endpoint flow (which checked the
+        // approved roots) gets away with proxy.manage.
+        let st = json!({ "command": { "type": "site", "action": "apply", "spec": { "kind": "static" } } });
+        assert_eq!(required_action(&st), Action::ServerCommand);
+        let rule =
+            json!({ "command": { "type": "site", "action": "apply", "spec": { "rules": [{ "kind": "static" }] } } });
+        assert_eq!(required_action(&rule), Action::ServerCommand);
+        let mut flow = st.clone();
+        flow[super::FROM_ENDPOINT] = json!("site-1");
+        assert_eq!(required_action(&flow), Action::ProxyManage);
+        assert_eq!(site("access_log", json!({})), Action::ServerManage);
+        assert_eq!(site("clear_cache", json!({})), Action::ProxyManage);
         let ingress = |custom: &str| {
             required_action(
                 &json!({ "command": { "type": "ingress", "op": { "op": "apply", "nginx": { "custom": custom } } } }),

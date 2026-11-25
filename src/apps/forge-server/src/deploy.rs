@@ -121,12 +121,17 @@ pub fn port_map(s: &SlotRecord) -> BTreeMap<u16, u16> {
 #[must_use]
 pub fn site_targets(config: &Value, app: forge_core::ServiceId) -> bool {
     let id = app.to_string();
-    ["targets", "standby_targets"].iter().any(|k| {
-        serde_json::from_value::<Vec<Target>>(config[*k].clone())
-            .unwrap_or_default()
-            .iter()
-            .any(|t| matches!(t, Target::App { service_id, .. } if *service_id == id))
-    })
+    let routes = |v: &Value| {
+        ["targets", "standby_targets"].iter().any(|k| {
+            // A missing or foreign list routes nowhere.
+            serde_json::from_value::<Vec<Target>>(v[*k].clone())
+                .unwrap_or_default()
+                .iter()
+                .any(|t| matches!(t, Target::App { service_id, .. } if *service_id == id))
+        })
+    };
+    // The default rule's targets, then each path rule's (D-169).
+    routes(config) || config["spec"]["rules"].as_array().is_some_and(|rules| rules.iter().any(routes))
 }
 
 fn svc_ref(id: forge_core::ServiceId) -> EntityRef {

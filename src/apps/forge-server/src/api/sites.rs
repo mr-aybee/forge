@@ -5,12 +5,17 @@
 //! * `POST /api/v1/sites/{id}/apply` — every edge: write, `nginx -t`, reload
 //!   (rolled back on failure), then publish DNS records if configured
 //! * `POST /api/v1/sites/{id}/remove` — take the site off its edges
+//! * `POST /api/v1/sites/{id}/cache/clear` — empty the proxy cache on every edge
+//! * `GET /api/v1/sites/{id}/logs?server_id=&log=access|error` — the tail of
+//!   the endpoint's own access or error log on one edge
 //! * `POST /api/v1/servers/{id}/dns` — PowerDNS zones and records on that node
 //!
 //! Applying, removing and DNS changes need `proxy.manage` (MFA) on each node;
 //! every node operation is an audited `agent.command` job. A non-empty custom
 //! block also needs `server.command` (MFA) on each edge, to save and to apply:
-//! nginx runs it as root. Sites are scoped to the caller's workspace.
+//! nginx runs it as root. A static directory must be inside an approved
+//! file root on every edge and needs `file.read` there. Sites are scoped to
+//! the caller's workspace.
 
 use std::time::Duration;
 
@@ -22,7 +27,7 @@ use forge_catalog::ingress::Target;
 use forge_core::model::{AgentStatus, JobStatus, NewJob, Site};
 use forge_core::ports::{JobRepository, ServerRepository, SiteRepository};
 use forge_core::{Action, EntityKind, EntityRef, ServerId};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::auth::{Caller, Ws};
@@ -64,9 +69,16 @@ pub async fn run_as(
 /// holds no link to this server.
 const OFFLINE_GRACE: Duration = Duration::from_secs(1);
 
-/// Runs `command`; with `attach_certificate` (the site's id) the job adds the
-/// uploaded certificate's key to a site `apply` (only the endpoint flow sets
-/// it, after authorizing the certificate's use).
+/// Marks a command sent by the endpoint flow (after its own checks): the
+/// site's id, and whether the job adds the uploaded certificate's key to a
+/// site `apply` (only after authorizing the certificate's use).
+#[derive(Debug, Clone, Copy)]
+struct EndpointFlow<'a> {
+    site: &'a str,
+    attach_certificate: bool,
+}
+
+/// Runs `command`, optionally marked as sent by the endpoint flow.
 async fn submit_and_wait(
     state: &AppState,
     principal: forge_core::Principal,
@@ -74,7 +86,7 @@ async fn submit_and_wait(
     server: ServerId,
     command: Value,
     wait: Duration,
-    attach_certificate: Option<&str>,
+    endpoint: Option<EndpointFlow<'_>>,
 ) -> ApiResult<Value> {
     crate::jobs::agent_command::parse_command(&command).map_err(ApiError::bad_request)?;
     let node = state.store.get_server(server).await.map_err(|_| ApiError::not_found("server not found"))?;
@@ -87,9 +99,14 @@ async fn submit_and_wait(
             principal,
             context,
             idempotency_key: None,
-            payload: match attach_certificate {
-                Some(site) => {
-                    json!({ "server_id": server, "command": command, crate::jobs::agent_command::ATTACH_CERTIFICATE: site })
+            payload: match endpoint {
+                Some(EndpointFlow { site, attach_certificate: true }) => json!({
+                    "server_id": server, "command": command,
+                    crate::jobs::agent_command::ATTACH_CERTIFICATE: site,
+                    crate::jobs::agent_command::FROM_ENDPOINT: site,
+                }),
+                Some(EndpointFlow { site, attach_certificate: false }) => {
+                    json!({ "server_id": server, "command": command, crate::jobs::agent_command::FROM_ENDPOINT: site })
                 }
                 None => json!({ "server_id": server, "command": command }),
             },
@@ -120,7 +137,7 @@ async fn submit_and_wait(
     }
 }
 
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DnsConfig {
     #[schemars(with = "String")]
     pub server_id: ServerId,
@@ -139,6 +156,21 @@ const fn ttl() -> u32 {
 }
 fn rr() -> String {
     "round_robin".into()
+}
+
+/// Where an endpoint is served: one or more nodes with Nginx, or a
+/// cluster's edge group (its ingress profile decides the edges).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Placement {
+    Nodes {
+        #[schemars(with = "Vec<String>")]
+        server_ids: Vec<ServerId>,
+    },
+    Cluster {
+        #[schemars(with = "String")]
+        cluster_id: forge_core::ClusterId,
+    },
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -165,10 +197,40 @@ pub struct SiteInput {
     pub standby_targets: Vec<Target>,
     #[serde(default)]
     pub dns: Option<DnsConfig>,
+    /// Where the endpoint is served; replaces `edges` / `cluster_id`, which
+    /// older clients still send.
+    #[serde(default)]
+    pub placement: Option<Placement>,
 }
 
-/// Fills edges from the cluster profile and resolves typed targets.
+/// The stored `config` of a site row.
+#[derive(Debug, Serialize)]
+struct StoredConfig<'a> {
+    spec: &'a SiteSpec,
+    placement: Option<&'a Placement>,
+    edges: &'a [ServerId],
+    cluster_id: Option<forge_core::ClusterId>,
+    targets: &'a [Target],
+    standby_targets: &'a [Target],
+    dns: Option<&'a DnsConfig>,
+}
+
+/// Reads the placement (or the older `edges` / `cluster_id` fields), fills
+/// the edges from the cluster profile and resolves typed targets.
 async fn resolve(state: &AppState, ws: forge_core::WorkspaceId, input: &mut SiteInput) -> ApiResult<()> {
+    match input.placement.clone() {
+        Some(Placement::Cluster { cluster_id }) => input.cluster_id = Some(cluster_id),
+        Some(Placement::Nodes { server_ids }) => {
+            input.cluster_id = None;
+            input.edges = server_ids;
+        }
+        None => {
+            input.placement = Some(match input.cluster_id {
+                Some(cluster_id) => Placement::Cluster { cluster_id },
+                None => Placement::Nodes { server_ids: input.edges.clone() },
+            });
+        }
+    }
     if let Some(c) = input.cluster_id {
         use forge_core::ports::ClusterRepository;
         let cluster = state.store.get_cluster(c).await.map_err(|_| ApiError::bad_request("cluster not found"))?;
@@ -184,21 +246,37 @@ async fn resolve(state: &AppState, ws: forge_core::WorkspaceId, input: &mut Site
             .iter()
             .map(|e| e.server_id.parse().map_err(|_| ApiError::bad_request("invalid edge id")))
             .collect::<ApiResult<_>>()?;
+        if input.edges.is_empty() {
+            return Err(ApiError::bad_request(format!(
+                "cluster {}'s edge group has no edge nodes yet: add one on the cluster's ingress profile",
+                cluster.name
+            )));
+        }
     }
-    if input.targets.is_empty() && input.standby_targets.is_empty() {
+    let typed_rules = input.spec.rules.iter().any(|r| !r.targets.is_empty() || !r.standby_targets.is_empty());
+    if input.targets.is_empty() && input.standby_targets.is_empty() && !typed_rules {
         return Ok(());
     }
     let r = super::routing::Resolver::new(state).await?.for_edges(&input.edges);
-    let (active, standby) = r.upstreams(state, &input.targets, &input.standby_targets).await?;
-    input.spec.upstreams = active;
-    input.spec.standby = standby;
+    if !input.targets.is_empty() || !input.standby_targets.is_empty() {
+        let (active, standby) = r.upstreams(state, &input.targets, &input.standby_targets).await?;
+        input.spec.upstreams = active;
+        input.spec.standby = standby;
+    }
+    for rule in &mut input.spec.rules {
+        if !rule.targets.is_empty() || !rule.standby_targets.is_empty() {
+            let (active, standby) = r.upstreams(state, &rule.targets, &rule.standby_targets).await?;
+            rule.upstreams = active;
+            rule.standby = standby;
+        }
+    }
     Ok(())
 }
 
 fn check(input: &SiteInput) -> ApiResult<()> {
     input.spec.validate().map_err(ApiError::bad_request)?;
     if input.edges.is_empty() {
-        return Err(ApiError::bad_request("choose at least one edge node (with Nginx)"));
+        return Err(ApiError::bad_request("choose the node that serves this endpoint (a node with Nginx installed)"));
     }
     if let Some(d) = &input.dns {
         if !d.zone.ends_with('.') {
@@ -248,8 +326,35 @@ async fn authorize_custom(caller: &Caller, custom: &str, edges: &[ServerId]) -> 
     Ok(())
 }
 
-fn config_of(input: &SiteInput) -> Value {
-    json!({ "spec": input.spec, "edges": input.edges, "cluster_id": input.cluster_id, "targets": input.targets, "standby_targets": input.standby_targets, "dns": input.dns.as_ref().map(|d| json!({ "server_id": d.server_id, "zone": d.zone, "ttl": d.ttl, "mode": d.mode, "addresses": d.addresses })) })
+fn config_of(input: &SiteInput) -> ApiResult<Value> {
+    let config = StoredConfig {
+        spec: &input.spec,
+        placement: input.placement.as_ref(),
+        edges: &input.edges,
+        cluster_id: input.cluster_id,
+        targets: &input.targets,
+        standby_targets: &input.standby_targets,
+        dns: input.dns.as_ref(),
+    };
+    Ok(serde_json::to_value(config).map_err(forge_core::DomainError::internal)?)
+}
+
+/// A static directory is served by nginx (root) from every edge: it must be
+/// inside an approved file root there, and the caller needs `file.read`.
+async fn authorize_static(state: &AppState, caller: &Caller, spec: &SiteSpec, edges: &[ServerId]) -> ApiResult<()> {
+    if spec.static_roots().is_empty() {
+        return Ok(());
+    }
+    for e in edges {
+        caller.authorize(Action::FileRead, server_ref(*e)).await?;
+    }
+    Ok(state.endpoints.check_static_roots(edges, spec).await?)
+}
+
+/// A site as the console sees it: basic-auth hashes stay on the server.
+fn redacted(mut site: Site) -> Site {
+    crate::endpoints::redact(&mut site.config);
+    site
 }
 
 /// What an endpoint lives on: its cluster (when it has one) and its edge
@@ -303,13 +408,13 @@ pub async fn list(State(state): State<AppState>, caller: Caller, Ws(ws): Ws) -> 
     // `view` on the workspace shows every endpoint, those on no cluster or
     // edge included.
     if caller.can(Action::View, ws_ref(ws)).await {
-        return Ok(Json(sites));
+        return Ok(Json(sites.into_iter().map(redacted).collect()));
     }
     if !crate::console_access::is_member(&state.store, &state.store, caller.session.user.id, ws).await? {
         caller.authorize(Action::View, ws_ref(ws)).await?;
     }
     let allowed = visible_sites(&caller, &sites).await;
-    Ok(Json(sites.into_iter().zip(allowed).filter_map(|(s, ok)| ok.then_some(s)).collect()))
+    Ok(Json(sites.into_iter().zip(allowed).filter_map(|(s, ok)| ok.then_some(redacted(s))).collect()))
 }
 
 /// A site of workspace `ws`; sites of other workspaces are not found.
@@ -328,14 +433,18 @@ pub async fn get(
     Ws(ws): Ws,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Site>> {
-    Ok(Json(load_visible(&state, &caller, ws, &id).await?))
+    Ok(Json(redacted(load_visible(&state, &caller, ws, &id).await?)))
 }
 
 /// Typed targets must belong to the caller's workspace (a node or a service
 /// of another workspace is not found).
 async fn check_targets_ws(state: &AppState, ws: forge_core::WorkspaceId, input: &SiteInput) -> ApiResult<()> {
     use forge_core::ports::ServiceRepository;
-    for t in input.targets.iter().chain(&input.standby_targets) {
+    let mut all: Vec<&Target> = input.targets.iter().chain(&input.standby_targets).collect();
+    for r in &input.spec.rules {
+        all.extend(r.targets.iter().chain(&r.standby_targets));
+    }
+    for t in all {
         match t {
             Target::Node { server_id, .. } => {
                 let id: ServerId = server_id.parse().map_err(|_| ApiError::bad_request("invalid node id"))?;
@@ -358,48 +467,92 @@ async fn check_targets_ws(state: &AppState, ws: forge_core::WorkspaceId, input: 
     Ok(())
 }
 
+/// One typed target of a preview with the addresses it resolves to.
+#[derive(Debug, Serialize)]
+struct PreviewTarget {
+    target: Target,
+    standby: bool,
+    upstreams: Vec<Value>,
+}
+
+/// `POST /sites/preview`.
+#[derive(Debug, Serialize)]
+pub struct Preview {
+    /// `https` with TLS (the variant the edges run), else `http`.
+    variant: &'static str,
+    /// The main configuration the edges run (read-only).
+    config: String,
+    http: String,
+    https: Option<String>,
+    /// The custom configuration file as written to the edges.
+    custom: String,
+    /// The first refusal in the custom configuration (line and directive).
+    custom_error: Option<forge_catalog::sites::CustomError>,
+    edges: Vec<ServerId>,
+    upstreams: Vec<String>,
+    standby: Vec<String>,
+    targets: Vec<PreviewTarget>,
+}
+
+/// A stand-in hash so a preview renders while passwords stay unknown (the
+/// main configuration never contains hashes).
+const PREVIEW_HASH: &str =
+    "$6$preview$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
 /// `POST /sites/preview`: takes the same body as `POST /sites` and returns
 /// the rendered config, the edges and, per typed target, the upstream
 /// addresses the edges would use — resolved exactly as on save and apply.
-/// Read-only: nothing is stored and no node is contacted.
+/// A refused custom configuration is reported in `custom_error` (with its
+/// line) instead of failing the preview. Read-only: nothing is stored and
+/// no node is contacted.
 pub async fn preview(
     State(state): State<AppState>,
     caller: Caller,
     Ws(ws): Ws,
     Json(mut input): Json<SiteInput>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<Preview>> {
     caller.authorize(Action::View, ws_ref(ws)).await?;
     check_targets_ws(&state, ws, &input).await?;
     resolve(&state, ws, &mut input).await?;
-    input.spec.validate().map_err(ApiError::bad_request)?;
+    if let Some(auth) = input.spec.access.basic_auth.as_mut() {
+        for u in &mut auth.users {
+            u.password = None;
+            PREVIEW_HASH.clone_into(&mut u.hash);
+        }
+    }
+    let custom_error = input.spec.check_custom().err();
+    let mut checked = input.spec.clone();
+    checked.custom.clear();
+    checked.validate().map_err(ApiError::bad_request)?;
     let r = super::routing::Resolver::new(&state).await?.for_edges(&input.edges);
     let mut targets = Vec::new();
     for (list, standby) in [(&input.targets, false), (&input.standby_targets, true)] {
         for t in list {
-            let ups: Vec<Value> = r
+            let upstreams: Vec<Value> = r
                 .expand(&state, t, standby)
                 .await?
                 .into_iter()
                 .map(|u| json!({ "address": u.address, "standby": u.standby, "server_id": u.server_id, "state": u.state }))
                 .collect();
-            targets.push(json!({ "target": t, "standby": standby, "upstreams": ups }));
+            targets.push(PreviewTarget { target: t.clone(), standby, upstreams });
         }
     }
-    let spec = &input.spec;
+    let spec = if custom_error.is_none() { &input.spec } else { &checked };
     // The variant the edges will run: HTTPS only with TLS (F-10). `https` is
     // null without TLS, since it would point at certificates that never exist.
     let with_tls = spec.tls != forge_catalog::sites::Tls::Off;
-    Ok(Json(json!({
-        "variant": if with_tls { "https" } else { "http" },
-        "config": spec.render(with_tls),
-        "http": spec.render(false),
-        "https": with_tls.then(|| spec.render(true)),
-        "custom": spec.render_custom(),
-        "edges": input.edges,
-        "upstreams": spec.upstreams,
-        "standby": spec.standby,
-        "targets": targets,
-    })))
+    Ok(Json(Preview {
+        variant: if with_tls { "https" } else { "http" },
+        config: spec.render(with_tls),
+        http: spec.render(false),
+        https: with_tls.then(|| spec.render(true)),
+        custom: input.spec.render_custom(),
+        custom_error,
+        edges: input.edges.clone(),
+        upstreams: spec.upstreams.clone(),
+        standby: spec.standby.clone(),
+        targets,
+    }))
 }
 
 pub async fn create(
@@ -411,9 +564,11 @@ pub async fn create(
     caller.authorize(Action::WorkspaceManage, ws_ref(ws)).await?;
     check_targets_ws(&state, ws, &input).await?;
     resolve(&state, ws, &mut input).await?;
+    crate::endpoints::prepare_basic_auth(&mut input.spec, None)?;
     check(&input)?;
     check_certificate(&state, ws, &input).await?;
     authorize_custom(&caller, &input.spec.custom, &input.edges).await?;
+    authorize_static(&state, &caller, &input.spec, &input.edges).await?;
     if state.store.list_sites().await?.iter().any(|s| s.name == input.spec.name) {
         return Err(ApiError::conflict(format!("a site named `{}` exists", input.spec.name)));
     }
@@ -422,16 +577,14 @@ pub async fn create(
         id: forge_core::JobId::new().to_string(),
         workspace_id: ws,
         name: input.spec.name.clone(),
-        config: config_of(&input),
+        config: config_of(&input)?,
         edge_status: json!({}),
         created_at: now,
         updated_at: now,
     };
     state.store.put_site(&site).await?;
-    caller
-        .audit("site.create", &ws_ref(ws), Some(ws), json!({ "site": site.name, "domains": input.spec.domains }))
-        .await;
-    Ok((StatusCode::CREATED, Json(site)))
+    caller.audit("site.create", &ws_ref(ws), Some(ws), audit_detail(&input)).await;
+    Ok((StatusCode::CREATED, Json(redacted(site))))
 }
 
 pub async fn update(
@@ -446,22 +599,32 @@ pub async fn update(
     input.spec.name.clone_from(&site.name);
     check_targets_ws(&state, ws, &input).await?;
     resolve(&state, ws, &mut input).await?;
+    crate::endpoints::prepare_basic_auth(&mut input.spec, spec_of(&site).ok().as_ref())?;
     check(&input)?;
     check_certificate(&state, ws, &input).await?;
     authorize_custom(&caller, &input.spec.custom, &input.edges).await?;
-    site.config = config_of(&input);
+    authorize_static(&state, &caller, &input.spec, &input.edges).await?;
+    site.config = config_of(&input)?;
     site.updated_at = state.clock.now();
     state.store.put_site(&site).await?;
-    // Custom blocks are versioned in the audit log.
-    caller
-        .audit(
-            "site.update",
-            &ws_ref(ws),
-            Some(ws),
-            json!({ "site": site.name, "domains": input.spec.domains, "custom": input.spec.custom }),
-        )
-        .await;
-    Ok(Json(site))
+    // Custom configurations are versioned in the audit log.
+    caller.audit("site.update", &ws_ref(ws), Some(ws), audit_detail(&input)).await;
+    Ok(Json(redacted(site)))
+}
+
+/// What the audit log records of a saved endpoint: the custom
+/// configuration is versioned there; basic-auth users by name only.
+fn audit_detail(input: &SiteInput) -> Value {
+    let s = &input.spec;
+    json!({
+        "site": s.name,
+        "domains": s.domains,
+        "kind": s.kind,
+        "rules": s.rules.iter().map(|r| json!({ "path": r.path, "kind": r.kind })).collect::<Vec<_>>(),
+        "placement": input.placement,
+        "basic_auth_users": s.access.basic_auth.as_ref().map(|b| b.users.iter().map(|u| u.user.clone()).collect::<Vec<_>>()),
+        "custom": s.custom,
+    })
 }
 
 pub async fn delete(
@@ -521,6 +684,8 @@ async fn authorize_edges(
         if spec.tls == forge_catalog::sites::Tls::Uploaded {
             caller.authorize(Action::CertificateUse, ws_ref(site.workspace_id)).await?;
         }
+        // The edges may have changed with the cluster profile since saving.
+        authorize_static(state, caller, &spec, &edges).await?;
     }
     Ok((spec, edges))
 }
@@ -532,7 +697,8 @@ async fn on_edges(
     action: &str,
     (spec, edges): (SiteSpec, Vec<ServerId>),
 ) -> ApiResult<Vec<Value>> {
-    let attach = (action == "apply" && spec.tls == forge_catalog::sites::Tls::Uploaded).then(|| site.id.clone());
+    let attach = action == "apply" && spec.tls == forge_catalog::sites::Tls::Uploaded;
+    let site_id = site.id.clone();
     let mut results = Vec::new();
     for (e, spec) in per_edge(state, &spec, &edges).await? {
         let r = submit_and_wait(
@@ -542,7 +708,7 @@ async fn on_edges(
             e,
             json!({ "type": "site", "action": action, "spec": spec }),
             Duration::from_secs(150),
-            attach.as_deref(),
+            Some(EndpointFlow { site: &site_id, attach_certificate: attach }),
         )
         .await?;
         let status = match (action, r["status"].as_str()) {
@@ -561,29 +727,35 @@ async fn on_edges(
 }
 
 /// Re-resolves typed targets so the upstreams follow where services run now
-/// (placements move after a deploy or a failover).
+/// (placements move after a deploy or a failover), for the default rule and
+/// every path rule.
 async fn refresh_upstreams(state: &AppState, site: &mut Site) -> ApiResult<()> {
+    // Rows written by Forge always hold valid target lists; a missing list is empty.
     let targets: Vec<Target> = serde_json::from_value(site.config["targets"].clone()).unwrap_or_default();
     let standby: Vec<Target> = serde_json::from_value(site.config["standby_targets"].clone()).unwrap_or_default();
-    if targets.is_empty() && standby.is_empty() {
+    let mut spec = spec_of(site)?;
+    let typed_rules = spec.rules.iter().any(|r| !r.targets.is_empty() || !r.standby_targets.is_empty());
+    if targets.is_empty() && standby.is_empty() && !typed_rules {
         return Ok(());
     }
     let edges: Vec<String> = serde_json::from_value(site.config["edges"].clone()).unwrap_or_default();
     let r = super::routing::Resolver::new(state).await?.for_edges(edges);
-    let resolved = r.resolve(state, &targets, &standby).await?;
-    site.config["spec"]["upstreams"] = json!(resolved.active);
-    site.config["spec"]["standby"] = json!(resolved.standby);
-    match site.config["spec"].as_object_mut() {
+    if !targets.is_empty() || !standby.is_empty() {
+        let resolved = r.resolve(state, &targets, &standby).await?;
+        spec.upstreams = resolved.active;
+        spec.standby = resolved.standby;
         // Weights only while a rollout shifts traffic (#73).
-        Some(spec) if resolved.weights.is_empty() => {
-            spec.remove("weights");
-        }
-        Some(spec) => {
-            spec.insert("weights".into(), json!(resolved.weights));
-        }
-        None => {}
+        spec.weights = resolved.weights;
     }
-    spec_of(site)?.validate().map_err(ApiError::bad_request)?;
+    for rule in &mut spec.rules {
+        if !rule.targets.is_empty() || !rule.standby_targets.is_empty() {
+            let (active, standby) = r.upstreams(state, &rule.targets, &rule.standby_targets).await?;
+            rule.upstreams = active;
+            rule.standby = standby;
+        }
+    }
+    spec.validate().map_err(ApiError::bad_request)?;
+    site.config["spec"] = serde_json::to_value(&spec).map_err(forge_core::DomainError::internal)?;
     Ok(())
 }
 
@@ -614,7 +786,8 @@ pub(crate) async fn reapply_for_app(
         let spec =
             spec_of(&site).map_err(|e| DomainError::Invalid(format!("endpoint {}: {}", site.name, e.message)))?;
         let edges = current_edges(state, &site).await.map_err(|e| DomainError::Invalid(e.message))?;
-        let attach = (spec.tls == forge_catalog::sites::Tls::Uploaded).then(|| site.id.clone());
+        let attach = spec.tls == forge_catalog::sites::Tls::Uploaded;
+        let site_id = site.id.clone();
         let mut failed = Vec::new();
         for (e, spec) in per_edge(state, &spec, &edges).await.map_err(|e| DomainError::Invalid(e.message))? {
             let r = submit_and_wait(
@@ -624,7 +797,7 @@ pub(crate) async fn reapply_for_app(
                 e,
                 json!({ "type": "site", "action": "apply", "spec": spec }),
                 Duration::from_secs(150),
-                attach.as_deref(),
+                Some(EndpointFlow { site: &site_id, attach_certificate: attach }),
             )
             .await
             .map_err(|e| DomainError::Invalid(e.message))?;
@@ -743,6 +916,82 @@ pub async fn remove(
         .audit("site.remove", &ws_ref(site.workspace_id), Some(site.workspace_id), json!({ "site": site.name }))
         .await;
     Ok(Json(json!({ "edges": edges })))
+}
+
+/// `POST /sites/{id}/cache/clear`: empties the endpoint's proxy cache on
+/// every edge (`proxy.manage` on each).
+pub async fn clear_cache(
+    State(state): State<AppState>,
+    caller: Caller,
+    Ws(ws): Ws,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let site = load_visible(&state, &caller, ws, &id).await?;
+    let (spec, edges) = authorize_edges(&state, &caller, &site, "clear_cache").await?;
+    let mut results = Vec::new();
+    for e in edges {
+        let r = submit_and_wait(
+            &state,
+            caller.principal(),
+            caller.ctx(),
+            e,
+            json!({ "type": "site", "action": "clear_cache", "spec": spec }),
+            Duration::from_secs(60),
+            Some(EndpointFlow { site: &site.id, attach_certificate: false }),
+        )
+        .await?;
+        results.push(json!({ "server_id": e, "result": r }));
+    }
+    caller.audit("site.cache_clear", &ws_ref(ws), Some(ws), json!({ "site": site.name })).await;
+    Ok(Json(json!({ "edges": results })))
+}
+
+/// Which of an endpoint's logs to read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LogKind {
+    Access,
+    Error,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct LogQuery {
+    /// The edge to read from (one of the endpoint's edges).
+    #[schemars(with = "String")]
+    pub server_id: ServerId,
+    pub log: LogKind,
+}
+
+/// `GET /sites/{id}/logs?server_id=&log=access|error`: the last lines (up
+/// to 1000, 512 KiB) of the endpoint's own log on one of its edges, and the
+/// file's size. Needs `server.manage` on that edge; only this endpoint's log
+/// files can be read.
+pub async fn logs(
+    State(state): State<AppState>,
+    caller: Caller,
+    Ws(ws): Ws,
+    Path(id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<LogQuery>,
+) -> ApiResult<Json<Value>> {
+    let site = load_visible(&state, &caller, ws, &id).await?;
+    let spec = spec_of(&site)?;
+    if !current_edges(&state, &site).await?.contains(&q.server_id) {
+        return Err(ApiError::bad_request("that node is not one of this endpoint's edges"));
+    }
+    caller.authorize(Action::ServerManage, server_ref(q.server_id)).await?;
+    let action = match q.log {
+        LogKind::Access => "access_log",
+        LogKind::Error => "error_log",
+    };
+    let r = run_on_node(
+        &state,
+        &caller,
+        q.server_id,
+        json!({ "type": "site", "action": action, "spec": spec }),
+        Duration::from_secs(20),
+    )
+    .await?;
+    Ok(Json(r))
 }
 
 /// The DNS server of the site's cluster profile, if the profile publishes DNS.

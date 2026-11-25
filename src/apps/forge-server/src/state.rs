@@ -130,6 +130,8 @@ pub struct Services {
     pub registries: Arc<crate::registries::RegistryService>,
     /// Docker images, volumes and networks on nodes (D-157).
     pub docker_resources: Arc<crate::docker_resources::DockerResources>,
+    /// Ingress endpoint checks: static roots and basic-auth users (D-169).
+    pub endpoints: Arc<crate::endpoints::EndpointService>,
     /// Bucket grants: one person's access to one bucket of a store (D-108).
     pub bucket_grants: crate::bucket_grants::BucketGrants,
     /// Vault-backed header values for health checks, handed to nodes (D-111).
@@ -384,6 +386,7 @@ impl Services {
             clock: clock.clone(),
         });
         let node_rpc = crate::node_rpc::NodeRpc { hub: hub.clone(), signer: signer.clone(), clock: clock.clone() };
+        let endpoints = Arc::new(crate::endpoints::EndpointService { files: Arc::new(store.clone()) });
         let docker_resources = Arc::new(crate::docker_resources::DockerResources {
             rpc: node_rpc.clone(),
             servers: Arc::new(store.clone()),
@@ -708,6 +711,7 @@ impl Services {
             files,
             swarm,
             docker_resources,
+            endpoints,
             registries,
             webhooks,
             access_lists,

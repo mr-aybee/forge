@@ -32,6 +32,7 @@ pub mod container_telemetry;
 pub mod deploy;
 pub mod docker_engine;
 pub mod docker_resources;
+pub mod endpoints;
 pub mod error;
 pub mod events;
 pub mod facts;

@@ -41,6 +41,7 @@ mod device_login;
 mod docker_resources;
 mod edge_security;
 mod elevated_tokens;
+mod endpoints;
 mod environments;
 mod files;
 mod idempotency;
