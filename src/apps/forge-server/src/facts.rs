@@ -130,6 +130,11 @@ fn keep(v: &Value) -> Value {
         // and whether its helper answered at all (after an update).
         "self_update",
         "helper_ok",
+        // Cluster container network (plans/native-mesh.md): the capability,
+        // the Docker version its retry follows, and forge-dns's state.
+        "mesh_network",
+        "docker_version",
+        "forge_dns",
     ] {
         if let Some(x) = v.get(k).filter(|x| !x.is_null()) {
             out.insert(k.to_owned(), x.clone());
@@ -224,5 +229,17 @@ mod tests {
             serde_json::json!({ "supervisor": "systemd", "ready": true, "reasons": [], "helper_version": "1.0.0" });
         let k = keep(&serde_json::json!({ "self_update": cap.clone() }));
         assert_eq!(k["self_update"], cap);
+    }
+
+    /// Found on the lab: stack planning, native containers and the network
+    /// retry read these facts, and dropping them left every node without
+    /// the cluster container network.
+    #[test]
+    fn the_cluster_network_facts_are_kept() {
+        let v = serde_json::json!({ "mesh_network": true, "docker_version": "29.1.0", "forge_dns": "running" });
+        let k = keep(&v);
+        assert_eq!(k["mesh_network"], true);
+        assert_eq!(k["docker_version"], "29.1.0");
+        assert_eq!(k["forge_dns"], "running");
     }
 }
