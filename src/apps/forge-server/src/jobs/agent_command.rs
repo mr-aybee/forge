@@ -395,6 +395,21 @@ impl JobHandler for AgentCommandJob {
                     .await
                     .ok_or_else(|| StepError::Retryable("agent did not respond in time".into()))?;
 
+                // A coded fabric refusal (old or missing Docker for the
+                // container network) is an answer, not a failure: the job
+                // engine keeps no state for failed jobs, and the reconciler
+                // needs the code to stop retrying (plans/native-mesh.md 1.4).
+                let fabric = ctx.job.payload.pointer("/command/type").and_then(Value::as_str) == Some("fabric");
+
+                if !result.ok && fabric && !result.error_code.is_empty() {
+                    ctx.set_state(
+                        "output",
+                        json!({ "refusal": { "code": result.error_code, "message": result.error } }),
+                    );
+
+                    return Ok(());
+                }
+
                 if !result.ok {
                     return Err(StepError::Fatal(format!("agent refused or failed: {}", result.error)));
                 }

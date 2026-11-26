@@ -59,6 +59,21 @@ pub(crate) async fn call(
     Ok(serde_json::from_slice(&bytes).unwrap_or(Value::Null))
 }
 
+/// The Engine's version string, or `None` without a reachable Docker.
+pub async fn engine_version() -> Option<String> {
+    if !Path::new(SOCKET).exists() {
+        return None;
+    }
+
+    match get("/version").await {
+        Ok(v) => v["Version"].as_str().map(str::to_owned),
+        Err(e) => {
+            tracing::debug!(error = %e, "reading the Docker version failed");
+            None
+        }
+    }
+}
+
 pub(crate) async fn get(path: &str) -> Result<Value, String> {
     call("GET", path, None, None, QUICK).await
 }

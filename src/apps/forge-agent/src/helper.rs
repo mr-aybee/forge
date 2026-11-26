@@ -333,6 +333,9 @@ pub struct HelperCapabilities {
     /// Self-update on this host; `None` from older helpers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub self_update: Option<forge_proto::facts::SelfUpdateCapability>,
+    /// Docker Engine version; `None` without Docker or from older helpers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docker_version: Option<String>,
 }
 
 impl HelperResponse {

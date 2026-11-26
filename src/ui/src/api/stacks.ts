@@ -54,6 +54,8 @@ export interface ServiceState {
   image: string;
   exit_code: number | null;
   ports: string;
+  /** Address on the cluster container network; absent when not attached or on older servers. */
+  mesh_ip?: string;
 }
 
 export interface StackNode {
@@ -105,6 +107,8 @@ export interface PreviewService {
   nodes: { server_id: string; hostname: string }[];
   policy: Policy;
   findings: Finding[];
+  /** Joins the cluster container network: true, false or "off (<reason>)". Absent on older servers. */
+  mesh?: boolean | string;
 }
 
 export interface PreviewNode {
@@ -255,6 +259,7 @@ function normState(v: unknown): ServiceState[] {
         image: s(x.image),
         exit_code: typeof x.exit_code === "number" ? x.exit_code : null,
         ports: flat(x.ports),
+        mesh_ip: typeof x.mesh_ip === "string" && x.mesh_ip ? x.mesh_ip : undefined,
       },
     ];
   });
@@ -352,6 +357,7 @@ export function normPreview(v: unknown): Preview | null {
             ? x.policy
             : "allowed",
         findings: normFindings(x.findings),
+        mesh: typeof x.mesh === "boolean" || typeof x.mesh === "string" ? x.mesh : undefined,
       },
     ];
   });

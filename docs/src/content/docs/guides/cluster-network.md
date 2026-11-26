@@ -22,6 +22,9 @@ itself, without Swarm or Kubernetes.
 - On RHEL 8 and some rebuilds, `wireguard-tools` comes from EPEL. The agent
   installs `epel-release` when the first install fails; on RHEL itself, enable
   EPEL first if that is not possible.
+- For the [container network](#container-network), Linux members need Docker
+  Engine 28.0 or newer and an agent that reports the `mesh_network` fact.
+  Nodes without it keep the mesh and run stacks as before.
 
 :::note[Limits]
 Forge connects nodes with an encrypted WireGuard mesh only; there is no
@@ -111,6 +114,64 @@ denial and you can apply again yourself.
 - Healthy nodes are re-checked every 10 minutes, which repairs drift.
 - **Re-sync now** in a node's row menu retries it at once.
 
+## Container network
+
+Once a Linux member's WireGuard part is in sync, Forge gives that node a
+Docker network for its containers. Its subnet is the node's instance block,
+which every peer already routes over the mesh. A container on one node
+reaches a container on another node at its own address, without a published
+port and without address translation.
+
+| Property | Value |
+| --- | --- |
+| Docker network name | `forge-<interface>`, for example `forge-forgea1b2c3` |
+| Bridge device | `fg` + the first 8 characters of the interface, for example `fgforgea1b` |
+| Subnet | The node's instance block (a /24 on a /16 network, a /28 on a /24 network) |
+| MTU | `1420` |
+| Gateway mode | `routed`: no masquerade, no inbound filtering for this network |
+| Labels | `forge.managed=true`, `forge.fabric=<interface>` |
+
+Forge also checks that `net.ipv4.ip_forward` is `1`. If it is not, Forge
+sets it and persists it in `/etc/sysctl.d/90-forge-fabric.conf`.
+
+Every service of a compose stack on that node joins the network in addition
+to its own networks, unless it sets `network_mode` or opts out with
+`x-forge.mesh: false`. See
+[Compose extensions](/docs/reference/compose-extensions/#cluster-network).
+The stack preview shows, per service, whether it joins (the **Mesh** row on
+each service card). In the stack editor and the **Update** dialog, the
+**Cluster network** checkbox writes the stack's top-level `x-forge.mesh`.
+When a node's network is `ok` but a running container has no cluster
+address, the stack page shows **Not on the cluster network** with
+**Redeploy**.
+
+A native service with runtime `container` joins too: after Forge creates
+the container, it connects it to the network as a second network. The
+default bridge and published ports stay as they are. Set `"mesh": false` in
+the [service definition](/docs/reference/cli/services/#service-definition)
+to keep it off. The container's inspect view shows its `mesh_ip`.
+
+The **Container network** column in the **Nodes** table on the **Network**
+page shows the network name, a state badge, `Docker <version>`, and the
+error when the state is `unsupported`. The API reports the same fields:
+
+| Field | Values |
+| --- | --- |
+| `network` | `ok`; `unsupported` (Docker older than 28 or missing); `waiting for a block` (the node has no instance block yet); absent before the first try and on Windows nodes |
+| `network_error` | Why the network is not `ok`, for example `docker 28.0 or newer is needed for the cluster container network (found 27.5.1)` |
+| `docker_version` | The Docker version the node reported |
+
+An `unsupported` node stays **in sync** for WireGuard and is not retried with
+backoff. Forge tries again when the node reports a different Docker version,
+on **Re-sync now**, and on the 10-minute repair pass. Stacks on that node
+deploy without the network.
+
+:::note[Limits]
+The container network exists on Linux members of Default clusters only.
+Swarm clusters and Windows nodes get none. Runtime `service` (systemd)
+services have no container to attach.
+:::
+
 ## Fix an address
 
 Open a node's or service's row menu (or right-click its row) on the
@@ -125,6 +186,17 @@ Open a node's or service's row menu (or right-click its row) on the
 
 To change the subnet, select **Change network**. Changing the subnet
 re-assigns every address that is not fixed.
+
+:::caution
+A new subnet gives every node a new instance block. The node's container
+network cannot move while containers are attached to it, so the network
+step fails on those nodes until you redeploy their stacks. **Change network**
+warns before you save; after you save, it lists the nodes under **Stacks on
+these nodes must be redeployed to move to the new block**. The
+`PUT /api/v1/clusters/<cluster-id>/fabric` response lists them:
+`restarts_containers` is `true` and `redeploy_nodes` names the nodes whose
+container network was up.
+:::
 
 ## Internal names
 
@@ -166,8 +238,10 @@ addresses.
 3. Type the cluster name and select **Remove network**.
 4. If asked, confirm in **Verify it's you**.
 
-Forge takes the interface off every online member and removes the hosts
-block. Offline members keep a dead interface; the toast names them so you
+Forge removes the container network first, then takes the interface off
+every online member and removes the hosts block. A container network that
+still has containers attached is not removed, and its node is reported as
+not cleaned. Offline members keep a dead interface; the toast names them so you
 can remove it by hand. The page then shows **Set up the cluster network**
 again.
 
@@ -182,6 +256,10 @@ answers `{ "not_cleaned": [...] }` with the members it could not clean.
   recent handshake for each peer.
 - From one member, `ping <other-hostname>.<domain>` answers from the other
   node's mesh address.
+- The **Container network** column shows `ok` for each Linux member.
+- On a Linux member with Docker 28 or newer,
+  `docker network inspect forge-<interface>` shows the node's instance block
+  as the subnet.
 
 ## Troubleshooting
 
@@ -192,6 +270,11 @@ answers `{ "not_cleaned": [...] }` with the members it could not clean.
 | **needs attention** | 8 failed attempts in a row | Fix the error shown; Forge keeps retrying every 15 minutes |
 | Two NATed nodes cannot reach each other | No public Linux node to relay | Add a public Linux member, or set a public endpoint with a port forward |
 | Nodes show a permission denial | The person who last applied the network lost access | Select **Re-apply network** yourself |
+| Network `unsupported`, error `docker 28.0 or newer is needed …` | Docker is older than 28 or missing | Upgrade Docker Engine to 28 or newer. Forge retries when the node reports the new version, or select **Re-sync now** |
+| Network `waiting for a block` | The node has no instance block lease | Check the plan has a free block; fix one with **Fix instance block** |
+| **retrying** with `network forge-… has <n> containers on subnet <old>; redeploy stacks to move to <new>` | The subnet changed while containers use the old block | Redeploy the stacks on that node |
+| The preview says `update its agent to put services on the cluster network` | The agent does not report the `mesh_network` fact | [Update the agent](/docs/guides/update-agents/), then redeploy |
+| **Not on the cluster network** on a stack | The stack was deployed before the node's network was `ok` | Select **Redeploy** |
 | The subnet is refused | Not a private IPv4 range between /16 and /24, or it overlaps | Pick another range, or keep the suggestion |
 
 ## Next steps

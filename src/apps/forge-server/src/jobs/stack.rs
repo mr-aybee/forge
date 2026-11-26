@@ -64,6 +64,7 @@ pub struct StackJob {
     pub clusters: Arc<dyn ClusterRepository>,
     pub fabrics: Arc<dyn FabricRepository>,
     pub files: Arc<dyn FileRepository>,
+    pub facts: Arc<dyn forge_core::tags::FactsRepository>,
     pub tenancy: Arc<dyn TenancyRepository>,
     pub stacks: Arc<dyn StackRepository>,
     pub apps: Arc<dyn ServiceRepository>,
@@ -102,6 +103,7 @@ impl StackJob {
             clusters: self.clusters.as_ref(),
             fabrics: self.fabrics.as_ref(),
             files: self.files.as_ref(),
+            facts: self.facts.as_ref(),
         }
     }
 

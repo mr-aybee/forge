@@ -48,6 +48,15 @@ export interface NodeSync {
   public_key?: string | null;
   unreachable?: string[];
   relay?: boolean;
+  /** Container network on the node: "ok", "unsupported" or "waiting for a block". Older servers omit it. */
+  network?: string;
+  network_error?: string;
+  docker_version?: string;
+}
+
+/** Docker name of the cluster container network: `forge-` + the interface name (`forge` + first 6 alphanumerics of the cluster id). */
+export function meshNetworkName(clusterId: string): string {
+  return `forge-forge${clusterId.replace(/[^a-z0-9]/gi, "").slice(0, 6).toLowerCase()}`;
 }
 export interface Suggestion {
   subnet: string;

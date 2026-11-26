@@ -21,7 +21,7 @@ import { errorText, useToast } from "../../app/toast";
 import type { Certificate } from "../ingress/types";
 import { Badge, Button, CopyButton, Field, Input, Modal, Select } from "../ui";
 import { diffLines } from "./diff";
-import { Designer, ServicePicker, YamlEditor, startBlocker, useMfaRetry } from "./parts";
+import { Designer, MeshToggle, ServicePicker, YamlEditor, startBlocker, useMfaRetry } from "./parts";
 import { DiffView } from "./Revisions";
 import { CodeField } from "../CodeField";
 
@@ -96,6 +96,7 @@ export function UpdateDialog({ d, onClose, onSaved }: { d: StackDetail; onClose:
   const [preview, setPreview] = useState<Preview | null>(d.preview);
   const [pvError, setPvError] = useState<string>();
   const [view, setView] = useState<"edit" | "diff" | "preview">("edit");
+  const [docRev, setDocRev] = useState(0);
   const changed = content !== d.content;
   const diff = useMemo(() => (view === "diff" ? diffLines(d.content, content) : []), [view, d.content, content]);
 
@@ -122,8 +123,17 @@ export function UpdateDialog({ d, onClose, onSaved }: { d: StackDetail; onClose:
               {v === "diff" ? `Changes${changed ? "" : " (none)"}` : v}
             </button>
           ))}
+          <span className="ml-auto pr-1">
+            <MeshToggle
+              content={content}
+              onChange={(t) => {
+                setContent(t);
+                setDocRev((k) => k + 1);
+              }}
+            />
+          </span>
         </div>
-        {view === "edit" && <YamlEditor value={d.content} docKey={`upd-${d.stack.id}-${d.stack.revision}`} onChange={setContent} height="h-[42vh]" />}
+        {view === "edit" && <YamlEditor value={content} docKey={`upd-${d.stack.id}-${d.stack.revision}-${docRev}`} onChange={setContent} height="h-[42vh]" />}
         {view === "diff" && <DiffView lines={diff} />}
         {view === "preview" && (preview ? <div className="max-h-[42vh] overflow-y-auto"><Designer preview={preview} /></div> : <p className="text-xs text-muted">No preview.</p>)}
         {pvError && <p role="alert" className="rounded-md bg-bad-soft px-3 py-2 font-mono text-[11.5px] whitespace-pre-wrap text-bad">{pvError}</p>}

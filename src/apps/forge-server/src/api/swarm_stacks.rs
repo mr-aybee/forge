@@ -322,7 +322,7 @@ pub async fn convert(
     caller.authorize(Action::SwarmManage, cluster_ref(id)).await?;
     let details = json!({ "to": req.to.as_str() });
 
-    match state.swarm_stacks.convert(id, req.to).await {
+    match state.swarm_stacks.convert(id, req.to, &principal(&caller)).await {
         Ok(check) => {
             caller.audit(AUDIT_CONVERT, &cluster_ref(id), None, json!({ "from": check.from, "to": check.to })).await;
             Ok(Json(check))

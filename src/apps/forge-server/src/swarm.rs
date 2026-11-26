@@ -565,6 +565,21 @@ impl SwarmService {
         self.rpc(server, principal, op).await.map_err(Into::into)
     }
 
+    /// Runs a fabric operation on one node (conversion removes the cluster
+    /// container network with it).
+    pub async fn fabric_on(
+        &self,
+        server: ServerId,
+        principal: &str,
+        op: &forge_catalog::fabric::FabricOp,
+    ) -> Result<serde_json::Value, RpcError> {
+        op.validate().map_err(RpcError::BadAnswer)?;
+        let op_json = serde_json::to_string(op).map_err(|e| RpcError::BadAnswer(e.to_string()))?;
+        let cmd = Command::FabricAction(forge_proto::messages::FabricAction { op_json });
+
+        self.rpc.call(server, principal, cmd, QUICK).await
+    }
+
     /// One signed swarm command to a node, waiting for its answer.
     async fn rpc(&self, server: ServerId, principal: &str, op: &SwarmOp) -> Result<serde_json::Value, RpcError> {
         let op_json = serde_json::to_string(op).map_err(|e| RpcError::BadAnswer(e.to_string()))?;

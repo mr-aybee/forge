@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError, get, post } from "../../api/client";
 import { useClusters } from "../../api/hooks";
 import { errorText, useToast } from "../../app/toast";
-import { blankFabric, FabricForm, type FabricResponse, type FabricSpec, type Lease, type NodeSync, validSubnet } from "../fabric/FabricForm";
+import { blankFabric, FabricForm, type FabricResponse, type FabricSpec, type Lease, meshNetworkName, type NodeSync, validSubnet } from "../fabric/FabricForm";
 import { PAGE_SIZES, Pager, usePaged } from "../Pager";
 import { Badge, Button, Empty, Field, Input, Modal, SectionBar, Panel, RowMenu, type RowAction, SearchInput, Skeleton, Status, Table, Td, useRowMenu } from "../ui";
 
@@ -30,6 +30,7 @@ export function ClusterNetworkTab({ clusterId }: { clusterId: string }) {
   const [applying, setApplying] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [memberQ, setMemberQ] = useState("");
+  const [redeploy, setRedeploy] = useState<string[]>([]);
 
   const applyNetwork = async () => {
     setApplying(true);
@@ -63,7 +64,9 @@ export function ClusterNetworkTab({ clusterId }: { clusterId: string }) {
   const save = async (nextPins = pins, nextSpec = spec) => {
     setSaving(true);
     try {
-      await api("PUT", `/api/v1/clusters/${clusterId}/fabric`, { spec: nextSpec, pins: nextPins });
+      const r = await api<{ restarts_containers?: boolean; redeploy_nodes?: string[] } | undefined>("PUT", `/api/v1/clusters/${clusterId}/fabric`, { spec: nextSpec, pins: nextPins });
+      const nodes = Array.isArray(r?.redeploy_nodes) ? r.redeploy_nodes.filter((x): x is string => typeof x === "string") : [];
+      setRedeploy(nodes);
       toast("Network saved");
       setEditing(false);
       setPinning(undefined);
@@ -147,7 +150,7 @@ export function ClusterNetworkTab({ clusterId }: { clusterId: string }) {
               </Empty>
             ) : (
               <>
-              <Table head={["Node", "Real address", "Mesh address", "Instance block", "Status", ""]}>
+              <Table head={["Node", "Real address", "Mesh address", "Instance block", "Container network", "Status", ""]}>
                 {memberPage.rows.map((m) => {
                   const a = lease("node", m.id);
                   const b = lease("block", m.id);
@@ -171,6 +174,9 @@ export function ClusterNetworkTab({ clusterId }: { clusterId: string }) {
                         {b?.cidr} {b?.pinned && <Pin className="ml-1 inline size-3 text-accent" />}
                       </Td>
                       <Td>
+                        <ContainerNet st={st} name={meshNetworkName(clusterId)} />
+                      </Td>
+                      <Td>
                         <SyncState st={st} applied={!!data.status?.applied_by} online={m.status === "online"} names={memberName} />
                       </Td>
                       <Td className="text-right">
@@ -181,7 +187,7 @@ export function ClusterNetworkTab({ clusterId }: { clusterId: string }) {
                 })}
                 {!memberRows.length && (
                   <tr>
-                    <Td colSpan={6} className="py-4 text-center text-muted">
+                    <Td colSpan={7} className="py-4 text-center text-muted">
                       No node matches “{memberQ}”.
                     </Td>
                   </tr>
@@ -234,6 +240,16 @@ export function ClusterNetworkTab({ clusterId }: { clusterId: string }) {
 
       <Modal open={editing} onOpenChange={setEditing} title="Change network" description="Changing the subnet re-assigns every address that is not fixed." width={960}>
         <FabricForm value={spec} onChange={setSpec} clusterId={clusterId} clusterName={cluster?.name ?? ""} />
+        {data?.status?.applied_by && data.spec && spec.subnet !== data.spec.subnet && (
+          <p className="mt-3 rounded-md border border-warn/40 bg-warn-soft px-3 py-2 text-[13px]">
+            Changing the subnet moves every node to a new instance block. The container network on each node is recreated, which restarts the containers attached to it. Stacks on those nodes must be redeployed to move to the new block; Forge lists them after you save.
+          </p>
+        )}
+        {data?.status?.applied_by && data.spec && spec.subnet !== data.spec.subnet && (
+          <p className="mt-3 rounded-md border border-warn/40 bg-warn-soft px-3 py-2 text-[13px]">
+            Changing the subnet moves every node to a new instance block. The container network on each node is recreated, which restarts the containers attached to it. Stacks on those nodes must be redeployed to move to the new block; Forge lists them after you save.
+          </p>
+        )}
         <div className="mt-4 flex justify-end gap-2">
           <Button variant="ghost" onClick={() => setEditing(false)}>
             Cancel
@@ -244,6 +260,23 @@ export function ClusterNetworkTab({ clusterId }: { clusterId: string }) {
         </div>
       </Modal>
 
+      {redeploy.length > 0 && (
+        <Modal open onOpenChange={(o) => !o && setRedeploy([])} title="Redeploy stacks" description="Stacks on these nodes must be redeployed to move to the new block.">
+          <ul className="space-y-0.5 text-[13px]">
+            {redeploy.map((id) => (
+              <li key={id} className="truncate font-mono text-xs" title={id}>
+                {memberName(id)}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-muted">Until then their containers keep addresses from the old block and are not reachable over the cluster network.</p>
+          <div className="mt-4 flex justify-end">
+            <Button variant="primary" onClick={() => setRedeploy([])}>
+              Got it
+            </Button>
+          </div>
+        </Modal>
+      )}
       {endpointFor && data?.spec && (
         <EndpointDialog
           name={endpointFor.name}
@@ -284,6 +317,29 @@ export function ClusterNetworkTab({ clusterId }: { clusterId: string }) {
         />
       )}
     </>
+  );
+}
+
+/** The node's Docker container network (cluster mesh) and Docker version. */
+function ContainerNet({ st, name }: { st?: NodeSync; name: string }) {
+  const net = typeof st?.network === "string" ? st.network : "";
+  const docker = typeof st?.docker_version === "string" && st.docker_version ? st.docker_version : "";
+  if (!net && !docker) return <span className="text-faint">—</span>;
+  return (
+    <div className="min-w-0 text-xs">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span className="truncate font-mono text-[11px]" title={name}>
+          {name}
+        </span>
+        {net && <Badge tone={net === "ok" ? "ok" : net === "unsupported" ? "bad" : "warn"}>{net}</Badge>}
+      </div>
+      {net === "unsupported" && st?.network_error && (
+        <div className="truncate text-[11px] text-bad" title={st.network_error}>
+          {st.network_error}
+        </div>
+      )}
+      <div className="font-mono text-[11px] text-muted tabular-nums">{docker ? `Docker ${docker}` : "Docker —"}</div>
+    </div>
   );
 }
 

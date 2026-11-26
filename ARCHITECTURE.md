@@ -371,6 +371,19 @@ address (or loopback) unless marked public. Deployed services register as
 `compose-service` services, which Sites can expose through Nginx. See
 D-058 to D-060.
 
+**Cluster container network.** After a Linux member of a Default cluster's
+fabric is in sync, the reconciler sends `FabricOp::NetworkEnsure`: the root
+helper creates a Docker bridge `forge-<iface>` on the node's instance block
+(MTU 1420, routed gateway mode, `ip_forward` on), so container addresses are
+routed by the existing WireGuard peers with no per-container tunnel. Docker
+older than 28 is an `unsupported` refusal, not a retried failure. The stack
+planner sets `StackPart.mesh_network` only for nodes whose network is `ok`
+and whose agent reports the `mesh_network` fact; the helper then attaches
+services under the reserved key `forge-mesh` after its policy check.
+Native `container` services are connected to the network as a second
+network after create, under the same gate.
+Conversion to Swarm and fabric removal run `NetworkRemove` first. See D-172.
+
 **Release rollouts.** `POST /deployments` parses a `forge.deploy.yaml`
 (YAML 1.2, bounded) into the typed `forge/v1` document, authorizes `deploy`
 on the service (environment for a new one), `server.manage` on nodes added

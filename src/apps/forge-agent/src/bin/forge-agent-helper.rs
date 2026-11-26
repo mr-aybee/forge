@@ -32,8 +32,21 @@ async fn capabilities(container_exec: bool) -> HelperResponse {
     let caps = forge_agent::helper::HelperCapabilities {
         container_exec,
         self_update: forge_agent::self_update::capability().await,
+        docker_version: docker_version().await,
     };
     data(serde_json::to_value(caps).map_err(|e| e.to_string()))
+}
+
+/// The Docker Engine version, for the `docker_version` fact (the server
+/// retries the cluster container network when it changes).
+#[cfg(unix)]
+async fn docker_version() -> Option<String> {
+    forge_agent::docker_ops::engine_version().await
+}
+
+#[cfg(not(unix))]
+async fn docker_version() -> Option<String> {
+    None
 }
 
 fn data(r: Result<serde_json::Value, String>) -> HelperResponse {

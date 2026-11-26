@@ -5956,3 +5956,17 @@ hand.
 **Why.** Users run whole applications on Swarm, not single services. Reusing the compose policy and the stack model keeps one review surface; letting Docker hold secrets avoids a second secret store with its own rotation story.
 
 **Trade-offs.** `docker stack deploy` needs the Docker CLI on managers (it ships with Docker Engine). A CIFS password is kept by Docker in the volume's options on that node. Hash-derived versions of secret variables can leave old versions behind until a prune.
+
+## D-172 Container addresses come from the node's instance block via a routed Docker bridge; no per-container WireGuard; Docker 28 minimum
+
+**Decision.** On every Linux member of a Default cluster whose fabric is in sync, Forge creates one Docker bridge network `forge-<iface>` whose subnet is that node's instance block (already in every peer's `allowed_ips`), with MTU 1420, bridge device `fg<first 8 chars of iface>` and `gateway_mode_ipv4=routed`; `net.ipv4.ip_forward` is enabled and persisted in `/etc/sysctl.d/90-forge-fabric.conf`. Every compose service joins it under the reserved key `forge-mesh` unless it sets `network_mode` or `x-forge.mesh: false` (service or top level). The helper injects the network after its policy check; an external network named like a cluster network is allowed only when it is the node's own.
+
+- **Gate.** The server sets `StackPart.mesh_network` only when the agent reports the capability fact `"mesh_network": true` (missing or unreadable = older agent, plus an Info finding). There is no version constant: agent build versions are not comparable.
+- **Docker 28 minimum.** Routed gateway mode needs Docker 28. An older or missing Docker is an `unsupported` refusal: the node's WireGuard part stays in sync, the network status is `unsupported`, and it is retried only when the `docker_version` fact changes, on **Re-sync now** and on the 10-minute repair pass. Swarm clusters and Windows nodes get no container network.
+- **Native containers.** A runtime `container` service is connected to `forge-<iface>` as a second network after create, under the same gate, unless its spec sets `"mesh": false`; the default bridge and published ports are unchanged.
+- **Subnet change.** The helper refuses to move a network with containers attached; `PUT /clusters/{id}/fabric` returns `restarts_containers` and `redeploy_nodes`.
+- **Conversion and removal.** Default → Swarm removes the network on every Linux member and is refused with `409` naming node and containers when any are still attached (only something outside Forge can be); offline nodes keep their empty network. The fabric stays for Swarm's data path. Swarm → Default needs nothing: the next reconcile recreates it. Fabric removal removes the network first.
+
+**Why.** The mesh already routes each node's block, so a routed bridge gives every container a cluster-reachable address without touching WireGuard peers, NAT or per-container keys, and Docker allocates the addresses.
+
+**Trade-offs.** Docker 28 is required for the feature. There is no filtering between environments on this network. Moving to a new subnet needs a redeploy of the stacks on affected nodes.

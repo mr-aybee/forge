@@ -120,7 +120,8 @@ impl Report {
         Err(b.iter().map(|f| describe(f)).collect::<Vec<_>>().join("\n"))
     }
 
-    fn push(&mut self, service: &str, severity: Severity, message: impl Into<String>) {
+    /// Adds a finding; a `Privileged` one marks the report privileged.
+    pub fn push(&mut self, service: &str, severity: Severity, message: impl Into<String>) {
         if severity == Severity::Privileged {
             self.privileged = true;
         }

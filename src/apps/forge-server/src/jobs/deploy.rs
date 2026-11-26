@@ -268,6 +268,10 @@ impl DeployJob {
             None => in_place_ports(&spec),
         };
 
+        let server: ServerId =
+            t.server_id.parse().map_err(|_| StepError::Fatal(format!("invalid node id `{}`", t.server_id)))?;
+        self.runner.attach_mesh(&r.app, &mut spec, server).await?;
+
         Ok((spec, map))
     }
 

@@ -133,6 +133,12 @@ pub struct AppSpec {
     /// run the service through a manager.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub swarm: Option<crate::swarm_service::SwarmSettings>,
+    /// Container: Docker name of the node's cluster container network to
+    /// connect to (`plans/native-mesh.md` 1.7). Set only for agents that
+    /// report the `mesh_network` fact, because older ones refuse unknown
+    /// fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_network: Option<String>,
 }
 
 impl std::fmt::Debug for AppSpec {
@@ -169,6 +175,7 @@ impl std::fmt::Debug for AppSpec {
             release,
             artifact,
             swarm,
+            mesh_network,
         } = self;
         let env: Vec<String> = env.iter().map(|(k, _)| format!("{k}=***")).collect();
 
@@ -203,6 +210,7 @@ impl std::fmt::Debug for AppSpec {
             // URLs may carry a signed query: the kind only.
             .field("artifact", &artifact.as_ref().map(crate::deploy::ArtifactRef::kind))
             .field("swarm", swarm)
+            .field("mesh_network", mesh_network)
             .finish()
     }
 }
@@ -401,6 +409,16 @@ impl AppSpec {
 
         if !matches!(self.slot.as_str(), "" | "a" | "b") {
             return Err("slot must be a or b".into());
+        }
+
+        if let Some(net) = &self.mesh_network {
+            let ok = net.starts_with("forge-forge")
+                && net.len() <= 64
+                && net.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+
+            if !ok || self.runtime != Runtime::Container {
+                return Err("mesh_network must be a cluster container network of a container".into());
+            }
         }
 
         if self.release.len() > 12 || !self.release.bytes().all(|b| b.is_ascii_digit()) {
@@ -837,6 +855,7 @@ mod tests {
             release: String::new(),
             artifact: None,
             swarm: None,
+            mesh_network: None,
             log_max_mb: 0,
         }
     }

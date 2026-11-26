@@ -46,7 +46,13 @@ fn sha256(s: &str) -> String {
 }
 
 fn deps(state: &AppState) -> Deps<'_> {
-    Deps { servers: &state.store, clusters: &state.store, fabrics: &state.store, files: &state.store }
+    Deps {
+        servers: &state.store,
+        clusters: &state.store,
+        fabrics: &state.store,
+        files: &state.store,
+        facts: &state.store,
+    }
 }
 
 pub(super) async fn load(state: &AppState, id: StackId) -> ApiResult<Stack> {

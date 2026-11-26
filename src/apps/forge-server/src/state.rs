@@ -398,6 +398,8 @@ impl Services {
             envelope: envelope.clone(),
             clock: clock.clone(),
             deploys: Arc::new(store.clone()),
+            fabrics: Arc::new(store.clone()),
+            facts: Arc::new(store.clone()),
         });
         registry.register(app_job.clone());
         let registries = Arc::new(crate::registries::RegistryService {
@@ -548,6 +550,7 @@ impl Services {
             clusters: Arc::new(store.clone()),
             fabrics: Arc::new(store.clone()),
             files: Arc::new(store.clone()),
+            facts: Arc::new(store.clone()),
             tenancy: Arc::new(store.clone()),
             stacks: Arc::new(store.clone()),
             apps: Arc::new(store.clone()),

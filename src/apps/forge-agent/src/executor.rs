@@ -157,6 +157,7 @@ impl CommandExecutor for LocalExecutor {
                 // with `mesh_network`, `NetworkEnsure`/`NetworkRemove`
                 // (plans/native-mesh.md). Older agents omit it.
                 "mesh_network": cfg!(unix),
+                "docker_version": caps.docker_version,
                 "helper_ok": helper_ok,
                 }))
             }

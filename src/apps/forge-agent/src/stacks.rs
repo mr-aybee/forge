@@ -333,11 +333,7 @@ pub fn add_mesh_addresses(rows: &mut [Value], containers: &Value) {
             row["number"] = json!(n);
         }
 
-        let nets = c.pointer("/NetworkSettings/Networks").and_then(Value::as_object);
-        let mesh = nets.into_iter().flatten().find(|(k, _)| k.starts_with("forge-forge"));
-        let ip = mesh.and_then(|(_, v)| v["IPAddress"].as_str()).filter(|ip| !ip.is_empty());
-
-        if let Some(ip) = ip {
+        if let Some(ip) = crate::docker::mesh_ip(c.pointer("/NetworkSettings/Networks")) {
             row["mesh_ip"] = json!(ip);
         }
     }
