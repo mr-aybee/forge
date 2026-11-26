@@ -362,7 +362,16 @@ impl AppJob {
             return Ok(());
         }
 
-        if crate::stacks::node_caps(self.facts.as_ref(), server).await.container_options {
+        // A failed read or a node that has not reported facts yet (just
+        // enrolled or updated) is retried; only facts without the flag mean
+        // an older agent.
+        let facts = self.facts.facts_of(server).await.map_err(retry)?;
+
+        let Some((facts, _)) = facts else {
+            return Err(retry("the node has not reported its facts yet"));
+        };
+
+        if facts.get("container_options").and_then(Value::as_bool) == Some(true) {
             return Ok(());
         }
 

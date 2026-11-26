@@ -907,9 +907,13 @@ impl AppSpec {
             RestartPolicy::OnFailure => "Restart=on-failure\nRestartSec=3\n".to_owned(),
         };
 
-        // systemd counts restarts in a window: one day stands in for "ever".
+        // systemd counts every start in a window, the first one included,
+        // so n restarts need a burst of n + 1; one day stands in for "ever".
+        // The agent resets the count before each deploy and operator start.
         let start_limit = match (self.effective_restart(), self.restart_max_attempts) {
-            (RestartPolicy::OnFailure, n) if n > 0 => format!("StartLimitIntervalSec=86400\nStartLimitBurst={n}\n"),
+            (RestartPolicy::OnFailure, n) if n > 0 => {
+                format!("StartLimitIntervalSec=86400\nStartLimitBurst={}\n", n.saturating_add(1))
+            }
             _ => String::new(),
         };
 
@@ -944,7 +948,7 @@ mod tests {
 
         let unit = s.service_unit("staging-api");
         assert!(unit.contains("Restart=on-failure"), "{unit}");
-        assert!(unit.contains("StartLimitBurst=4"), "{unit}");
+        assert!(unit.contains("StartLimitBurst=5"), "{unit}");
     }
 
     #[test]

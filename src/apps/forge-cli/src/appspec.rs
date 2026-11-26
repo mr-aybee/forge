@@ -348,17 +348,24 @@ pub fn apply(body: &mut Value, changes: Changes<'_>) -> Result<()> {
         b.insert("listen_port".into(), json!(p));
     }
 
-    if let Some(r) = f.restart {
-        b.insert("restart".into(), json!(r));
-    }
+    // `--restart` alone sets the matching policy: a stored policy would
+    // otherwise win over the flag on the server.
+    let policy =
+        f.restart_policy.or(f.restart.map(|r| if r { RestartPolicy::UnlessStopped } else { RestartPolicy::No }));
 
-    if let Some(p) = f.restart_policy {
+    if let Some(p) = policy {
         b.insert("restart_policy".into(), json!(p.as_str()));
         b.insert("restart".into(), json!(p != RestartPolicy::No));
     }
 
     if let Some(n) = f.restart_max_attempts {
         b.insert("restart_max_attempts".into(), json!(n));
+    }
+
+    // Attempts apply to on-failure only; a stored count would make the
+    // server refuse a policy the user just changed.
+    if b.get("restart_policy").and_then(Value::as_str) != Some("on-failure") {
+        b.remove("restart_max_attempts");
     }
 
     for (key, list) in [("cap_add", &f.cap_add), ("cap_drop", &f.cap_drop), ("dns", &f.dns), ("networks", &f.networks)]
@@ -497,7 +504,7 @@ mod tests {
             body,
             json!({
                 "environment_id": "ns-1", "name": "web", "runtime": "container", "image": "nginx:1.27",
-                "ports": ["8080:80"], "restart": false,
+                "ports": ["8080:80"], "restart": false, "restart_policy": "no",
                 "volumes": ["/srv/forge/apps/shop-prod/web/html:/usr/share/nginx/html:ro"],
                 "env": [
                     { "key": "MODE", "value": "prod" },
@@ -574,6 +581,32 @@ mod tests {
         assert_eq!(body["tmpfs"], json!([{ "target": "/tmp", "size_mb": 64 }, { "target": "/run", "size_mb": 0 }]));
         assert_eq!((&body["init"], &body["networks"]), (&json!(true), &json!(["backend"])));
         assert!(parse_tmpfs("/tmp:big").is_err());
+    }
+
+    #[test]
+    fn restart_flags_override_a_stored_policy() {
+        let stored = json!({ "runtime": "systemd", "spec": { "restart": true, "restart_policy": "on-failure",
+                             "restart_max_attempts": 3 }, "env": [] });
+
+        // `--restart false` must stop restarts, not leave the stored policy in charge.
+        let mut body = definition(&stored);
+        let off = AppFlags { restart: Some(false), ..AppFlags::default() };
+        assert!(apply(&mut body, Changes::of(&off)).is_ok());
+        assert_eq!((&body["restart_policy"], &body["restart"]), (&json!("no"), &json!(false)));
+        assert!(body.get("restart_max_attempts").is_none(), "attempts dropped with on-failure");
+
+        // Another policy drops the stored attempts the server would refuse.
+        let mut body = definition(&stored);
+        let always = AppFlags { restart_policy: Some(RestartPolicy::Always), ..AppFlags::default() };
+        assert!(apply(&mut body, Changes::of(&always)).is_ok());
+        assert_eq!(body["restart_policy"], "always");
+        assert!(body.get("restart_max_attempts").is_none());
+
+        // Unrelated flags keep a stored on-failure count.
+        let mut body = definition(&stored);
+        let image = AppFlags { command: Some("/usr/bin/true".into()), ..AppFlags::default() };
+        assert!(apply(&mut body, Changes::of(&image)).is_ok());
+        assert_eq!(body["restart_max_attempts"], 3);
     }
 
     #[test]
