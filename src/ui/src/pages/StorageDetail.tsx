@@ -11,7 +11,6 @@ import { AccessKeys } from "../components/storage/AccessKeys";
 import { BucketGrants, grantAccessLabel } from "../components/storage/BucketGrants";
 import { ObjectExplorer } from "../components/storage/ObjectExplorer";
 import { providerLabel } from "../components/storage/StoreDialogs";
-import { StoreSettingsDialog } from "../components/storage/StoreSettings";
 import { ChangeEnvironmentDialog, StoreOwner } from "../components/storage/StoreOwner";
 import { type ActionTone, Badge, Button, actionHover, Confirm, CopyButton, Drawer, Empty, ErrorNote, Field, IconButton, Input, Modal, Panel, Skeleton, Status, Table, Td, ago, time, toMs } from "../components/ui";
 import { AdoptedBadge, CapacityCell, ModeBadge } from "./Storage";
@@ -72,7 +71,6 @@ function Detail({ s }: { s: ObjectStore }) {
   const [jobId, setJobId] = useState<string | null>(null);
   const [bucket, setBucket] = useState<string | null>(null);
   const [assigning, setAssigning] = useState(false);
-  const [settings, setSettings] = useState(false);
   // Through bucket grants only: what the person may do differs per bucket.
   const mine = useMyBucketGrants(s.by_grant);
   const held = (mine.data ?? []).filter((g) => g.store_id === s.id);
@@ -238,7 +236,7 @@ function Detail({ s }: { s: ObjectStore }) {
                   {a.label}
                 </Button>
               ))}
-              <Button title={busyWhy ?? (adopted ? "Adopted stores keep the container they were created with" : "Release, ports, region and Docker options")} disabled={busy} onClick={() => setSettings(true)}>
+              <Button title={busyWhy ?? (adopted ? "Adopted stores keep the container they were created with" : "Release, ports, region and Docker options")} disabled={busy} onClick={() => void navigate({ to: "/storage/$storeId/settings", params: { storeId: s.id } })}>
                 <Settings2 className="size-4" /> Settings
               </Button>
               <Button variant="danger" title={busyWhy ?? (adopted ? "Remove the forge-rustfs container; data and credential are kept" : "Remove the service; data and credential are kept")} disabled={busy || act.isPending} onClick={() => setConfirm("uninstall")}>
@@ -351,7 +349,6 @@ function Detail({ s }: { s: ObjectStore }) {
       {!s.limited && <BucketGrants s={s} />}
 
       {assigning && <ChangeEnvironmentDialog store={s} onClose={() => setAssigning(false)} />}
-      {managed && <StoreSettingsDialog s={s} open={settings} onOpenChange={setSettings} />}
       <Confirm
         open={!!confirm}
         onOpenChange={(o) => !o && setConfirm(null)}

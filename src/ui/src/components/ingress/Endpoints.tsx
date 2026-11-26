@@ -8,7 +8,7 @@ import {
   Trash2,
   Undo2,
 } from "lucide-react";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { useClusters, useServers } from "../../api/hooks";
@@ -41,7 +41,6 @@ import {
   useRowMenu,
 } from "../ui";
 import { EndpointDialog } from "./EndpointDialog";
-import { EndpointEditor } from "./EndpointEditor";
 import { CertChip, placementLabel } from "./EndpointParts";
 
 type Pending = { site: Site; what: "remove" | "delete" };
@@ -68,12 +67,14 @@ export function Endpoints({
   const rm = useRowMenu();
   const [ui, setUi] = useState<{
     filter: string;
-    editing?: string;
     creating: boolean;
     pending?: Pending;
     busy?: string;
   }>({ filter: defaultFilter, creating: false });
   const patch = (p: Partial<typeof ui>) => setUi((u) => ({ ...u, ...p }));
+  const navigate = useNavigate();
+  const edit = (siteId: string) =>
+    void navigate({ to: "/ingress/endpoints/$siteId", params: { siteId } });
   const host = (id: string) =>
     nodes.find((n) => n.id === id)?.hostname ?? id.slice(0, 8);
   const clusterName = (id: string) =>
@@ -200,7 +201,7 @@ export function Endpoints({
                 {
                   label: "Edit",
                   icon: Pencil,
-                  onSelect: () => patch({ editing: s.id }),
+                  onSelect: () => edit(s.id),
                 },
                 {
                   label: busy ? "Working…" : "Apply to edges",
@@ -302,7 +303,7 @@ export function Endpoints({
                     <button
                       type="button"
                       className="block max-w-full truncate font-mono text-[11px] text-faint hover:text-accent"
-                      onClick={() => patch({ editing: s.id })}
+                      onClick={() => edit(s.id)}
                       title={`Edit ${s.name}`}
                     >
                       {s.name}
@@ -382,13 +383,10 @@ export function Endpoints({
         <EndpointDialog
           clusterId={scope}
           onClose={() => patch({ creating: false })}
-          onCreated={(s) => patch({ creating: false, editing: s.id })}
-        />
-      )}
-      {ui.editing && (
-        <EndpointEditor
-          siteId={ui.editing}
-          onClose={() => patch({ editing: undefined })}
+          onCreated={(s) => {
+            patch({ creating: false });
+            edit(s.id);
+          }}
         />
       )}
       {ui.pending && (

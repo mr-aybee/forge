@@ -6,7 +6,7 @@ import { ApiError } from "../api/client";
 import { isAdopted, storeBusy, useObjectStores, useStoreAction } from "../api/storage";
 import { errorText, useToast } from "../app/toast";
 import type { ObjectStore } from "../api/types";
-import { AdoptStoreDialog, ConnectStoreDialog, InstallStoreDialog, RemoveStoreDialog, providerLabel } from "../components/storage/StoreDialogs";
+import { AdoptStoreDialog, ConnectStoreDialog, RemoveStoreDialog, providerLabel } from "../components/storage/StoreDialogs";
 import { FoundOnNodes } from "../components/storage/FoundOnNodes";
 import { ChangeEnvironmentDialog, StoreOwner } from "../components/storage/StoreOwner";
 import { Badge, Button, Confirm, Empty, ErrorNote, PageHeader, Panel, RowMenu, type RowAction, SearchInput, Skeleton, Status, Table, Td, bytes, useRowMenu } from "../components/ui";
@@ -73,7 +73,6 @@ export function Storage() {
   const [disconnecting, setDisconnecting] = useState<ObjectStore | null>(null);
   const [assigning, setAssigning] = useState<ObjectStore | null>(null);
   const [q, setQ] = useState("");
-  const [installing, setInstalling] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [adopting, setAdopting] = useState(false);
 
@@ -134,7 +133,7 @@ export function Storage() {
       <Button onClick={() => setConnecting(true)}>
         <Cable className="size-4" /> Connect existing
       </Button>
-      <Button variant="primary" onClick={() => setInstalling(true)}>
+      <Button variant="primary" onClick={() => void navigate({ to: "/storage/install" })}>
         <Plus className="size-4" /> Install RustFS
       </Button>
     </>
@@ -265,7 +264,6 @@ export function Storage() {
         {rm.menu}
       </Panel>
       {!missing && <FoundOnNodes />}
-      <InstallStoreDialog open={installing} onOpenChange={setInstalling} />
       <RemoveStoreDialog store={removing} onOpenChange={(o) => !o && setRemoving(null)} />
       <Confirm
         open={!!disabling}

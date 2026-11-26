@@ -34,6 +34,7 @@ npm run build      # dist/ — serve with ui_dir in forge.toml
 | `src/components/service-editor/` | The service editor used by **New service** (`/services/new`) and the **Configuration** tab: kind cards (**Container**, **Systemd**), one section component per card, the sticky section rail with its status marks (`StatusMark`, `sections.ts`) and the compose YAML mapping (`yaml.ts`) |
 | `src/components/service/` | The service page's **Overview** tab: `ServiceStatusStrip` (replicas, last deploy, endpoint, log ingest keys), `ServiceNodes` (one compact line per node with chips, **Logs** and a ⋯ / right-click menu, **Add node**) and `ServiceSummary` (definition and **On the node**, long values wrapped in full with copy buttons) |
 | `src/components/PlacementDialog.tsx` | Replica or standby choice when a service is placed on a further node; checks Docker Engine for container services |
+| `src/components/FormPage.tsx` | Full-page form layout: `FormPage`, `FormSection`, `ChoiceCards`, `FieldError`, `SummaryPanel`/`SummaryRow` and the `TILE` icon tones. Used by `/storage/install`, `/storage/<id>/settings` and the ingress endpoint editor (`/ingress/endpoints/<id>`) |
 | `src/components/ingress/` | `types.ts` (Site, SiteSpec, Balance labels), `sites.ts` (`useSites`, never throws; `sitesForApp`, `fanOut`), `EndpointDialog.tsx` (the endpoint editor, shared by the Ingress page and **Expose through ingress** on a service, takes `initial`), `ServiceRoutes.tsx` (the service page's Routes block), `Routing.tsx` (replica / standby chips) |
 | `src/components/feed/Feed.tsx`, `src/components/filters/`, `src/components/charts/StackedHistogram.tsx` | Shared feed pieces for **Logs**, **Audit log** and key/value detail grids: `Meta`/`MetaGrid` (`wrap` shows long values in full), `FeedTail`, `QueryInput`, `TimeRange`, `CheckDropdown`, `StackedHistogram` |
 | `src/components/containers/` | `ContainerLogs` (tail, filter, follow live; shared by the container page and the node's Containers tab), `owner.ts` (maps a container to its Forge service or stack from its name or compose labels) and `OwnerLink` |
@@ -120,10 +121,19 @@ item, extend the test in `tests/it/console_access.rs` and document the field.
   `menu` once. The browser menu stays on links, form fields and selected text.
 - Disabled actions say why: `title` on buttons, `hint` on `RowAction`.
 - Large create forms are pages, not modals (`/stacks/new`,
-  `/stacks/new-container`, `/services/new`): a `PageCrumb` back link,
-  `PageHeader`, the form, and an `ActionBar` with Cancel and the submit
+  `/stacks/new-container`, `/services/new`, `/storage/install`,
+  `/storage/<id>/settings`, `/ingress/endpoints/<id>`): a `PageCrumb` back
+  link, `PageHeader`, the form, and an `ActionBar` with Cancel and the submit
   button. Preselect through search parameters (`?node=`, `?environment=`).
-  Keep `Modal` for short forms and confirmations.
+  Keep `Modal` for short forms (under about 8 fields) and confirmations.
+- New sectioned forms use `components/FormPage.tsx`: `FormPage` (crumb,
+  header, sticky section nav with an ok/error state per section, optional
+  live `SummaryPanel`, `ActionBar`; one column at 720px and below),
+  `FormSection` (tinted icon tile from `TILE`, title, one plain sentence),
+  `ChoiceCards` for key either/or choices instead of a bare select, and
+  `FieldError` for the message beside a field. Rare options go under an
+  **Advanced** `<details>`. After submit, the page shows the job
+  (`InstallJobs`/`JobDetail`) instead of closing.
 - The sidebar is always the fleet navigation. A per-cluster view is a filter
   (`/nodes?cluster=<id>`, `/services?cluster=<id>`, `/ingress?cluster=<id>`)
   or a tab of the cluster page (`/clusters/<id>?tab=overview|network|containers`),

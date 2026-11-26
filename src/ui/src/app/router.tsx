@@ -65,11 +65,31 @@ export const INGRESS_VIEWS = ["list", "cluster"] as const;
 export interface IngressSearch {
   cluster?: string;
   view?: (typeof INGRESS_VIEWS)[number];
+  /** Routing tab filters: text, rule kind, edge node id, placement, TLS, status. */
+  rq?: string;
+  rkind?: (typeof ROUTE_KINDS)[number];
+  redge?: string;
+  rplace?: (typeof ROUTE_PLACES)[number];
+  rtls?: (typeof ROUTE_TLS)[number];
+  rstatus?: (typeof ROUTE_STATUS)[number];
 }
+export const ROUTE_KINDS = ["proxy", "balancer", "redirect", "static"] as const;
+export const ROUTE_PLACES = ["nodes", "cluster"] as const;
+export const ROUTE_TLS = ["on", "off"] as const;
+export const ROUTE_STATUS = ["healthy", "degraded", "down"] as const;
 const ingress = createRoute({
   getParentRoute: parent,
   path: "/ingress",
-  validateSearch: (s: Record<string, unknown>): IngressSearch => ({ cluster: optStr(s.cluster), view: optOneOf(s.view, INGRESS_VIEWS) }),
+  validateSearch: (s: Record<string, unknown>): IngressSearch => ({
+    cluster: optStr(s.cluster),
+    view: optOneOf(s.view, INGRESS_VIEWS),
+    rq: optStr(s.rq),
+    rkind: optOneOf(s.rkind, ROUTE_KINDS),
+    redge: optStr(s.redge),
+    rplace: optOneOf(s.rplace, ROUTE_PLACES),
+    rtls: optOneOf(s.rtls, ROUTE_TLS),
+    rstatus: optOneOf(s.rstatus, ROUTE_STATUS),
+  }),
   component: lazyRouteComponent(() => import("../pages/Ingress"), "Ingress"),
 });
 const dns = createRoute({ getParentRoute: parent, path: "/dns", component: lazyRouteComponent(() => import("../pages/Dns"), "Dns") });
@@ -280,6 +300,9 @@ const storage = createRoute({
     show: s.show === "all" ? "all" : undefined,
   }),
   component: lazyRouteComponent(() => import("../pages/Storage"), "Storage") });
+const ingressEndpoint = createRoute({ getParentRoute: parent, path: "/ingress/endpoints/$siteId", component: lazyRouteComponent(() => import("../pages/IngressEndpoint"), "IngressEndpoint") });
+const storageInstall = createRoute({ getParentRoute: parent, path: "/storage/install", component: lazyRouteComponent(() => import("../pages/StorageInstall"), "StorageInstall") });
+const storageSettings = createRoute({ getParentRoute: parent, path: "/storage/$storeId/settings", component: lazyRouteComponent(() => import("../pages/StorageSettings"), "StorageSettings") });
 const storageDetail = createRoute({ getParentRoute: parent, path: "/storage/$storeId", component: lazyRouteComponent(() => import("../pages/StorageDetail"), "StorageDetail") });
 const jobs = createRoute({ getParentRoute: parent, path: "/jobs", component: lazyRouteComponent(() => import("../pages/Jobs"), "Jobs") });
 /** `/audit` filters; parsed into an `AuditFilter` by `parseAuditSearch`. */
@@ -438,6 +461,7 @@ const routeTree = rootRoute.addChildren([
   newService,
   service,
   ingress,
+  ingressEndpoint,
   dns,
   alerts,
   logs,
@@ -456,6 +480,8 @@ const routeTree = rootRoute.addChildren([
   installed,
   updates,
   storage,
+  storageInstall,
+  storageSettings,
   storageDetail,
   jobs,
   audit,
