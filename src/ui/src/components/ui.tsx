@@ -313,10 +313,14 @@ export function PageCrumb({ back, current }: { back: ReactNode; current: string 
   );
 }
 
-/** Sticky action bar at the bottom of a full-page form: a note on the left, buttons on the right. */
+/**
+ * Sticky action bar at the bottom of a full-page form: a note on the left, buttons on the right.
+ * `-bottom-5` cancels `<main>`'s bottom padding (`py-5`), which sticky positioning keeps clear,
+ * so the bar sits flush with the bottom edge with no content showing below it.
+ */
 export function ActionBar({ note, children }: { note?: ReactNode; children: ReactNode }) {
   return (
-    <div className="sticky bottom-0 z-10 -mx-4 mt-4 -mb-5 flex flex-wrap items-center justify-end gap-2 border-t border-line bg-bg/95 px-4 py-2.5 backdrop-blur md:-mx-6 md:px-6">
+    <div className="sticky -bottom-5 z-10 -mx-4 mt-4 -mb-5 flex flex-wrap items-center justify-end gap-2 border-t border-line bg-bg/95 px-4 py-2.5 backdrop-blur md:-mx-6 md:px-6">
       {note && <span className="mr-auto min-w-0 text-[11px] text-faint">{note}</span>}
       {children}
     </div>
@@ -959,8 +963,9 @@ export function UnsavedBar({
   const blocker = useBlocker({ shouldBlockFn: ({ current, next }) => dirty && current.pathname !== next.pathname, enableBeforeUnload: () => dirty, withResolver: true });
   return (
     <>
+      {/* `-bottom-5` cancels `<main>`'s bottom padding so the bar sits on the bottom edge, as ActionBar does */}
       {dirty && (
-        <div role="region" aria-label="Unsaved changes" className="bar-in sticky bottom-2 z-20 mt-3 flex flex-wrap items-center justify-end gap-2 rounded-lg border border-line-strong bg-panel/95 px-3 py-1.5 shadow-[var(--shadow-pop)] backdrop-blur">
+        <div role="region" aria-label="Unsaved changes" className="bar-in sticky -bottom-5 z-20 mt-3 flex flex-wrap items-center justify-end gap-2 rounded-t-lg border border-b-0 border-line-strong bg-panel/95 px-3 py-1.5 shadow-[var(--shadow-pop)] backdrop-blur">
           <span className="mr-auto flex min-w-0 items-center gap-2 text-xs">
             <span className="size-1.5 shrink-0 rounded-full bg-warn" aria-hidden />
             <span className="font-medium">Unsaved changes</span>
