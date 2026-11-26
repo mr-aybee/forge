@@ -86,6 +86,6 @@ mod tests {
         assert_eq!(action_for(&DockerOp::VolumePrune {}), Action::VolumeManage);
         assert_eq!(action_for(&DockerOp::NetworkRemove { id: "app".into() }), Action::NetworkManage);
         assert!(is_slow(&DockerOp::ImagePull { image: "nginx".into(), registry_auth: None }));
-        assert!(!is_slow(&DockerOp::VolumeCreate { name: "data".into(), labels: Default::default() }));
+        assert!(!is_slow(&DockerOp::VolumeCreate { name: "data".into(), labels: Default::default(), remote: None }));
     }
 }

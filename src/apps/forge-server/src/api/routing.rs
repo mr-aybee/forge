@@ -152,6 +152,15 @@ impl Resolver {
                 let slots = forge_core::deploy::DeploymentRepository::list_slots(&state.store, id).await?;
                 let mut out = Vec::new();
 
+                // A Swarm service without slots: the routing mesh answers on
+                // every node of the swarm (D-171).
+                if slots.is_empty()
+                    && let Some(app) = state.store.get_service(id).await?
+                    && let Some(cluster) = state.swarm.swarm_of_environment(app.environment_id).await?
+                {
+                    return self.swarm_upstreams(state, cluster, *port, standby).await;
+                }
+
                 for i in state.store.list_instances(id).await? {
                     let sid = i.server_id.to_string();
                     let Some(host) = self.addr(&sid) else { continue };
@@ -186,6 +195,10 @@ impl Resolver {
 
                 Ok(out)
             }
+            Target::Swarm { cluster_id, port, .. } => {
+                let cluster: ClusterId = cluster_id.parse().map_err(|_| ApiError::bad_request("invalid cluster id"))?;
+                self.swarm_upstreams(state, cluster, *port, standby).await
+            }
             other => {
                 let a = other.resolve(|id| self.addr(id)).map_err(ApiError::bad_request)?;
 
@@ -197,6 +210,37 @@ impl Resolver {
                 Ok(vec![Upstream { address: a, standby, server_id, state: None, weight: 100 }])
             }
         }
+    }
+
+    /// Every joined node of the cluster's swarm at `port`: the routing mesh
+    /// answers there whichever node runs the tasks.
+    async fn swarm_upstreams(
+        &self,
+        state: &AppState,
+        cluster: ClusterId,
+        port: u16,
+        standby: bool,
+    ) -> ApiResult<Vec<Upstream>> {
+        if port == 0 {
+            return Err(ApiError::bad_request("port must be 1–65535"));
+        }
+
+        let members = forge_core::swarm::SwarmRepository::list_members(&state.store, cluster).await?;
+        let mut out = Vec::new();
+
+        for m in members.into_iter().filter(|m| m.state == forge_core::swarm::MemberState::Joined) {
+            let sid = m.server_id.to_string();
+            let Some(host) = self.addr(&sid) else { continue };
+            out.push(Upstream {
+                address: host_port(&host, port),
+                standby,
+                server_id: Some(sid),
+                state: None,
+                weight: 100,
+            });
+        }
+
+        Ok(out)
     }
 
     /// `(active, standby)` upstream lists for Nginx.
@@ -225,6 +269,12 @@ impl Resolver {
                     return Err(ApiError::bad_request(format!(
                         "service {service_id} is not placed on any node yet; deploy it first"
                     )));
+                }
+
+                if ups.is_empty()
+                    && let Target::Swarm { .. } = t
+                {
+                    return Err(ApiError::bad_request("the swarm has no joined node yet"));
                 }
 
                 for u in ups {
@@ -331,6 +381,9 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Path(id): Path<C
                         (format!("{}:{port}", servers.get(server_id).cloned().unwrap_or_default()), None)
                     }
                     Target::External { address } => (address.clone(), None),
+                    Target::Swarm { service, port, .. } => {
+                        (format!("{} (swarm :{port})", service.clone().unwrap_or_else(|| "routing mesh".into())), None)
+                    }
                 };
 
                 let ups = r.expand(&state, &t, standby).await.unwrap_or_default();

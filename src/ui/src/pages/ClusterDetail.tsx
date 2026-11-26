@@ -6,10 +6,11 @@ import { Boxes, Container, Gauge, Network, Pencil, Plus, Server, UserMinus } fro
 import { useState } from "react";
 
 import { useServices, useAssignServer, useClusters, useOnboardingNodes, useServers } from "../api/hooks";
-import type { ClusterTab } from "../app/router";
+import type { ClusterTab, SwarmSection } from "../app/router";
 import { ClusterContainersTab } from "../components/cluster/ClusterContainersTab";
 import { ClusterNetworkTab } from "../components/cluster/ClusterNetworkTab";
 import { ClusterSwarmTab } from "../components/cluster/ClusterSwarmTab";
+import { ConvertDialog } from "../components/swarm/ConvertDialog";
 import { errorText, useToast } from "../app/toast";
 import { emptyNodeFilter, NodeList, type NodeFilter } from "../components/NodeList";
 import { useLatestMetrics } from "../components/NodeTable";
@@ -22,7 +23,9 @@ import { ClusterForm } from "./Clusters";
 export function ClusterDetail() {
   const { clusterId } = useParams({ strict: false }) as { clusterId: string };
   const navigate = useNavigate();
-  const { tab = "overview" } = useSearch({ from: "/clusters/$clusterId" });
+  const { tab = "overview", section = "overview" } = useSearch({ from: "/clusters/$clusterId" });
+  const setSection = (sec: SwarmSection) =>
+    void navigate({ to: "/clusters/$clusterId", params: { clusterId }, search: { tab: "swarm", section: sec === "overview" ? undefined : sec }, replace: true });
   const setTab = (t: string) =>
     void navigate({ to: "/clusters/$clusterId", params: { clusterId }, search: { tab: t === "overview" ? undefined : (t as ClusterTab) }, replace: true });
   const services = useServices(undefined, clusterId);
@@ -34,6 +37,7 @@ export function ClusterDetail() {
   const assign = useAssignServer();
   const toast = useToast();
   const [editing, setEditing] = useState(false);
+  const [converting, setConverting] = useState(false);
   const [adding, setAdding] = useState("");
   const [filter, setFilter] = useState<NodeFilter>(() => emptyNodeFilter());
 
@@ -96,6 +100,16 @@ export function ClusterDetail() {
             <Button onClick={() => setEditing(true)}>
               <Pencil className="size-4" /> Edit
             </Button>
+            {cluster.mode !== "swarm" && (
+              <Button onClick={() => setConverting(true)} title="Check this cluster and convert it to Docker Swarm mode">
+                <Boxes className="size-4" /> Convert to Swarm
+              </Button>
+            )}
+            {cluster.mode !== "swarm" && (
+              <Button onClick={() => setConverting(true)} title="Check this cluster and convert it to Docker Swarm mode">
+                <Boxes className="size-4" /> Convert to Swarm
+              </Button>
+            )}
             <Button
               variant="primary"
               onClick={() =>
@@ -142,7 +156,7 @@ export function ClusterDetail() {
         </Tabs.Content>
         {cluster.mode === "swarm" && (
           <Tabs.Content value="swarm">
-            <ClusterSwarmTab clusterId={clusterId} />
+            <ClusterSwarmTab clusterId={clusterId} environmentId={cluster.environment_id} section={section} onSection={setSection} />
           </Tabs.Content>
         )}
         <Tabs.Content value="overview">
@@ -253,6 +267,7 @@ export function ClusterDetail() {
       />
         </Tabs.Content>
       </Tabs.Root>
+      {converting && <ConvertDialog clusterId={cluster.id} clusterName={cluster.name} to="swarm" onClose={() => setConverting(false)} />}
       <Modal open={editing} onOpenChange={setEditing} title="Edit cluster">
         <ClusterForm initial={cluster} onDone={() => setEditing(false)} />
       </Modal>

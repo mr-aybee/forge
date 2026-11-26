@@ -5939,3 +5939,20 @@ silently overwritten, but Forge cannot change keys while RustFS is down.
 Bucket grants for people (D-108) are unchanged: they stay Forge-level and never
 issue S3 credentials. Named volumes left after an uninstall must be removed by
 hand.
+
+## D-171 Docker Swarm end to end: stacks, secrets, shared network, mesh addresses, conversion
+
+**Decision.** Swarm clusters get the rest of what Swarm offers, driven through the same signed `SwarmOp` set (D-154):
+
+- **Stacks.** A compose stack whose environment is in a Swarm cluster is deployed as one `docker stack deploy` on a manager (`swarm.stack` job), not per node. The stack keeps its row, revisions and sealed `.env`; `POST /stacks/{id}/deploy` and `/down` route there. The compose policy is the same `forge_catalog::stacks::check`, plus Swarm rules (`forge_catalog::swarm_stack`): `secrets:`/`configs:` must be `external`, relative binds and `network_mode` are refused, `depends_on` and `container_name` are dropped with a note, host binds must be inside a root approved on every node.
+- **Shared network.** Every swarm can have `forge-shared`, an attachable, encrypted overlay. Stack services that publish `ports:` (or set `x-forge.shared: true`) join it, so other stacks reach them by name; the rest stay on the stack's own encrypted overlay.
+- **Secrets and configs.** Docker is the record; Forge labels what it creates. Values arrive in the request (or from a vault item) and go only into the signed command; they are never stored, logged, audited or returned. Swarm objects are immutable, so a rotation creates `<name>.v<N+1>`; stacks and services always mount the newest version on their next deploy, and a prune removes old unused versions. Single Swarm services mount them too (`swarm.secrets`, `swarm.configs`), and `swarm.secret_env: files` moves secret variables into Swarm secrets (`/run/secrets/<KEY>` plus `<KEY>_FILE`), so they leave the service spec. Managing objects is `swarm.manage` (administrators, MFA).
+- **Mesh addresses.** The join form and `forge swarm addresses` suggest the node's addresses with the Forge fabric address first; the agent sends `DataPathAddr` equal to an IP advertise address, so overlay traffic follows it across NAT and sites.
+- **Volumes.** `volume_create` accepts a typed NFS or CIFS share (checked fields, no free-form driver options) and lists show which containers use each volume.
+- **Visibility.** Stack status lists every task with history; per-task CPU and memory come from one `TaskStats` command per node that runs the viewed tasks, cached for ten seconds.
+- **Ingress.** A new target kind `swarm` (cluster and published port) resolves to every joined swarm node (the routing mesh); `app` targets of Swarm services without slots do the same.
+- **Conversion.** `POST /clusters/{id}/convert` switches Default → Swarm when every node runs Linux, no service is pinned to nodes and no stack runs per node. Swarm → Default needs every node to have left and no Swarm service left; Forge does not move running Swarm tasks back onto nodes, because that needs a placement decision only the operator can make.
+
+**Why.** Users run whole applications on Swarm, not single services. Reusing the compose policy and the stack model keeps one review surface; letting Docker hold secrets avoids a second secret store with its own rotation story.
+
+**Trade-offs.** `docker stack deploy` needs the Docker CLI on managers (it ships with Docker Engine). A CIFS password is kept by Docker in the volume's options on that node. Hash-derived versions of secret variables can leave old versions behind until a prune.

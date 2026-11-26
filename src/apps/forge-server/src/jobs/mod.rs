@@ -17,6 +17,7 @@ pub mod storage;
 pub mod swarm;
 pub mod swarm_rollout;
 pub mod swarm_service;
+pub mod swarm_stack;
 
 pub use agent_command::AgentCommandJob;
 pub use app::AppJob;

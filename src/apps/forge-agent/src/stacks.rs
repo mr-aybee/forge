@@ -87,7 +87,7 @@ async fn compose(project: &str, dir: &str, args: &[&str], timeout: Duration) -> 
     run("docker", &argv, timeout).await
 }
 
-async fn run(cmd: &str, args: &[&str], timeout: Duration) -> Result<String, String> {
+pub(crate) async fn run(cmd: &str, args: &[&str], timeout: Duration) -> Result<String, String> {
     let child = Command::new(cmd)
         .args(args)
         .env_clear()
@@ -139,8 +139,13 @@ async fn compose_available() -> Result<(), String> {
 
 /// Creates the stack folder (0750, root) and refuses symlinks on the way.
 fn ensure_dir(dir: &str) -> Result<(), String> {
-    if dir.starts_with(STACKS_DIR) {
-        for d in [STACKS_DIR, Path::new(dir).parent().and_then(Path::to_str).unwrap_or(STACKS_DIR)] {
+    ensure_dir_in(STACKS_DIR, dir)
+}
+
+/// Creates `dir` (0750, root) below `base`, refusing symlinks on the way.
+pub(crate) fn ensure_dir_in(base: &str, dir: &str) -> Result<(), String> {
+    if dir.starts_with(base) {
+        for d in [base, Path::new(dir).parent().and_then(Path::to_str).unwrap_or(base)] {
             std::fs::create_dir_all(d).map_err(|e| format!("{d}: {e}"))?;
             std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o755)).map_err(|e| format!("{d}: {e}"))?;
         }
@@ -155,7 +160,7 @@ fn ensure_dir(dir: &str) -> Result<(), String> {
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o750)).map_err(|e| format!("{dir}: {e}"))
 }
 
-fn write_private(path: &str, content: &str) -> Result<(), String> {
+pub(crate) fn write_private(path: &str, content: &str) -> Result<(), String> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt;
     let tmp = format!("{path}.forge-tmp");

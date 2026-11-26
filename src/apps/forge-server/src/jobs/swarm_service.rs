@@ -174,7 +174,7 @@ impl SwarmServiceJob {
         Ok(m.server_id)
     }
 
-    async fn apply_op(&self, p: &Payload, app: &Service) -> Result<SwarmOp, StepError> {
+    async fn apply_op(&self, p: &Payload, app: &Service, principal: &str) -> Result<SwarmOp, StepError> {
         let sid = app.id.to_string();
         Ok(match p.action {
             ServiceAction::Deploy => {
@@ -192,6 +192,10 @@ impl SwarmServiceJob {
                     )));
                 }
 
+                let mut def = def;
+                crate::swarm_stacks::resolve_objects(&self.swarm, p.cluster_id, principal, app, &mut def)
+                    .await
+                    .map_err(fatal)?;
                 let registry_auth = self.registries.auth_for(app.workspace_id, &def.image).await.map_err(retry)?;
                 SwarmOp::ServiceApply { def: Box::new(def), registry_auth }
             }
@@ -261,7 +265,8 @@ impl SwarmServiceJob {
                     .await
                     .map_err(retry)?
                     .ok_or_else(|| fatal("the service is gone"))?;
-                let op = self.apply_op(p, &app).await?;
+                let principal = ctx.job.principal.to_string();
+                let op = self.apply_op(p, &app, &principal).await?;
                 self.op(ctx, manager, "apply_op", &op, QUICK_WAIT).await.map(|_| ())
             }
             2 => self.converge(ctx, p, manager).await,

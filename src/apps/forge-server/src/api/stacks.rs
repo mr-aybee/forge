@@ -82,6 +82,27 @@ async fn plan_for(
     plan(&deps(state), ws, server, ns, name, dir, content, env, true).await.map_err(ApiError::bad_request)
 }
 
+/// The plan of a stack in a Swarm cluster's environment: no per-node split,
+/// the swarm policy (D-171). `None` for other environments.
+async fn swarm_plan(
+    state: &AppState,
+    caller: &Caller,
+    environment: EnvironmentId,
+    name: &str,
+    content: &str,
+    env: &BTreeMap<String, String>,
+) -> ApiResult<Option<Plan>> {
+    if state.swarm.swarm_of_environment(environment).await?.is_none() {
+        return Ok(None);
+    }
+
+    let draft = crate::swarm_stacks::Draft { environment, name, content, env: env.clone() };
+    let p = state.swarm_stacks.prepare_draft(draft, true, &caller.principal().to_string()).await?;
+    let tree = crate::stacks::parse_compose(content).map_err(ApiError::bad_request)?;
+
+    Ok(Some(Plan { tree, interpolated: p.part.compose, nodes: Vec::new(), report: p.report }))
+}
+
 fn check_dir(dir: Option<&str>) -> ApiResult<Option<String>> {
     match dir.map(str::trim).filter(|d| !d.is_empty()) {
         None => Ok(None),
@@ -225,7 +246,13 @@ pub async fn preview_stack(
     let env = env_input(input.env.as_deref())?.unwrap_or_default();
     let dir = check_dir(input.dir.as_deref())?;
     let name = input.name.unwrap_or_else(|| "stack".into());
-    let p = plan_for(&state, server.workspace_id, server.id, &ns, &name, dir.as_deref(), &input.content, &env).await?;
+    let p = match swarm_plan(&state, &caller, input.environment_id, &name, &input.content, &env).await? {
+        Some(p) => p,
+        None => {
+            plan_for(&state, server.workspace_id, server.id, &ns, &name, dir.as_deref(), &input.content, &env).await?
+        }
+    };
+
     let mut v = preview(&p);
     v["can_privileged"] = json!(caller.can(Action::StackPrivileged, ns_ref(input.environment_id)).await);
 
@@ -276,8 +303,14 @@ async fn create_stack(
     }
 
     let dir = check_dir(input.dir.as_deref())?;
-    let p =
-        plan_for(state, ns.workspace_id, server.id, &ns_s, &input.name, dir.as_deref(), &input.content, &env).await?;
+
+    let p = match swarm_plan(state, caller, ns.id, &input.name, &input.content, &env).await? {
+        Some(p) => p,
+        None => {
+            plan_for(state, ns.workspace_id, server.id, &ns_s, &input.name, dir.as_deref(), &input.content, &env)
+                .await?
+        }
+    };
 
     if let Some(f) = p.report.findings.iter().find(|f| f.severity == cat::Severity::Blocked) {
         return Err(ApiError::bad_request(
@@ -498,17 +531,22 @@ pub async fn update(
     }
 
     let content = input.content.unwrap_or_else(|| current.content.clone());
-    let p = plan_for(
-        &state,
-        stack.workspace_id,
-        stack.default_server,
-        &ns,
-        &stack.name,
-        stack.dir.as_deref(),
-        &content,
-        &env,
-    )
-    .await?;
+    let p = match swarm_plan(&state, &caller, stack.environment_id, &stack.name, &content, &env).await? {
+        Some(p) => p,
+        None => {
+            plan_for(
+                &state,
+                stack.workspace_id,
+                stack.default_server,
+                &ns,
+                &stack.name,
+                stack.dir.as_deref(),
+                &content,
+                &env,
+            )
+            .await?
+        }
+    };
 
     if let Some(f) = p.report.findings.iter().find(|f| f.severity == cat::Severity::Blocked) {
         return Err(ApiError::bad_request(
@@ -566,6 +604,10 @@ pub async fn delete(State(state): State<AppState>, caller: Caller, Path(id): Pat
 
     if !state.store.list_nodes(id).await?.is_empty() {
         return Err(ApiError::conflict("take the stack down on its nodes first"));
+    }
+
+    if stack.deployed_revision > 0 && state.swarm.swarm_of_environment(stack.environment_id).await?.is_some() {
+        return Err(ApiError::conflict("remove the stack from the swarm first"));
     }
 
     state.store.delete_stack(id).await?;
@@ -672,6 +714,16 @@ pub async fn deploy(
     let stack = load(&state, id).await?;
     caller.authorize(Action::StackManage, ns_ref(stack.environment_id)).await?;
     let revision = input.revision.unwrap_or(stack.revision);
+
+    // A stack in a Swarm cluster is one `docker stack deploy` (D-171).
+    if state.swarm.swarm_of_environment(stack.environment_id).await?.is_some() {
+        let action = crate::jobs::swarm_stack::StackAction::Deploy { revision };
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(vec![super::swarm_stacks::start(&state, &caller, &stack, action).await?]),
+        ));
+    }
+
     let rev = state.store.get_revision(id, revision).await?.ok_or_else(|| ApiError::not_found("revision not found"))?;
     let ns = ns_name(&state, stack.environment_id).await?;
     let env = open_env(&state.envelope, id, stack.env_sealed.as_deref()).map_err(internal)?;
@@ -847,6 +899,15 @@ pub async fn down(
 ) -> ApiResult<(StatusCode, Json<Vec<Job>>)> {
     let stack = load(&state, id).await?;
     caller.authorize(Action::StackManage, ns_ref(stack.environment_id)).await?;
+
+    if state.swarm.swarm_of_environment(stack.environment_id).await?.is_some() {
+        let action = crate::jobs::swarm_stack::StackAction::Remove;
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(vec![super::swarm_stacks::start(&state, &caller, &stack, action).await?]),
+        ));
+    }
+
     let mut jobs = Vec::new();
 
     for n in state.store.list_nodes(id).await? {

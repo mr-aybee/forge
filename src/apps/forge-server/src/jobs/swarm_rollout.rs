@@ -298,6 +298,10 @@ impl DeployJob {
 
         let sid = r.app.id.to_string();
         let mut def = service_def(&spec, &settings, &sid, &r.app.environment_id.to_string()).map_err(failed)?;
+        let principal = ctx.job.principal.to_string();
+        crate::swarm_stacks::resolve_objects(&self.swarm, cluster, &principal, &r.app, &mut def)
+            .await
+            .map_err(failed)?;
         let needed = self.swarm.privileged_binds(cluster, &def.bind_sources()).await?;
         if let Some(b) = needed.iter().find(|b| !r.payload.privileged_mounts.contains(b)) {
             return Err(Stop::Failed(format!(

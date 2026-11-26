@@ -93,6 +93,14 @@ export const swarmKeys = {
   view: (cluster: string) => ["swarm", cluster] as const,
   service: (id: string) => ["swarm", "service", id] as const,
   serviceLogs: (id: string, tail: number) => ["swarm", "service", id, "logs", tail] as const,
+  stacks: (cluster: string) => ["swarm", cluster, "stacks"] as const,
+  networks: (cluster: string) => ["swarm", cluster, "networks"] as const,
+  objects: (cluster: string, kind: SwarmObjectKind) => ["swarm", cluster, "objects", kind] as const,
+  addresses: (cluster: string, server: string) => ["swarm", cluster, "addresses", server] as const,
+  convert: (cluster: string, to: ClusterMode) => ["swarm", "convert", cluster, to] as const,
+  stack: (id: string) => ["swarm", "stack", id] as const,
+  taskStats: (cluster: string, nodes: string) => ["swarm", cluster, "task-stats", nodes] as const,
+  stackLogs: (id: string, service: string, tail: number) => ["swarm", "stack", id, "logs", service, tail] as const,
 };
 
 type Rec = Record<string, unknown>;
@@ -234,9 +242,41 @@ export interface SwarmSettings {
   restart: { condition: SwarmRestartCondition; max_attempts: number; delay_secs: number };
   update: { parallelism: number; delay_secs: number; order: SwarmUpdateOrder; failure_action: SwarmFailureAction; monitor_secs: number; max_failure_ratio: number };
   publish: SwarmPublishMode;
+  /** Swarm secrets mounted as files. */
+  secrets: FileRef[];
+  /** Swarm configs mounted as files. */
+  configs: FileRef[];
+  /** How secret variables reach the task: `env` (visible in inspect) or `files` (`<KEY>_FILE=/run/secrets/<KEY>`). */
+  secret_env: SecretEnvMode;
 }
 
+export type SecretEnvMode = "env" | "files";
+
+/** A secret or config mounted into the task. */
+export interface FileRef {
+  name: string;
+  /** Empty: secrets at `/run/secrets/<name>`, configs at `/<name>`. */
+  target?: string;
+  uid: string;
+  gid: string;
+  /** File mode as a number (0o444 = 292). */
+  mode: number;
+}
+
+export const defaultFileRef = (name = ""): FileRef => ({ name, target: "", uid: "0", gid: "0", mode: 0o444 });
+
+function normFileRef(v: unknown): FileRef | null {
+  const o = rec(v);
+  const name = str(o.name);
+  if (!name) return null;
+  return { name, target: typeof o.target === "string" ? o.target : "", uid: str(o.uid) ?? "0", gid: str(o.gid) ?? "0", mode: num(o.mode) ?? 0o444 };
+}
+
+/** Defaults for a NEW Swarm service: secret variables as files. */
 export const defaultSwarmSettings = (): SwarmSettings => ({
+  secrets: [],
+  configs: [],
+  secret_env: "files",
   name: "",
   mode: "replicated",
   replicas: 1,
@@ -277,6 +317,10 @@ export function normSwarmSettings(v: unknown): SwarmSettings {
       max_failure_ratio: num(u.max_failure_ratio) ?? 0,
     },
     publish: oneOf(o.publish, ["ingress", "host"] as const, d.publish),
+    secrets: arr(o.secrets).map(normFileRef).filter((x): x is FileRef => x !== null),
+    configs: arr(o.configs).map(normFileRef).filter((x): x is FileRef => x !== null),
+    // Stored services without the field keep the server's default, `env`.
+    secret_env: oneOf(o.secret_env, ["env", "files"] as const, "env"),
   };
 }
 
@@ -420,6 +464,370 @@ export const useServiceSwarmLogs = (id: string, tail: number, enabled = true) =>
     queryKey: swarmKeys.serviceLogs(id, tail),
     queryFn: () => get<unknown>(`${svcBase(id)}/logs?tail=${tail}`).then((v) => str(rec(v).logs) ?? ""),
     enabled: enabled && !!id,
+    retry: false,
+    staleTime: 5_000,
+  });
+
+// ------------------------------------------------------------------ cluster-wide swarm resources
+
+const bool = (v: unknown) => v === true;
+
+/** A stack of this cluster's environments, deployed (or to deploy) into the swarm. */
+export interface SwarmStackRef {
+  id: string;
+  name: string;
+  environment_id: string;
+  environment: string;
+  revision: number;
+  deployed_revision: number;
+}
+
+export interface SwarmNetwork {
+  id: string;
+  name: string;
+  driver: string;
+  scope: string;
+  subnets: string[];
+  encrypted: boolean;
+  attachable: boolean;
+  /** The routing mesh network. */
+  ingress: boolean;
+  managed: boolean;
+  services: string[];
+}
+
+export type SwarmObjectKind = "secret" | "config";
+
+export interface SwarmObject {
+  id: string;
+  kind: SwarmObjectKind;
+  /** Logical name; versions share it. */
+  name: string;
+  /** Docker object name. */
+  docker_name: string;
+  version: number;
+  created_at?: number;
+  used_by: string[];
+  managed: boolean;
+}
+
+export type SwarmObjectBody = { kind: SwarmObjectKind; name: string; value?: string; vault_item_id?: string };
+
+export type AddressSource = "mesh" | "primary" | "interface" | "agent";
+export interface SwarmAddress {
+  address: string;
+  source: AddressSource;
+  interface?: string;
+}
+
+export interface ConvertCheck {
+  name: string;
+  ok: boolean;
+  detail: string;
+}
+export interface ConvertReport {
+  from: ClusterMode;
+  to: ClusterMode;
+  ok: boolean;
+  checks: ConvertCheck[];
+}
+
+const normStack = (v: unknown): SwarmStackRef | null => {
+  const o = rec(v);
+  const id = str(o.id);
+  return id
+    ? {
+        id,
+        name: str(o.name) ?? id,
+        environment_id: str(o.environment_id) ?? "",
+        environment: str(o.environment) ?? "",
+        revision: num(o.revision) ?? 0,
+        deployed_revision: num(o.deployed_revision) ?? 0,
+      }
+    : null;
+};
+
+const normNetwork = (v: unknown): SwarmNetwork | null => {
+  const o = rec(v);
+  const id = str(o.id);
+  return id
+    ? {
+        id,
+        name: str(o.name) ?? id,
+        driver: str(o.driver) ?? "",
+        scope: str(o.scope) ?? "",
+        subnets: strs(o.subnets),
+        encrypted: bool(o.encrypted),
+        attachable: bool(o.attachable),
+        ingress: bool(o.ingress),
+        managed: bool(o.managed),
+        services: strs(o.services),
+      }
+    : null;
+};
+
+const normObject = (v: unknown): SwarmObject | null => {
+  const o = rec(v);
+  const docker_name = str(o.docker_name);
+  return docker_name
+    ? {
+        id: str(o.id) ?? docker_name,
+        kind: oneOf(o.kind, ["secret", "config"] as const, "secret"),
+        name: str(o.name) ?? docker_name,
+        docker_name,
+        version: num(o.version) ?? 0,
+        created_at: num(o.created_at),
+        used_by: strs(o.used_by),
+        managed: bool(o.managed),
+      }
+    : null;
+};
+
+const normAddress = (v: unknown): SwarmAddress | null => {
+  const o = rec(v);
+  const address = str(o.address);
+  return address ? { address, source: oneOf(o.source, ["mesh", "primary", "interface", "agent"] as const, "agent"), interface: str(o.interface) } : null;
+};
+
+export function normConvert(v: unknown): ConvertReport {
+  const o = rec(v);
+  const mode = (x: unknown): ClusterMode => (x === "swarm" ? "swarm" : "default");
+  return {
+    from: mode(o.from),
+    to: mode(o.to),
+    ok: bool(o.ok),
+    checks: arr(o.checks)
+      .map((c) => {
+        const x = rec(c);
+        const name = str(x.name);
+        return name ? { name, ok: bool(x.ok), detail: str(x.detail) ?? "" } : null;
+      })
+      .filter((c): c is ConvertCheck => c !== null),
+  };
+}
+
+const listOf = <T>(path: string, norm: (v: unknown) => T | null) => get<unknown>(path).then((v) => arr(v).map(norm).filter((x): x is T => x !== null));
+
+/** Stacks of this cluster's environments, deployed to the swarm. */
+export const useSwarmStacks = (cluster: string, enabled = true) =>
+  useQuery({
+    queryKey: swarmKeys.stacks(cluster),
+    queryFn: () => listOf(`${base(cluster)}/stacks`, normStack),
+    enabled: enabled && !!cluster,
+    retry: false,
+    staleTime: 10_000,
+    refetchInterval: 30_000,
+  });
+
+export const useSwarmNetworks = (cluster: string, enabled = true) =>
+  useQuery({ queryKey: swarmKeys.networks(cluster), queryFn: () => listOf(`${base(cluster)}/networks`, normNetwork), enabled: enabled && !!cluster, retry: false, staleTime: 10_000 });
+
+/** Creates the attachable encrypted overlay `forge-shared`. */
+export const useCreateSharedNetwork = (cluster: string) => useAction(() => post<void>(`${base(cluster)}/networks/shared`), [swarmKeys.networks(cluster)]);
+
+export const useSwarmObjects = (cluster: string, kind: SwarmObjectKind, enabled = true) =>
+  useQuery({
+    queryKey: swarmKeys.objects(cluster, kind),
+    queryFn: () => listOf(`${base(cluster)}/objects?kind=${kind}`, normObject),
+    enabled: enabled && !!cluster,
+    retry: false,
+    staleTime: 10_000,
+  });
+
+/** Creates version 1 of a secret or config, or rotates it to the next version. */
+export const useCreateSwarmObject = (cluster: string) =>
+  useAction(
+    (b: SwarmObjectBody) =>
+      post<unknown>(`${base(cluster)}/objects`, b).then((v) => {
+        const o = rec(v);
+        return { docker_name: str(o.docker_name) ?? b.name, version: num(o.version) };
+      }),
+    [swarmKeys.all],
+  );
+
+/** Removes unused older versions; returns the removed Docker names. */
+export const usePruneSwarmObjects = (cluster: string) =>
+  useAction((kind: SwarmObjectKind) => post<unknown>(`${base(cluster)}/objects/prune`, { kind }).then((v) => strs(rec(v).removed)), [swarmKeys.all]);
+
+export const useRemoveSwarmObject = (cluster: string) =>
+  useAction(
+    ({ kind, docker_name }: { kind: SwarmObjectKind; docker_name: string }) => api<void>("DELETE", `${base(cluster)}/objects/${kind}/${enc(docker_name)}`),
+    [swarmKeys.all],
+  );
+
+/** Addresses a node can advertise, best first (mesh preferred). */
+export const useSwarmAddresses = (cluster: string, server: string) =>
+  useQuery({
+    queryKey: swarmKeys.addresses(cluster, server),
+    queryFn: () => listOf(`${base(cluster)}/addresses?server_id=${enc(server)}`, normAddress),
+    enabled: !!cluster && !!server,
+    retry: false,
+    staleTime: 30_000,
+  });
+
+/** The read-only check before a mode conversion; never cached across opens. */
+export const useConvertCheck = (cluster: string, to: ClusterMode) =>
+  useQuery({
+    queryKey: swarmKeys.convert(cluster, to),
+    queryFn: () => get<unknown>(`/api/v1/clusters/${enc(cluster)}/convert?to=${to}`).then(normConvert),
+    retry: false,
+    gcTime: 0,
+  });
+
+export const useConvertCluster = (cluster: string) =>
+  useAction((to: ClusterMode) => post<unknown>(`/api/v1/clusters/${enc(cluster)}/convert`, { to }).then(normConvert), [["clusters"], swarmKeys.all]);
+
+// ------------------------------------------------------------------ a stack in the swarm
+
+export interface SwarmPort {
+  published?: number;
+  target?: number;
+  protocol: string;
+  mode: string;
+}
+
+export interface SwarmStackService {
+  name: string;
+  docker_name: string;
+  id?: string;
+  image?: string;
+  mode?: string;
+  desired: number;
+  running: number;
+  ports: SwarmPort[];
+  update_state?: string;
+  update_message?: string;
+  /** Attached to `forge-shared`. */
+  shared: boolean;
+  tasks: SwarmTask[];
+}
+
+export interface StackFinding {
+  service: string;
+  severity: "blocked" | "privileged" | "info";
+  message: string;
+}
+
+export interface StackSwarmView {
+  cluster_id: string;
+  namespace: string;
+  revision: number;
+  deployed_revision: number;
+  status: { namespace: string; services: SwarmStackService[] } | null;
+  status_error: string | null;
+  findings: StackFinding[];
+  findings_error: string | null;
+  privileged: boolean;
+}
+
+function normStackService(v: unknown): SwarmStackService | null {
+  const o = rec(v);
+  const name = str(o.name);
+  if (!name) return null;
+  return {
+    name,
+    docker_name: str(o.docker_name) ?? name,
+    id: str(o.id),
+    image: str(o.image),
+    mode: str(o.mode),
+    desired: num(o.desired) ?? 0,
+    running: num(o.running) ?? 0,
+    ports: arr(o.ports).map((p) => {
+      const x = rec(p);
+      return { published: num(x.published), target: num(x.target), protocol: str(x.protocol) ?? "tcp", mode: str(x.mode) ?? "ingress" };
+    }),
+    update_state: str(o.update_state),
+    update_message: str(o.update_message),
+    shared: bool(o.shared),
+    tasks: arr(o.tasks).map(normTask).filter((t): t is SwarmTask => t !== null),
+  };
+}
+
+export function normStackSwarm(v: unknown): StackSwarmView {
+  const o = rec(v);
+  const st = o.status && typeof o.status === "object" ? rec(o.status) : null;
+  return {
+    cluster_id: str(o.cluster_id) ?? "",
+    namespace: str(o.namespace) ?? "",
+    revision: num(o.revision) ?? 0,
+    deployed_revision: num(o.deployed_revision) ?? 0,
+    status: st ? { namespace: str(st.namespace) ?? "", services: arr(st.services).map(normStackService).filter((x): x is SwarmStackService => x !== null) } : null,
+    status_error: str(o.status_error) ?? null,
+    findings: arr(o.findings)
+      .map((f) => {
+        const x = rec(f);
+        const message = str(x.message);
+        return message ? { service: str(x.service) ?? "", severity: oneOf(x.severity, ["blocked", "privileged", "info"] as const, "info"), message } : null;
+      })
+      .filter((x): x is StackFinding => x !== null),
+    findings_error: str(o.findings_error) ?? null,
+    privileged: bool(o.privileged),
+  };
+}
+
+const stackBusy = (v: StackSwarmView | undefined) =>
+  !!v?.status?.services.some((s) => s.update_state === "updating" || s.update_state === "rollback_started" || s.running < s.desired);
+
+const stackBase = (id: string) => `/api/v1/stacks/${enc(id)}/swarm`;
+
+/** A stack's live status in the swarm; polls every 3 s while converging. */
+export const useStackSwarm = (id: string, enabled = true) =>
+  useQuery({
+    queryKey: swarmKeys.stack(id),
+    queryFn: () => get<unknown>(stackBase(id)).then(normStackSwarm),
+    enabled: enabled && !!id,
+    retry: false,
+    staleTime: 5_000,
+    refetchInterval: (q) => (stackBusy(q.state.data) ? 3_000 : 30_000),
+  });
+
+/** Deploys (or redeploys) the stack to the swarm; returns the `swarm.stack` job. */
+export const useDeploySwarmStack = (id: string) =>
+  useAction((revision?: number) => post<Job>(`${stackBase(id)}/deploy`, revision === undefined ? {} : { revision }), [swarmKeys.all, ["stacks"], ["jobs"]]);
+
+/** Removes the stack's services from the swarm; returns the job. */
+export const useRemoveSwarmStack = (id: string) => useAction(() => post<Job>(`${stackBase(id)}/remove`), [swarmKeys.all, ["stacks"], ["jobs"]]);
+
+export type StackServiceAction = { kind: "scale"; replicas: number } | { kind: "restart" } | { kind: "rollback" };
+
+export const useStackServiceAction = (id: string) =>
+  useAction(({ service, ...b }: StackServiceAction & { service: string }) => post<void>(`${stackBase(id)}/services/${enc(service)}`, b), [swarmKeys.stack(id)]);
+
+/** CPU and memory of one running task. */
+export interface SwarmTaskStat {
+  task_id: string;
+  service: string;
+  cpu_percent?: number;
+  memory_bytes?: number;
+  memory_limit?: number;
+}
+
+const normTaskStat = (v: unknown): SwarmTaskStat | null => {
+  const o = rec(v);
+  const task_id = str(o.task_id);
+  return task_id ? { task_id, service: str(o.service) ?? "", cpu_percent: num(o.cpu_percent), memory_bytes: num(o.memory_bytes), memory_limit: num(o.memory_limit) } : null;
+};
+
+/** Per-task CPU and memory on the given Docker nodes, keyed by task id; polls every 15 s while enabled. */
+export const useSwarmTaskStats = (cluster: string, nodeIds: string[], enabled = true) => {
+  const nodes = [...new Set(nodeIds.filter(Boolean))].sort();
+  return useQuery({
+    queryKey: swarmKeys.taskStats(cluster, nodes.join(",")),
+    queryFn: () =>
+      listOf(`${base(cluster)}/task-stats?nodes=${nodes.map(enc).join(",")}`, normTaskStat).then((l) => new Map(l.map((s) => [s.task_id, s]))),
+    enabled: enabled && !!cluster && nodes.length > 0,
+    retry: false,
+    staleTime: 10_000,
+    refetchInterval: 15_000,
+  });
+};
+
+/** The last `tail` lines of one service; fetched on demand. */
+export const useStackServiceLogs = (id: string, service: string, tail: number) =>
+  useQuery({
+    queryKey: swarmKeys.stackLogs(id, service, tail),
+    queryFn: () => get<unknown>(`${stackBase(id)}/services/${enc(service)}/logs?tail=${tail}`).then((v) => str(rec(v).logs) ?? ""),
+    enabled: !!id && !!service,
     retry: false,
     staleTime: 5_000,
   });

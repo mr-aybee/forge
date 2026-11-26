@@ -176,3 +176,55 @@ async fn swarm_services_are_containers_with_checked_settings() {
     let (s, e) = admin.post("/api/v1/deployments/plan", json!({"yaml": doc("manual")})).await;
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{e}");
 }
+
+#[tokio::test]
+async fn converting_addresses_and_swarm_objects_are_checked() {
+    let h = start().await;
+    let mut admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+    let (_, plain) = admin.post("/api/v1/clusters", json!({"name": "plain"})).await;
+    let (_, swarm) = admin.post("/api/v1/clusters", json!({"name": "swarm-eu", "mode": "swarm"})).await;
+    let pid = plain["id"].as_str().unwrap().to_owned();
+    let sid = swarm["id"].as_str().unwrap().to_owned();
+    let a = node(&h, &admin, "lab-a", &plain).await;
+
+    // The check lists what stands in the way; a cluster cannot convert to its own mode.
+    let (s, c) = admin.get(&format!("/api/v1/clusters/{pid}/convert?to=swarm")).await;
+    assert_eq!(s, StatusCode::OK, "{c}");
+    assert_eq!(c["from"], "default");
+    assert!(c["checks"].as_array().unwrap().iter().any(|x| x["name"] == "linux" && x["ok"] == true), "{c}");
+    let (_, same) = admin.get(&format!("/api/v1/clusters/{sid}/convert?to=swarm")).await;
+    assert_eq!(same["ok"], false);
+
+    // Converting needs MFA (swarm.manage), then succeeds.
+    let (s, _) = admin.post(&format!("/api/v1/clusters/{pid}/convert"), json!({"to": "swarm"})).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    step_up(&mut admin).await;
+    let (s, b) = admin.post(&format!("/api/v1/clusters/{pid}/convert"), json!({"to": "swarm"})).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    let (_, got) = admin.get(&format!("/api/v1/clusters/{pid}")).await;
+    assert_eq!(got["mode"], "swarm", "{got}");
+
+    // Back to Default: allowed while no swarm exists.
+    let (s, b) = admin.post(&format!("/api/v1/clusters/{pid}/convert"), json!({"to": "default"})).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+
+    // Addresses of a node outside the cluster are refused.
+    let (s, _) = admin.get(&format!("/api/v1/clusters/{sid}/swarm/addresses?server_id={a}")).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Objects need a manager; without one the API says so, and the value
+    // never comes back.
+    let objects = format!("/api/v1/clusters/{sid}/swarm/objects");
+    let (s, e) = admin.post(&objects, json!({"kind": "secret", "name": "db", "value": "s3cret-value"})).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{e}");
+    assert!(!e.to_string().contains("s3cret-value"));
+    let (s, _) = admin.post(&objects, json!({"kind": "secret", "name": "db"})).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "a value or a vault item is required");
+
+    // Operators may not manage swarm secrets.
+    let mut op =
+        user_with_role(&h, &admin, "op@example.com", "operator", &format!("workspace:{}", h.default_org)).await;
+    step_up(&mut op).await;
+    let (s, _) = op.post(&objects, json!({"kind": "secret", "name": "db", "value": "x"})).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+}

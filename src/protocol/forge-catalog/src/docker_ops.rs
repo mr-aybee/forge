@@ -80,6 +80,10 @@ pub enum DockerOp {
         name: String,
         #[serde(default)]
         labels: BTreeMap<String, String>,
+        /// A network share mounted by the local driver (D-171). The only
+        /// driver options accepted, built from checked fields.
+        #[serde(default)]
+        remote: Option<VolumeRemote>,
     },
     VolumeRemove {
         name: String,
@@ -131,6 +135,123 @@ pub enum DockerOp {
 
 const fn five_minutes() -> u32 {
     300
+}
+
+/// A network share for a local volume: NFS or CIFS/SMB.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum VolumeRemote {
+    Nfs {
+        /// The NFS server's IP address.
+        server: String,
+        /// The exported path (absolute).
+        path: String,
+        /// `3`, `4`, `4.1` or `4.2` (default 4).
+        #[serde(default)]
+        version: Option<String>,
+        #[serde(default)]
+        read_only: bool,
+    },
+    Cifs {
+        /// Host name or IP address of the file server.
+        server: String,
+        share: String,
+        #[serde(default)]
+        username: Option<String>,
+        /// Kept by Docker in the volume's options on that node.
+        #[serde(default)]
+        password: Option<String>,
+        #[serde(default)]
+        read_only: bool,
+    },
+}
+
+impl std::fmt::Debug for VolumeRemote {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Nfs { server, path, .. } => write!(f, "nfs {server}:{path}"),
+            Self::Cifs { server, share, .. } => write!(f, "cifs //{server}/{share}"),
+        }
+    }
+}
+
+/// A mount option value: no `,` or `=` (they would add options), printable.
+fn opt_ok(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 256 && !s.chars().any(|c| c.is_control() || matches!(c, ',' | '=' | ' ' | '"'))
+}
+
+impl VolumeRemote {
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Nfs { server, path, version, .. } => {
+                if server.parse::<std::net::IpAddr>().is_err() {
+                    return Err("the NFS server must be an IP address".into());
+                }
+
+                if !path.starts_with('/') || path.contains("..") || !opt_ok(path) || path.contains(':') {
+                    return Err("the NFS export must be an absolute path".into());
+                }
+
+                if version.as_deref().is_some_and(|v| !matches!(v, "3" | "4" | "4.1" | "4.2")) {
+                    return Err("the NFS version is 3, 4, 4.1 or 4.2".into());
+                }
+
+                Ok(())
+            }
+            Self::Cifs { server, share, username, password, .. } => {
+                let host_ok = server.parse::<std::net::IpAddr>().is_ok()
+                    || (server.len() <= 253
+                        && server.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-')));
+
+                if !host_ok || server.is_empty() {
+                    return Err("the CIFS server must be a host name or IP address".into());
+                }
+
+                if !opt_ok(share) || share.contains('/') || share.contains('\\') {
+                    return Err("the CIFS share is one name without `/`, `,` or `=`".into());
+                }
+
+                if username.as_deref().is_some_and(|u| !opt_ok(u)) || password.as_deref().is_some_and(|p| !opt_ok(p)) {
+                    return Err("the CIFS user name and password cannot contain `,`, `=`, spaces or quotes".into());
+                }
+
+                Ok(())
+            }
+        }
+    }
+
+    /// The local driver's options: `type`, `o` and `device`.
+    #[must_use]
+    pub fn driver_opts(&self) -> BTreeMap<String, String> {
+        let (kind, mut o, device) = match self {
+            Self::Nfs { server, path, version, .. } => (
+                "nfs",
+                vec![format!("addr={server}"), format!("nfsvers={}", version.as_deref().unwrap_or("4"))],
+                format!(":{path}"),
+            ),
+            Self::Cifs { server, share, username, password, .. } => {
+                let mut o = Vec::new();
+                o.extend(username.as_ref().map(|u| format!("username={u}")));
+                o.extend(password.as_ref().map(|p| format!("password={p}")));
+
+                if username.is_none() {
+                    o.push("guest".to_owned());
+                }
+
+                ("cifs", o, format!("//{server}/{share}"))
+            }
+        };
+
+        if matches!(self, Self::Nfs { read_only: true, .. } | Self::Cifs { read_only: true, .. }) {
+            o.push("ro".to_owned());
+        }
+
+        BTreeMap::from([
+            ("type".to_owned(), kind.to_owned()),
+            ("o".to_owned(), o.join(",")),
+            ("device".to_owned(), device),
+        ])
+    }
 }
 
 impl std::fmt::Debug for DockerOp {
@@ -331,7 +452,13 @@ impl DockerOp {
                 crate::apps::valid_image_ref(image) && auth_ok(registry_auth.as_ref())
             }
             Self::VolumeInspect { name } | Self::VolumeRemove { name, .. } => name_ok(name),
-            Self::VolumeCreate { name, labels } => name_ok(name) && labels_ok(labels),
+            Self::VolumeCreate { name, labels, remote } => {
+                if let Some(r) = remote {
+                    r.validate()?;
+                }
+
+                name_ok(name) && labels_ok(labels)
+            }
             Self::NetworkInspect { id } => name_ok(id),
             Self::NetworkRemove { id } => {
                 if network_protected(id) {
@@ -429,7 +556,10 @@ mod tests {
         assert!(DockerOp::VolumeRemove { name: "-rf".into(), force: false }.validate().is_err());
         let mut labels = BTreeMap::new();
         labels.insert("forge.managed".to_owned(), "true".to_owned());
-        assert!(DockerOp::VolumeCreate { name: "data".into(), labels }.validate().is_err(), "forge.* is reserved");
+        assert!(
+            DockerOp::VolumeCreate { name: "data".into(), labels, remote: None }.validate().is_err(),
+            "forge.* is reserved"
+        );
         assert!(DockerOp::ImagePull { image: "nginx".into(), registry_auth: Some("a b".into()) }.validate().is_err());
     }
 

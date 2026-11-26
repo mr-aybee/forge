@@ -64,6 +64,7 @@ mod stacks;
 mod storage;
 mod storage_grants;
 mod swarm;
+mod swarm_stacks;
 pub mod system_update;
 mod tags;
 mod telemetry;
@@ -410,6 +411,7 @@ pub fn router(state: AppState) -> Router {
         .merge(container_telemetry::routes())
         .merge(processes::routes())
         .merge(docker::routes())
+        .merge(swarm_stacks::routes())
         .merge(agent_updates::routes())
         // An unknown `/api/v1/...` path is a JSON 404, never the console's
         // index page.

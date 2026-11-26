@@ -478,6 +478,18 @@ forge docker volume create [OPTIONS] <NODE> <NAME>
 | `<node>` | string | - | yes | Node id, host name or name | - |
 | `<name>` | string | - | yes | Name | - |
 | `--label` | flag | - | no | <KEY=VALUE> | - |
+| `--nfs-server` | string | - | no | NFS server IP address (needs `--nfs-path`) | `192.0.2.20` |
+| `--nfs-path` | string | - | no | The NFS export | `/exports/data` |
+| `--nfs-version` | string | `4` | no | `3`, `4`, `4.1` or `4.2` | `4.1` |
+| `--cifs-server` | string | - | no | CIFS/SMB server (needs `--cifs-share`) | `files.example` |
+| `--cifs-share` | string | - | no | Share name | `media` |
+| `--cifs-user` | string | - | no | User name (guest when empty) | `svc` |
+| `--cifs-password-file` | path | - | no | File with the password; `-` reads standard input | `pw.txt` |
+| `--read-only` | flag | - | no | Mount the share read-only | - |
+
+The share options cannot contain `,`, `=`, spaces or quotes. Docker keeps a
+CIFS password in the volume's options on that node, readable by anyone with
+Docker access there.
 
 ### forge docker volume remove
 

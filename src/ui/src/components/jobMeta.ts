@@ -194,6 +194,15 @@ export function jobAction(j: Job, names: JobNames): string {
       const name = (id && names.app(id)) ?? "service";
       return `${verb(s(p.action), "Run")} ${name}`;
     }
+    case "swarm.stack": {
+      const what = s(p.stack_name) ?? "stack";
+      const act = p.action && typeof p.action === "object" ? s((p.action as { kind?: unknown }).kind) : undefined;
+      return `${act === "remove" ? "Remove" : "Deploy"} Swarm stack ${what}`;
+    }
+    case "swarm.member":
+      return `${s(p.action) === "leave" ? "Leave" : "Join"} swarm`;
+    case "swarm.service":
+      return `${verb(p.action && typeof p.action === "object" ? s((p.action as { kind?: unknown }).kind) : undefined, "Deploy")} Swarm service`;
     case "storage.action": {
       const id = s(p.store_id);
       const name = id ? names.store(id) : undefined;
@@ -228,6 +237,10 @@ export function jobCategory(j: Job): JobCategory {
       return "deploy";
     case "storage.action":
       return "storage";
+    case "swarm.stack":
+    case "swarm.service":
+    case "swarm.member":
+      return "container";
     case "agent.command":
       break;
     default:

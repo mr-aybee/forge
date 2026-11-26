@@ -135,10 +135,13 @@ const clusters = createRoute({
 });
 export const CLUSTER_TABS = ["overview", "network", "containers", "swarm"] as const;
 export type ClusterTab = (typeof CLUSTER_TABS)[number];
+/** Sub-sections of a cluster's Swarm tab (`?section=`). */
+export const SWARM_SECTIONS = ["overview", "nodes", "stacks", "objects", "networks", "volumes"] as const;
+export type SwarmSection = (typeof SWARM_SECTIONS)[number];
 const cluster = createRoute({
   getParentRoute: parent,
   path: "/clusters/$clusterId",
-  validateSearch: (s: Record<string, unknown>): { tab?: ClusterTab } => ({ tab: optOneOf(s.tab, CLUSTER_TABS) }),
+  validateSearch: (s: Record<string, unknown>): { tab?: ClusterTab; section?: SwarmSection } => ({ tab: optOneOf(s.tab, CLUSTER_TABS), section: optOneOf(s.section, SWARM_SECTIONS) }),
   component: lazyRouteComponent(() => import("../pages/ClusterDetail"), "ClusterDetail"),
 });
 // The former per-cluster pages are filters and tabs now.
