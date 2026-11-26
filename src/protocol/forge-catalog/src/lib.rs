@@ -39,6 +39,7 @@ pub mod storage;
 pub mod swarm;
 pub mod swarm_rollout;
 pub mod swarm_service;
+pub mod swarm_stack;
 pub mod versions;
 
 use std::collections::BTreeMap;

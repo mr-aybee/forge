@@ -116,6 +116,8 @@ pub struct Services {
     pub files: Arc<forge_files::FileService>,
     /// Docker Swarm in Swarm clusters (D-154).
     pub swarm: Arc<crate::swarm::SwarmService>,
+    /// Stacks, secrets, configs and networks of Swarm clusters (D-171).
+    pub swarm_stacks: Arc<crate::swarm_stacks::SwarmStacks>,
     /// `[security.access]`, parsed once (D-161).
     pub access_lists: crate::net_access::Lists,
     /// API-wide rate limits per client address (D-161).
@@ -499,6 +501,26 @@ impl Services {
             envelope: envelope.clone(),
             registries: registries.clone(),
         }));
+        let swarm_stacks = Arc::new(crate::swarm_stacks::SwarmStacks {
+            swarm: swarm.clone(),
+            stacks: Arc::new(store.clone()),
+            tenancy: Arc::new(store.clone()),
+            swarms: Arc::new(store.clone()),
+            servers: Arc::new(store.clone()),
+            clusters: Arc::new(store.clone()),
+            services: Arc::new(store.clone()),
+            files: Arc::new(store.clone()),
+            fabrics: Arc::new(store.clone()),
+            facts: Arc::new(store.clone()),
+            envelope: envelope.clone(),
+            stats_cache: std::sync::Mutex::default(),
+        });
+        registry.register(Arc::new(crate::jobs::swarm_stack::SwarmStackJob {
+            ops: node_ops.clone(),
+            stacks: swarm_stacks.clone(),
+            store: Arc::new(store.clone()),
+            swarms: Arc::new(store.clone()),
+        }));
         registry.register(Arc::new(crate::jobs::docker_op::DockerOpJob {
             ops: node_ops.clone(),
             registries: registries.clone(),
@@ -752,6 +774,7 @@ impl Services {
             health,
             files,
             swarm,
+            swarm_stacks,
             docker_resources,
             endpoints,
             objstore_discovery,

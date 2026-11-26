@@ -559,6 +559,12 @@ impl SwarmService {
         Err(DomainError::Conflict(format!("no swarm manager answered: {last}")))
     }
 
+    /// Runs `op` on one node of the swarm (not only managers).
+    pub async fn run_on(&self, server: ServerId, principal: &str, op: &SwarmOp) -> DomainResult<serde_json::Value> {
+        op.validate().map_err(invalid)?;
+        self.rpc(server, principal, op).await.map_err(Into::into)
+    }
+
     /// One signed swarm command to a node, waiting for its answer.
     async fn rpc(&self, server: ServerId, principal: &str, op: &SwarmOp) -> Result<serde_json::Value, RpcError> {
         let op_json = serde_json::to_string(op).map_err(|e| RpcError::BadAnswer(e.to_string()))?;

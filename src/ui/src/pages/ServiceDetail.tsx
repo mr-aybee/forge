@@ -593,7 +593,7 @@ function ConfigurationTab({
   const deployWhy = issues[0] ?? (denied ? "Needs the deploy permission on this environment" : !swarm && a.instances.length === 0 ? "Choose nodes on the Overview tab first" : undefined);
   return (
     <div>
-      <ServiceEditor mode="edit" swarm={swarm} value={form} onChange={onChange} basics={basics} basicsState={basicsState} facts={facts} serviceId={a.id} />
+      <ServiceEditor mode="edit" swarm={swarm} environmentId={a.environment_id} value={form} onChange={onChange} basics={basics} basicsState={basicsState} facts={facts} serviceId={a.id} />
       <UnsavedBar
         dirty={dirty}
         summary={issues[0]}

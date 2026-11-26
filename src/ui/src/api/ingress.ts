@@ -134,7 +134,9 @@ export interface LiveResponse {
 export type Target =
   | { kind: "app"; service_id: string; port: number }
   | { kind: "node"; server_id: string; port: number }
-  | { kind: "external"; address: string };
+  | { kind: "external"; address: string }
+  /** Every node of a Swarm cluster on the routing-mesh port; `service` is a label only. */
+  | { kind: "swarm"; cluster_id: string; port: number; service?: string };
 
 export const defaultNginx = (): NginxSettings => ({
   worker_connections: 4096,

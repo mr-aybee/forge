@@ -159,6 +159,114 @@ pub struct SwarmSettings {
     pub update: UpdatePolicy,
     #[serde(default)]
     pub publish: PublishMode,
+    /// Forge Swarm secrets mounted as files (D-171).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<FileRef>,
+    /// Forge Swarm configs mounted as files (D-171).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub configs: Vec<FileRef>,
+    /// How environment variables marked secret reach the tasks.
+    #[serde(default, skip_serializing_if = "SecretEnv::is_env")]
+    pub secret_env: SecretEnv,
+}
+
+/// How secret environment variables reach a Swarm service's tasks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SecretEnv {
+    /// As plain variables: visible in `docker service inspect` on managers.
+    #[default]
+    Env,
+    /// As Swarm secrets: the file `/run/secrets/<KEY>` and the variable
+    /// `<KEY>_FILE` naming it; the value is not in the service spec.
+    Files,
+}
+
+impl SecretEnv {
+    #[must_use]
+    pub fn is_env(&self) -> bool {
+        *self == Self::Env
+    }
+}
+
+/// A Forge secret or config mounted into the tasks as a file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileRef {
+    /// The Forge name (`db_password`); the newest version is mounted.
+    pub name: String,
+    /// Secrets: a file name under `/run/secrets/` (default: the name).
+    /// Configs: an absolute path (default `/<name>`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target: String,
+    #[serde(default = "zero_id")]
+    pub uid: String,
+    #[serde(default = "zero_id")]
+    pub gid: String,
+    /// File mode, e.g. `0o440` = 288.
+    #[serde(default = "read_mode")]
+    pub mode: u32,
+}
+
+fn zero_id() -> String {
+    "0".to_owned()
+}
+
+const fn read_mode() -> u32 {
+    0o444
+}
+
+impl FileRef {
+    pub fn validate(&self, kind: crate::swarm_stack::ObjectKind) -> Result<(), String> {
+        if !crate::swarm_stack::object_name_ok(&self.name) {
+            return Err(format!("`{}`: names use a-z, 0-9, `_` and `-`", self.name));
+        }
+
+        let target_ok = match kind {
+            crate::swarm_stack::ObjectKind::Secret => {
+                self.target.is_empty()
+                    || (self.target.len() <= 255
+                        && self.target.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-')))
+                    || container_path_ok(&self.target)
+            }
+            crate::swarm_stack::ObjectKind::Config => self.target.is_empty() || container_path_ok(&self.target),
+        };
+
+        if !target_ok {
+            return Err(format!("`{}`: invalid file target `{}`", self.name, self.target));
+        }
+
+        let id_ok = |v: &str| (1..=10).contains(&v.len()) && v.bytes().all(|b| b.is_ascii_digit());
+        if !id_ok(&self.uid) || !id_ok(&self.gid) || self.mode > 0o777 {
+            return Err(format!("`{}`: uid and gid are numbers, mode at most 0777", self.name));
+        }
+
+        Ok(())
+    }
+
+    /// The file target in the container.
+    #[must_use]
+    pub fn file(&self, kind: crate::swarm_stack::ObjectKind) -> String {
+        match (kind, self.target.is_empty()) {
+            (crate::swarm_stack::ObjectKind::Secret, true) => self.name.clone(),
+            (crate::swarm_stack::ObjectKind::Config, true) => format!("/{}", self.name),
+            _ => self.target.clone(),
+        }
+    }
+}
+
+/// A resolved secret or config of a [`ServiceDef`]: the exact Docker
+/// object (version) and its file. The node looks the object id up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObjectMount {
+    pub kind: crate::swarm_stack::ObjectKind,
+    /// `<name>.v<N>`.
+    pub docker_name: String,
+    pub file: String,
+    pub uid: String,
+    pub gid: String,
+    pub mode: u32,
 }
 
 impl Default for SwarmSettings {
@@ -173,6 +281,9 @@ impl Default for SwarmSettings {
             restart: RestartPolicy::default(),
             update: UpdatePolicy::default(),
             publish: PublishMode::Ingress,
+            secrets: Vec::new(),
+            configs: Vec::new(),
+            secret_env: SecretEnv::Env,
         }
     }
 }
@@ -204,6 +315,18 @@ fn label_name_ok(k: &str) -> bool {
 
 impl SwarmSettings {
     pub fn validate(&self) -> Result<(), String> {
+        if self.secrets.len() + self.configs.len() > 64 {
+            return Err("at most 64 secrets and configs".into());
+        }
+
+        for f in &self.secrets {
+            f.validate(crate::swarm_stack::ObjectKind::Secret)?;
+        }
+
+        for f in &self.configs {
+            f.validate(crate::swarm_stack::ObjectKind::Config)?;
+        }
+
         if !self.name.is_empty() && !docker_name_ok(&self.name) {
             return Err(format!(
                 "service name: lowercase letters, digits and `-`, starting with a letter or digit, up to {MAX_NAME} characters"
@@ -392,6 +515,10 @@ pub struct ServiceDef {
     pub labels: Vec<(String, String)>,
     pub ports: Vec<PortDef>,
     pub settings: SwarmSettings,
+    /// Secrets and configs, resolved to their Docker objects by the control
+    /// plane (D-171).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub objects: Vec<ObjectMount>,
 }
 
 impl std::fmt::Debug for ServiceDef {
@@ -506,6 +633,7 @@ pub fn service_def(
         labels: app.labels.clone(),
         ports: app.ports.iter().map(|p| port(p)).collect::<Result<_, _>>()?,
         settings: settings.clone(),
+        objects: Vec::new(),
     };
     def.validate()?;
 
@@ -654,6 +782,32 @@ impl ServiceDef {
             }
         }
 
+        if self.objects.len() > 128 {
+            return Err("at most 128 secrets and configs".into());
+        }
+
+        for o in &self.objects {
+            let named = o.docker_name.rsplit_once(".v").is_some_and(|(n, v)| {
+                crate::swarm_stack::object_name_ok(n) && !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit())
+            });
+
+            let file_ok = match o.kind {
+                crate::swarm_stack::ObjectKind::Secret => {
+                    container_path_ok(&o.file)
+                        || (!o.file.is_empty()
+                            && o.file.len() <= 255
+                            && o.file.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-')))
+                }
+                crate::swarm_stack::ObjectKind::Config => container_path_ok(&o.file),
+            };
+
+            let id_ok = |v: &str| (1..=10).contains(&v.len()) && v.bytes().all(|b| b.is_ascii_digit());
+
+            if !named || !file_ok || !id_ok(&o.uid) || !id_ok(&o.gid) || o.mode > 0o777 {
+                return Err(format!("invalid secret or config `{}`", o.docker_name));
+            }
+        }
+
         self.settings.validate()
     }
 
@@ -687,6 +841,28 @@ impl ServiceDef {
             "ReadOnly": self.read_only,
             "Hosts": self.extra_hosts.iter().filter_map(|h| h.split_once(':').map(|(n, ip)| format!("{ip} {n}"))).collect::<Vec<_>>(),
         });
+
+        for (kind, key) in
+            [(crate::swarm_stack::ObjectKind::Secret, "Secrets"), (crate::swarm_stack::ObjectKind::Config, "Configs")]
+        {
+            let refs: Vec<Value> = self
+                .objects
+                .iter()
+                .filter(|o| o.kind == kind)
+                .map(|o| {
+                    let name_key =
+                        if kind == crate::swarm_stack::ObjectKind::Secret { "SecretName" } else { "ConfigName" };
+                    json!({
+                        "File": { "Name": o.file, "UID": o.uid, "GID": o.gid, "Mode": o.mode },
+                        name_key: o.docker_name,
+                    })
+                })
+                .collect();
+
+            if !refs.is_empty() {
+                container[key] = json!(refs);
+            }
+        }
 
         if !self.command.is_empty() {
             container["Command"] = json!(self.command);
@@ -870,6 +1046,33 @@ pub fn ha_report(settings: &SwarmSettings, has_healthcheck: bool, managers: usiz
     let score = u8::try_from(passed * 100 / checks.len()).unwrap_or(100);
 
     HaReport { score, checks }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod object_tests {
+    use super::*;
+    use crate::swarm_stack::ObjectKind;
+
+    #[test]
+    fn file_refs_are_checked_and_mounted_by_name() {
+        let ok = FileRef {
+            name: "db_password".into(),
+            target: String::new(),
+            uid: "0".into(),
+            gid: "0".into(),
+            mode: 0o400,
+        };
+        assert!(ok.validate(ObjectKind::Secret).is_ok());
+        assert_eq!(ok.file(ObjectKind::Secret), "db_password");
+        assert_eq!(ok.file(ObjectKind::Config), "/db_password");
+        let bad = FileRef { target: "../etc/passwd".into(), ..ok.clone() };
+        assert!(bad.validate(ObjectKind::Secret).is_err());
+        let bad = FileRef { uid: "root".into(), ..ok };
+        assert!(bad.validate(ObjectKind::Secret).is_err());
+        let s: SwarmSettings = serde_json::from_value(json!({"secrets": [{"name": "db"}]})).unwrap();
+        assert_eq!((s.secrets[0].mode, s.secret_env), (0o444, SecretEnv::Env));
+    }
 }
 
 #[cfg(test)]

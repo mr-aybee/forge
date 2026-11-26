@@ -1801,6 +1801,46 @@ The `/install.sh` and `/install.ps1` responses carry `Cache-Control: no-store` a
 | `terminal_account` | string | none | Terminal account the installer creates and Forge saves. Same rules as `name` under [Terminal accounts](#terminal-accounts) (`400` otherwise). Empty or missing creates none |
 | `terminal_account_sudo` | boolean | `false` | Passwordless `sudo` for `terminal_account`. Ignored without it |
 
+### Docker Swarm: stacks, secrets, networks
+
+Swarm clusters only. Secret and config values are accepted in requests and
+never returned, stored or audited. See [Run a Docker Swarm cluster](/docs/guides/docker-swarm/).
+
+| Method | Path | Permission |
+| --- | --- | --- |
+| GET | `/clusters/{id}/swarm/stacks` | `view` on the cluster; stacks of environments you can view: `[{id, name, environment_id, environment, revision, deployed_revision}]` |
+| GET | `/clusters/{id}/swarm/networks` | `view`: `[{id, name, driver, scope, subnets, encrypted, attachable, ingress, managed, services}]` |
+| POST | `/clusters/{id}/swarm/networks/shared` | `swarm.manage` (MFA): creates `forge-shared` when missing → `204` |
+| GET | `/clusters/{id}/swarm/objects?kind=secret\|config` | `view`: `[{id, kind, name, docker_name, version, created_at, used_by, managed}]` |
+| POST | `/clusters/{id}/swarm/objects` | `swarm.manage` (MFA): `{kind, name, value}` or `{kind, name, vault_item_id}` (vault items: platform administrators, `secret.read`) creates version 1 or the next version → `201 {docker_name, version}` |
+| POST | `/clusters/{id}/swarm/objects/prune` | `swarm.manage` (MFA): `{kind}` removes old versions no service uses → `{removed}` |
+| DELETE | `/clusters/{id}/swarm/objects/{kind}/{docker_name}` | `swarm.manage` (MFA): one Forge-made version; `409` while a service uses it |
+| GET | `/clusters/{id}/swarm/addresses?server_id=` | `view`: addresses the node could advertise, best first: `[{address, source: mesh\|primary\|interface\|agent, interface}]` |
+| GET | `/clusters/{id}/swarm/task-stats?nodes=` | `view`: CPU and memory of the Swarm tasks on these Docker nodes (comma-separated ids, at most 32; cached 10 s per node): `[{task_id, service, cpu_percent, memory_bytes, memory_limit}]` |
+| GET | `/clusters/{id}/convert?to=swarm\|default` | `view`: `{from, to, ok, checks: [{name, ok, detail}]}` |
+| POST | `/clusters/{id}/convert` | `workspace.manage` and `swarm.manage` (MFA): `{to}` switches the mode when every check passes, else `409` with the reasons |
+| GET | `/stacks/{id}/swarm` | `view` on the environment: `{cluster_id, namespace, revision, deployed_revision, status, status_error, findings, findings_error, privileged}`. `status.services[]`: `{name, docker_name, id, image, mode, desired, running, ports, update_state, update_message, shared, tasks}` |
+| POST | `/stacks/{id}/swarm/deploy` | `stack.manage` (and `stack.privileged` when the file needs host access): `{revision?}` → `202` the `swarm.stack` job |
+| POST | `/stacks/{id}/swarm/remove` | `stack.manage` → `202` the `swarm.stack` job (volumes stay) |
+| POST | `/stacks/{id}/swarm/services/{service}` | `stack.manage`: `{kind: "scale", replicas}`, `{kind: "restart"}` or `{kind: "rollback"}` → `204` |
+| GET | `/stacks/{id}/swarm/services/{service}/logs?tail=` | `view`: `{logs}` (1 to 10000 lines, default 200) |
+
+`POST /stacks/{id}/deploy` and `POST /stacks/{id}/down` start the same
+`swarm.stack` job for a stack in a Swarm cluster. Deleting such a stack
+needs it removed from the swarm first (`409`).
+
+Swarm service settings (`spec.swarm`) also take `secrets` and `configs`
+(`[{name, target, uid, gid, mode}]`, newest version mounted) and
+`secret_env` (`env` or `files`; `files` mounts each secret variable at
+`/run/secrets/<KEY>` and sets `<KEY>_FILE`).
+
+Ingress targets take `{"kind": "swarm", "cluster_id", "port", "service"}`:
+every joined node of the cluster's swarm on that published port.
+
+`POST /servers/{id}/docker/ops` with `volume_create` takes an optional
+`remote`: `{"type": "nfs", "server": "<ip>", "path": "/export", "version": "4", "read_only": false}`
+or `{"type": "cifs", "server", "share", "username", "password", "read_only"}`.
+
 ### Moving a node between clusters
 
 `PATCH /servers/{id}` with a different `cluster_id` hands the node over:

@@ -110,9 +110,12 @@ you can delete it.
 :::
 
 :::caution[Secrets and host folders in a swarm]
-- Environment variables, including ones marked secret, become part of the
-  Swarm service. Every manager stores them, and `docker service inspect` on a
-  manager shows them. Restrict who can log in to manager nodes.
+- Environment variables become part of the Swarm service: every manager
+  stores them, and `docker service inspect` shows them. For variables marked
+  secret, choose **As files (Swarm secrets)** under **Swarm → Secret
+  variables** (`swarm.secret_env: files`): Forge then puts each one in a
+  Swarm secret mounted at `/run/secrets/<KEY>` and sets `<KEY>_FILE` to that
+  path. Your application must read the file.
 - A host folder mounted into a Swarm service must lie inside an approved
   file root on **every** node of the swarm, because a task may run on any
   of them. Other host folders need `stack.privileged` (an administrator with
@@ -163,6 +166,131 @@ The service page shows an **HA readiness** score: more than one task, tasks
 spread over nodes, a health check, restarts, rollback on failure, and at
 least three managers.
 
+## Choose the advertise address
+
+When you add a node, the **Advertise address** field lists the node's
+addresses with the best one selected:
+
+| Source | When it is offered |
+| --- | --- |
+| **mesh** | The node is in a Forge network fabric (WireGuard). Preferred: the swarm then works across NAT and sites |
+| **primary** | The node's main address |
+| **interface** | Every other interface, except loopback, link-local and Docker bridges |
+| **agent** | The address the agent connects from |
+
+Forge also uses an IP advertise address as the data-path address, so overlay
+traffic takes the same path. From the CLI: `forge swarm addresses <cluster> <node>`.
+
+## Deploy a compose stack to the swarm
+
+A compose stack in an environment of a Swarm cluster runs as one Docker
+stack (`docker stack deploy` on a manager), not per node.
+
+1. Open **Clusters** → your cluster → **Swarm** → **Stacks** and select
+   **Deploy stack**, or run `forge stacks create` with an environment
+   of the Swarm cluster and a manager as `--node`.
+2. Paste or upload the compose file. Forge checks it with the compose policy
+   and these Swarm rules:
+   - `secrets:` and `configs:` must be declared `external: true`; create them
+     first under **Secrets & configs**. Forge mounts the newest version.
+   - `network_mode` and relative bind mounts (`./data`) are refused. Host
+     folders must be inside a root approved on every node.
+   - `depends_on` and `container_name` are dropped: Swarm ignores them. Give
+     services a health check and a restart policy instead.
+3. Select **Deploy**. Forge starts a `swarm.stack` job and waits until every
+   service runs its tasks.
+
+Services that publish `ports:` (or set `x-forge: { shared: true }`) also join
+the shared network `forge-shared`, so services of other stacks reach them by
+service name (`<namespace>_<service>`, for example `forge-prod-shop_api`).
+Services without ports stay on the stack's own encrypted overlay and are
+reachable only inside the stack.
+
+```yaml
+services:
+  api:
+    image: registry.example/api:1.4
+    ports: ["8080:80"]
+    secrets: [db_password]
+    deploy: { replicas: 2 }
+  redis:
+    image: redis:7
+secrets:
+  db_password: { external: true }
+```
+
+Redeploy with a new revision for a rolling update, or deploy an older
+revision to roll back. Per service you can **Scale**, **Restart**, **Roll
+back** and read **Logs**; the stack view shows replicas, published ports,
+every task with its errors, and CPU and memory of running tasks.
+
+## Manage secrets and configs
+
+Under **Swarm → Secrets & configs**, **Create** a secret or config from a
+value or a credential vault item. Values never leave the request: Forge does
+not store, log or return them. **Rotate** creates the next version
+(`<name>.v2`); redeploy the stacks and services that use it. **Prune**
+removes old versions no service uses. This needs `swarm.manage` (MFA).
+
+A single Swarm service mounts secrets and configs in **Swarm → Secrets &
+configs** of the service editor, with the file name, owner and mode.
+
+## Networks and volumes
+
+**Swarm → Networks** lists the swarm's overlays with subnets, encryption and
+attached services. `ingress` is the routing mesh: a published port answers on
+every node. **Create forge-shared** makes the shared network if no stack has
+yet.
+
+**Swarm → Volumes** lists each node's volumes and the containers using them,
+and creates local, NFS or CIFS volumes. A local volume exists only on its
+node: pin a stateful service to that node with a placement rule
+(`node.hostname == <node-name>` or a node label), or use an NFS or CIFS volume
+that every node can mount.
+
+## Send traffic to a stack service
+
+In an ingress endpoint, add a **Swarm port** target: choose the cluster and
+the stack service's published port. Forge sends traffic to every joined
+swarm node on that port, and the routing mesh forwards it to a task. From the
+CLI, use a site spec with the target
+`{"kind": "swarm", "cluster_id": "<cluster-id>", "port": 8080, "service": "shop api"}`
+and `forge sites create --file site.json`.
+
+## Convert a Default cluster to Swarm
+
+On a Default cluster select **Convert to Swarm** (or `forge swarm convert
+<cluster> --to swarm --check`). Forge converts only when:
+
+- every node runs Linux;
+- no service of the cluster's environments runs on chosen nodes;
+- no compose stack is deployed per node.
+
+Then create the swarm as above. Converting back to Default needs every node
+to have left the swarm and no Swarm service left: Forge does not move running
+Swarm tasks onto nodes for you. Remove the stacks and services, make each
+node **Leave**, then convert.
+
+## Set up a swarm from the CLI
+
+```sh
+forge clusters create --file cluster.json          # {"name": "swarm-eu", "mode": "swarm"}
+forge nodes enroll-token --cluster swarm-eu --hostname lab-a   # one token per node; install with it
+forge swarm init swarm-eu lab-a --wait
+forge swarm join swarm-eu lab-b --role worker --wait
+forge swarm join swarm-eu lab-c --role worker --wait
+forge swarm labels swarm-eu lab-c --label zone=b
+printf '%s' "$DB_PASSWORD" | forge swarm secrets create swarm-eu db_password --value-file -
+forge swarm networks shared swarm-eu
+forge stacks create shop --environment prod --node lab-a --compose compose.yaml
+forge swarm stacks deploy shop --wait --yes
+forge swarm stacks ps shop
+forge swarm stacks scale shop api 3
+forge swarm stats shop
+forge swarm stacks logs shop api --tail 100
+forge swarm drain swarm-eu lab-b
+```
+
 ## Verify
 
 - The **Swarm** tab lists every node as **joined**, and the node cards show
@@ -179,6 +307,11 @@ least three managers.
 | **failed**: join timed out | Firewall blocks TCP 2377, TCP/UDP 7946 or UDP 4789 between nodes | Open the ports, then **Leave** with **Force** and add the node again |
 | `no swarm manager answered` | Every manager is offline | Bring a manager online; the live node list comes back on its own |
 | `the swarm is still being created` | The first node has not joined yet | Wait until the first node shows **joined**, then add more nodes |
+| Stack deploy: `secrets \`x\` does not exist in this swarm` | The stack names a secret Forge has not created | Create it under **Secrets & configs**, then deploy again |
+| Stack deploy: `... create it in Forge ... and declare it external: true` | The compose file uses `file:` secrets | Create the secret in Forge and declare it `external: true` |
+| A stack service cannot reach another stack's service | The target publishes no port, so it is not on `forge-shared` | Publish a port or set `x-forge: { shared: true }`, and use `<namespace>_<service>` |
+| Overlay traffic fails between sites | Nodes advertise LAN addresses | Put the nodes in a network fabric and re-join them with the mesh address |
+| `docker stack deploy failed` | The Docker CLI on the manager is missing or old | Install Docker Engine from the App Store on the manager |
 
 ## Next steps
 

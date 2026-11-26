@@ -235,7 +235,7 @@ pub enum StackEditCmd {
     },
 }
 
-fn read_text(spec: &str) -> Result<String> {
+pub(crate) fn read_text(spec: &str) -> Result<String> {
     if spec == "-" {
         return Ok(std::io::read_to_string(std::io::stdin())?);
     }
@@ -312,7 +312,7 @@ async fn stack_edit(g: &Global, api: &mut Api, server: &str, cmd: StackEditCmd) 
 }
 
 /// A stack by id, or by name (unique in the environment if one is given).
-async fn resolve_stack(api: &mut Api, stack: &str, environment: Option<&str>) -> Result<Value> {
+pub(crate) async fn resolve_stack(api: &mut Api, stack: &str, environment: Option<&str>) -> Result<Value> {
     if looks_like_id(stack) {
         return api.get(&format!("/api/v1/stacks/{stack}")).await;
     }

@@ -26,6 +26,7 @@ pub fn page_of(path: &[&str]) -> &'static str {
             "audit" => "audit",
             "plugins" => "plugins",
             "stacks" => "stacks",
+            "swarm" => "swarm",
             "projects" => "projects",
             "services" => "services",
             "approvals" => "approvals",

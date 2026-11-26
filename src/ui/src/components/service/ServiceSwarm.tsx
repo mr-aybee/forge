@@ -4,10 +4,11 @@ import { useState } from "react";
 
 import type { Service } from "../../api/types";
 import { ReplicaBar } from "./ReplicaBar";
-import { type ServiceSwarmAction, type ServiceSwarmView, type SwarmTask, swarmServiceBusy, useServiceSwarm, useServiceSwarmAction, useServiceSwarmLogs, useSwarm } from "../../api/swarm";
+import { isRunning, runningNodes } from "../swarm/TaskUsage";
+import { type ServiceSwarmAction, type ServiceSwarmView, type SwarmTask, type SwarmTaskStat, swarmServiceBusy, useSwarmTaskStats, useServiceSwarm, useServiceSwarmAction, useServiceSwarmLogs, useSwarm } from "../../api/swarm";
 import { useServers } from "../../api/hooks";
 import { errorText, useToast } from "../../app/toast";
-import { Badge, Button, Confirm, CopyIcon, Empty, ErrorNote, Input, Modal, Panel, Select, Skeleton, Table, Td, ago, time } from "../ui";
+import { Badge, Button, Confirm, CopyIcon, Empty, ErrorNote, Input, Modal, Panel, Select, Skeleton, Table, Td, ago, bytes, time } from "../ui";
 
 type Tone = "ok" | "accent" | "warn" | "bad" | "muted";
 const taskTone = (s: string): Tone =>
@@ -91,7 +92,7 @@ export function ServiceSwarm({ a, onEditSettings }: { a: Service; onEditSettings
           Deploy creates the Docker service <span className="font-mono text-xs">{v.name || a.name}</span> on a manager; the swarm then places its tasks.
         </Empty>
       ) : s ? (
-        <Tasks tasks={s.tasks} hostOf={hostOf} />
+        <Tasks clusterId={v.cluster_id} tasks={s.tasks} hostOf={hostOf} />
       ) : null}
       {exists && <Logs id={a.id} />}
 
@@ -226,12 +227,13 @@ function HaReadiness({ v, onEdit }: { v: ServiceSwarmView; onEdit?: () => void }
   );
 }
 
-function Tasks({ tasks, hostOf }: { tasks: SwarmTask[]; hostOf: (id?: string) => { name?: string; server?: string } | undefined }) {
+function Tasks({ clusterId, tasks, hostOf }: { clusterId: string; tasks: SwarmTask[]; hostOf: (id?: string) => { name?: string; server?: string } | undefined }) {
+  const stats = useSwarmTaskStats(clusterId, runningNodes(tasks)).data;
   if (tasks.length === 0) return <p className="px-3 py-3 text-xs text-muted">No tasks yet. They appear once the swarm schedules the service.</p>;
   // Newest first within a slot, so the current task sits on top.
   const rows = [...tasks].sort((x, y) => (x.slot ?? 0) - (y.slot ?? 0) || (taskMs(y) ?? 0) - (taskMs(x) ?? 0));
   return (
-    <Table head={["Slot", "Node", "State", "Desired", "Error", "Updated"]}>
+    <Table head={["Slot", "Node", "State", "Desired", "CPU", "Memory", "Error", "Updated"]}>
       {rows.map((t) => {
         const h = hostOf(t.node_id);
         const ms = taskMs(t);
@@ -257,6 +259,8 @@ function Tasks({ tasks, hostOf }: { tasks: SwarmTask[]; hostOf: (id?: string) =>
               <Badge tone={taskTone(t.state)}>{t.state}</Badge>
             </Td>
             <Td className="text-xs text-muted">{t.desired_state ?? "—"}</Td>
+            <Td className="font-mono text-[11px] whitespace-nowrap tabular-nums">{fmtCpu(isRunning(t) ? stats?.get(t.id) : undefined)}</Td>
+            <Td className="font-mono text-[11px] whitespace-nowrap tabular-nums">{fmtMem(isRunning(t) ? stats?.get(t.id) : undefined)}</Td>
             <Td className="max-w-[260px]">
               {t.error ? (
                 <span className="block truncate text-xs text-bad select-all" title={t.error}>
@@ -275,6 +279,9 @@ function Tasks({ tasks, hostOf }: { tasks: SwarmTask[]; hostOf: (id?: string) =>
     </Table>
   );
 }
+
+const fmtCpu = (s?: SwarmTaskStat) => (s?.cpu_percent === undefined ? "—" : `${s.cpu_percent.toFixed(1)}%`);
+const fmtMem = (s?: SwarmTaskStat) => (s?.memory_bytes === undefined ? "—" : `${bytes(s.memory_bytes)}${s.memory_limit ? ` / ${bytes(s.memory_limit)}` : ""}`);
 
 const TAILS = [100, 200, 500, 1000] as const;
 

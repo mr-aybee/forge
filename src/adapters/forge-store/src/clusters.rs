@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use forge_core::model::Cluster;
+use forge_core::model::{Cluster, ClusterMode};
 use forge_core::ports::ClusterRepository;
 use forge_core::*;
 use sqlx::Row;
@@ -75,6 +75,21 @@ impl ClusterRepository for Store {
         .execute(self.pool())
         .await
         .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn set_cluster_mode(&self, id: ClusterId, mode: ClusterMode) -> DomainResult<()> {
+        let done = sqlx::query("UPDATE clusters SET mode = $1 WHERE id = $2")
+            .bind(mode.as_str())
+            .bind(id.to_string())
+            .execute(self.pool())
+            .await
+            .map_err(db_err)?;
+
+        if done.rows_affected() == 0 {
+            return Err(DomainError::NotFound("cluster not found".into()));
+        }
+
         Ok(())
     }
 

@@ -59,6 +59,8 @@ impl Sampler {
         let mut mounts = HashSet::new();
         let (mut disk_total, mut disk_avail) = (0u64, 0u64);
         let mut volumes = Vec::new();
+        let mut real_totals = HashSet::new();
+        let mut overlays = Vec::new();
 
         for d in self.disks.list() {
             let fs = d.file_system().to_string_lossy().into_owned();
@@ -86,8 +88,22 @@ impl Sampler {
                 continue;
             }
 
+            // An overlay root is a view of a disk counted below; add it only if nothing else is
+            if is_overlay(&fs) {
+                overlays.push((d.total_space(), d.available_space()));
+                continue;
+            }
+
+            real_totals.insert(d.total_space());
             disk_total = disk_total.saturating_add(d.total_space());
             disk_avail = disk_avail.saturating_add(d.available_space());
+        }
+
+        for (total, avail) in overlays {
+            if real_totals.insert(total) {
+                disk_total = disk_total.saturating_add(total);
+                disk_avail = disk_avail.saturating_add(avail);
+            }
         }
 
         let (mut rx, mut tx) = (0u64, 0u64);
@@ -181,6 +197,11 @@ fn route_traffic() -> Vec<forge_proto::messages::SiteTraffic> {
                 .collect(),
         })
         .collect()
+}
+
+/// Union file systems that only layer over another mounted disk (container roots).
+fn is_overlay(fs: &str) -> bool {
+    matches!(fs, "overlay" | "overlayfs" | "aufs" | "fuse-overlayfs")
 }
 
 #[cfg(test)]

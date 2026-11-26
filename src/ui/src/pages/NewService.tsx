@@ -116,6 +116,7 @@ export function NewService() {
             mode="create"
             value={input}
             swarm={swarm}
+            environmentId={env?.id}
             onChange={(next) => setForm((f) => ({ ...f, input: next }))}
             basicsState={basicsState}
             facts={facts}

@@ -321,6 +321,21 @@
     "GET /api/v1/services/{id}/swarm": "forge services swarm status",
     "POST /api/v1/services/{id}/swarm": "forge services swarm deploy|scale|restart|rollback|remove",
     "GET /api/v1/services/{id}/swarm/logs": "forge services swarm logs",
+    "GET /api/v1/clusters/{id}/swarm/stacks": "forge swarm stacks ls",
+    "GET /api/v1/clusters/{id}/swarm/networks": "forge swarm networks ls",
+    "POST /api/v1/clusters/{id}/swarm/networks/shared": "forge swarm networks shared",
+    "GET /api/v1/clusters/{id}/swarm/objects": "forge swarm secrets ls / forge swarm configs ls",
+    "POST /api/v1/clusters/{id}/swarm/objects": "forge swarm secrets create|rotate / forge swarm configs create|rotate",
+    "POST /api/v1/clusters/{id}/swarm/objects/prune": "forge swarm secrets prune / forge swarm configs prune",
+    "DELETE /api/v1/clusters/{id}/swarm/objects/{kind}/{name}": "forge swarm secrets rm / forge swarm configs rm",
+    "GET /api/v1/clusters/{id}/swarm/addresses": "forge swarm addresses",
+    "GET /api/v1/clusters/{id}/convert": "forge swarm convert --check",
+    "POST /api/v1/clusters/{id}/convert": "forge swarm convert",
+    "GET /api/v1/stacks/{id}/swarm": "forge swarm stacks ps",
+    "POST /api/v1/stacks/{id}/swarm/deploy": "forge swarm stacks deploy",
+    "POST /api/v1/stacks/{id}/swarm/remove": "forge swarm stacks rm",
+    "POST /api/v1/stacks/{id}/swarm/services/{service}": "forge swarm stacks scale|restart|rollback",
+    "GET /api/v1/stacks/{id}/swarm/services/{service}/logs": "forge swarm stacks logs",
     "GET /api/v1/servers/{id}/docker/images": "forge docker images",
     "GET /api/v1/servers/{id}/docker/volumes": "forge docker volumes",
     "GET /api/v1/servers/{id}/docker/networks": "forge docker networks",
@@ -338,7 +353,8 @@
     "POST /api/v1/webhooks/{id}/rotate": "forge webhooks rotate",
     "GET /api/v1/webhooks/{id}/deliveries": "forge webhooks deliveries",
     "GET /api/v1/stack-templates": "forge stacks templates",
-    "POST /api/v1/stacks/from-template": "forge stacks from-template"
+    "POST /api/v1/stacks/from-template": "forge stacks from-template",
+    "GET /api/v1/clusters/{id}/swarm/task-stats": "forge swarm stats"
   },
   "api": {
     "GET /api/v1/object-stores/discover": "Object Storage → Found on nodes; `forge api call` for scripts",
@@ -600,6 +616,22 @@
     },
     "PUT /api/v1/servers/{id}/files/uploads/{upload}": {
       "offset": "set per chunk by the uploader"
+    },
+    "GET /api/v1/clusters/{id}/swarm/addresses": {
+      "server_id": "the command resolves the <node> argument"
+    },
+    "GET /api/v1/clusters/{id}/swarm/objects": {
+      "_command": "forge swarm secrets ls",
+      "kind": "the command fills it from `secrets` or `configs`"
+    },
+    "GET /api/v1/clusters/{id}/convert": {
+      "to": "--to"
+    },
+    "GET /api/v1/stacks/{id}/swarm/services/{service}/logs": {
+      "tail": "--tail"
+    },
+    "GET /api/v1/clusters/{id}/swarm/task-stats": {
+      "nodes": "the command passes the nodes that run the stack's tasks"
     }
   }
 }
