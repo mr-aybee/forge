@@ -459,6 +459,42 @@ export interface ServiceSpec {
   mesh?: boolean;
   /** Container services in a Swarm cluster: replicas, placement, restart and rollout. */
   swarm?: SwarmSettings | null;
+  /** Restart policy; absent on older services (then `restart` decides). */
+  restart_policy?: RestartPolicy;
+  /** Only with `on-failure`: retries before giving up (0 = unlimited). */
+  restart_max_attempts?: number;
+  cap_add?: string[];
+  cap_drop?: string[];
+  ulimits?: Ulimit[];
+  tmpfs?: TmpfsMount[];
+  /** DNS server IP addresses. */
+  dns?: string[];
+  sysctls?: [string, string][];
+  devices?: DeviceMount[];
+  /** Run an init process (tini) as PID 1. */
+  init?: boolean;
+  /** Existing Docker networks to join as well. */
+  networks?: string[];
+}
+
+export type RestartPolicy = "no" | "always" | "unless-stopped" | "on-failure";
+/** A resource limit; -1 means unlimited. */
+export interface Ulimit {
+  name: string;
+  soft: number;
+  hard: number;
+}
+export interface TmpfsMount {
+  target: string;
+  /** MiB; 0 = Docker's default. */
+  size_mb: number;
+}
+export interface DeviceMount {
+  /** Under /dev/. */
+  host: string;
+  container?: string;
+  /** Subset of rwm. */
+  permissions?: string;
 }
 
 export interface ServiceDependency {
@@ -498,6 +534,8 @@ export interface Service {
   created_at: number;
   updated_at: number;
   instances: ServiceInstance[];
+  /** Optimistic-lock version; sent back on update. Absent on older servers. */
+  version?: number;
   /** The caller may deploy, start, stop and restart it (a hint; the server still authorizes). Absent on older servers. */
   can_deploy?: boolean;
 }
@@ -544,6 +582,20 @@ export interface ServiceInput {
   mesh?: false;
   /** Set only for services in a Swarm cluster; omitted otherwise. */
   swarm?: SwarmSettings;
+  /** Omitted keeps the legacy `restart` boolean. */
+  restart_policy?: RestartPolicy;
+  restart_max_attempts: number;
+  cap_add: string[];
+  cap_drop: string[];
+  ulimits: Ulimit[];
+  tmpfs: TmpfsMount[];
+  dns: string[];
+  sysctls: [string, string][];
+  devices: DeviceMount[];
+  init: boolean;
+  networks: string[];
+  /** Update: the version the editor loaded (409 when it changed since). */
+  version?: number;
 }
 
 /** Name to show for a node. */

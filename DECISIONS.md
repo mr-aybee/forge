@@ -6011,3 +6011,23 @@ hand.
 **Why.** Container addresses change on every redeploy and scale, and a hosts file cannot carry ports, round robin or reverse names. A resolver on each node keeps lookups local and working when the server is down; the server tier covers a node whose resolver is stopped. Using Compose's container number keeps replica names stable across restarts without a Forge-side slot table.
 
 **Trade-offs.** Native container services still resolve to the node's mesh address. A name follows a change in up to about 10 s (state push) plus 2 s (file poll) plus the 5 s TTL. Agent self-update does not update forge-dns yet; a node gets a newer forge-dns from the package. Nodes without systemd-resolved do not get SRV or PTR answers for their own lookups.
+
+## D-176 Service orchestration in native mode, step 1: a complete, typed container spec
+
+**Decision.** In native mode a Service is the one managed unit (`plans/service-orchestration.md`). Step 1 completes and types its container spec, and adds optimistic locking for edits.
+
+- **Fields.** `forge_catalog::AppSpec` gains:
+  - `restart_policy` (`no`, `always`, `unless-stopped` or `on-failure`) and `restart_max_attempts`;
+  - `cap_add` and `cap_drop`;
+  - `ulimits`, `tmpfs`, `dns`, `sysctls` and `devices`;
+  - `init` and `networks`.
+
+  Their types and checks live in `forge_catalog::container_opts`. The old boolean `restart` is still read and decides when `restart_policy` is absent. A native Service maps the policy onto systemd `Restart=` and `StartLimitBurst`.
+- **Wire compatibility.** Agents refuse unknown spec fields, so every new field is left out when empty. A spec that uses one is sent only to an agent that reports the `container_options` fact; otherwise the deploy step fails and names the cause.
+- **Policy.** Added capabilities, devices and sysctls need `stack.privileged`, as on the stack path. They join host-path volumes in the job's `privileged_mounts` list (`cap_add:X`, `device:/dev/x`, `sysctl:k`), so one approval covers exactly what was shown, and the job re-checks it at dispatch.
+- **Storage.** The API writes `services.spec` through one typed struct (`StoredSpec`), not an ad hoc `json!`.
+- **Locking.** Migration 0005 adds `services.version`, and every save bumps it. `PUT /services/{id}` with `version` saves only when the stored version still matches; otherwise it answers `409` "this service changed since you opened it". A PUT without `version` (older clients) still saves. The console and `forge services update` send the version they read.
+
+**Why.** Swarm parity in native mode (later steps: reconciler, Compose-format apply) needs every common container setting as a typed value that the console, the CLI and a file can all describe. Typed values let the policy check each setting, and the version stops two editors from silently overwriting each other.
+
+**Trade-offs.** Two fields describe restarts during the transition (`restart` and `restart_policy`). The domain `Service.spec` is still a `Value`; only the API's write path is typed. Extra networks must already exist on the node, because Forge does not create them.

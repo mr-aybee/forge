@@ -451,8 +451,8 @@ kind asks first and clears the other kind's fields.
 | --- | --- |
 | **Basics** | Project, environment, name, placement |
 | **Runtime** | The runtimes the service needs (see [Runtime dependencies](#runtime-dependencies)) |
-| **Start command** | Command, working directory, **Listening port**, restart |
-| **Resources** | CPU and memory limits (systemd `CPUQuota=`, `MemoryMax=`) |
+| **Start command** | Command, working directory, **Listening port**, **Restart policy** (and **Max restart attempts** for **On failure**) |
+| **Limits** | CPU and memory limits (systemd `CPUQuota=`, `MemoryMax=`) |
 | **Environment variables** | **Grid** or **Bulk edit**, **Paste .env**, package variables |
 | **Storage** | Service directory, environment file; buckets are on the **Storage** tab |
 | **Health checks** | The default TCP check, with a link to the **Health** tab |
@@ -461,14 +461,25 @@ kind asks first and clears the other kind's fields.
 | Container section | Contents |
 | --- | --- |
 | **Basics** | Project, environment, name, placement |
-| **Image** | The image |
-| **Ports** | Port mappings |
-| **Command and entrypoint** | Command, entrypoint, restart policy, stop timeout |
-| **Resources** | CPU and memory limits |
+| **Image** | The image, command and entrypoint |
+| **Runtime** | **Restart policy** (**Unless stopped**, **Always**, **On failure** with **Max restart attempts**, **Never**), stop timeout, user, host name, **Run an init process** |
+| **Network** | Published ports, **Cluster network**, extra Docker networks, extra `/etc/hosts` entries, DNS servers |
+| **Storage** | Volumes and tmpfs mounts (target and size in MiB) |
+| **Limits** | CPU and memory limits, ulimits (soft / hard, `-1` = unlimited) |
+| **Security** | Read-only root filesystem, dropped and added capabilities, devices (`/dev/…`, permissions from `rwm`), sysctls |
 | **Environment variables** | **Grid** or **Bulk edit**, **Paste .env**, package variables |
-| **Volumes** | Volumes, read-only root filesystem |
 | **Health checks** | Docker `HEALTHCHECK`: command, interval, timeout, retries, start period |
-| **Advanced** | User, host name, log rotation size, labels, extra `/etc/hosts` entries; **Form / YAML** toggle |
+| **Advanced** | Log rotation size, labels; **Form / YAML** toggle |
+
+**Privileged settings.** Added capabilities, devices and sysctls, like host
+paths outside the app's folder, carry a **needs stack.privileged** badge.
+You can save them; deploying needs `stack.privileged` (**Admin** or
+**Platform admin**) with an MFA-verified session.
+
+**Concurrent edits.** The editor saves against the version it loaded. If
+someone else saved the service in the meantime, **Save** stops with a notice
+that keeps your edits on screen; **Reload** loads the latest version and
+discards them. Validation errors from the server show above the editor.
 
 **Volumes.** A container volume is `<host path>:<container path>[:ro]`.
 Which host paths you can mount depends on your rights:
@@ -497,9 +508,11 @@ event `service.deploy` lists the mounts in `privileged_mounts`.
 
 **YAML.** Under **Advanced**, containers can switch from **Form** to **YAML** and edit the whole
 container as a docker-compose service:
-`image`, `command`, `entrypoint`, `user`, `hostname`, `restart`, `ports`,
+`image`, `command`, `entrypoint`, `user`, `hostname`, `restart` (`on-failure:N` included), `ports`,
 `volumes`, `environment`, `extra_hosts`, `labels`, `read_only`,
-`stop_grace_period`, `healthcheck`, `deploy.resources.limits` and
+`stop_grace_period`, `healthcheck`, `deploy.resources.limits`, `init`,
+`networks`, `dns`, `cap_add`, `cap_drop`, `devices`, `tmpfs`
+(`/path:size=64m`), `sysctls`, `ulimits` and
 `logging.options.max-size`. Unsupported keys are reported. Changes apply to
 the form as you type.
 

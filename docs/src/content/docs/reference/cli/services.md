@@ -523,11 +523,20 @@ missing one exits with `2` and names the flag.
 | `--listen-port <LISTEN_PORT>` | integer, 1 to 65535 | none | no | The TCP port a native service listens on. Forge's default health check connects to it | `--listen-port 8080` |
 | `--volume <VOLUME>` | `HOST_PATH:CONTAINER_PATH[:ro]` or `VOLUME_NAME:CONTAINER_PATH[:ro]`; repeatable | none | no | A container volume. Given at all, the flags replace the file's whole `volumes` list | `--volume /srv/forge/apps/shop-prod/web/html:/usr/share/nginx/html:ro` |
 | `--restart <BOOL>` | `true` or `false` | the server's default, `true` | no | Restart it when it stops | `--restart false` |
+| `--restart-policy <POLICY>` | enum: `no`, `always`, `unless-stopped`, `on-failure` | none | no | When the service is restarted. Overrides `--restart` | `--restart-policy on-failure` |
+| `--restart-max-attempts <N>` | integer, 0 to 1000 | none | no | With `on-failure` only: stop restarting after N restarts. `0` means no limit | `--restart-max-attempts 5` |
+| `--cap-add <CAP>` | capability name; repeatable | none | no | A Linux capability to add (container only). Deploying then needs `stack.privileged`. Given at all, the flags replace the whole list | `--cap-add NET_ADMIN` |
+| `--cap-drop <CAP>` | capability name or `ALL`; repeatable | none | no | A Linux capability to drop (container only) | `--cap-drop ALL` |
+| `--dns <IP>` | IP address; repeatable | none | no | A DNS server for the container, at most 8 | `--dns 192.0.2.53` |
+| `--tmpfs <PATH[:SIZE_MB]>` | container path with an optional size; repeatable | none | no | A tmpfs mount. Without a size, Docker's default applies | `--tmpfs /tmp:64` |
+| `--init <BOOL>` | `true` or `false` | none | no | Run Docker's init as PID 1, which reaps zombie processes and forwards signals | `--init true` |
+| `--network <NAME>` | Docker network name; repeatable | none | no | An existing Docker network on the node to connect the container to as well | `--network backend` |
 
 Fields without a flag need `--file`: `working_dir`, `env_files`,
 `dependencies`, `cpu_millis`, `memory_mb`, `entrypoint`, `user`, `hostname`,
-`labels`, `extra_hosts`, `healthcheck`, `stop_timeout_secs`, `read_only` and
-`log_max_mb`. See [Service definition](#service-definition).
+`labels`, `extra_hosts`, `healthcheck`, `stop_timeout_secs`, `read_only`,
+`log_max_mb`, `ulimits`, `sysctls` and `devices`. See
+[Service definition](#service-definition).
 
 #### Secret variables
 
@@ -638,6 +647,11 @@ first unless you pass `--yes`. Needs `deploy` on the environment.
 | `--file` | The file replaces the whole definition. A field the file leaves out goes back to its default; a secret variable listed without a value keeps its stored value |
 | `--file` and flags | The file replaces the definition, then the flags change its fields |
 
+The CLI sends back the version of the service it read. If someone else
+saved the service in between, the server refuses the update with `409`
+(`this service changed since you opened it`) and nothing changes. Run the
+command again to apply your change on top of theirs.
+
 Pass at least one of `--file`, a definition flag or `--unset-env`; otherwise
 the command exits with `2`. The name and the environment of a service
 cannot be changed.
@@ -664,6 +678,14 @@ forge services update [OPTIONS] <SERVICE>
 | `--listen-port <LISTEN_PORT>` | integer, 1 to 65535 | keep | no | The TCP port a native service listens on | `--listen-port 8080` |
 | `--volume <VOLUME>` | `HOST_PATH:CONTAINER_PATH[:ro]` or `VOLUME_NAME:CONTAINER_PATH[:ro]`; repeatable | keep | no | Container volumes. Given at all, the flags replace the whole list | `--volume /srv/data:/data` |
 | `--restart <BOOL>` | `true` or `false` | keep | no | Restart it when it stops | `--restart false` |
+| `--restart-policy <POLICY>` | enum: `no`, `always`, `unless-stopped`, `on-failure` | keep | no | When the service is restarted. Overrides `--restart` | `--restart-policy on-failure` |
+| `--restart-max-attempts <N>` | integer, 0 to 1000 | keep | no | With `on-failure` only: stop restarting after N restarts. `0` means no limit | `--restart-max-attempts 5` |
+| `--cap-add <CAP>` | capability name; repeatable | keep | no | A Linux capability to add (container only). Deploying then needs `stack.privileged`. Given at all, the flags replace the whole list | `--cap-add NET_ADMIN` |
+| `--cap-drop <CAP>` | capability name or `ALL`; repeatable | keep | no | A Linux capability to drop (container only) | `--cap-drop ALL` |
+| `--dns <IP>` | IP address; repeatable | keep | no | A DNS server for the container, at most 8 | `--dns 192.0.2.53` |
+| `--tmpfs <PATH[:SIZE_MB]>` | container path with an optional size; repeatable | keep | no | A tmpfs mount. Without a size, Docker's default applies | `--tmpfs /tmp:64` |
+| `--init <BOOL>` | `true` or `false` | keep | no | Run Docker's init as PID 1, which reaps zombie processes and forwards signals | `--init true` |
+| `--network <NAME>` | Docker network name; repeatable | keep | no | An existing Docker network on the node to connect the container to as well | `--network backend` |
 | `--environment <ENVIRONMENT>` | environment id or name | — | no | Look the name up in this environment only. It does not move the service | `--environment shop-prod` |
 | `--yes` | flag | off | no | Skip the confirmation prompt | `--yes` |
 
@@ -1254,6 +1276,18 @@ mismatch.
 | `read_only` | bool | `false` | none | Container only: read-only root filesystem |
 | `log_max_mb` | integer, MB | `0` (not set) | none | Container only: log rotation size |
 | `mesh` | bool | `true` | none | Container only: `false` keeps the container off the node's [cluster container network](/docs/guides/cluster-network/#container-network) |
+| `restart_policy` | `no`, `always`, `unless-stopped`, `on-failure`, or absent | absent | `--restart-policy` | When the service is restarted. When it is absent, `restart` decides: `true` is `unless-stopped`. A native service maps it onto systemd `Restart=` |
+| `restart_max_attempts` | integer, 0 to 1000 | `0` (no limit) | `--restart-max-attempts` | `on-failure` only: stop restarting after this many restarts |
+| `cap_add` | list of capability names | `[]` | `--cap-add` | Container only: Linux capabilities to add, such as `NET_ADMIN`. Deploying needs `stack.privileged` |
+| `cap_drop` | list of capability names | `[]` | `--cap-drop` | Container only: Linux capabilities to drop; `ALL` drops every one |
+| `ulimits` | list of `{name, soft, hard}` | `[]` | none | Container only: resource limits such as `nofile`. `-1` means unlimited, and `soft` may not exceed `hard` |
+| `tmpfs` | list of `{target, size_mb}` | `[]` | `--tmpfs` | Container only: tmpfs mounts, at most 20. A `size_mb` of `0` means Docker's default |
+| `dns` | list of IP addresses | `[]` | `--dns` | Container only: DNS servers, at most 8 |
+| `sysctls` | list of `[key, value]` pairs | `[]` | none | Container only: kernel parameters such as `net.core.somaxconn`. Deploying needs `stack.privileged` |
+| `devices` | list of `{host, container, permissions}` | `[]` | none | Container only: host devices under `/dev/`. `permissions` is drawn from `rwm` and defaults to `rwm`. Deploying needs `stack.privileged` |
+| `init` | bool | `false` | `--init` | Container only: run Docker's init as PID 1 |
+| `networks` | list of Docker network names | `[]` | `--network` | Container only: existing networks on the node to connect to as well, at most 10 |
+| `version` | integer | absent | none | Update only: the `version` you read. If the service was saved since then, the update fails with `409` |
 
 Example `app.json` for a container:
 

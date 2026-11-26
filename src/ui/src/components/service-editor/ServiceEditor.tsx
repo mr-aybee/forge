@@ -4,15 +4,16 @@ import { useCatalog } from "../../api/hooks";
 import type { EditableRuntime, ServiceInput } from "../../api/types";
 import { Confirm } from "../ui";
 import { AdvancedSection, YamlToggle } from "./AdvancedSection";
-import { CommandSection } from "./CommandSection";
 import { EnvSection } from "./EnvSection";
 import { HealthSection } from "./HealthSection";
 import { ImageSection } from "./ImageSection";
-import { SectionCard } from "./parts";
-import { PortsSection } from "./PortsSection";
+import { PrivilegedHint, SectionCard } from "./parts";
+import { NetworkSection } from "./NetworkSection";
 import { ResourcesSection } from "./ResourcesSection";
+import { RunSection } from "./RunSection";
 import { RuntimeSection } from "./RuntimeSection";
-import { CLEARED_ON_SWITCH, KINDS, type BasicsState, type SectionId, sectionDomId, sectionIssues, sectionsFor, switchKind } from "./sections";
+import { SecuritySection } from "./SecuritySection";
+import { CLEARED_ON_SWITCH, KINDS, privilegedOf, type BasicsState, type SectionId, sectionDomId, sectionIssues, sectionsFor, switchKind } from "./sections";
 import { StartSection } from "./StartSection";
 import { StatusMark } from "./StatusMark";
 import { StorageSection } from "./StorageSection";
@@ -73,10 +74,12 @@ export function ServiceEditor({ value, onChange, mode, basics, basicsState, fact
         return { node: <StartSection value={value} set={set} home={facts.home} /> };
       case "image":
         return { node: <ImageSection value={value} set={set} /> };
-      case "ports":
-        return { node: <PortsSection value={value} set={set} /> };
-      case "command":
-        return { node: <CommandSection value={value} set={set} /> };
+      case "network":
+        return { node: <NetworkSection value={value} set={set} /> };
+      case "run":
+        return { node: <RunSection value={value} set={set} /> };
+      case "security":
+        return { node: <SecuritySection value={value} set={set} />, actions: privilegedOf(value).length ? <PrivilegedHint /> : undefined };
       case "resources":
         return { node: <ResourcesSection value={value} set={set} /> };
       case "env":

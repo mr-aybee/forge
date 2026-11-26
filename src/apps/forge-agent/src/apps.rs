@@ -846,7 +846,7 @@ pub async fn supervise(spec_file: &str) -> Result<(), String> {
             let _ = writeln!(f, "{note}");
         }
 
-        if !spec.restart {
+        if spec.effective_restart() == forge_catalog::apps::RestartPolicy::No {
             return Ok(());
         }
 
@@ -904,6 +904,8 @@ fn apply_container_options(body: &mut Value, spec: &AppSpec) {
         body["Labels"][k] = json!(v);
     }
 
+    apply_runtime_options(body, spec);
+
     if let Some(hc) = &spec.healthcheck {
         let ns = |s: u32| u64::from(s) * 1_000_000_000;
         body["Healthcheck"] = json!({
@@ -913,6 +915,59 @@ fn apply_container_options(body: &mut Value, spec: &AppSpec) {
             "Retries": hc.retries,
             "StartPeriod": ns(hc.start_period_secs),
         });
+    }
+}
+
+/// Capabilities, ulimits, tmpfs, DNS, sysctls, devices and init
+/// (`plans/service-orchestration.md` step 1). The server approved the
+/// privileged ones; the spec was validated on both sides.
+fn apply_runtime_options(body: &mut Value, spec: &AppSpec) {
+    let host = &mut body["HostConfig"];
+    let cap = |c: &String| c.strip_prefix("CAP_").unwrap_or(c).to_owned();
+
+    if !spec.cap_add.is_empty() {
+        host["CapAdd"] = json!(spec.cap_add.iter().map(cap).collect::<Vec<_>>());
+    }
+
+    if !spec.cap_drop.is_empty() {
+        host["CapDrop"] = json!(spec.cap_drop.iter().map(cap).collect::<Vec<_>>());
+    }
+
+    if !spec.ulimits.is_empty() {
+        let u: Vec<Value> =
+            spec.ulimits.iter().map(|u| json!({ "Name": u.name, "Soft": u.soft, "Hard": u.hard })).collect();
+        host["Ulimits"] = json!(u);
+    }
+
+    for t in &spec.tmpfs {
+        let opts = if t.size_mb > 0 { format!("size={}m", t.size_mb) } else { String::new() };
+        host["Tmpfs"][&t.target] = json!(opts);
+    }
+
+    if !spec.dns.is_empty() {
+        host["Dns"] = json!(spec.dns.iter().map(ToString::to_string).collect::<Vec<_>>());
+    }
+
+    for (k, v) in &spec.sysctls {
+        host["Sysctls"][k] = json!(v);
+    }
+
+    if !spec.devices.is_empty() {
+        let d: Vec<Value> = spec
+            .devices
+            .iter()
+            .map(|d| {
+                let inside = if d.container.is_empty() { &d.host } else { &d.container };
+                let perms = if d.permissions.is_empty() { "rwm" } else { &d.permissions };
+
+                json!({ "PathOnHost": d.host, "PathInContainer": inside, "CgroupPermissions": perms })
+            })
+            .collect();
+        host["Devices"] = json!(d);
+    }
+
+    if spec.init {
+        host["Init"] = json!(true);
     }
 }
 
@@ -975,7 +1030,10 @@ async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, Str
                 "HostConfig": {
                     "PortBindings": bindings,
                     "Binds": spec.volumes,
-                    "RestartPolicy": { "Name": if spec.restart { "unless-stopped" } else { "no" } },
+                    "RestartPolicy": {
+                        "Name": spec.effective_restart().docker_name(),
+                        "MaximumRetryCount": spec.restart_max_attempts,
+                    },
                 },
             });
 
@@ -991,6 +1049,14 @@ async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, Str
             if let Some(net) = &spec.mesh_network {
                 let connect = json!({ "Container": name });
                 docker::api("POST", &format!("/networks/{net}/connect"), Some(&connect), t).await?;
+            }
+
+            // Extra networks the operator named; they must already exist.
+            for net in &spec.networks {
+                let connect = json!({ "Container": name });
+                docker::api("POST", &format!("/networks/{net}/connect"), Some(&connect), t)
+                    .await
+                    .map_err(|e| format!("network `{net}`: {e}"))?;
             }
 
             docker::api("POST", &format!("/containers/{name}/start"), None, t).await?;
@@ -1404,6 +1470,47 @@ mod tests {
 
     fn me() -> u32 {
         rustix::process::getuid().as_raw()
+    }
+
+    #[test]
+    fn container_options_map_onto_the_docker_create_body() {
+        let spec: AppSpec = serde_json::from_value(json!({
+            "environment": "uat", "name": "cache", "runtime": "container", "image": "redis:7",
+            "cap_add": ["CAP_NET_ADMIN"], "cap_drop": ["ALL"],
+            "ulimits": [{"name": "nofile", "soft": 1024, "hard": 4096}],
+            "tmpfs": [{"target": "/tmp", "size_mb": 64}, {"target": "/run"}],
+            "dns": ["192.0.2.53"], "sysctls": [["net.core.somaxconn", "1024"]],
+            "devices": [{"host": "/dev/fuse"}], "init": true,
+        }))
+        .unwrap();
+        let mut body = json!({ "HostConfig": {} });
+        apply_runtime_options(&mut body, &spec);
+        let h = &body["HostConfig"];
+
+        assert_eq!(h["CapAdd"], json!(["NET_ADMIN"]));
+        assert_eq!(h["CapDrop"], json!(["ALL"]));
+        assert_eq!(h["Ulimits"], json!([{ "Name": "nofile", "Soft": 1024, "Hard": 4096 }]));
+        assert_eq!(h["Tmpfs"], json!({ "/tmp": "size=64m", "/run": "" }));
+        assert_eq!(h["Dns"], json!(["192.0.2.53"]));
+        assert_eq!(h["Sysctls"], json!({ "net.core.somaxconn": "1024" }));
+        assert_eq!(
+            h["Devices"],
+            json!([{ "PathOnHost": "/dev/fuse", "PathInContainer": "/dev/fuse", "CgroupPermissions": "rwm" }])
+        );
+        assert_eq!(h["Init"], json!(true));
+    }
+
+    #[test]
+    fn a_spec_without_options_adds_nothing() {
+        let spec: AppSpec = serde_json::from_value(json!({
+            "environment": "uat", "name": "web", "runtime": "container", "image": "nginx:1.27",
+        }))
+        .unwrap();
+        let mut body = json!({ "HostConfig": {} });
+        apply_runtime_options(&mut body, &spec);
+
+        assert_eq!(body, json!({ "HostConfig": {} }));
+        assert_eq!(spec.effective_restart().docker_name(), "unless-stopped");
     }
 
     #[test]

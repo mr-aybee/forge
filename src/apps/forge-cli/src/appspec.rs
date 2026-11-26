@@ -65,6 +65,65 @@ pub struct AppFlags {
     /// Restart it when it stops: true or false (the server's default is true).
     #[arg(long, value_name = "BOOL")]
     pub restart: Option<bool>,
+    /// Restart policy: no, always, unless-stopped or on-failure.
+    #[arg(long, value_enum, value_name = "POLICY")]
+    pub restart_policy: Option<RestartPolicy>,
+    /// With `--restart-policy on-failure`: give up after N restarts (0 = never).
+    #[arg(long, value_name = "N")]
+    pub restart_max_attempts: Option<u32>,
+    /// Kernel capability to add, such as NET_ADMIN (deploying needs
+    /// stack.privileged); repeat for more. Given at all, replaces the list.
+    #[arg(long = "cap-add", value_name = "CAP")]
+    pub cap_add: Vec<String>,
+    /// Kernel capability to drop (`ALL` for every one); repeat for more.
+    #[arg(long = "cap-drop", value_name = "CAP")]
+    pub cap_drop: Vec<String>,
+    /// DNS server address for the container; repeat for more.
+    #[arg(long = "dns", value_name = "IP")]
+    pub dns: Vec<String>,
+    /// tmpfs mount `PATH[:SIZE_MB]`; repeat for more.
+    #[arg(long = "tmpfs", value_name = "PATH[:SIZE_MB]")]
+    pub tmpfs: Vec<String>,
+    /// Run Docker's init as PID 1: true or false.
+    #[arg(long, value_name = "BOOL")]
+    pub init: Option<bool>,
+    /// Existing Docker network to connect to as well; repeat for more.
+    #[arg(long = "network", value_name = "NAME")]
+    pub networks: Vec<String>,
+}
+
+/// A restart policy (`--restart-policy`).
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestartPolicy {
+    No,
+    Always,
+    UnlessStopped,
+    OnFailure,
+}
+
+impl RestartPolicy {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::No => "no",
+            Self::Always => "always",
+            Self::UnlessStopped => "unless-stopped",
+            Self::OnFailure => "on-failure",
+        }
+    }
+}
+
+/// `PATH[:SIZE_MB]` of `--tmpfs`.
+fn parse_tmpfs(spec: &str) -> Result<Value> {
+    let (target, size) = match spec.split_once(':') {
+        Some((t, s)) => {
+            let mb: u32 =
+                s.parse().map_err(|_| CliError::usage(format!("--tmpfs {spec}: SIZE_MB must be a number")))?;
+            (t, mb)
+        }
+        None => (spec, 0),
+    };
+
+    Ok(json!({ "target": target, "size_mb": size }))
 }
 
 impl AppFlags {
@@ -79,6 +138,14 @@ impl AppFlags {
             || self.listen_port.is_some()
             || !self.volumes.is_empty()
             || self.restart.is_some()
+            || self.restart_policy.is_some()
+            || self.restart_max_attempts.is_some()
+            || !self.cap_add.is_empty()
+            || !self.cap_drop.is_empty()
+            || !self.dns.is_empty()
+            || !self.tmpfs.is_empty()
+            || self.init.is_some()
+            || !self.networks.is_empty()
     }
 }
 
@@ -190,6 +257,12 @@ pub fn definition(app: &Value) -> Value {
     let mut d = Map::new();
     d.insert("runtime".into(), app["runtime"].clone());
 
+    // Sent back on update: the server refuses it (409) if someone saved in
+    // between, instead of overwriting their change.
+    if app["version"].is_i64() {
+        d.insert("version".into(), app["version"].clone());
+    }
+
     for (k, v) in app["spec"].as_object().into_iter().flatten() {
         if !NOT_DEFINITION.contains(&k.as_str()) && !v.is_null() {
             d.insert(k.clone(), v.clone());
@@ -277,6 +350,31 @@ pub fn apply(body: &mut Value, changes: Changes<'_>) -> Result<()> {
 
     if let Some(r) = f.restart {
         b.insert("restart".into(), json!(r));
+    }
+
+    if let Some(p) = f.restart_policy {
+        b.insert("restart_policy".into(), json!(p.as_str()));
+        b.insert("restart".into(), json!(p != RestartPolicy::No));
+    }
+
+    if let Some(n) = f.restart_max_attempts {
+        b.insert("restart_max_attempts".into(), json!(n));
+    }
+
+    for (key, list) in [("cap_add", &f.cap_add), ("cap_drop", &f.cap_drop), ("dns", &f.dns), ("networks", &f.networks)]
+    {
+        if !list.is_empty() {
+            b.insert(key.into(), json!(list));
+        }
+    }
+
+    if !f.tmpfs.is_empty() {
+        let t = f.tmpfs.iter().map(|t| parse_tmpfs(t)).collect::<Result<Vec<_>>>()?;
+        b.insert("tmpfs".into(), Value::Array(t));
+    }
+
+    if let Some(i) = f.init {
+        b.insert("init".into(), json!(i));
     }
 
     for key in changes.unset_env {
@@ -453,6 +551,29 @@ mod tests {
         let missing = s(&["NOPE"]);
         let e = apply(&mut body, Changes { flags: &AppFlags::default(), secrets: Vec::new(), unset_env: &missing });
         assert!(e.is_err_and(|e| e.exit == Exit::Usage));
+    }
+
+    #[test]
+    fn container_option_flags_map_onto_the_definition() {
+        let flags = AppFlags {
+            restart_policy: Some(RestartPolicy::OnFailure),
+            restart_max_attempts: Some(3),
+            cap_drop: s(&["ALL"]),
+            dns: s(&["192.0.2.53"]),
+            tmpfs: s(&["/tmp:64", "/run"]),
+            init: Some(true),
+            networks: s(&["backend"]),
+            ..AppFlags::default()
+        };
+        let mut body = definition(&json!({ "runtime": "container", "version": 7, "spec": {}, "env": [] }));
+        assert!(apply(&mut body, Changes::of(&flags)).is_ok());
+
+        assert_eq!(body["version"], 7, "the loaded version goes back for the 409 check");
+        assert_eq!((&body["restart_policy"], &body["restart"]), (&json!("on-failure"), &json!(true)));
+        assert_eq!(body["restart_max_attempts"], 3);
+        assert_eq!(body["tmpfs"], json!([{ "target": "/tmp", "size_mb": 64 }, { "target": "/run", "size_mb": 0 }]));
+        assert_eq!((&body["init"], &body["networks"]), (&json!(true), &json!(["backend"])));
+        assert!(parse_tmpfs("/tmp:big").is_err());
     }
 
     #[test]

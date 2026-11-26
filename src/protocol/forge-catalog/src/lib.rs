@@ -24,6 +24,7 @@
 //!   (mode 0600; generated passwords never leave the node).
 
 pub mod apps;
+pub mod container_opts;
 pub mod deploy;
 pub mod docker_ops;
 pub mod docker_tls;

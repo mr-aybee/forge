@@ -13,10 +13,13 @@ serde.workspace = true
 serde_json.workspace = true
 forge-core.workspace = true
 serde-saphyr = { workspace = true, optional = true }
+schemars = { version = "1.2", default-features = false, features = ["derive", "std"], optional = true }
 
 [features]
 # Bounded YAML reading of Forge documents (server and CLI; not the agent).
 yaml = ["dep:serde-saphyr"]
+# JSON Schema for API inputs that embed catalog types (server only).
+schema = ["dep:schemars"]
 
 [lints]
 workspace = true

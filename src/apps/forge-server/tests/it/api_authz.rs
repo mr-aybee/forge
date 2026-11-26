@@ -880,6 +880,7 @@ async fn cluster_profiles_validate_scope_and_feed_ingress_endpoints() {
         created_by: forge_core::Principal::User(forge_core::UserId::new()),
         created_at: now,
         updated_at: now,
+        version: 0,
     };
     forge_core::ports::ServiceRepository::put_service(store, &app).await.unwrap();
 

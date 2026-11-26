@@ -1,8 +1,9 @@
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, ShieldAlert, Trash2 } from "lucide-react";
 import { type ReactNode, useId } from "react";
 
-import { Button, IconButton, Input } from "../ui";
-import { sectionDomId, type SectionMeta, type SectionStatus } from "./sections";
+import type { RestartPolicy, ServiceInput } from "../../api/types";
+import { Badge, Button, IconButton, Input, Select } from "../ui";
+import { RESTART_POLICIES, policyOf, sectionDomId, type SectionMeta, type SectionStatus } from "./sections";
 import { StatusMark } from "./StatusMark";
 
 /** One always-open section card at full width; its id is the rail's scroll target. */
@@ -64,10 +65,11 @@ export function FormField({ label, hint, error, wide, children }: { label: strin
 }
 
 /** A number input whose empty value is `0` (no limit) or `null`. */
-export function NumberInput({ id, value, onChange, empty = 0, invalid, ...rest }: { id: string; value: number | null; onChange: (v: number) => void; empty?: number; invalid?: boolean; min?: number; max?: number; step?: number; placeholder?: string; className?: string }) {
+export function NumberInput({ id, value, onChange, empty = 0, invalid, ...rest }: { id: string; value: number | null; onChange: (v: number) => void; empty?: number; invalid?: boolean; min?: number; max?: number; step?: number; placeholder?: string; className?: string; label?: string }) {
   return (
     <Input
       id={id}
+      aria-label={rest.label}
       type="number"
       inputMode="decimal"
       aria-invalid={invalid || undefined}
@@ -129,5 +131,86 @@ export function Check({ checked, onChange, label, hint }: { checked: boolean; on
         {hint && <span className="block text-xs text-faint">{hint}</span>}
       </span>
     </label>
+  );
+}
+
+/** Restart policy select, plus the attempt limit when it is `on-failure`. */
+export function RestartFields({ value, set, systemd = false }: { value: ServiceInput; set: (p: Partial<ServiceInput>) => void; systemd?: boolean }) {
+  const policy = policyOf(value);
+  const attemptsBad = policy === "on-failure" && (!Number.isInteger(value.restart_max_attempts) || value.restart_max_attempts < 0 || value.restart_max_attempts > 1000);
+  return (
+    <>
+      <FormField label="Restart policy" hint={systemd ? "systemd Restart=: always, on-failure or no. Unless stopped behaves like always." : "Unless stopped is Forge's default: restart unless an operator stopped it."}>
+        {(id) => (
+          <Select id={id} value={policy} onChange={(e) => {
+            const p = e.target.value as RestartPolicy;
+            set({ restart_policy: p, restart: p !== "no" });
+          }}>
+            {RESTART_POLICIES.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.label}
+              </option>
+            ))}
+          </Select>
+        )}
+      </FormField>
+      {policy === "on-failure" && (
+        <FormField label="Max restart attempts" error={attemptsBad ? "0 (unlimited) to 1000." : undefined} hint="After a non-zero exit. Empty or 0: no limit.">
+          {(id, invalid) => <NumberInput id={id} className="w-36" min={0} max={1000} value={value.restart_max_attempts} invalid={invalid} placeholder="unlimited" onChange={(n) => set({ restart_max_attempts: Math.round(n) || 0 })} />}
+        </FormField>
+      )}
+    </>
+  );
+}
+
+/** Small marker for settings that need stack.privileged to deploy. */
+export function PrivilegedHint() {
+  return (
+    <span title="Deploying needs the stack.privileged permission (administrators) and an MFA-verified sign-in. You can still save." className="inline-flex">
+      <Badge tone="warn">
+        <ShieldAlert className="mr-1 size-3" aria-hidden /> needs stack.privileged
+      </Badge>
+    </span>
+  );
+}
+
+/** A labelled block inside a section: small heading with optional badge, then content. */
+export function SubBlock({ title, badge, hint, children }: { title: string; badge?: ReactNode; hint?: ReactNode; children: ReactNode }) {
+  return (
+    <div className="min-w-0 space-y-1 md:col-span-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+        <p className="text-xs font-medium text-muted">{title}</p>
+        {badge}
+      </div>
+      {children}
+      {hint && <p className="text-xs text-faint">{hint}</p>}
+    </div>
+  );
+}
+
+/** Dense rows of several inputs each (ulimits, tmpfs, devices, sysctls). */
+export function RowsEditor<T>({ label, rows, onChange, blank, addLabel, render, max }: { label: string; rows: T[]; onChange: (v: T[]) => void; blank: () => T; addLabel: string; render: (row: T, set: (r: T) => void, i: number) => ReactNode; max?: number }) {
+  return (
+    <div className="space-y-1.5">
+      {rows.length === 0 ? (
+        <p className="rounded-md border border-dashed border-line px-3 py-2 text-xs text-faint">None yet.</p>
+      ) : (
+        <ul className="divide-y divide-line rounded-md border border-line">
+          {rows.map((r, i) => (
+            // Index keys: rows have no identity of their own.
+            <li key={i} className="flex min-w-0 items-center gap-2 px-2 py-1">
+              <span className="w-5 shrink-0 text-right font-mono text-[11px] text-faint tabular-nums">{i + 1}</span>
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 sm:flex-nowrap">{render(r, (n) => onChange(rows.map((x, j) => (j === i ? n : x))), i)}</div>
+              <IconButton type="button" label={`Remove ${label.toLowerCase()} ${i + 1}`} className="size-7 hover:text-bad" onClick={() => onChange(rows.filter((_, j) => j !== i))}>
+                <Trash2 className="size-3.5" />
+              </IconButton>
+            </li>
+          ))}
+        </ul>
+      )}
+      <Button type="button" variant="ghost" disabled={max !== undefined && rows.length >= max} title={max !== undefined && rows.length >= max ? `At most ${max}` : undefined} onClick={() => onChange([...rows, blank()])}>
+        <Plus className="size-4" /> {addLabel}
+      </Button>
+    </div>
   );
 }

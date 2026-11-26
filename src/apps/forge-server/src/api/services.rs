@@ -213,7 +213,54 @@ pub struct AppInput {
     /// Container: join the node's cluster container network (default on).
     #[serde(default)]
     pub mesh: Option<bool>,
+    /// Restart policy, capabilities, ulimits, tmpfs, DNS, sysctls, devices,
+    /// init and extra networks.
+    #[serde(flatten)]
+    pub options: forge_catalog::container_opts::ContainerOptions,
+    /// Update only: the `version` the editor loaded. A different stored
+    /// version fails with 409 instead of overwriting someone else's change.
+    #[serde(default)]
+    pub version: Option<i64>,
 }
+
+/// The stored form of a service spec (`services.spec`): the runtime fields
+/// of `forge_catalog::AppSpec` without name, runtime and environment
+/// variables, plus Forge's own `health` and `mesh`.
+#[derive(Debug, Serialize)]
+struct StoredSpec<'a> {
+    environment: &'a str,
+    command: &'a str,
+    working_dir: &'a str,
+    listen_port: Option<u16>,
+    image: &'a str,
+    ports: &'a [String],
+    volumes: &'a [String],
+    env_files: &'a [String],
+    restart: bool,
+    dependencies: &'a [forge_catalog::apps::Dependency],
+    cpu_millis: u32,
+    memory_mb: u32,
+    entrypoint: &'a str,
+    user: &'a str,
+    hostname: &'a str,
+    labels: &'a [(String, String)],
+    extra_hosts: &'a [String],
+    healthcheck: &'a Option<forge_catalog::apps::HealthCheck>,
+    stop_timeout_secs: u32,
+    read_only: bool,
+    log_max_mb: u32,
+    swarm: &'a Option<forge_catalog::swarm_service::SwarmSettings>,
+    #[serde(flatten)]
+    options: &'a forge_catalog::container_opts::ContainerOptions,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    health: Option<Value>,
+    /// Only the opt-out is stored: absent means on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mesh: Option<bool>,
+}
+
+/// The 409 message when a service changed after the editor loaded it.
+const CHANGED_SINCE_OPENED: &str = "this service changed since you opened it; reload to see the latest version";
 
 const fn yes() -> bool {
     true
@@ -266,42 +313,36 @@ fn apply(state: &AppState, app: &mut Service, ns_slug: &str, input: AppInput) ->
     // The health policy has its own endpoint (`PUT /services/{id}/health`);
     // an ordinary update keeps it.
     let health = app.spec.get("health").cloned().filter(|v| !v.is_null());
-    app.spec = json!({
-        "environment": ns_slug,
-        "command": input.command.trim(),
-        "working_dir": input.working_dir.trim(),
-        "listen_port": input.listen_port,
-        "image": input.image.trim(),
-        "ports": input.ports,
-        "volumes": input.volumes,
-        "env_files": input.env_files,
-        "restart": input.restart,
-        "dependencies": input.dependencies,
-        "cpu_millis": input.cpu_millis,
-        "memory_mb": input.memory_mb,
-        "entrypoint": input.entrypoint.trim(),
-        "user": input.user.trim(),
-        "hostname": input.hostname.trim(),
-        "labels": input.labels,
-        "extra_hosts": input.extra_hosts,
-        "healthcheck": input.healthcheck,
-        "stop_timeout_secs": input.stop_timeout_secs,
-        "read_only": input.read_only,
-        "log_max_mb": input.log_max_mb,
-        "swarm": input.swarm,
-    });
-
-    if let (Some(h), Some(spec)) = (health, app.spec.as_object_mut()) {
-        spec.insert("health".into(), h);
-    }
-
-    // Only the opt-out is stored: absent means on.
-    if input.mesh == Some(false)
-        && app.runtime == "container"
-        && let Some(spec) = app.spec.as_object_mut()
-    {
-        spec.insert("mesh".into(), json!(false));
-    }
+    let mesh = (input.mesh == Some(false) && app.runtime == "container").then_some(false);
+    let stored = StoredSpec {
+        environment: ns_slug,
+        command: input.command.trim(),
+        working_dir: input.working_dir.trim(),
+        listen_port: input.listen_port,
+        image: input.image.trim(),
+        ports: &input.ports,
+        volumes: &input.volumes,
+        env_files: &input.env_files,
+        restart: input.restart,
+        dependencies: &input.dependencies,
+        cpu_millis: input.cpu_millis,
+        memory_mb: input.memory_mb,
+        entrypoint: input.entrypoint.trim(),
+        user: input.user.trim(),
+        hostname: input.hostname.trim(),
+        labels: &input.labels,
+        extra_hosts: &input.extra_hosts,
+        healthcheck: &input.healthcheck,
+        stop_timeout_secs: input.stop_timeout_secs,
+        read_only: input.read_only,
+        log_max_mb: input.log_max_mb,
+        swarm: &input.swarm,
+        options: &input.options,
+        health,
+        mesh,
+    };
+    app.spec = serde_json::to_value(&stored)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?;
 
     app.updated_at = state.clock.now();
     build_spec(app, None).map_err(ApiError::bad_request)?;
@@ -338,6 +379,7 @@ pub async fn create(
         created_by: caller.principal(),
         created_at: now,
         updated_at: now,
+        version: 0,
     };
     apply(&state, &mut app, &crate::names::environment_slug(&ns.name), input)?;
     state.swarm.check_runtime(ns.id, &app.runtime).await?;
@@ -369,6 +411,15 @@ pub async fn update(
     let mut app = load_own(&state, id).await?;
     caller.authorize(Action::Deploy, ns_ref(app.environment_id)).await?;
     let ns_slug = app.spec.get("environment").and_then(Value::as_str).unwrap_or_default().to_owned();
+
+    // The editor sends the version it loaded; a mismatch means someone
+    // saved in between, and their change must not be lost silently.
+    let expected = input.version;
+
+    if expected.is_some_and(|v| v != app.version) {
+        return Err(ApiError::conflict(CHANGED_SINCE_OPENED));
+    }
+
     apply(&state, &mut app, &ns_slug, input)?;
     state.swarm.check_runtime(app.environment_id, &app.runtime).await?;
 
@@ -377,7 +428,20 @@ pub async fn update(
         crate::jobs::swarm_service::binds_of(&app).map_err(ApiError::bad_request)?;
     }
 
-    state.store.put_service(&app).await?;
+    match expected {
+        Some(v) => {
+            if !state.store.update_service_if(&app, v).await? {
+                return Err(ApiError::conflict(CHANGED_SINCE_OPENED));
+            }
+
+            app.version = v + 1;
+        }
+        None => {
+            state.store.put_service(&app).await?;
+            app.version += 1;
+        }
+    }
+
     let keys: Vec<&str> = app.env.iter().map(|e| e.key.as_str()).collect();
     caller
         .audit(

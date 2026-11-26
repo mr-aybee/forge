@@ -46,6 +46,7 @@ fn app_row(r: &AnyRow) -> DomainResult<Service> {
         created_by: parsed(r, "created_by")?,
         created_at: ts(r, "created_at")?,
         updated_at: ts(r, "updated_at")?,
+        version: int(r, "version")?,
     })
 }
 
@@ -68,7 +69,8 @@ impl ServiceRepository for Store {
         sqlx::query(
             "INSERT INTO services (id, workspace_id, environment_id, name, runtime, spec, env, created_by, created_at, updated_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-             ON CONFLICT (id) DO UPDATE SET runtime = $5, spec = $6, env = $7, updated_at = $10",
+             ON CONFLICT (id) DO UPDATE SET runtime = $5, spec = $6, env = $7, updated_at = $10,
+                 version = services.version + 1",
         )
         .bind(a.id.to_string())
         .bind(a.workspace_id.to_string())
@@ -84,6 +86,24 @@ impl ServiceRepository for Store {
         .await
         .map_err(db_err)?;
         Ok(())
+    }
+
+    async fn update_service_if(&self, a: &Service, expected: i64) -> DomainResult<bool> {
+        let done = sqlx::query(
+            "UPDATE services SET runtime = $2, spec = $3, env = $4, updated_at = $5, version = version + 1
+             WHERE id = $1 AND version = $6",
+        )
+        .bind(a.id.to_string())
+        .bind(&a.runtime)
+        .bind(a.spec.to_string())
+        .bind(env_to_db(&a.env))
+        .bind(a.updated_at.0)
+        .bind(expected)
+        .execute(self.pool())
+        .await
+        .map_err(db_err)?;
+
+        Ok(done.rows_affected() == 1)
     }
 
     async fn get_service(&self, id: ServiceId) -> DomainResult<Option<Service>> {
@@ -270,7 +290,9 @@ impl HealthAuthorityRepository for Store {
         // One transaction: a changed policy never exists without the
         // record of who saved it, nor that record without the policy.
         let mut tx = self.pool().begin().await.map_err(db_err)?;
-        sqlx::query("UPDATE services SET runtime = $2, spec = $3, env = $4, updated_at = $5 WHERE id = $1")
+        sqlx::query(
+            "UPDATE services SET runtime = $2, spec = $3, env = $4, updated_at = $5, version = version + 1 WHERE id = $1",
+        )
             .bind(a.id.to_string())
             .bind(&a.runtime)
             .bind(a.spec.to_string())

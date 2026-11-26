@@ -2346,6 +2346,7 @@ name = "forge-catalog"
 version = "0.0.1"
 dependencies = [
  "forge-core",
+ "schemars 1.2.3",
  "serde",
  "serde-saphyr",
  "serde_json",

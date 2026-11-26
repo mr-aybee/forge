@@ -927,6 +927,10 @@ pub struct Service {
     pub created_by: Principal,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// Bumped on every save; an editor sends back the one it loaded so a
+    /// concurrent change is refused instead of overwritten.
+    #[serde(default)]
+    pub version: i64,
 }
 
 /// Placement of a service on a node.
