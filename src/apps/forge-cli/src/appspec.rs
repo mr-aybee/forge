@@ -362,9 +362,16 @@ pub fn apply(body: &mut Value, changes: Changes<'_>) -> Result<()> {
         b.insert("restart_max_attempts".into(), json!(n));
     }
 
-    // Attempts apply to on-failure only; a stored count would make the
-    // server refuse a policy the user just changed.
+    // Attempts apply to on-failure only. A count the user asked for is an
+    // error under another policy; a stored one is dropped, since the server
+    // would otherwise refuse the policy the user just changed.
     if b.get("restart_policy").and_then(Value::as_str) != Some("on-failure") {
+        if f.restart_max_attempts.is_some_and(|n| n > 0) {
+            return Err(CliError::usage(
+                "--restart-max-attempts applies to the on-failure policy only; add --restart-policy on-failure",
+            ));
+        }
+
         b.remove("restart_max_attempts");
     }
 
@@ -601,6 +608,12 @@ mod tests {
         assert!(apply(&mut body, Changes::of(&always)).is_ok());
         assert_eq!(body["restart_policy"], "always");
         assert!(body.get("restart_max_attempts").is_none());
+
+        // A count asked for under another policy is an error, not dropped silently.
+        let mut body = definition(&json!({ "runtime": "systemd", "spec": { "restart": true }, "env": [] }));
+        let attempts = AppFlags { restart_max_attempts: Some(3), ..AppFlags::default() };
+        let e = apply(&mut body, Changes::of(&attempts));
+        assert!(e.is_err_and(|e| e.exit == Exit::Usage && e.message.contains("--restart-policy on-failure")));
 
         // Unrelated flags keep a stored on-failure count.
         let mut body = definition(&stored);

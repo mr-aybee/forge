@@ -173,6 +173,27 @@ pub struct AppJob {
     pub facts: Arc<dyn forge_core::tags::FactsRepository>,
 }
 
+/// Whether a node with `facts` can take a spec with step-1 container
+/// options. No facts yet (a node that just enrolled or updated) is
+/// retryable: the job's attempt limit (2 for `app.action`, 3 on the deploy
+/// path) turns it into a failure with this message if the node never
+/// reports. Facts without the `container_options` flag mean an older agent.
+pub fn agent_takes_options(facts: Option<&Value>) -> Result<(), StepError> {
+    let Some(facts) = facts else {
+        return Err(retry(
+            "the node has not reported its facts yet, so Forge cannot tell whether its agent supports this service's container options; deploy again once the node is online",
+        ));
+    };
+
+    if facts.get("container_options").and_then(Value::as_bool) == Some(true) {
+        return Ok(());
+    }
+
+    Err(StepError::Fatal(
+        "this node's agent is too old for the restart policy, capabilities, ulimits, tmpfs, DNS, sysctls, devices, init or networks this service uses; update the agent first".into(),
+    ))
+}
+
 /// Whether a service wants the cluster container network: containers only,
 /// unless its spec sets `"mesh": false`.
 #[must_use]
@@ -362,22 +383,9 @@ impl AppJob {
             return Ok(());
         }
 
-        // A failed read or a node that has not reported facts yet (just
-        // enrolled or updated) is retried; only facts without the flag mean
-        // an older agent.
         let facts = self.facts.facts_of(server).await.map_err(retry)?;
 
-        let Some((facts, _)) = facts else {
-            return Err(retry("the node has not reported its facts yet"));
-        };
-
-        if facts.get("container_options").and_then(Value::as_bool) == Some(true) {
-            return Ok(());
-        }
-
-        Err(StepError::Fatal(
-            "this node's agent is too old for the restart policy, capabilities, ulimits, tmpfs, DNS, sysctls, devices, init or networks this service uses; update the agent first".into(),
-        ))
+        agent_takes_options(facts.as_ref().map(|(f, _)| f))
     }
 
     /// Puts `spec` into the copy that serves on `server` (#73): a service
@@ -660,6 +668,14 @@ impl JobHandler for AppJob {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_facts_are_retried_and_old_agents_refused() {
+        assert!(matches!(agent_takes_options(None), Err(StepError::Retryable(_))), "no facts yet");
+        assert!(matches!(agent_takes_options(Some(&json!({ "agent_version": "1.0" }))), Err(StepError::Fatal(_))));
+        assert!(matches!(agent_takes_options(Some(&json!({ "container_options": false }))), Err(StepError::Fatal(_))));
+        assert!(agent_takes_options(Some(&json!({ "container_options": true }))).is_ok());
+    }
 
     #[test]
     fn expands_setting_references() {

@@ -524,7 +524,7 @@ missing one exits with `2` and names the flag.
 | `--volume <VOLUME>` | `HOST_PATH:CONTAINER_PATH[:ro]` or `VOLUME_NAME:CONTAINER_PATH[:ro]`; repeatable | none | no | A container volume. Given at all, the flags replace the file's whole `volumes` list | `--volume /srv/forge/apps/shop-prod/web/html:/usr/share/nginx/html:ro` |
 | `--restart <BOOL>` | `true` or `false` | the server's default, `true` | no | Restart it when it stops. Sets the restart policy to `unless-stopped` (`true`) or `no` (`false`) | `--restart false` |
 | `--restart-policy <POLICY>` | enum: `no`, `always`, `unless-stopped`, `on-failure` | none | no | When the service is restarted. Overrides `--restart` | `--restart-policy on-failure` |
-| `--restart-max-attempts <N>` | integer, 0 to 1000 | none | no | With `on-failure` only: stop restarting after N restarts. `0` means no limit. Any other policy clears it | `--restart-max-attempts 5` |
+| `--restart-max-attempts <N>` | integer, 0 to 1000 | none | no | With `on-failure` only: stop restarting after N restarts. `0` means no limit. Under any other policy the command exits with `2`. A stored count is cleared when you switch to another policy | `--restart-max-attempts 5` |
 | `--cap-add <CAP>` | capability name; repeatable | none | no | A Linux capability to add (container only). Deploying then needs `stack.privileged`. Given at all, the flags replace the whole list | `--cap-add NET_ADMIN` |
 | `--cap-drop <CAP>` | capability name or `ALL`; repeatable | none | no | A Linux capability to drop (container only) | `--cap-drop ALL` |
 | `--dns <IP>` | IP address; repeatable | none | no | A DNS server for the container, at most 8 | `--dns 192.0.2.53` |
@@ -679,7 +679,7 @@ forge services update [OPTIONS] <SERVICE>
 | `--volume <VOLUME>` | `HOST_PATH:CONTAINER_PATH[:ro]` or `VOLUME_NAME:CONTAINER_PATH[:ro]`; repeatable | keep | no | Container volumes. Given at all, the flags replace the whole list | `--volume /srv/data:/data` |
 | `--restart <BOOL>` | `true` or `false` | keep | no | Restart it when it stops. Replaces a stored restart policy with `unless-stopped` (`true`) or `no` (`false`) | `--restart false` |
 | `--restart-policy <POLICY>` | enum: `no`, `always`, `unless-stopped`, `on-failure` | keep | no | When the service is restarted. Overrides `--restart` | `--restart-policy on-failure` |
-| `--restart-max-attempts <N>` | integer, 0 to 1000 | keep | no | With `on-failure` only: stop restarting after N restarts. `0` means no limit. Any other policy clears it | `--restart-max-attempts 5` |
+| `--restart-max-attempts <N>` | integer, 0 to 1000 | keep | no | With `on-failure` only: stop restarting after N restarts. `0` means no limit. Under any other policy the command exits with `2`. A stored count is cleared when you switch to another policy | `--restart-max-attempts 5` |
 | `--cap-add <CAP>` | capability name; repeatable | keep | no | A Linux capability to add (container only). Deploying then needs `stack.privileged`. Given at all, the flags replace the whole list | `--cap-add NET_ADMIN` |
 | `--cap-drop <CAP>` | capability name or `ALL`; repeatable | keep | no | A Linux capability to drop (container only) | `--cap-drop ALL` |
 | `--dns <IP>` | IP address; repeatable | keep | no | A DNS server for the container, at most 8 | `--dns 192.0.2.53` |
