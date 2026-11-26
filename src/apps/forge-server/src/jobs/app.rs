@@ -64,6 +64,12 @@ pub fn build_spec(app: &Service, envelope: Option<&Envelope>) -> Result<AppSpec,
         env.push(json!([e.key, value]));
     }
 
+    // `mesh` (default on) is the service's choice; the job decides the
+    // network per node (`AppJob::attach_mesh`), so it never reaches a node.
+    if let Some(m) = v.as_object_mut() {
+        m.remove("mesh");
+    }
+
     v["name"] = json!(app.name);
     v["runtime"] = json!(app.runtime);
     v["env"] = Value::Array(env);
@@ -161,6 +167,17 @@ pub struct AppJob {
     pub clock: Arc<dyn Clock>,
     /// Which copy (slot) of a service serves on each node (#73).
     pub deploys: Arc<dyn forge_core::deploy::DeploymentRepository>,
+    /// Cluster networks and node facts: whether a container joins the
+    /// node's cluster container network (`plans/native-mesh.md` 1.7).
+    pub fabrics: Arc<dyn forge_core::ports::FabricRepository>,
+    pub facts: Arc<dyn forge_core::tags::FactsRepository>,
+}
+
+/// Whether a service wants the cluster container network: containers only,
+/// unless its spec sets `"mesh": false`.
+#[must_use]
+pub fn mesh_wanted(app: &Service) -> bool {
+    app.runtime == "container" && app.spec.get("mesh") != Some(&Value::Bool(false))
 }
 
 /// Instance status while an action runs.
@@ -320,6 +337,23 @@ impl AppJob {
         Ok(spec)
     }
 
+    /// Connects a container to `server`'s cluster container network when the
+    /// service wants it, the network is up there and the agent can take the
+    /// field; otherwise leaves `spec` as it is.
+    pub async fn attach_mesh(&self, app: &Service, spec: &mut AppSpec, server: ServerId) -> Result<(), StepError> {
+        if !mesh_wanted(app) {
+            return Ok(());
+        }
+
+        let node = self.servers.get_server(server).await.map_err(retry)?;
+        let fabric = crate::stacks::fabric_nodes(self.fabrics.as_ref(), node.workspace_id).await;
+        let capable = crate::stacks::mesh_capable(self.facts.as_ref(), server).await;
+        let (net, _) = crate::stacks::decide_mesh(fabric.get(&server.to_string()), capable, false, &node.hostname);
+        spec.mesh_network = net;
+
+        Ok(())
+    }
+
     /// Puts `spec` into the copy that serves on `server` (#73): a service
     /// rolled out side by side runs in slot `a` or `b` with its own ports;
     /// one deployed only in place keeps its single instance.
@@ -428,6 +462,7 @@ impl AppJob {
         }
 
         self.serving_slot(&mut spec, app.id, p.server_id).await?;
+        self.attach_mesh(&app, &mut spec, p.server_id).await?;
 
         if p.action == "deploy" {
             let roots = crate::stacks::bind_roots(self.files.as_ref(), p.server_id).await;

@@ -459,6 +459,36 @@ but programs that query mDNS directly (Avahi tools, some browsers) do not
 read the hosts file. See [the trade-offs](/docs/concepts/local-names/#local-and-mdns).
 :::
 
+### Cluster DNS
+
+The `[dns]` section turns on the server host's tier of
+[forge-dns](/docs/reference/forge-dns/). Each node in a cluster network runs
+its own forge-dns; this tier answers when a node's resolver is down. It is
+off by default.
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `dns.listen` | list of `IPv4:port` | `[]` | Addresses nodes reach this host's forge-dns on. When set, the server writes `/var/lib/forge-dns/names.json` (`dns.records_file`) with the names of every cluster in every workspace, and sends these IPs to nodes as the second resolver for their containers. Empty: no server-host tier and no file |
+| `dns.upstreams` | list of `IP:port` | `[]` | Resolvers for names outside the cluster zones. Parsed and checked, but not passed to forge-dns yet: forge-dns forwards to the host's own resolvers (`/etc/resolv.conf`). To use others, add `--upstream <ip:port>` to `FORGE_DNS_ARGS` in `/etc/forge/forge-dns.env` |
+| `dns.records_file` | path | `/var/lib/forge-dns/names.json` | The record file the server writes (mode `0644`) for this host's forge-dns. Its folder must be writable by the server and readable by the `forge-dns` user; `install.sh` creates the default one |
+
+```toml
+[dns]
+listen = ["192.0.2.10:53"]
+upstreams = []
+```
+
+The server does not run forge-dns itself. The `forge-dns.service` unit does.
+`install.sh` writes its settings to `/etc/forge/forge-dns.env` and starts
+it when `dns.listen` is set:
+
+```sh
+FORGE_DNS_FILE=/var/lib/forge-dns/names.json
+FORGE_DNS_ARGS=--listen 192.0.2.10:53
+```
+
+Nodes must reach the listen address on UDP and TCP port `53`.
+
 ## Environment overrides
 
 `FORGE_DATA_DIR`, `FORGE_DATABASE_URL`, `FORGE_API_LISTEN`,

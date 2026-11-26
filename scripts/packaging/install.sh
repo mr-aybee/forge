@@ -211,6 +211,11 @@ if [ "$UNINSTALL" = true ]; then
   if command -v systemctl >/dev/null 2>&1; then
     systemctl disable --now forge-server >/dev/null 2>&1 || true
     rm -f /etc/systemd/system/forge-server.service
+    # forge-dns stays when this machine is also a node: the agent runs it then.
+    if ! systemctl cat forge-agent.service >/dev/null 2>&1; then
+      systemctl disable --now forge-dns >/dev/null 2>&1 || true
+      rm -f /etc/systemd/system/forge-dns.service /usr/local/bin/forge-dns "$CONF_DIR/forge-dns.env"
+    fi
     systemctl daemon-reload >/dev/null 2>&1 || true
   fi
   step "Service" "forge-server.service stopped and removed"
@@ -765,6 +770,16 @@ conf_value() { # conf_value <table or -> <key>: a quoted value from forge.toml
       }
     }' "$CONF_DIR/forge.toml"
 }
+conf_list() { # conf_list <table> <key>: the quoted items of a one-line list, one per line
+  awk -v t="$1" -v k="$2" '
+    /^[[:space:]]*\[/ { cur = $0; gsub(/[][[:space:]]/, "", cur); next }
+    cur == t && match($0, "^[[:space:]]*" k "[[:space:]]*=[[:space:]]*\\[") {
+      v = substr($0, RLENGTH + 1); sub(/\].*/, "", v)
+      n = split(v, parts, ",")
+      for (i = 1; i <= n; i++) { p = parts[i]; gsub(/[[:space:]"]/, "", p); if (p != "") print p }
+      exit
+    }' "$CONF_DIR/forge.toml"
+}
 port_of() { printf '%s' "$1" | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p'; }
 API_LISTEN="$(conf_value - api_listen)"; API_LISTEN="${API_LISTEN:-0.0.0.0:3880}"
 API_PORT="$(port_of "$API_LISTEN")"; API_PORT="${API_PORT:-3880}"
@@ -776,6 +791,61 @@ API_HOST="$(printf '%s' "$API_LISTEN" | sed -E 's/:[0-9]+$//; s/^\[(.*)\]$/\1/')
 case "$API_HOST" in ""|0.0.0.0|::) LOCAL_API="http://127.0.0.1:$API_PORT" ;; *:*) LOCAL_API="http://[$API_HOST]:$API_PORT" ;; *) LOCAL_API="http://$API_HOST:$API_PORT" ;; esac
 PORTS="$API_PORT $AGENT_PORT $WORKER_PORT"
 PORTS_TEXT="$API_PORT/tcp (console), $AGENT_PORT/tcp (agents), $WORKER_PORT/tcp (analytics uploads)"
+
+# ------------------------------------------------------------------ cluster DNS
+# forge-dns answers the cluster names from $DATA_DIR/names.json for the nodes
+# (plans/native-mesh.md 2.4). Installed always; enabled only when forge.toml
+# sets [dns] listen (default empty = disabled). The env file is ours on the
+# server and is rewritten on every run from that setting.
+DNS_STATE="installed, disabled ([dns] listen is empty)"
+if [ -f "$HERE/dist/forge-dns-linux-$MACH" ]; then
+  install -m 0755 "$HERE/dist/forge-dns-linux-$MACH" /usr/local/bin/forge-dns
+  id forge-dns >/dev/null 2>&1 || useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin forge-dns
+  # The server writes names.json here (0644); forge-dns only reads the folder
+  install -d -m 0755 -o forge -g forge /var/lib/forge-dns
+  DNS_LISTEN="$(conf_list dns listen | tr '\n' ' ' | sed 's/ $//')"
+  cat > /etc/systemd/system/forge-dns.service <<EOF
+[Unit]
+Description=Orbyn Forge cluster DNS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=forge-dns
+Group=forge-dns
+DynamicUser=no
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/var/lib/forge-dns
+EnvironmentFile=-$CONF_DIR/forge-dns.env
+ExecStart=/usr/local/bin/forge-dns --file \${FORGE_DNS_FILE} \$FORGE_DNS_ARGS
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  command -v restorecon >/dev/null 2>&1 && restorecon -F /etc/systemd/system/forge-dns.service 2>/dev/null || true
+  systemctl daemon-reload
+  if [ -n "$DNS_LISTEN" ]; then
+    DNS_ARGS=""
+    for a in $DNS_LISTEN; do DNS_ARGS="$DNS_ARGS --listen $a"; done
+    for u in $(conf_list dns upstreams); do DNS_ARGS="$DNS_ARGS --upstream $u"; done
+    printf 'FORGE_DNS_FILE=%s\nFORGE_DNS_ARGS=%s\n' "/var/lib/forge-dns/names.json" "${DNS_ARGS# }" > "$CONF_DIR/forge-dns.env"
+    chmod 0644 "$CONF_DIR/forge-dns.env"
+    systemctl enable forge-dns >/dev/null 2>&1
+    systemctl restart forge-dns || true
+    DNS_STATE="listening on $DNS_LISTEN"
+  else
+    systemctl disable --now forge-dns >/dev/null 2>&1 || true
+  fi
+  step "Cluster DNS" "forge-dns.service ($DNS_STATE)"
+else
+  note "Cluster DNS" "forge-dns-linux-$MACH is not in this package; skipped"
+fi
 
 # Plain iptables (for example Oracle Cloud images: SSH allowed, then a final
 # REJECT): insert an ACCEPT per port above the first REJECT or DROP rule, for

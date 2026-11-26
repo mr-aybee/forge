@@ -1,6 +1,6 @@
 ---
 title: Deploy from CI
-description: Roll out a service from GitHub Actions or GitLab CI with a service account that may deploy only that service.
+description: Roll out a service or a compose stack from GitHub Actions or GitLab CI with a service account limited to it.
 sidebar:
   order: 8
 ---
@@ -122,6 +122,39 @@ The step's exit status tells the pipeline what happened:
 | `7` | The service already has a deployment running |
 | `4` | The token may not deploy this service |
 | `2` | The document or the plan was refused |
+
+## Deploy a compose stack
+
+A pipeline can roll out a compose stack from a
+[`forge.stack.yaml`](/docs/reference/stack-yaml/) the same way.
+
+1. Give the service account `view`, `stack.manage` and `job.create` on the
+   environment and `server.manage` on the stack's nodes:
+
+   ```sh
+   forge access profiles create "CI stacks" --action view --action stack.manage --action job.create --action server.manage
+   forge access assignments add svc-ci-web "CI stacks" environment:<environment-id> --yes
+   forge access assignments add svc-ci-web "CI stacks" server:<node-id> --yes
+   ```
+
+2. Run the apply step instead of `forge deploy apply`:
+
+   ```sh
+   ./forge --non-interactive stacks apply -f forge.stack.yaml --environment prod --wait --timeout 30
+   ```
+
+   `--non-interactive` starts without a prompt.
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | The stack is live on every node |
+| `1` | The document or the plan was refused |
+| `2` | A node failed; later nodes were not deployed |
+| `7` | A rollout of the stack is already running |
+| `8` | `--timeout` passed; the rollout goes on in Forge |
+
+Stacks with host-access settings need `stack.privileged` and MFA, which a
+token never holds.
 
 ## Verify
 

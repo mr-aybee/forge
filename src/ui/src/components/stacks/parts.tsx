@@ -172,6 +172,55 @@ function Row({ k, children }: { k: string; children: ReactNode }) {
   );
 }
 
+/** Whether a service joins the cluster container network, as the preview reports it. */
+export function MeshValue({ mesh }: { mesh: boolean | string }) {
+  if (mesh === true) return <Badge tone="ok">on</Badge>;
+  if (mesh === false) return <span className="text-faint" title="The node is not on the cluster network">no</span>;
+  return <Badge tone="muted">{mesh}</Badge>;
+}
+
+/** Reads top-level `x-forge.mesh` from a compose text: absent means on. */
+export function composeMeshOn(text: string): boolean {
+  const lines = text.split("\n");
+  const i = lines.findIndex((l) => /^x-forge:\s*(#.*)?$/.test(l));
+  if (i < 0) return !/^x-forge:\s*\{[^}]*\bmesh:\s*false\b/m.test(text);
+  for (let j = i + 1; j < lines.length && (/^\s/.test(lines[j] ?? "") || lines[j] === ""); j++) {
+    if (/^\s+mesh:\s*false\s*(#.*)?$/.test(lines[j] ?? "")) return false;
+  }
+  return true;
+}
+
+/** Sets top-level `x-forge.mesh`: on removes the key (the default), off writes `mesh: false`. Keeps the rest of the text. */
+export function setComposeMesh(text: string, on: boolean): string {
+  const lines = text.split("\n");
+  const i = lines.findIndex((l) => /^x-forge:\s*(#.*)?$/.test(l));
+  let end = i + 1;
+  if (i >= 0) while (end < lines.length && (/^\s/.test(lines[end] ?? "") || lines[end] === "")) end++;
+  const meshAt = i < 0 ? -1 : lines.slice(i + 1, end).findIndex((l) => /^\s+mesh:/.test(l));
+  if (on) {
+    if (meshAt < 0) return text.replace(/^x-forge:\s*\{\s*mesh:\s*false\s*\}\s*\n?/m, "");
+    lines.splice(i + 1 + meshAt, 1);
+    const rest = lines.slice(i + 1, end - 1).some((l) => l.trim() && !l.trim().startsWith("#"));
+    if (!rest) lines.splice(i, end - 1 - i);
+    return lines.join("\n");
+  }
+  if (i < 0) return `${text.replace(/\n*$/, "")}\n\nx-forge:\n  mesh: false\n`;
+  if (meshAt >= 0) lines[i + 1 + meshAt] = (lines[i + 1 + meshAt] ?? "").replace(/mesh:.*/, "mesh: false");
+  else lines.splice(i + 1, 0, "  mesh: false");
+  return lines.join("\n");
+}
+
+/** The editor toggle for `x-forge.mesh`; `onChange` gets the rewritten compose text. */
+export function MeshToggle({ content, onChange }: { content: string; onChange: (next: string) => void }) {
+  const on = composeMeshOn(content);
+  return (
+    <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-muted" title="Join the cluster container network so services reach each other across nodes. Writes x-forge.mesh in compose.yaml.">
+      <input type="checkbox" className="accent-accent" checked={on} onChange={(e) => onChange(setComposeMesh(content, e.target.checked))} />
+      Cluster network
+    </label>
+  );
+}
+
 function ServiceCard({ svc }: { svc: PreviewService }) {
   return (
     <div className="min-w-0 border-t border-line px-3 py-2 first:border-t-0">
@@ -248,6 +297,11 @@ function ServiceCard({ svc }: { svc: PreviewService }) {
             <span className="text-faint">image default</span>
           )}
         </Row>
+        {svc.mesh !== undefined && (
+          <Row k="Mesh">
+            <MeshValue mesh={svc.mesh} />
+          </Row>
+        )}
         <Row k="Restart">
           <span className="font-mono text-[11px]">{svc.restart || "—"}</span>
         </Row>

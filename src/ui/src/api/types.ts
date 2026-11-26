@@ -455,6 +455,8 @@ export interface ServiceSpec {
   stop_timeout_secs?: number;
   read_only?: boolean;
   log_max_mb?: number;
+  /** Native container: join the node's cluster container network. Absent means true. */
+  mesh?: boolean;
   /** Container services in a Swarm cluster: replicas, placement, restart and rollout. */
   swarm?: SwarmSettings | null;
 }
@@ -538,6 +540,8 @@ export interface ServiceInput {
   stop_timeout_secs: number;
   read_only: boolean;
   log_max_mb: number;
+  /** Native container: `false` keeps it off the cluster container network; omitted means on. */
+  mesh?: false;
   /** Set only for services in a Swarm cluster; omitted otherwise. */
   swarm?: SwarmSettings;
 }

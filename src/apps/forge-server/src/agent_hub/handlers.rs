@@ -260,6 +260,13 @@ pub(super) async fn heartbeat(
     // the agent changes version (facts.rs).
     crate::facts::maybe_collect(&state, server.id, server.agent_version != hb.agent_version);
 
+    // Compose containers that changed since the last push: stored rows and
+    // names follow them between deploys (plans/native-mesh.md 1.8).
+    if let Some(st) = &hb.stack_states {
+        let (state, id, json) = (state.clone(), server.id, st.states_json.clone());
+        tokio::spawn(async move { crate::stack_states::ingest(&state, id, &json).await });
+    }
+
     // The fleet's names (D-084): on change, on reconnect and every few minutes.
     crate::names::on_heartbeat(&state, server.id, server.status != AgentStatus::Online);
 

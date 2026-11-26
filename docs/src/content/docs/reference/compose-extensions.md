@@ -16,8 +16,78 @@ against. For the model behind it, see [Compose stacks](/docs/concepts/compose-st
 | `x-forge.node` | string | the node the stack was created from | Hostname (or display name) of the node that runs the service |
 | `x-forge.cluster` | string | none | Name of a cluster: the service runs on every node of it. Cannot be combined with `node` |
 | `x-forge.public` | list of ports, or `true` | none | Published ports that bind to all addresses (`0.0.0.0`). `true` makes every port of the service public |
+| `x-forge.mesh` | boolean | `true` | `false` keeps the service off the [cluster network](#cluster-network) |
 
-Forge removes `x-forge` from the file it writes on the node.
+Forge removes `x-forge` from the file it writes on the node, except `public`
+and `mesh`, which the node's helper reads.
+
+## `x-forge` at the top level
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x-forge.mesh` | boolean | `true` | `false` keeps every service of the stack off the cluster network |
+
+```yaml
+x-forge:
+  mesh: false        # the whole stack stays off the cluster network
+services:
+  api:
+    image: registry.example.com/api:1.4
+  worker:
+    image: registry.example.com/worker:1.4
+    x-forge:
+      mesh: false    # or opt out one service
+```
+
+## Cluster network
+
+When the node's [container network](/docs/guides/cluster-network/#container-network)
+is up, the node's helper attaches every service to it in addition to the
+service's own networks, under the network key `forge-mesh`:
+
+| Service as written | On the node |
+| --- | --- |
+| no `networks` | `networks: [default, forge-mesh]` |
+| `networks` as a list | `forge-mesh` appended |
+| `networks` as a map | key `forge-mesh: {}` added |
+| any `network_mode` | unchanged |
+| `x-forge.mesh: false`, on the service or the top level | unchanged |
+
+When at least one service was attached, the top level gains
+`networks.forge-mesh: {external: true, name: forge-<interface>}`.
+
+The helper adds the network only when all of these hold; otherwise the
+service runs as before:
+
+- the node runs Linux in a Default cluster whose network is **in sync** on
+  that node, with the container network `ok`;
+- the node's agent reports the `mesh_network` fact;
+- the stack's top-level `x-forge.mesh` is not `false`.
+
+The preview shows a `mesh` value per service (`true`, `false`,
+`"off (x-forge.mesh)"` or `"off (network_mode)"`) and adds an Info finding
+that says why a node's services do not join:
+
+| Finding | Cause |
+| --- | --- |
+| `services are reachable from other nodes only through published ports; create the cluster network to reach them by name` | The node is in no cluster network |
+| `<node>: cluster network not applied yet; services will join it on the next deploy after it is in sync` | The node's mesh or container network is not up (including Docker older than 28) |
+| `<node>: update its agent to put services on the cluster network` | The agent does not report the `mesh_network` fact |
+
+### DNS on the cluster network
+
+The helper also sets DNS on every service it attached to the cluster
+network, unless the service sets `dns` itself:
+
+| Key | Value |
+| --- | --- |
+| `dns` | The node's mesh address, then each IP of the server's [`[dns] listen`](/docs/reference/configuration/#cluster-dns) |
+| `dns_search` | `<stack>.<environment>.<zone>`, `<environment>.<zone>`, `<zone>`, where `<zone>` is `<cluster>.<suffix>`. Not set when the service sets its own `dns_search` |
+
+The node derives `dns_search` from the zone it was sent with its names.
+Both resolvers run [forge-dns](/docs/reference/forge-dns/). See
+[Local names](/docs/concepts/local-names/#stack-names) for the names a stack
+gets.
 
 ## Placement
 
@@ -60,6 +130,16 @@ Images; named volumes; `tmpfs`; bind mounts inside the stack folder or an
 approved, writable [file root](/docs/guides/approve-file-roots/) on that node;
 ports; environment; `env_file` inside the stack folder; healthchecks;
 resource limits; networks the stack defines; `depends_on`; labels.
+
+External networks follow these rules:
+
+- The network key `forge-mesh` is reserved. A stack that defines it is
+  refused: ``the network key `forge-mesh` is reserved``.
+- An `external` network whose Docker name starts with `forge-forge` (a
+  cluster container network) is allowed only when it is the node's own
+  cluster network. Otherwise the node refuses the part when it deploys: ``network `<key>` uses
+  the cluster network `<name>`, which this node does not offer``.
+- Other external networks keep the rules below.
 
 ### Needs `stack.privileged` (administrators, MFA)
 

@@ -1,20 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
 import { Check, Copy } from "lucide-react";
 import { useState } from "react";
 
-import { get } from "../api/client";
 import type { FabricResponse } from "./fabric/FabricForm";
 import { useToast } from "../app/toast";
 import { COPY_BLOCKED, copyText } from "../lib/clipboard";
 
-/** A cluster's network plan (cached; shared by node, cluster and app pages). */
-export const useClusterFabric = (clusterId?: string | null) =>
-  useQuery({
-    queryKey: ["fabric", clusterId],
-    queryFn: () => get<FabricResponse>(`/api/v1/clusters/${clusterId}/fabric`),
-    enabled: !!clusterId,
-    staleTime: 30_000,
-  });
+export { useClusterFabric } from "../api/fabric";
 
 /** Address of an owner in a fabric plan, without a /32 suffix. */
 export function leaseOf(f: FabricResponse | undefined, kind: "node" | "block" | "service", owner: string) {

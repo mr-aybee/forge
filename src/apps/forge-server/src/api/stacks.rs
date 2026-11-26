@@ -41,19 +41,26 @@ pub(super) fn ns_ref(id: EnvironmentId) -> EntityRef {
     EntityRef::new(EntityKind::Environment, id)
 }
 
-fn sha256(s: &str) -> String {
+pub(super) fn sha256(s: &str) -> String {
     hex::encode(ring::digest::digest(&ring::digest::SHA256, s.as_bytes()))
 }
 
-fn deps(state: &AppState) -> Deps<'_> {
-    Deps { servers: &state.store, clusters: &state.store, fabrics: &state.store, files: &state.store }
+pub(super) fn deps(state: &AppState) -> Deps<'_> {
+    Deps {
+        servers: &state.store,
+        clusters: &state.store,
+        fabrics: &state.store,
+        files: &state.store,
+        facts: &state.store,
+        forge_dns: state.config.dns.second_tier(),
+    }
 }
 
 pub(super) async fn load(state: &AppState, id: StackId) -> ApiResult<Stack> {
     state.store.get_stack(id).await?.ok_or_else(|| ApiError::not_found("stack not found"))
 }
 
-async fn ns_name(state: &AppState, id: EnvironmentId) -> ApiResult<String> {
+pub(super) async fn ns_name(state: &AppState, id: EnvironmentId) -> ApiResult<String> {
     let ns = state.store.get_environment(id).await?;
     let slug = ns_slug(&ns.name);
     if !valid_stack_name(&slug) {
@@ -64,12 +71,12 @@ async fn ns_name(state: &AppState, id: EnvironmentId) -> ApiResult<String> {
 }
 
 /// `.env` text → variables (or `None` to keep the stored ones).
-fn env_input(text: Option<&str>) -> ApiResult<Option<BTreeMap<String, String>>> {
+pub(super) fn env_input(text: Option<&str>) -> ApiResult<Option<BTreeMap<String, String>>> {
     text.map(|t| parse_env(t).map_err(ApiError::bad_request)).transpose()
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn plan_for(
+pub(super) async fn plan_for(
     state: &AppState,
     ws: forge_core::WorkspaceId,
     server: ServerId,
@@ -103,7 +110,7 @@ async fn swarm_plan(
     Ok(Some(Plan { tree, interpolated: p.part.compose, nodes: Vec::new(), report: p.report }))
 }
 
-fn check_dir(dir: Option<&str>) -> ApiResult<Option<String>> {
+pub(super) fn check_dir(dir: Option<&str>) -> ApiResult<Option<String>> {
     match dir.map(str::trim).filter(|d| !d.is_empty()) {
         None => Ok(None),
         Some(d) => cat::normalize_abs(d)
@@ -276,7 +283,7 @@ pub struct CreateInput {
     pub note: Option<String>,
 }
 
-async fn create_stack(
+pub(super) async fn create_stack(
     state: &AppState,
     caller: &Caller,
     input: CreateInput,
@@ -474,7 +481,7 @@ pub async fn create_container(
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateInput {
-    /// New compose content (a new revision when it differs).
+    /// New compose content (a new revision when it or the `.env` differs).
     #[serde(default)]
     pub content: Option<String>,
     /// New `.env` content; omitted keeps the stored variables.
@@ -504,21 +511,35 @@ pub async fn update(
     Path(id): Path<StackId>,
     Json(input): Json<UpdateInput>,
 ) -> ApiResult<Json<Value>> {
-    let mut stack = load(&state, id).await?;
+    let (stack, p) = update_stack(&state, &caller, id, input, None).await?;
+
+    Ok(Json(json!({ "stack": stack, "preview": preview(&p) })))
+}
+
+/// Saves a new revision (when the content differs), the `.env` and the
+/// folder; `default_server` moves the stack's default node (`forge stacks
+/// apply`). Audited as `stack.update`.
+pub(super) async fn update_stack(
+    state: &AppState,
+    caller: &Caller,
+    id: StackId,
+    input: UpdateInput,
+    default_server: Option<ServerId>,
+) -> ApiResult<(Stack, Plan)> {
+    let mut stack = load(state, id).await?;
     caller.authorize(Action::StackManage, ns_ref(stack.environment_id)).await?;
 
     if input.version.is_some_and(|v| v != stack.updated_at.0) {
         return Err(stale_version());
     }
 
-    let ns = ns_name(&state, stack.environment_id).await?;
+    let ns = ns_name(state, stack.environment_id).await?;
     let current =
         state.store.get_revision(id, stack.revision).await?.ok_or_else(|| ApiError::not_found("revision missing"))?;
 
-    let env = match env_input(input.env.as_deref())? {
-        Some(e) => e,
-        None => open_env(&state.envelope, id, stack.env_sealed.as_deref()).map_err(internal)?,
-    };
+    let stored_env = open_env(&state.envelope, id, stack.env_sealed.as_deref()).map_err(internal)?;
+    let env = env_input(input.env.as_deref())?.unwrap_or_else(|| stored_env.clone());
+    let env_changed = env != stored_env;
 
     if input.dir.is_some() {
         let deployed = !state.store.list_nodes(id).await?.is_empty();
@@ -530,12 +551,24 @@ pub async fn update(
         stack.dir = dir;
     }
 
+    if let Some(server) = default_server
+        && server != stack.default_server
+    {
+        let s = state.store.get_server(server).await.map_err(|_| ApiError::not_found("node not found"))?;
+        if s.workspace_id != stack.workspace_id {
+            return Err(ApiError::bad_request("the node is in another organization"));
+        }
+
+        caller.authorize(Action::ServerManage, EntityRef::new(EntityKind::Server, server)).await?;
+        stack.default_server = server;
+    }
+
     let content = input.content.unwrap_or_else(|| current.content.clone());
-    let p = match swarm_plan(&state, &caller, stack.environment_id, &stack.name, &content, &env).await? {
+    let p = match swarm_plan(state, caller, stack.environment_id, &stack.name, &content, &env).await? {
         Some(p) => p,
         None => {
             plan_for(
-                &state,
+                state,
                 stack.workspace_id,
                 stack.default_server,
                 &ns,
@@ -564,7 +597,10 @@ pub async fn update(
 
     let mut new_rev = None;
 
-    if content != current.content {
+    // A changed `.env` is a new revision too, even with the same compose
+    // text: rollouts skip nodes already at the current revision, so an
+    // env-only change would otherwise never reach them.
+    if content != current.content || env_changed {
         let rev = StackRevision {
             stack_id: id,
             revision: 0,
@@ -590,12 +626,12 @@ pub async fn update(
             Some(stack.workspace_id),
             json!({
                 "stack": stack.name, "revision": new_rev.as_ref().map(|r| r.0), "sha256": new_rev.as_ref().map(|r| &r.1),
-                "env_keys": stack.env_keys, "env_changed": input.env.is_some(), "privileged": p.report.privileged,
+                "env_keys": stack.env_keys, "env_changed": env_changed, "privileged": p.report.privileged,
             }),
         )
         .await;
 
-    Ok(Json(json!({ "stack": stack, "preview": preview(&p) })))
+    Ok((stack, p))
 }
 
 pub async fn delete(State(state): State<AppState>, caller: Caller, Path(id): Path<StackId>) -> ApiResult<StatusCode> {
@@ -620,11 +656,11 @@ pub async fn delete(State(state): State<AppState>, caller: Caller, Path(id): Pat
 
 // ---- operations -------------------------------------------------------------------------
 
-async fn submit(state: &AppState, caller: &Caller, stack: &Stack, payload: Value) -> ApiResult<Job> {
+pub(super) async fn submit(state: &AppState, caller: &Caller, stack: &Stack, payload: Value) -> ApiResult<Job> {
     Ok(state
         .jobs
         .submit(NewJob {
-            kind: "stack.action".into(),
+            kind: crate::jobs::stack::KIND.into(),
             workspace_id: Some(stack.workspace_id),
             resource: ns_ref(stack.environment_id),
             principal: caller.principal(),

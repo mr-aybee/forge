@@ -282,7 +282,22 @@ pub async fn put(
         )
         .await;
 
-    Ok(Json(json!({ "leases": saved.map(|r| r.leases) })))
+    // Nodes whose container network moves with the subnet: their stacks
+    // must be redeployed (the helper refuses while containers are attached).
+    let moving = if moved {
+        match previous.as_ref() {
+            Some(rec) => crate::stacks::network_node_names(&state.store, &rec.status).await?,
+            None => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+
+    Ok(Json(json!({
+        "leases": saved.map(|r| r.leases),
+        "restarts_containers": !moving.is_empty(),
+        "redeploy_nodes": moving,
+    })))
 }
 
 /// Members must allow `server.command` (MFA) for the caller: applying

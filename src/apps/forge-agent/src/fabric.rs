@@ -11,9 +11,18 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use forge_catalog::fabric::{FabricOp, MeshConfig, valid_key};
+#[cfg(not(unix))]
+use forge_proto::messages::RefusalCode;
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
+
+use crate::executor::CommandError;
+
+#[cfg(unix)]
+pub mod dns;
+#[cfg(unix)]
+mod network;
 
 const T: Duration = Duration::from_secs(120);
 
@@ -365,24 +374,58 @@ async fn remove(iface: &str) -> Result<Value, String> {
     Ok(json!({ "removed": iface }))
 }
 
-pub async fn run_op(op: &FabricOp) -> Result<Value, String> {
+/// Runs one fabric operation. Refusals the control plane tells apart (an
+/// old or missing Docker for the container network) keep their code.
+pub async fn run_op(op: &FabricOp) -> Result<Value, CommandError> {
     op.validate()?;
 
     match op {
-        FabricOp::Install => install().await,
-        FabricOp::Key { iface } => key(iface).await,
+        FabricOp::Install => Ok(install().await?),
+        FabricOp::Key { iface } => Ok(key(iface).await?),
         FabricOp::Apply { config } => {
             let mut out = apply(config).await?;
             out["hosts"] = json!(write_hosts(&config.iface, &config.hosts)?);
+
             Ok(out)
         }
-        FabricOp::Status { iface } => status(iface).await,
+        FabricOp::Status { iface } => Ok(status(iface).await?),
         FabricOp::Remove { iface } => {
+            // The container network goes first: with containers still on
+            // it, the fabric stays and the control plane reports the node.
+            network_remove(iface).await?;
+
+            #[cfg(unix)]
+            dns::remove(iface).await;
+
             let out = remove(iface).await?;
             write_hosts(iface, &[])?;
+
             Ok(out)
         }
+        FabricOp::NetworkEnsure { iface, subnet, mtu } => network_ensure(iface, subnet, *mtu).await,
+        FabricOp::NetworkRemove { iface } => Ok(network_remove(iface).await?),
     }
+}
+
+#[cfg(unix)]
+async fn network_ensure(iface: &str, subnet: &forge_catalog::fabric::Cidr, mtu: u16) -> Result<Value, CommandError> {
+    network::ensure(iface, subnet, mtu).await
+}
+
+#[cfg(not(unix))]
+async fn network_ensure(_: &str, _: &forge_catalog::fabric::Cidr, _: u16) -> Result<Value, CommandError> {
+    Err(CommandError::refused(RefusalCode::Unsupported, "container networks need a Linux node"))
+}
+
+#[cfg(unix)]
+async fn network_remove(iface: &str) -> Result<Value, String> {
+    network::remove(iface).await
+}
+
+/// Windows nodes never get a container network, so there is nothing to remove.
+#[cfg(not(unix))]
+async fn network_remove(_: &str) -> Result<Value, String> {
+    Ok(json!({ "removed": false }))
 }
 
 /// Rewrites this fabric's block in the hosts file (cluster names → mesh

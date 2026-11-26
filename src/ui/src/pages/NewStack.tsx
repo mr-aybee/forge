@@ -27,6 +27,7 @@ import { useEnvironmentChoices } from "../components/stacks/CreateStack";
 import { FromTemplate } from "../components/stacks/FromTemplate";
 import {
   Designer,
+  MeshToggle,
   ServicePicker,
   UploadText,
   YamlEditor,
@@ -391,6 +392,14 @@ export function NewStack() {
               <span className="font-mono text-xs font-medium text-muted">
                 compose.yaml
               </span>
+              <div className="flex items-center gap-3">
+              <MeshToggle
+                content={content}
+                onChange={(t) => {
+                  setContent(t);
+                  setDocKey((k) => k + 1);
+                }}
+              />
               <UploadText
                 label="Upload file"
                 accept=".yml,.yaml,text/yaml,text/plain"
@@ -400,6 +409,7 @@ export function NewStack() {
                   setDocKey((k) => k + 1);
                 }}
               />
+              </div>
             </div>
             <YamlEditor
               value={content}

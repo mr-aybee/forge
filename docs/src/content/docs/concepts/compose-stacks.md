@@ -129,6 +129,46 @@ otherwise to `127.0.0.1`. It never binds to all addresses unless the service
 lists the port in `x-forge.public`. Other nodes in the cluster and the
 cluster's Nginx edges can reach internal ports; the internet cannot.
 
+## Two legs: stack networks and the cluster network
+
+On a node whose [container network](/docs/guides/cluster-network/#container-network)
+is up, each container has two legs:
+
+- **Stack networks.** The networks the compose file defines, or Compose's
+  `default`. Services of the same stack on the same node talk here by
+  service name, as in plain Compose.
+- **The cluster network** (`forge-<interface>`, key `forge-mesh`). An address
+  from the node's instance block. Every peer in the WireGuard mesh routes that
+  block to the node, and Docker's routed gateway mode forwards it without
+  address translation. A container on another node reaches this container at
+  this address, and sees the caller's real container address.
+
+```diagram
+alt: A container on lab-b reaching a container on lab-c over the cluster network
+flow:
+  direction: column
+  steps:
+    - { label: "container on lab-b", note: "instance block of lab-b", edge: "" }
+    - { label: "WireGuard mesh", note: "routes each node's block", edge: "" }
+    - { label: "container on lab-c", note: "instance block of lab-c", tone: accent }
+```
+
+Forge adds the second leg on the node, after the policy check, so the file
+that was checked is the file that runs. A service with `network_mode`, or
+with `x-forge.mesh: false` on itself or on the stack, keeps one leg.
+
+Why a routed Docker bridge rather than WireGuard per container: the instance
+block is already routed by every peer, so nothing in the mesh changes when a
+container starts or stops, and Docker assigns the addresses. The trade-off is
+the Docker 28 minimum, which introduced routed gateway mode. Nodes with an
+older Docker, an older agent, Windows nodes and Swarm clusters keep one leg;
+their services are reachable from other nodes only through published ports.
+
+There is no firewall between environments on the cluster network: any
+container in the cluster can reach any other container's address. Names for
+these addresses are not published yet; use the address the stack status
+reports (`mesh_ip`).
+
 ## Services and exposure
 
 After a deploy, each service on each node is registered as a service of the

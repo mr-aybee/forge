@@ -313,6 +313,8 @@ fn parts_are_rechecked_and_literal_on_the_node() {
         env: env.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect(),
         policy: Policy { stack_dir: dir.into(), ..policy() },
         internal_ip: "10.0.0.5".into(),
+        mesh_network: None,
+        dns: None,
     };
     let dir = "/opt/forge/stacks/web/shop";
     let ok =
@@ -512,6 +514,8 @@ fn system_paths_win_over_the_stack_folder() {
         env: BTreeMap::new(),
         policy: Policy { stack_dir: "/var/lib/docker/overlay2".into(), ..p },
         internal_ip: "10.0.0.5".into(),
+        mesh_network: None,
+        dns: None,
     };
     assert!(part.prepare().is_err());
     assert!(!StackOp::Ps { project: "forge-web-shop".into(), dir: "/etc/forge/x".into() }.validate().is_ok());
@@ -539,7 +543,129 @@ fn env_values_are_redacted_from_messages() {
         env,
         policy: policy(),
         internal_ip: "10.0.0.5".into(),
+        mesh_network: None,
+        dns: None,
     };
     let e = part.prepare().unwrap_err();
     assert!(!e.contains("very-secret") && e.contains("${SRC}"), "{e}");
+}
+
+const MESH: &str = "forge-forgea1b2c3";
+
+fn meshed(tree: Value) -> Value {
+    let mut t = tree;
+    add_mesh_network(&mut t, MESH);
+
+    t
+}
+
+#[test]
+fn mesh_network_joins_list_map_and_absent_networks() {
+    let t = meshed(json!({ "services": {
+        "a": { "image": "x" },
+        "b": { "image": "x", "networks": ["back"] },
+        "c": { "image": "x", "networks": { "back": { "aliases": ["c1"] } } },
+        "d": { "image": "x", "networks": ["back", "forge-mesh"] },
+    }}));
+
+    assert_eq!(t.pointer("/services/a/networks").unwrap(), &json!(["default", "forge-mesh"]));
+    assert_eq!(t.pointer("/services/b/networks").unwrap(), &json!(["back", "forge-mesh"]));
+    assert_eq!(t.pointer("/services/c/networks/forge-mesh").unwrap(), &json!({}));
+    assert_eq!(t.pointer("/services/c/networks/back/aliases/0").unwrap(), "c1");
+    assert_eq!(t.pointer("/services/d/networks").unwrap(), &json!(["back", "forge-mesh"]));
+    assert_eq!(t.pointer("/networks/forge-mesh").unwrap(), &json!({ "external": true, "name": MESH }));
+}
+
+#[test]
+fn mesh_network_respects_network_mode_and_opt_outs() {
+    let t = meshed(json!({ "services": {
+        "host": { "image": "x", "network_mode": "host" },
+        "side": { "image": "x", "network_mode": "service:host" },
+        "off": { "image": "x", "x-forge": { "mesh": false } },
+        "on": { "image": "x", "x-forge": { "mesh": true } },
+    }}));
+
+    for name in ["host", "side", "off"] {
+        assert!(t.pointer(&format!("/services/{name}/networks")).is_none(), "{name}");
+    }
+
+    assert_eq!(t.pointer("/services/on/networks").unwrap(), &json!(["default", "forge-mesh"]));
+
+    let nothing = meshed(json!({ "services": { "off": { "image": "x", "x-forge": { "mesh": false } } } }));
+    assert!(nothing.get("networks").is_none());
+
+    let stack_off = meshed(json!({ "x-forge": { "mesh": false }, "services": { "a": { "image": "x" } } }));
+    assert!(stack_off.pointer("/services/a/networks").is_none());
+    assert!(stack_off.get("networks").is_none());
+}
+
+#[test]
+fn mesh_network_key_is_reserved() {
+    let tree = json!({
+        "services": { "a": { "image": "x", "networks": ["forge-mesh"] } },
+        "networks": { "forge-mesh": {} },
+    });
+
+    assert!(blocked(&tree).iter().any(|m| m.contains("`forge-mesh` is reserved")), "{:?}", blocked(&tree));
+}
+
+#[test]
+fn only_the_parts_own_cluster_network_may_be_external() {
+    let tree = |name: &str| {
+        json!({
+            "services": { "a": { "image": "x", "networks": ["n"] } },
+            "networks": { "n": { "external": true, "name": name } },
+        })
+    };
+
+    assert!(check_mesh_refs(&tree(MESH), Some(MESH)).is_ok());
+    assert!(check_mesh_refs(&tree(MESH), None).is_err());
+    assert!(check_mesh_refs(&tree("forge-forgeffffff"), Some(MESH)).is_err());
+    assert!(check_mesh_refs(&tree("shared-proxy"), None).is_ok());
+}
+
+#[test]
+fn prepared_part_joins_the_mesh_and_keeps_service_opt_out() {
+    let dir = "/opt/forge/stacks/web/shop";
+    let compose = json!({ "services": {
+        "web": { "image": "x", "x-forge": { "mesh": false, "node": "lab-b" } },
+        "api": { "image": "x" },
+    }});
+    let part_tree = part_for(&compose, &["web".to_owned(), "api".to_owned()].into(), "s1").unwrap();
+
+    assert_eq!(part_tree.pointer("/services/web/x-forge/mesh").unwrap(), false);
+    assert!(part_tree.pointer("/services/web/x-forge/node").is_none());
+
+    let part = StackPart {
+        environment: "web".into(),
+        stack: "shop".into(),
+        dir: dir.into(),
+        compose: part_tree,
+        env: BTreeMap::new(),
+        policy: policy(),
+        internal_ip: "10.0.0.5".into(),
+        mesh_network: Some(MESH.into()),
+        dns: None,
+    };
+    let (tree, _) = part.prepare().unwrap();
+
+    assert_eq!(tree.pointer("/services/api/networks").unwrap(), &json!(["default", "forge-mesh"]));
+    assert!(tree.pointer("/services/web/networks").is_none());
+    assert_eq!(tree.pointer("/networks/forge-mesh/name").unwrap(), MESH);
+}
+
+#[test]
+fn dns_goes_only_on_meshed_services_without_their_own() {
+    let mut t = meshed(json!({ "services": {
+        "api": { "image": "x" },
+        "own": { "image": "x", "dns": ["192.0.2.53"] },
+        "off": { "image": "x", "x-forge": { "mesh": false } },
+    }}));
+    let dns = StackDns { servers: vec!["10.64.12.1".parse().unwrap()], search: vec!["prod.c1.local".into()] };
+    add_dns(&mut t, &dns);
+
+    assert_eq!(t.pointer("/services/api/dns").unwrap(), &json!(["10.64.12.1"]));
+    assert_eq!(t.pointer("/services/api/dns_search").unwrap(), &json!(["prod.c1.local"]));
+    assert_eq!(t.pointer("/services/own/dns").unwrap(), &json!(["192.0.2.53"]));
+    assert!(t.pointer("/services/off/dns").is_none());
 }

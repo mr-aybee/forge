@@ -16,6 +16,8 @@ use crate::link::{Endpoint, Link};
 use crate::policy::LocalPolicy;
 use crate::{service, tls};
 
+/// Least time between two compose state pushes.
+const STACK_PUSH_GAP: Duration = Duration::from_secs(10);
 /// Long-poll requests can be held by the server; allow for that.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
 const RECONNECT: Backoff = Backoff::new(Duration::from_secs(1), Duration::from_secs(60));
@@ -51,6 +53,9 @@ pub struct Agent {
     containers: forge_proto::messages::ContainerTelemetryConfig,
     /// The container log batch the spool holds, for the helper.
     container_ack: u64,
+    /// Compose container rows last pushed (hash) and when: names follow
+    /// replicas between deploys (`plans/native-mesh.md` 1.8).
+    stack_push: (u64, Option<Instant>),
     /// Spool, local log listener and uploader (D-142); `None` when the
     /// spool folder cannot be opened (the agent then runs without it).
     analytics: Option<crate::node_analytics::NodeAnalytics>,
@@ -152,6 +157,7 @@ impl Agent {
             // On until a server says otherwise.
             containers: forge_proto::messages::ContainerTelemetryConfig { enabled: true, exclude: Vec::new() },
             container_ack: 0,
+            stack_push: (0, None),
             analytics,
             pins,
             pins_broken: false,
@@ -171,6 +177,7 @@ impl Agent {
 
         let results: Vec<CommandResult> = std::mem::take(&mut self.pending_results);
         let containers = self.poll_containers().await;
+        let (stack_states, stack_hash) = self.poll_stack_states().await.unzip();
         let mut metrics = self.sampler.sample();
         let now = crate::node_analytics::now_ms();
 
@@ -204,6 +211,7 @@ impl Agent {
             container_logs: None,
             spool,
             pinned_server_keys: self.pins.fingerprints(),
+            stack_states,
         };
 
         let body = match self.link.request(http::Method::POST, paths::HEARTBEAT, hb.encode_to_vec()).await {
@@ -216,6 +224,11 @@ impl Agent {
                 return Err(e);
             }
         };
+
+        // Only a delivered push counts: a failed heartbeat resends it
+        if let Some(h) = stack_hash {
+            self.stack_push = (h, Some(Instant::now()));
+        }
 
         let resp = HeartbeatResponse::decode(body.as_slice())?;
         if let Some(c) = &resp.container_telemetry {
@@ -254,6 +267,37 @@ impl Agent {
         }
 
         Ok(jitter(Duration::from_secs(u64::from(resp.next_interval_secs))))
+    }
+
+    /// The compose container rows to push with this heartbeat and their
+    /// hash, when they changed since the last delivered push and the gap
+    /// has passed. The caller records the hash once the heartbeat succeeds.
+    async fn poll_stack_states(&mut self) -> Option<(forge_proto::messages::StackStates, u64)> {
+        if cfg!(not(unix)) || !tokio::fs::try_exists(crate::helper::SOCKET).await.unwrap_or(false) {
+            return None;
+        }
+
+        if self.stack_push.1.is_some_and(|at| at.elapsed() < STACK_PUSH_GAP) {
+            return None;
+        }
+
+        let r = crate::helper::call(&crate::helper::HelperRequest::StackStates {}, CONTAINER_POLL).await;
+
+        let Some(data) = r.data.filter(|_| r.ok) else {
+            tracing::debug!(error = ?r.error, "compose container states unavailable");
+            return None;
+        };
+
+        let states_json = data.to_string();
+        let h = states_json
+            .bytes()
+            .fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+
+        if h == self.stack_push.0 {
+            return None;
+        }
+
+        Some((forge_proto::messages::StackStates { states_json }, h))
     }
 
     /// Asks the helper for container lines and samples, acknowledging the

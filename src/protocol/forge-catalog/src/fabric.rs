@@ -421,6 +421,22 @@ pub fn interface_name(cluster_id: &str) -> String {
 
 /// MTU of the mesh: 1500 minus the WireGuard/UDP/IPv4 overhead.
 pub const MESH_MTU: u16 = 1420;
+/// Docker name of a node's cluster container network for `iface`: a routed
+/// bridge on the node's instance block (`plans/native-mesh.md` step 1).
+#[must_use]
+pub fn network_name(iface: &str) -> String {
+    format!("forge-{iface}")
+}
+
+/// Linux bridge device of the container network for `iface`: `fg` plus the
+/// first 8 characters of the interface (within the 15-character limit).
+#[must_use]
+pub fn network_bridge(iface: &str) -> String {
+    let head: String = iface.chars().take(8).collect();
+
+    format!("fg{head}")
+}
+
 /// Keep-alive for nodes behind NAT, so their mapping stays open.
 pub const NAT_KEEPALIVE: u16 = 25;
 
@@ -695,16 +711,38 @@ pub enum FabricOp {
     Status { iface: String },
     /// Take the interface down and delete its configuration and key.
     Remove { iface: String },
+    /// Ensure the node's container network for `iface` exists with exactly
+    /// this subnet, MTU and routed gateway mode. Recreates it only when the
+    /// subnet differs and no container is attached. Linux only.
+    NetworkEnsure { iface: String, subnet: Cidr, mtu: u16 },
+    /// Remove the node's container network for `iface` if it exists and has
+    /// no attached containers; with containers attached, returns an error
+    /// naming them.
+    NetworkRemove { iface: String },
 }
 
 impl FabricOp {
     pub fn validate(&self) -> Result<(), String> {
         match self {
             FabricOp::Install => Ok(()),
-            FabricOp::Key { iface } | FabricOp::Status { iface } | FabricOp::Remove { iface } => {
-                valid_fabric_iface(iface)
-            }
+            FabricOp::Key { iface }
+            | FabricOp::Status { iface }
+            | FabricOp::Remove { iface }
+            | FabricOp::NetworkRemove { iface } => valid_fabric_iface(iface),
             FabricOp::Apply { config } => config.validate(),
+            FabricOp::NetworkEnsure { iface, subnet, mtu } => {
+                valid_fabric_iface(iface)?;
+
+                if !(20..=28).contains(&subnet.prefix()) {
+                    return Err(format!("container network subnet {subnet} must be a /20 to /28"));
+                }
+
+                if !(1280..=1500).contains(mtu) {
+                    return Err(format!("container network MTU {mtu} must be 1280 to 1500"));
+                }
+
+                Ok(())
+            }
         }
     }
 }
@@ -718,6 +756,17 @@ pub fn offerable_interface(name: &str) -> bool {
         &["lo", "forge", "fgacc", "docker", "br-", "veth", "cni", "flannel", "cali", "vxlan", "kube", "virbr", "wg"];
     !name.is_empty() && !SKIP.iter().any(|p| name.starts_with(p))
 }
+
+/// A node's container-network state in a fabric's status (`network`).
+/// The network is up.
+pub const NETWORK_OK: &str = "ok";
+/// Docker is missing or older than 28; retried when its version changes.
+pub const NETWORK_UNSUPPORTED: &str = "unsupported";
+/// The node has no instance block leased yet.
+pub const NETWORK_WAITING_BLOCK: &str = "waiting for a block";
+/// The node failed to create the network (an overlapping Docker network, a
+/// failed sysctl, an unreachable node); retried on the repair pass.
+pub const NETWORK_FAILED: &str = "failed";
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
@@ -735,6 +784,30 @@ mod tests {
             assert!(op(other).is_err(), "{other}");
             assert!(FabricOp::Remove { iface: other.into() }.validate().is_err(), "{other}");
         }
+    }
+
+    #[test]
+    fn network_ops_validate_bounds() {
+        let iface = interface_name("a1b2c3d4");
+        let ensure = |subnet: &str, mtu: u16| {
+            FabricOp::NetworkEnsure { iface: iface.clone(), subnet: subnet.parse().unwrap(), mtu }.validate()
+        };
+
+        assert!(ensure("10.64.12.0/24", MESH_MTU).is_ok());
+        assert!(ensure("10.64.0.0/20", 1280).is_ok());
+        assert!(ensure("10.64.12.0/28", 1500).is_ok());
+        assert!(ensure("10.64.0.0/19", MESH_MTU).is_err());
+        assert!(ensure("10.64.12.0/29", MESH_MTU).is_err());
+        assert!(ensure("10.64.12.0/24", 1279).is_err());
+        assert!(ensure("10.64.12.0/24", 1501).is_err());
+        assert!(
+            FabricOp::NetworkEnsure { iface: "eth0".into(), subnet: "10.64.12.0/24".parse().unwrap(), mtu: MESH_MTU }
+                .validate()
+                .is_err()
+        );
+        assert!(FabricOp::NetworkRemove { iface: "wg0".into() }.validate().is_err());
+        assert_eq!(network_name(&iface), "forge-forgea1b2c3");
+        assert_eq!(network_bridge(&iface), "fgforgea1b");
     }
 
     fn spec(s: &str) -> FabricSpec {

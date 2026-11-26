@@ -167,6 +167,8 @@ pub enum StacksCmd {
     },
     #[command(flatten)]
     Edit(StackEditCmd),
+    #[command(flatten)]
+    Doc(crate::stackdoccmd::StackDocCmd),
 }
 
 /// Creating and editing stacks from compose files (for CI pipelines).
@@ -362,11 +364,15 @@ pub async fn stacks(g: &Global, cmd: StacksCmd) -> Result<()> {
         return crate::containercmd::templates(g, c).await;
     }
 
+    if let StacksCmd::Doc(c) = cmd {
+        return crate::stackdoccmd::run(g, c).await;
+    }
+
     let t = target(g)?;
     let mut api = connect(g, &t).await?;
 
     match cmd {
-        StacksCmd::Templates(_) => Ok(()),
+        StacksCmd::Templates(_) | StacksCmd::Doc(_) => Ok(()),
         StacksCmd::Edit(e) => stack_edit(g, &mut api, &t.server, e).await,
         StacksCmd::List { environment, node, paging } => {
             let mut q = Vec::new();

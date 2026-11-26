@@ -35,6 +35,7 @@ mod queryparity;
 mod rescmd;
 mod schemacheck;
 mod silencecmd;
+mod stackdoccmd;
 mod swarmcmd;
 mod termcmd;
 mod tunnel_direct;

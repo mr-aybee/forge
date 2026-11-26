@@ -113,6 +113,15 @@ NetworkRemove { iface: String },
 - `Remove` of the fabric (existing `FabricOp::Remove`) must also run
   `NetworkRemove` first; with containers attached it fails and the fabric
   removal reports it in `not_cleaned`.
+- **Cluster conversion** (`POST /clusters/{id}/convert`, D-171). Default →
+  Swarm already requires that no stack runs per node and no service is
+  pinned to nodes, so nothing Forge manages is attached. The conversion
+  runs `NetworkRemove` on every Linux member and refuses the whole
+  conversion with `409` naming node and containers when any is still
+  attached (that can only be something outside Forge's control, and the
+  operator must detach it). The fabric itself stays: Swarm uses the fabric
+  address as `DataPathAddr`. Swarm → Default needs nothing: the next
+  reconcile pass runs `NetworkEnsure` again.
 
 ### 1.4 Server reconciler: `api/fabric_reconcile.rs`
 
@@ -124,6 +133,17 @@ NetworkRemove { iface: String },
   `tracing::warn!` and mark the node `waiting for a block`, do not error.
 - Store the result's `docker_version` in `NodeState` (new optional field,
   `#[serde(default)]`), shown in the Network page's node row.
+- **Docker older than 28 is not a retried failure.** When `NetworkEnsure`
+  returns `error_code = "unsupported"`, set the node's status to
+  `unsupported` with the helper's message (a new `NodeState` status next to
+  `waiting for peers`), keep the WireGuard part of the node `in sync`, and do
+  **not** schedule a retry: the condition changes only when the operator
+  upgrades Docker. Re-run `NetworkEnsure` for that node when the agent's
+  reported Docker version fact changes, on **Re-sync now**, and on the
+  10-minute repair pass. The Network page shows
+  `Docker 28 or newer needed for the container network (found <v>)` on the
+  node row; stacks on that node deploy as today, without the network, and
+  the plan carries the Info finding from 1.6.
 - Subnet change (`PUT /clusters/{id}/fabric` with a new subnet) already
   re-leases blocks; the next converge sends the new subnet and the helper
   refuses while containers are attached. The API response of the subnet
@@ -147,12 +167,17 @@ pub mesh_network: Option<String>,
 ```
 
   `StackPart` has `deny_unknown_fields`, so an older helper refuses a part
-  that carries the field. The server sets it only when the node's agent
-  version is at least the version that ships this change (compare
-  `Server::agent_version` with the constant `MIN_AGENT_MESH_NETWORK` defined
-  once in `forge-server/src/stacks.rs`); otherwise it leaves `None` and adds
-  the plan finding `Info: "<node>: update its agent to put services on the
-  cluster network"`.
+  that carries the field. **Gate on a capability fact, not on a version
+  string.** `forge_agent::VERSION` is a build string (`FORGE_BUILD_VERSION`
+  or the crate version, which is `0.0.1` for every rc), so it cannot be
+  compared. Follow the `self_update` pattern in `agent_update_overview.rs`:
+  the agent reports `"mesh_network": true` in its facts; the server reads it
+  with the same "unreadable or missing = older agent" rule and sets
+  `mesh_network` on the part only when the fact is `true`. Otherwise it
+  leaves `None` and adds the plan finding
+  `Info: "<node>: update its agent to put services on the cluster network"`.
+  The same fact gates `dns` injection (step 2) and the native-container
+  network (1.7). There is no `MIN_AGENT_MESH_NETWORK` constant.
 - New `pub fn add_mesh_network(tree: &mut Value, docker_name: &str)` next to
   `add_log_url`:
   - For every service: skip when `network_mode` is set to anything, or when
@@ -179,7 +204,7 @@ pub mesh_network: Option<String>,
 In `stacks::plan_unredacted`, per node: `mesh_network = Some(network_name(iface))`
 when all of: the node's cluster has a fabric whose status for that node is
 `in sync` (reuse `fabric_ips`'s source, extend it to return the iface and
-sync state), the node is Linux, the agent version is new enough, and the
+sync state), the node is Linux, the agent reports `"mesh_network": true`, and the
 document's top-level `x-forge.mesh` is not `false`. `NodePlan` gains
 `mesh_network: Option<String>` and `preview` shows per service
 `"mesh": true|false|"off (x-forge.mesh)"|"off (network_mode)"`.
@@ -197,7 +222,7 @@ The helper's `docker run` argument builder for `forge-app-<env>-<svc>`
 (`forge-agent/src/docker.rs`, the function that builds the create body)
 gains the network when the command carries it. The command type for app
 deploys gains `mesh_network: Option<String>` with the same serde attributes
-and the same version gate. The `Service.spec` JSON gains `"mesh": bool`
+and the same capability-fact gate. The `Service.spec` JSON gains `"mesh": bool`
 (default `true`), editable in the service form. No change for runtime
 `service` (systemd).
 
@@ -256,8 +281,8 @@ The helper's stack `ps` (`forge-agent/src/stacks.rs::ps`) adds per row:
   `28.1.0-rc1` ok); ensure logic on a fake Docker transport (missing, same,
   different subnet with and without containers).
 - `forge-server`: plan sets `mesh_network` only when fabric in sync and
-  agent new enough; preview findings texts; `it` test that an old agent
-  version yields `None` and the Info finding.
+  the agent reports the `mesh_network` fact; preview findings texts; `it`
+  test that a missing or unreadable fact yields `None` and the Info finding.
 - Lab (lab-operator): two stacks on lab-b and lab-c without published ports;
   `curl` container to container; `docker inspect` on lab-c shows the source
   address unchanged; `wg show` counters move.

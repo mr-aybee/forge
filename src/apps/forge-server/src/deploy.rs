@@ -66,32 +66,7 @@ pub trait RolloutEffects: Send + Sync + std::fmt::Debug {
 /// Parses a deployment document's YAML (YAML 1.2, with limits on depth,
 /// size and aliases, as compose files).
 pub fn parse_yaml(text: &str) -> Result<Value, String> {
-    if text.len() > cat::MAX_DOC_BYTES {
-        return Err(format!("the document is larger than {} KiB", cat::MAX_DOC_BYTES / 1024));
-    }
-
-    if text.trim().is_empty() {
-        return Err("the document is empty".into());
-    }
-
-    let mut budget = serde_saphyr::Budget::default();
-    budget.max_depth = 32;
-    budget.max_nodes = 20_000;
-    budget.max_aliases = 200;
-    budget.max_anchors = 200;
-    budget.max_documents = 1;
-    budget.max_events = 100_000;
-    budget.max_total_scalar_bytes = cat::MAX_DOC_BYTES * 4;
-    budget.max_recorded_anchor_bytes = cat::MAX_DOC_BYTES * 4;
-    let mut options = serde_saphyr::Options::default();
-    options.budget = Some(budget);
-    options.strict_booleans = true;
-    options.leading_zero_numbers_as_strings = true;
-
-    serde_saphyr::from_str_with_options(text, options).map_err(|e| {
-        let msg = e.to_string();
-        format!("invalid YAML: {}", msg.lines().next().unwrap_or(&msg))
-    })
+    forge_catalog::yaml::parse_document(text)
 }
 
 /// Reads a document: YAML, then the typed `forge/v1` schema.

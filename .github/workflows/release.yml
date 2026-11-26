@@ -237,10 +237,12 @@ jobs:
           case "$t" in
             x86_64-unknown-linux-musl)
               cp "$src/forge-agent" out/forge-agent-linux-x86_64
-              cp "$src/forge-agent-helper" out/forge-agent-helper-linux-x86_64 ;;
+              cp "$src/forge-agent-helper" out/forge-agent-helper-linux-x86_64
+              cp "$src/forge-dns" out/forge-dns-linux-x86_64 ;;
             aarch64-unknown-linux-musl)
               cp "$src/forge-agent" out/forge-agent-linux-aarch64
-              cp "$src/forge-agent-helper" out/forge-agent-helper-linux-aarch64 ;;
+              cp "$src/forge-agent-helper" out/forge-agent-helper-linux-aarch64
+              cp "$src/forge-dns" out/forge-dns-linux-aarch64 ;;
           esac
           if [ "${{ matrix.os }}" = linux ] || [ "${{ matrix.os }}" = linux-arm ]; then
             for f in out/*; do

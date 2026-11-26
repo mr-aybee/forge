@@ -13,6 +13,13 @@ use std::net::IpAddr;
 
 use serde::{Deserialize, Serialize};
 
+mod records;
+
+pub use records::{
+    RECORDS_FILE, RECORDS_TTL, RECORDS_VERSION, Record, RecordInput, Records, SrvPort, build_records,
+    first_container_port, ptr_name, replica_clashes, reverse_zone, search_list,
+};
+
 /// Suffix of every name unless the operator sets another (`names.suffix`).
 pub const DEFAULT_SUFFIX: &str = "local";
 /// The hosts-file block written for the fleet's names.

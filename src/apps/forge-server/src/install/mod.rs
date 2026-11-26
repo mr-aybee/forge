@@ -86,7 +86,9 @@ impl DistManifest {
 
 /// Supported Linux architectures (as `uname -m` reports them after normalising).
 pub const LINUX_ARCHES: [&str; 2] = ["x86_64", "aarch64"];
-pub const BINARIES: [&str; 2] = ["forge-agent", "forge-agent-helper"];
+/// Binaries handed to Linux nodes; `forge-dns` is optional (older packages
+/// do not carry it, and a node installs it only when offered).
+pub const BINARIES: [&str; 3] = ["forge-agent", "forge-agent-helper", "forge-dns"];
 /// Windows architectures with an agent build (D-079); there is no helper on Windows.
 pub const WINDOWS_ARCHES: [&str; 1] = ["x86_64"];
 /// Release asset name of the Windows agent.
@@ -246,9 +248,10 @@ pub fn render_script(dist: &AgentDist, p: &InstallParams<'_>) -> String {
         .iter()
         .map(|a| {
             format!(
-                "    {a}) AGENT_SHA={}; HELPER_SHA={} ;;",
+                "    {a}) AGENT_SHA={}; HELPER_SHA={}; DNS_SHA={} ;;",
                 sh_quote(dist.sum(a, "forge-agent")),
-                sh_quote(dist.sum(a, "forge-agent-helper"))
+                sh_quote(dist.sum(a, "forge-agent-helper")),
+                sh_quote(dist.sum(a, "forge-dns"))
             )
         })
         .collect::<Vec<_>>()
@@ -326,8 +329,43 @@ if [ -n "$HELPER_SHA" ]; then
   step "install -m 0755 forge-agent-helper /usr/local/bin/forge-agent-helper"
   install -m 0755 "$TMP/forge-agent-helper" /usr/local/bin/forge-agent-helper
 fi
+# Cluster DNS (plans/native-mesh.md 2.4): installed when offered; the agent
+# configures and starts it once the node is on a cluster network.
+if [ -n "$DNS_SHA" ] && command -v systemctl >/dev/null 2>&1; then
+  step "curl -fsSL $FORGE_URL/agent/download/linux/$ARCH/forge-dns"
+  fetch "$FORGE_URL/agent/download/linux/$ARCH/forge-dns" "$TMP/forge-dns"
+  verify "$TMP/forge-dns" "$DNS_SHA"
+  install -m 0755 "$TMP/forge-dns" /usr/local/bin/forge-dns
+  id forge-dns >/dev/null 2>&1 || useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin forge-dns
+  install -d -m 0755 /var/lib/forge-dns
+  cat > /etc/systemd/system/forge-dns.service <<'UNIT'
+[Unit]
+Description=Orbyn Forge cluster DNS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=forge-dns
+Group=forge-dns
+DynamicUser=no
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/var/lib/forge-dns
+EnvironmentFile=-/etc/forge/forge-dns.env
+ExecStart=/usr/local/bin/forge-dns --file ${{FORGE_DNS_FILE}} $FORGE_DNS_ARGS
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+fi
 # SELinux (RHEL-likes): give the binaries their directory's default label.
-command -v restorecon >/dev/null 2>&1 && restorecon -F /usr/local/bin/forge-agent* 2>/dev/null || true
+command -v restorecon >/dev/null 2>&1 && restorecon -F /usr/local/bin/forge-agent* /usr/local/bin/forge-dns 2>/dev/null || true
 
 if ! id forge-agent >/dev/null 2>&1; then
   step "useradd --system forge-agent"

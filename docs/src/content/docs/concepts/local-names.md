@@ -13,13 +13,45 @@ that every other node can resolve, and why it works the way it does.
 Forge keeps one list of names per workspace and writes it to every enrolled
 node, whether the node is in a cluster or not.
 
-| What | Name in a cluster | Name outside a cluster |
-| --- | --- | --- |
-| A node | `<node>.<cluster>.local` | `<node>.local` |
-| A service (a service with an active instance) | `<app>.<environment>.<cluster>.local` | `<app>.<environment>.local` |
+| What | Name in a cluster | Name outside a cluster | Addresses |
+| --- | --- | --- | --- |
+| A node | `<node>.<cluster>.local` | `<node>.local` | One |
+| A service (a service with an active instance) | `<app>.<environment>.<cluster>.local` | `<app>.<environment>.local` | One per node it runs on |
+| A compose stack service | `<svc>.<stack>.<environment>.<cluster>.local` | none | One per running container that is healthy or has no health check |
+| One replica of a compose stack service | `<svc>-<n>.<stack>.<environment>.<cluster>.local` | none | The address of container number `<n>`, whatever its health |
 
-A service on three nodes has three lines with the same name, one per node.
 `local` is the default suffix. See [The suffix](#the-suffix) to change it.
+
+### Stack names
+
+Stack names point at the containers' own addresses on the
+[container network](/docs/guides/cluster-network/#container-network), not
+at the node. These rules apply:
+
+- Only a compose service with a container port in `ports:` or `expose:` gets
+  a name. A service with neither has none.
+- Only containers on the cluster network get a row. A container with
+  `x-forge.mesh: false` or `network_mode` has no name.
+- `<n>` is the Compose container number (`api-1`, `api-2`).
+- The stack service name drops a container that is unhealthy or still
+  starting, so callers reach only healthy replicas. The replica name keeps
+  it, so you can still reach a sick container to debug it.
+- The names follow containers within about 10 seconds. The agent reports
+  its containers when they change, without waiting for a deploy.
+- These addresses are reachable only inside the fabric, so only nodes in
+  the same cluster network see these names.
+
+Native services with runtime `container` keep the node's mesh address.
+They have no per-container name yet.
+
+### When names clash
+
+- A node name wins over a service name.
+- A replica name that equals a service or stack service name is dropped.
+  The stack plan shows an Info finding such as
+  ``service `api-2` clashes with replica 2 of `api` ``.
+- A stack and a native service with the same name do not clash: the stack
+  service is `api.orders.prod...`, the native service `orders.prod...`.
 
 ## The suffix
 
@@ -103,6 +135,15 @@ flow:
 
 ## How a node keeps them
 
+A node resolves names in two ways:
+
+| Path | Nodes | Serves |
+| --- | --- | --- |
+| Hosts file | Every node, Linux and Windows | A names (one line per address) |
+| forge-dns | Linux nodes in a cluster network | A, SRV and PTR records for the node's cluster |
+
+### Hosts file
+
 The node's agent replaces one marked block in its hosts file and leaves
 every other line alone:
 
@@ -150,6 +191,55 @@ number of names, not with the number of nodes times the number of names.
 
 The node checks every entry again before it writes: each name must be made
 of DNS labels and end in a safe suffix, and each address must parse.
+
+### forge-dns
+
+On a Linux node in a cluster network, the agent also runs
+[forge-dns](/docs/reference/forge-dns/), a small DNS server that listens on
+the node's mesh address, port `53`. The helper writes the cluster's records
+to `/var/lib/forge-dns/names.json`, and forge-dns reloads it within about
+2 seconds. Records have a TTL of 5 seconds.
+
+forge-dns answers more than a hosts file can:
+
+- **A** records, rotated on each query, so clients spread over replicas.
+- **SRV** records `_<service>._<proto>.<name>` with the service's first
+  container port. These exist only in forge-dns, never in the hosts file.
+- **PTR** records for every address inside the fabric subnet. A replica or
+  node name is preferred as the target, so a reverse lookup names one
+  container.
+
+Names outside the cluster zone are forwarded to the node's usual resolvers.
+
+**Containers** on the cluster network get these DNS settings, unless the
+compose service sets `dns` itself:
+
+- `dns`: the node's mesh address first, then the server host's forge-dns
+  when [`[dns] listen`](/docs/reference/configuration/#cluster-dns) is set.
+  Docker's embedded resolver tries them in order.
+- `dns_search`: `<stack>.<environment>.<cluster>.<suffix>`,
+  `<environment>.<cluster>.<suffix>`, `<cluster>.<suffix>`. A container
+  reaches another service of its stack as `api`, and one in another stack as
+  `api.orders`.
+
+**The node itself** uses forge-dns only with systemd-resolved: the agent
+runs `resolvectl dns <iface> <mesh ip>` and
+`resolvectl domain <iface> ~<zone> ~<reverse zones>`. This is scoped to the
+WireGuard interface, so the node's other resolvers stay untouched. Without
+systemd-resolved, the node changes nothing and the hosts file still serves
+its names.
+
+The **server host tier** is optional. With `[dns] listen` set, the server
+writes `/var/lib/forge-dns/names.json` (`dns.records_file`) with every cluster of every workspace, and
+its own forge-dns answers when a node's forge-dns is down.
+
+A node's facts report `forge_dns` as `running`, `stopped` or `missing`.
+Windows nodes and nodes outside a cluster network use the hosts file only.
+
+:::note
+Agent self-update does not update the forge-dns binary yet. Reinstall with
+the package to get a newer forge-dns.
+:::
 
 ## Ports
 

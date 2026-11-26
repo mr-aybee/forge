@@ -29,7 +29,7 @@ names on nodes you cannot see are left out.
 **Synopsis**
 
 ```text
-forge dns list [--workspace <WORKSPACE>] [--kind <KIND>]
+forge dns list [--workspace <WORKSPACE>] [--kind <KIND>] [--stack <STACK>]
 ```
 
 **Arguments and flags**
@@ -38,6 +38,7 @@ forge dns list [--workspace <WORKSPACE>] [--kind <KIND>]
 | --- | --- | --- | --- | --- | --- |
 | `--workspace <WORKSPACE>` | id | all workspaces you can see | no | Only this workspace's names | `--workspace <workspace-id>` |
 | `--kind <KIND>` | `node` \| `service` | both | no | Only node names or only service names | `--kind service` |
+| `--stack <STACK>` | stack id | all | no | Only that compose stack's `stack-service` and `replica` names; needs `view` on its environment | `--stack <stack-id>` |
 
 **Examples**
 

@@ -3,13 +3,14 @@ import { ArrowLeft, Download, FileText, Globe, History, Layers, Loader2, Pencil,
 import { useState } from "react";
 
 import { ApiError } from "../api/client";
+import { useClusterFabric } from "../api/fabric";
 import { useAllEnvironments, useServers } from "../api/hooks";
 import { type StackDetail as Detail, type StackNode, jobServer, useDeleteStack, useRefreshStack, useStack, useStackServiceAction } from "../api/stacks";
 import { nodeName, type Job } from "../api/types";
 import { errorText, useToast } from "../app/toast";
 import { NodeJobTabs } from "../components/JobLog";
 import { WebhooksTab } from "../components/deploy/WebhooksTab";
-import { Designer, Findings, NodeLink, StateChip, YamlEditor } from "../components/stacks/parts";
+import { Designer, Findings, NodeLink, StateChip, YamlEditor, composeMeshOn } from "../components/stacks/parts";
 import { RevisionsPanel } from "../components/stacks/Revisions";
 import { ServicePorts } from "../components/tunnels/ServicePorts";
 import { DeployDialog, DownDialog, ExposeDialog, KindBadge, LogsDialog, UpdateDialog } from "../components/stacks/StackDialogs";
@@ -78,6 +79,7 @@ function StackView({ d, tab, setTab, fetching }: { d: Detail; tab: Tab; setTab: 
   const live = d.nodes.length > 0;
   const busy = d.nodes.some((n) => /ing$/.test(n.status));
   const s = d.stack;
+  const offMesh = useOffMeshNodes(d, ns?.cluster_id ?? null);
 
   const runService = (node: StackNode, action: ServiceAction, services?: string[]) => {
     const key = `${node.server_id}:${action}:${services?.join(",") ?? "*"}`;
@@ -159,6 +161,16 @@ function StackView({ d, tab, setTab, fetching }: { d: Detail; tab: Tab; setTab: 
             </span>
           )}
         </Meta>
+        {offMesh.length > 0 && (
+          <Meta k="Network">
+            <span className="inline-flex items-center gap-1.5" title={`Running containers on ${offMesh.map(host).join(", ")} have no address on the cluster network. Redeploy to attach them.`}>
+              <Badge tone="warn">Not on the cluster network</Badge>
+              <Button className="h-6 px-2 text-xs" disabled={busy} title={busy ? "A job is running on a node" : "Redeploy to join the cluster network"} onClick={() => setDialog({ k: "deploy" })}>
+                <Rocket className="size-3.5" /> Redeploy
+              </Button>
+            </span>
+          </Meta>
+        )}
         <Meta k="Folder">
           <span className="inline-flex min-w-0 items-center">
             <span className="max-w-[320px] truncate font-mono text-[11px]" title={d.dir || undefined}>
@@ -281,6 +293,21 @@ function StackView({ d, tab, setTab, fetching }: { d: Detail; tab: Tab; setTab: 
       </div>
     </>
   );
+}
+
+/**
+ * Nodes where the stack runs but its containers have no cluster-network address,
+ * although the node's container network is ready. Empty when anything is unknown.
+ */
+function useOffMeshNodes(d: Detail, clusterId: string | null): string[] {
+  const q = useClusterFabric(clusterId);
+  const nodes = q.data?.status?.nodes;
+  if (!nodes || !composeMeshOn(d.content ?? "")) return [];
+  const optedOut = new Set((d.preview?.services ?? []).filter((x) => typeof x.mesh === "string" || x.mesh === false).map((x) => x.name));
+  return (d.nodes ?? [])
+    .filter((n) => nodes[n.server_id]?.network === "ok")
+    .filter((n) => (n.state ?? []).some((r) => r.state === "running" && !r.mesh_ip && !optedOut.has(r.service)))
+    .map((n) => n.server_id);
 }
 
 function Meta({ k, children }: { k: string; children: React.ReactNode }) {

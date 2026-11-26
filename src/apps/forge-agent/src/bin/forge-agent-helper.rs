@@ -32,8 +32,21 @@ async fn capabilities(container_exec: bool) -> HelperResponse {
     let caps = forge_agent::helper::HelperCapabilities {
         container_exec,
         self_update: forge_agent::self_update::capability().await,
+        docker_version: docker_version().await,
     };
     data(serde_json::to_value(caps).map_err(|e| e.to_string()))
+}
+
+/// The Docker Engine version, for the `docker_version` fact (the server
+/// retries the cluster container network when it changes).
+#[cfg(unix)]
+async fn docker_version() -> Option<String> {
+    forge_agent::docker_ops::engine_version().await
+}
+
+#[cfg(not(unix))]
+async fn docker_version() -> Option<String> {
+    None
 }
 
 fn data(r: Result<serde_json::Value, String>) -> HelperResponse {
@@ -179,9 +192,27 @@ async fn handle(
         HelperRequest::Site { action, spec } => data(forge_agent::sites::site_action(&action, &spec).await),
         HelperRequest::Dns { dns } => data(forge_agent::sites::dns_action(&dns).await),
         HelperRequest::Ingress { ingress } => data(forge_agent::ingress::run_op(&ingress).await),
-        HelperRequest::Fabric { fabric } => data(forge_agent::fabric::run_op(&fabric).await),
-        HelperRequest::Names { suffix, entries, containers } => {
-            data(forge_agent::host_names::apply(suffix, entries, containers).await)
+        // A refusal code travels in `data` (`executor::refusal_code`).
+        HelperRequest::Fabric { fabric } => match forge_agent::fabric::run_op(&fabric).await {
+            Ok(v) => data(Ok(v)),
+            Err(e) => e.into_response(),
+        },
+        HelperRequest::Names { suffix, entries, containers, records } => {
+            let r = forge_agent::host_names::apply(suffix, entries, containers).await;
+
+            match (r, records) {
+                (Ok(mut v), Some(rec)) => match forge_agent::host_names::write_records(&rec).await {
+                    Ok(()) => {
+                        #[cfg(unix)]
+                        forge_agent::fabric::dns::on_records_written().await;
+
+                        v["records"] = serde_json::json!(rec.records.len());
+                        data(Ok(v))
+                    }
+                    Err(e) => HelperResponse::failed(e),
+                },
+                (r, _) => data(r),
+            }
         }
         HelperRequest::Storage { storage } => store_request(&storage, progress.as_ref()).await,
         HelperRequest::Files { files } => data(forge_agent::files::run_async(files).await),
@@ -241,6 +272,10 @@ async fn handle(
             Some(c) => data(c.handle(telemetry).await.and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))),
             None => HelperResponse::failed("container telemetry needs `forge-agent-helper serve`"),
         },
+        #[cfg(unix)]
+        HelperRequest::StackStates {} => data(forge_agent::stacks::states().await),
+        #[cfg(not(unix))]
+        HelperRequest::StackStates {} => HelperResponse::failed("compose stacks need a Linux node"),
         #[cfg(not(unix))]
         HelperRequest::ContainerTelemetry { .. } => {
             HelperResponse::failed("containers are not supported on this OS yet")

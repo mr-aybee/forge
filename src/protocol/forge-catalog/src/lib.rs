@@ -33,6 +33,7 @@ pub mod ingress;
 pub mod integration;
 pub mod names;
 pub mod sites;
+pub mod stack_doc;
 pub mod stack_templates;
 pub mod stacks;
 pub mod storage;
@@ -41,6 +42,8 @@ pub mod swarm_rollout;
 pub mod swarm_service;
 pub mod swarm_stack;
 pub mod versions;
+#[cfg(feature = "yaml")]
+pub mod yaml;
 
 use std::collections::BTreeMap;
 

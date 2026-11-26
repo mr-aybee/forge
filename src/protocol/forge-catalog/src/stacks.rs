@@ -120,7 +120,8 @@ impl Report {
         Err(b.iter().map(|f| describe(f)).collect::<Vec<_>>().join("\n"))
     }
 
-    fn push(&mut self, service: &str, severity: Severity, message: impl Into<String>) {
+    /// Adds a finding; a `Privileged` one marks the report privileged.
+    pub fn push(&mut self, service: &str, severity: Severity, message: impl Into<String>) {
         if severity == Severity::Privileged {
             self.privileged = true;
         }
@@ -786,6 +787,10 @@ pub fn check(tree: &Value, p: &Policy) -> Report {
     }
 
     for (name, v) in top.get("networks").and_then(Value::as_object).into_iter().flatten() {
+        if name == MESH_NETWORK_KEY {
+            r.push("", Severity::Blocked, format!("the network key `{MESH_NETWORK_KEY}` is reserved"));
+        }
+
         if v.get("driver").and_then(Value::as_str) == Some("host") || docker_network_name(name, v) == Some("host") {
             r.push("", Severity::Privileged, format!("network `{name}` uses the host network"));
         }
@@ -1208,6 +1213,11 @@ pub enum Placement {
 pub fn placements(tree: &Value) -> Result<BTreeMap<String, Placement>, String> {
     let mut out = BTreeMap::new();
 
+    // A top-level `x-forge.cluster` places every service without its own
+    // placement on each node of that cluster (`spec.placement.cluster` of a
+    // `forge.stack.yaml`).
+    let default_cluster = tree.pointer("/x-forge/cluster").and_then(Value::as_str);
+
     for (name, svc) in tree.get("services").and_then(Value::as_object).into_iter().flatten() {
         let node = svc.pointer("/x-forge/node").and_then(Value::as_str);
         let cluster = svc.pointer("/x-forge/cluster").and_then(Value::as_str);
@@ -1229,7 +1239,7 @@ pub fn placements(tree: &Value) -> Result<BTreeMap<String, Placement>, String> {
             (Some(n), None, []) => Placement::Node(n.to_owned()),
             (Some(n), None, [h]) if h == n => Placement::Node(n.to_owned()),
             (None, Some(c), []) => Placement::Cluster(c.to_owned()),
-            (None, None, []) => Placement::Default,
+            (None, None, []) => default_cluster.map_or(Placement::Default, |c| Placement::Cluster(c.to_owned())),
             (None, None, [h]) => Placement::Node(h.clone()),
             _ => return Err(format!("{name}: the placement names more than one node")),
         };
@@ -1330,11 +1340,20 @@ pub fn part_for(tree: &Value, services: &BTreeSet<String>, stack_label: &str) ->
             // server and the agent both run `bind_ports` on this part, and
             // without it every port fell back to the internal address.
             // Compose accepts `x-*` extension fields on a service.
-            let public = m.get("x-forge").and_then(|x| x.get("public")).cloned();
+            // `mesh` survives too: the helper reads it when it attaches
+            // services to the cluster network.
+            let mut kept = Map::new();
+
+            for key in ["public", "mesh"] {
+                if let Some(v) = m.get("x-forge").and_then(|x| x.get(key)) {
+                    kept.insert(key.into(), v.clone());
+                }
+            }
+
             m.remove("x-forge");
 
-            if let Some(p) = public {
-                m.insert("x-forge".into(), json!({ "public": p }));
+            if !kept.is_empty() {
+                m.insert("x-forge".into(), Value::Object(kept));
             }
 
             if let Some(dep) = m.get_mut("deploy").and_then(Value::as_object_mut) {
@@ -1505,6 +1524,29 @@ pub struct StackPart {
     pub policy: Policy,
     /// Address unmarked ports bind to.
     pub internal_ip: String,
+    /// Docker name of the node's cluster container network, when every
+    /// service not opted out must join it. `None`: no injection. Only set
+    /// for agents that report the `mesh_network` fact, because older
+    /// helpers refuse unknown fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_network: Option<String>,
+    /// Resolvers for services on the cluster network (`plans/native-mesh.md`
+    /// 2.5). Only with `mesh_network`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns: Option<StackDns>,
+}
+
+/// `dns`/`dns_search` written on every service attached to the cluster
+/// network that sets no `dns` itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StackDns {
+    /// The node's forge-dns first, then the server host's.
+    pub servers: Vec<std::net::Ipv4Addr>,
+    /// Search domains, most specific first. Empty: the node derives them
+    /// from the zone of its `names.json`.
+    #[serde(default)]
+    pub search: Vec<String>,
 }
 
 impl StackPart {
@@ -1551,9 +1593,123 @@ impl StackPart {
         report.ensure(self.policy.allow_privileged).map_err(hide)?;
         let ports = bind_ports(&mut tree, &ip.to_string(), &mut report);
         report.ensure(self.policy.allow_privileged).map_err(hide)?;
+        check_mesh_refs(&tree, self.mesh_network.as_deref())?;
         add_log_url(&mut tree);
 
+        if let Some(net) = &self.mesh_network {
+            add_mesh_network(&mut tree, net);
+
+            if let Some(dns) = &self.dns {
+                add_dns(&mut tree, dns);
+            }
+        }
+
         Ok((escape_dollars(&tree), ports))
+    }
+}
+
+/// Compose key of the cluster container network in a stack part. Reserved:
+/// a stack that defines it is refused.
+pub const MESH_NETWORK_KEY: &str = "forge-mesh";
+
+/// Prefix of every cluster container network's Docker name
+/// (`fabric::network_name` of a `forge…` interface).
+const MESH_NETWORK_PREFIX: &str = "forge-forge";
+
+/// Refuses a network whose Docker name is a cluster container network
+/// unless it is this part's own (`mesh`): a stack cannot join another
+/// cluster's network, or this one where the server did not put it.
+fn check_mesh_refs(tree: &Value, mesh: Option<&str>) -> Result<(), String> {
+    for (key, v) in tree.get("networks").and_then(Value::as_object).into_iter().flatten() {
+        let Some(name) = docker_network_name(key, v) else { continue };
+
+        if name.starts_with(MESH_NETWORK_PREFIX) && Some(name) != mesh {
+            return Err(format!("network `{key}` uses the cluster network `{name}`, which this node does not offer"));
+        }
+    }
+
+    Ok(())
+}
+
+/// Whether `x-forge.mesh` is explicitly `false` on `v` (a service or the
+/// top level). Absent or anything else keeps the default, `true`.
+fn mesh_off(v: &Value) -> bool {
+    v.pointer("/x-forge/mesh") == Some(&Value::Bool(false))
+}
+
+/// Attaches every service to the node's cluster container network
+/// `docker_name` under the reserved key [`MESH_NETWORK_KEY`], in addition to
+/// its own networks. Skipped for a service with any `network_mode` or
+/// `x-forge.mesh: false`, and for the whole stack with a top-level
+/// `x-forge.mesh: false`. Declares the network as external only when a
+/// service was attached.
+pub fn add_mesh_network(tree: &mut Value, docker_name: &str) {
+    if mesh_off(tree) {
+        return;
+    }
+
+    let Some(services) = tree.get_mut("services").and_then(Value::as_object_mut) else { return };
+    let mut attached = false;
+
+    for svc in services.values_mut() {
+        if svc.get("network_mode").is_some() || mesh_off(svc) {
+            continue;
+        }
+
+        let Some(m) = svc.as_object_mut() else { continue };
+
+        match m.entry("networks").or_insert_with(|| json!(["default"])) {
+            Value::Array(list) => {
+                if !list.iter().any(|n| n.as_str() == Some(MESH_NETWORK_KEY)) {
+                    list.push(json!(MESH_NETWORK_KEY));
+                }
+            }
+            Value::Object(map) => {
+                map.entry(MESH_NETWORK_KEY).or_insert_with(|| json!({}));
+            }
+            _ => continue,
+        }
+
+        attached = true;
+    }
+
+    if !attached {
+        return;
+    }
+
+    let Some(top) = tree.as_object_mut() else { return };
+
+    if let Value::Object(nets) = top.entry("networks").or_insert_with(|| json!({})) {
+        nets.entry(MESH_NETWORK_KEY).or_insert_with(|| json!({ "external": true, "name": docker_name }));
+    }
+}
+
+/// Writes `dns` and `dns_search` on every service attached to the cluster
+/// network (see [`add_mesh_network`]) that sets no `dns` itself. Docker's
+/// embedded resolver forwards to these in order.
+pub fn add_dns(tree: &mut Value, dns: &StackDns) {
+    if dns.servers.is_empty() {
+        return;
+    }
+
+    let Some(services) = tree.get_mut("services").and_then(Value::as_object_mut) else { return };
+
+    for svc in services.values_mut().filter_map(Value::as_object_mut) {
+        let attached = match svc.get("networks") {
+            Some(Value::Array(l)) => l.iter().any(|n| n.as_str() == Some(MESH_NETWORK_KEY)),
+            Some(Value::Object(m)) => m.contains_key(MESH_NETWORK_KEY),
+            _ => false,
+        };
+
+        if !attached || svc.contains_key("dns") {
+            continue;
+        }
+
+        svc.insert("dns".into(), json!(dns.servers.iter().map(ToString::to_string).collect::<Vec<_>>()));
+
+        if !dns.search.is_empty() && !svc.contains_key("dns_search") {
+            svc.insert("dns_search".into(), json!(dns.search));
+        }
     }
 }
 

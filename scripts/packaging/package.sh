@@ -4,8 +4,8 @@
 #
 # <bin-dir> holds forge-server-<target>[.exe], forge-plugin-runner-<target>[.exe],
 # forge-analytics-worker-<target>[.exe],
-# forge-agent-linux-<arch>, forge-agent-helper-linux-<arch> and
-# forge-agent-windows-x86_64.exe. <out-dir> gets:
+# forge-agent-linux-<arch>, forge-agent-helper-linux-<arch>,
+# forge-dns-linux-<arch> and forge-agent-windows-x86_64.exe. <out-dir> gets:
 #   * the raw binaries (the self-updater downloads these), and
 #   * one self-contained package per server platform:
 #       forge-<version>-x86_64-linux.tar.gz
@@ -25,7 +25,7 @@ cp "$BIN"/* "$OUT"/
 cp "$HERE/../../LICENSE" "$OUT/LICENSE.txt"  # also a release asset of its own
 
 agents=()
-for a in forge-agent-linux-x86_64 forge-agent-helper-linux-x86_64 forge-agent-linux-aarch64 forge-agent-helper-linux-aarch64 forge-agent-windows-x86_64.exe; do
+for a in forge-agent-linux-x86_64 forge-agent-helper-linux-x86_64 forge-dns-linux-x86_64 forge-agent-linux-aarch64 forge-agent-helper-linux-aarch64 forge-dns-linux-aarch64 forge-agent-windows-x86_64.exe; do
   [ -f "$BIN/$a" ] && agents+=("$a")
 done
 
@@ -53,7 +53,7 @@ stage() { # stage <dir> <server-target> <exe>
   cp "$HERE/forge.toml.example" "$d/forge.toml.example"
   sed "s/@VERSION@/$VERSION/g" "$HERE/README.txt" > "$d/README.txt"
   cp "$HERE/../../LICENSE" "$d/LICENSE.txt"
-  chmod 0755 "$d/forge-server$x" "$d/forge-plugin-runner$x" "$d/forge-analytics-worker$x" "$d"/dist/forge-agent* || true
+  chmod 0755 "$d/forge-server$x" "$d/forge-plugin-runner$x" "$d/forge-analytics-worker$x" "$d"/dist/forge-agent* "$d"/dist/forge-dns* || true
 }
 
 tmp="$(mktemp -d)"

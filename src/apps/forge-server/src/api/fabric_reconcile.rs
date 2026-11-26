@@ -26,11 +26,13 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use forge_catalog::fabric::{
-    FabricMode, FabricOp, FabricSpec, HostEntry, Lease, LeaseKind, MeshNode, interface_name, plan_mesh,
+    FabricMode, FabricOp, FabricSpec, HostEntry, Lease, LeaseKind, MESH_MTU, MeshNode, interface_name, plan_mesh,
 };
 use forge_core::model::{AgentStatus, FabricRecord, Server};
-use forge_core::ports::{FabricRepository, ServerRepository, ServiceRepository, TenancyRepository};
+use forge_core::ports::{ClusterRepository, FabricRepository, ServerRepository, ServiceRepository, TenancyRepository};
+use forge_core::tags::FactsRepository;
 use forge_core::{AuthzContext, ClusterId, Principal, ServiceId, Timestamp};
+use forge_proto::messages::RefusalCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::watch;
@@ -79,6 +81,27 @@ pub struct NodeState {
     pub missing_keys: Vec<String>,
     #[serde(default)]
     pub relay: bool,
+    /// The node's cluster container network (`plans/native-mesh.md` 1.4):
+    /// `ok`, `unsupported` (old or missing Docker; not retried with
+    /// back-off), `waiting for a block`, or `None` before the first try and
+    /// on Windows nodes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<String>,
+    /// Why the container network is not `ok`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_error: Option<String>,
+    /// Docker version the node reported with its last network answer (or
+    /// its `docker_version` fact when the network was refused).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docker_version: Option<String>,
+}
+
+pub use forge_catalog::fabric::{NETWORK_FAILED, NETWORK_OK, NETWORK_UNSUPPORTED, NETWORK_WAITING_BLOCK};
+
+/// Whether an `unsupported` container network should be tried again now
+/// because the node reports a different Docker version than when refused.
+fn docker_changed(ns: &NodeState, fact: Option<&str>) -> bool {
+    ns.network.as_deref() == Some(NETWORK_UNSUPPORTED) && fact.is_some() && fact != ns.docker_version.as_deref()
 }
 
 /// Whether a node needs a step now: its time has come, or a peer it was
@@ -161,8 +184,34 @@ async fn save_node(state: &AppState, cluster: ClusterId, node: &str, ns: &NodeSt
     }
 }
 
-/// Run one fabric command on a node and return its output.
+/// The answer to a fabric command: its output, or a coded refusal the
+/// reconciler acts on (`jobs::agent_command` records it as the output).
+enum Answer {
+    Done(Value),
+    Refused { code: String, message: String },
+}
+
+/// Run one fabric command on a node and return its output; a coded refusal
+/// is an error here.
 async fn exec(state: &AppState, by: &AppliedBy, node: &Server, op: FabricOp) -> Result<Value, String> {
+    match exec_coded(state, by, node, op).await? {
+        Answer::Done(v) => Ok(v),
+        Answer::Refused { message, .. } => Err(message),
+    }
+}
+
+/// Run one fabric command on a node, keeping a coded refusal apart.
+async fn exec_coded(state: &AppState, by: &AppliedBy, node: &Server, op: FabricOp) -> Result<Answer, String> {
+    let out = exec_raw(state, by, node, op).await?;
+
+    let Some(refusal) = out.get("refusal") else { return Ok(Answer::Done(out)) };
+    let code = refusal.get("code").and_then(Value::as_str).unwrap_or_default().to_owned();
+    let message = refusal.get("message").and_then(Value::as_str).unwrap_or("refused").to_owned();
+
+    Ok(Answer::Refused { code, message })
+}
+
+async fn exec_raw(state: &AppState, by: &AppliedBy, node: &Server, op: FabricOp) -> Result<Value, String> {
     let cmd = json!({ "type": "fabric", "op": op });
     let r = run_as(state, by.principal.clone(), by.context, node.id, cmd, WAIT).await.map_err(|e| e.message)?;
     match r.get("status").and_then(Value::as_str) {
@@ -239,6 +288,16 @@ async fn pass(state: &AppState, cluster: ClusterId) -> bool {
     let iface = interface_name(&cluster.to_string());
     let now = state.clock.now().0;
     let hosts = cluster_hosts(state, cluster, &spec, &leases, &members).await;
+    let docker_facts = docker_versions(state).await;
+
+    let swarm = match state.store.get_cluster(cluster).await {
+        Ok(c) => c.mode == forge_core::model::ClusterMode::Swarm,
+        Err(e) => {
+            tracing::warn!(error = %e, %cluster, "reading the cluster failed; skipping this pass");
+            return false;
+        }
+    };
+
     let mut learned = false;
 
     for node in &members {
@@ -250,13 +309,31 @@ async fn pass(state: &AppState, cluster: ClusterId) -> bool {
         let mut ns =
             states.get(&id).cloned().unwrap_or_else(|| NodeState { state: "pending".into(), ..NodeState::default() });
 
-        if node.status != AgentStatus::Online || !due(&ns, &states, now) {
+        let docker_fact = docker_facts.get(&node.id).map(String::as_str);
+
+        if node.status != AgentStatus::Online || !(due(&ns, &states, now) || docker_changed(&ns, docker_fact)) {
             continue;
         }
 
         let had_key = ns.public_key.is_some();
 
         let result = converge(state, &by, &spec, &iface, &leases, &members, &hosts, &states, node, &mut ns, now).await;
+
+        // Swarm clusters keep the fabric for their data path but have no
+        // container network (conversion removed it); Windows nodes neither.
+        // A network failure is recorded on the network fields only: the
+        // WireGuard part stays in sync and other nodes keep their reach.
+        if result.is_ok() && !swarm && !node.os.to_lowercase().starts_with("win") {
+            let block = leases.iter().find(|l| l.kind == LeaseKind::Block && l.owner == id).map(|l| l.cidr);
+
+            if let Err(e) = ensure_network(state, &by, &iface, block, node, &mut ns).await {
+                tracing::info!(%cluster, node = %id, error = %e, "container network failed; retried on the repair pass");
+                ns.step = None;
+                ns.network = Some(NETWORK_FAILED.into());
+                ns.network_error = Some(e);
+            }
+        }
+
         match result {
             Ok(()) => {
                 ns.attempts = 0;
@@ -339,6 +416,61 @@ async fn converge(
     ns.state = if unreachable.is_empty() { "ok".into() } else { "waiting".into() };
     ns.unreachable = unreachable;
     ns.missing_keys = missing_keys;
+
+    Ok(())
+}
+
+/// Every node's `docker_version` fact. Unreadable facts count as unknown:
+/// the 10-minute repair pass still retries the network.
+async fn docker_versions(state: &AppState) -> HashMap<forge_core::ServerId, String> {
+    let all = match state.store.all_facts().await {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(error = %e, "reading node facts failed; Docker upgrades are noticed on the repair pass");
+            return HashMap::new();
+        }
+    };
+
+    all.into_iter().filter_map(|(id, (f, _))| Some((id, f.get("docker_version")?.as_str()?.to_owned()))).collect()
+}
+
+/// Runs `NetworkEnsure` after the WireGuard part is in sync. An old or
+/// missing Docker marks the network `unsupported` without failing the node,
+/// so it is not retried with back-off; any other error is a node failure.
+async fn ensure_network(
+    state: &AppState,
+    by: &AppliedBy,
+    iface: &str,
+    block: Option<forge_catalog::fabric::Cidr>,
+    node: &Server,
+    ns: &mut NodeState,
+) -> Result<(), String> {
+    let Some(subnet) = block else {
+        tracing::warn!(node = %node.id, "no instance block leased; the container network waits");
+        ns.network = Some(NETWORK_WAITING_BLOCK.into());
+        ns.network_error = None;
+
+        return Ok(());
+    };
+
+    ns.step = Some("network".into());
+    let op = FabricOp::NetworkEnsure { iface: iface.to_owned(), subnet, mtu: MESH_MTU };
+    let answer = exec_coded(state, by, node, op).await?;
+    ns.step = None;
+
+    match answer {
+        Answer::Done(out) => {
+            ns.network = Some(NETWORK_OK.into());
+            ns.network_error = None;
+            ns.docker_version = out.get("docker_version").and_then(Value::as_str).map(str::to_owned);
+        }
+        Answer::Refused { code, message } if RefusalCode::parse(&code) == Some(RefusalCode::Unsupported) => {
+            ns.network = Some(NETWORK_UNSUPPORTED.into());
+            ns.network_error = Some(message);
+            ns.docker_version = docker_versions(state).await.remove(&node.id);
+        }
+        Answer::Refused { message, .. } => return Err(message),
+    }
 
     Ok(())
 }
@@ -507,6 +639,22 @@ mod tests {
         b.unreachable = vec!["c".into()];
         let states = BTreeMap::from([("b".to_owned(), b.clone()), ("c".to_owned(), node(5_000, Some("KC"), &[]))]);
         assert!(!due(&b, &states, 1_000));
+    }
+
+    #[test]
+    fn an_unsupported_network_is_retried_only_when_docker_changes() {
+        let ns = NodeState {
+            network: Some(NETWORK_UNSUPPORTED.into()),
+            docker_version: Some("27.5.1".into()),
+            ..NodeState::default()
+        };
+
+        assert!(!docker_changed(&ns, Some("27.5.1")));
+        assert!(!docker_changed(&ns, None));
+        assert!(docker_changed(&ns, Some("28.1.0")));
+
+        let ok = NodeState { network: Some(NETWORK_OK.into()), ..ns };
+        assert!(!docker_changed(&ok, Some("28.1.0")));
     }
 
     #[test]

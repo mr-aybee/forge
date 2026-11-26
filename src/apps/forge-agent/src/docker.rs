@@ -360,6 +360,16 @@ pub async fn logs_window(name: &str, since: f64, until: f64) -> Result<Option<St
     }
 }
 
+/// A container's address on the cluster container network (a `forge-forge…`
+/// network) from its `NetworkSettings.Networks`; `None` when not attached.
+#[must_use]
+pub fn mesh_ip(networks: Option<&Value>) -> Option<&str> {
+    let nets = networks?.as_object()?;
+    let (_, v) = nets.iter().find(|(k, _)| k.starts_with("forge-forge"))?;
+
+    v["IPAddress"].as_str().filter(|ip| !ip.is_empty())
+}
+
 /// The `inspect` answer without environment values: identity, state, ports,
 /// mounts, network names, environment *names*, labels.
 fn inspect_view(v: &Value) -> Value {
@@ -377,6 +387,7 @@ fn inspect_view(v: &Value) -> Value {
         "ports": v.pointer("/NetworkSettings/Ports"),
         "mounts": v["Mounts"].as_array().map(|m| m.iter().map(|x| json!({"source": x["Source"], "destination": x["Destination"], "mode": x["Mode"]})).collect::<Vec<_>>()),
         "networks": v.pointer("/NetworkSettings/Networks").and_then(Value::as_object).map(|n| n.keys().cloned().collect::<Vec<_>>()),
+        "mesh_ip": mesh_ip(v.pointer("/NetworkSettings/Networks")),
         "env_keys": env_keys,
         "labels": v.pointer("/Config/Labels"),
         "created": v["Created"],

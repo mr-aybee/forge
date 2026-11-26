@@ -176,6 +176,8 @@ pub async fn catalogue(state: &AppState, ws: WorkspaceId) -> Result<Vec<ServiceP
         clusters: &state.store,
         fabrics: &state.store,
         files: &state.store,
+        facts: &state.store,
+        forge_dns: state.config.dns.second_tier(),
     };
 
     for stack in state.store.list_stacks(None).await.map_err(e)?.into_iter().filter(|s| s.workspace_id == ws) {

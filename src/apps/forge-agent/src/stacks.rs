@@ -263,7 +263,36 @@ fn recheck_links(tree: &Value, part: &StackPart) -> Result<(), String> {
     Ok(())
 }
 
+/// The cluster zone of this node's `names.json` (the one that is not a
+/// reverse zone), if forge-dns has records here.
+async fn cluster_zone() -> Option<String> {
+    let text = tokio::fs::read_to_string(crate::host_names::records_path()).await.ok()?;
+    let r: forge_catalog::names::Records = serde_json::from_str(&text).ok()?;
+
+    r.zones.into_iter().find(|z| !z.ends_with(".in-addr.arpa"))
+}
+
+/// Fills the search domains of a part's `dns` from the node's zone:
+/// `<stack>.<env>.<zone>`, `<env>.<zone>`, `<zone>`.
+async fn with_search(part: &StackPart) -> StackPart {
+    let mut part = part.clone();
+
+    let Some(dns) = part.dns.as_mut().filter(|d| d.search.is_empty()) else { return part };
+    let Some(zone) = cluster_zone().await else { return part };
+
+    let (Some(stack), Some(env)) =
+        (forge_catalog::names::label_from(&part.stack), forge_catalog::names::label_from(&part.environment))
+    else {
+        return part;
+    };
+
+    dns.search = vec![format!("{stack}.{env}.{zone}"), format!("{env}.{zone}"), zone];
+
+    part
+}
+
 async fn deploy(part: &StackPart, services: &[String], pull: bool) -> Result<Value, String> {
+    let part = &with_search(part).await;
     let (tree, ports) = part.prepare()?;
     recheck_links(&tree, part)?;
     compose_available().await?;
@@ -299,9 +328,90 @@ fn summary(status: &[Value]) -> String {
 
 /// `docker compose ps --all --format json`, normalized to
 /// `[{service, name, state, health, status, ports, image, exit_code}]`.
+/// Each row also carries the replica `number` and, when the container is on
+/// the cluster container network, its `mesh_ip` (Compose does not report
+/// addresses, so they come from the Engine API).
 async fn ps(project: &str, dir: &str) -> Result<Vec<Value>, String> {
     let out = compose(project, dir, &["ps", "--all", "--format", "json"], SHORT).await?;
-    Ok(parse_ps(&out))
+    let mut rows = parse_ps(&out);
+
+    let filters = json!({ "label": [format!("com.docker.compose.project={project}")] }).to_string();
+    let path = format!("/containers/json?all=1&filters={}", crate::docker_ops::enc(&filters));
+    let containers = crate::docker_ops::get(&path).await?;
+    add_mesh_addresses(&mut rows, &containers);
+
+    Ok(rows)
+}
+
+/// Every Forge compose container on the node, grouped by its stack label
+/// (`<environment>/<stack>`): `{service, name, number, state, health,
+/// mesh_ip}` rows, for names that follow replicas between deploys.
+pub async fn states() -> Result<Value, String> {
+    let filters = json!({ "label": [forge_catalog::stacks::STACK_LABEL] }).to_string();
+    let path = format!("/containers/json?all=1&filters={}", crate::docker_ops::enc(&filters));
+    let list = crate::docker_ops::get(&path).await?;
+
+    Ok(group_states(&list))
+}
+
+/// Groups `GET /containers/json` rows by stack label (see [`states`]).
+#[must_use]
+pub fn group_states(list: &Value) -> Value {
+    let mut out: std::collections::BTreeMap<String, Vec<Value>> = std::collections::BTreeMap::new();
+
+    for c in list.as_array().into_iter().flatten() {
+        let labels = &c["Labels"];
+        let Some(stack) = labels[forge_catalog::stacks::STACK_LABEL].as_str() else { continue };
+        let status = c["Status"].as_str().unwrap_or_default();
+
+        let health = if status.contains("(healthy)") {
+            "healthy"
+        } else if status.contains("(unhealthy)") {
+            "unhealthy"
+        } else if status.contains("(health: starting)") {
+            "starting"
+        } else {
+            ""
+        };
+
+        let number = labels["com.docker.compose.container-number"].as_str().and_then(|n| n.parse::<u32>().ok());
+        let row = json!({
+            "service": labels["com.docker.compose.service"],
+            "name": c["Names"].get(0).and_then(Value::as_str).map(|n| n.trim_start_matches('/')),
+            "number": number,
+            "state": c["State"],
+            "health": health,
+            "mesh_ip": crate::docker::mesh_ip(c.pointer("/NetworkSettings/Networks")),
+        });
+        out.entry(stack.to_owned()).or_default().push(row);
+    }
+
+    json!(out)
+}
+
+/// Adds `number` (label `com.docker.compose.container-number`) and
+/// `mesh_ip` (the address on a `forge-forge…` network) to each `ps` row,
+/// matched by container name. Absent when unknown or not attached.
+pub fn add_mesh_addresses(rows: &mut [Value], containers: &Value) {
+    let Some(list) = containers.as_array() else { return };
+
+    for c in list {
+        let Some(name) = c["Names"].get(0).and_then(Value::as_str).map(|n| n.trim_start_matches('/')) else {
+            continue;
+        };
+
+        let Some(row) = rows.iter_mut().find(|r| r["name"].as_str() == Some(name)) else { continue };
+
+        let number = c["Labels"]["com.docker.compose.container-number"].as_str().and_then(|n| n.parse::<u32>().ok());
+
+        if let Some(n) = number {
+            row["number"] = json!(n);
+        }
+
+        if let Some(ip) = crate::docker::mesh_ip(c.pointer("/NetworkSettings/Networks")) {
+            row["mesh_ip"] = json!(ip);
+        }
+    }
 }
 
 /// Compose prints a JSON array (older v2) or one object per line (newer).
@@ -382,6 +492,46 @@ mod tests {
         let arr = "[{\"Service\":\"web\",\"State\":\"running\"}]";
         assert_eq!(parse_ps(arr)[0]["state"], "running");
         assert!(parse_ps("").is_empty());
+    }
+
+    #[test]
+    fn ps_rows_get_replica_number_and_mesh_address() {
+        let mut rows = parse_ps("{\"Service\":\"api\",\"Name\":\"p-api-2\"}\n{\"Service\":\"db\",\"Name\":\"p-db-1\"}");
+        let containers = json!([
+            { "Names": ["/p-api-2"], "Labels": { "com.docker.compose.container-number": "2" },
+              "NetworkSettings": { "Networks": {
+                  "p_default": { "IPAddress": "172.18.0.3" },
+                  "forge-forgea1b2c3": { "IPAddress": "10.64.12.4" } } } },
+            { "Names": ["/p-db-1"], "Labels": { "com.docker.compose.container-number": "1" },
+              "NetworkSettings": { "Networks": { "p_default": { "IPAddress": "172.18.0.2" } } } },
+        ]);
+        add_mesh_addresses(&mut rows, &containers);
+
+        assert_eq!(rows[0]["number"], 2);
+        assert_eq!(rows[0]["mesh_ip"], "10.64.12.4");
+        assert_eq!(rows[1]["number"], 1);
+        assert!(rows[1].get("mesh_ip").is_none());
+    }
+
+    #[test]
+    fn states_group_by_stack_with_health_and_mesh_address() {
+        let list = json!([
+            { "Names": ["/p-api-1"], "State": "running", "Status": "Up 2 minutes (healthy)",
+              "Labels": { "forge.stack": "prod/orders", "com.docker.compose.service": "api",
+                          "com.docker.compose.container-number": "1" },
+              "NetworkSettings": { "Networks": { "forge-forgea1b2c3": { "IPAddress": "10.64.12.4" } } } },
+            { "Names": ["/p-api-2"], "State": "exited", "Status": "Exited (1)",
+              "Labels": { "forge.stack": "prod/orders", "com.docker.compose.service": "api",
+                          "com.docker.compose.container-number": "2" } },
+            { "Names": ["/other"], "State": "running", "Labels": {} },
+        ]);
+        let g = group_states(&list);
+
+        assert_eq!(g["prod/orders"].as_array().map(Vec::len), Some(2));
+        assert_eq!(g["prod/orders"][0]["health"], "healthy");
+        assert_eq!(g["prod/orders"][0]["mesh_ip"], "10.64.12.4");
+        assert_eq!(g["prod/orders"][1]["number"], 2);
+        assert!(g.get("").is_none());
     }
 
     #[test]

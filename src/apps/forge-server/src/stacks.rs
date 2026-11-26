@@ -4,13 +4,14 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use forge_catalog::fabric::{Lease, LeaseKind};
+use forge_catalog::fabric::{Lease, LeaseKind, interface_name, network_name};
 use forge_catalog::stacks::{
     self as cat, MAX_COMPOSE_BYTES, Placement, Policy, PublishedPort, Report, Severity, StackPart,
 };
 use forge_core::files::{FileRepository, RootSpec};
 use forge_core::model::Server;
 use forge_core::ports::{ClusterRepository, FabricRepository, ServerRepository};
+use forge_core::tags::FactsRepository;
 use forge_core::{ServerId, StackId, WorkspaceId};
 use forge_secrets::Envelope;
 use serde::Serialize;
@@ -103,6 +104,10 @@ pub struct Deps<'a> {
     pub clusters: &'a dyn ClusterRepository,
     pub fabrics: &'a dyn FabricRepository,
     pub files: &'a dyn FileRepository,
+    pub facts: &'a dyn FactsRepository,
+    /// The server host's forge-dns addresses (`[dns] listen`), after each
+    /// node's own in a stack's `dns`.
+    pub forge_dns: Vec<std::net::Ipv4Addr>,
 }
 
 /// One node's share of a stack.
@@ -119,6 +124,13 @@ pub struct NodePlan {
     pub ports: Vec<PublishedPort>,
     /// Policy findings for this node's part.
     pub findings: Vec<cat::Finding>,
+    /// Docker name of the cluster container network the node's services
+    /// join, when the node can take it (`plans/native-mesh.md` 1.6).
+    pub mesh_network: Option<String>,
+    /// Resolvers for those services: the node's forge-dns (its mesh
+    /// address), then the server host's.
+    #[serde(skip)]
+    pub dns: Option<cat::StackDns>,
 }
 
 /// A planned stack: the raw tree, its interpolated form and the nodes.
@@ -152,19 +164,166 @@ pub fn stack_dir(dir: Option<&str>, environment: &str, stack: &str) -> String {
 
 /// Cluster network addresses of nodes whose mesh is up.
 pub async fn fabric_ips(fabrics: &dyn FabricRepository, ws: WorkspaceId) -> HashMap<String, String> {
-    let mut out = HashMap::new();
+    fabric_nodes(fabrics, ws).await.into_iter().filter_map(|(id, n)| Some((id, n.ip?))).collect()
+}
 
-    for f in fabrics.list_fabrics(Some(ws)).await.unwrap_or_default() {
-        let up = |id: &str| f.status.pointer(&format!("/nodes/{id}/state")).and_then(Value::as_str) == Some("ok");
+/// A node's place in its cluster's fabric, as stack planning needs it.
+#[derive(Debug, Clone, Default)]
+pub struct FabricNode {
+    /// Mesh address, when the node's WireGuard part is in sync.
+    pub ip: Option<String>,
+    /// Docker name of the cluster container network, when it is `ok` on
+    /// the node.
+    pub network: Option<String>,
+}
+
+/// Every fabric member of a workspace, by server id. Nodes outside any
+/// fabric are absent.
+pub async fn fabric_nodes(fabrics: &dyn FabricRepository, ws: WorkspaceId) -> HashMap<String, FabricNode> {
+    let mut out: HashMap<String, FabricNode> = HashMap::new();
+
+    // Planning reads fabrics best effort: without them every node simply
+    // binds to loopback and joins no network, which the preview says.
+    let list = fabrics.list_fabrics(Some(ws)).await.unwrap_or_default();
+
+    for f in list {
+        let field = |id: &str, k: &str| f.status.pointer(&format!("/nodes/{id}/{k}")).and_then(Value::as_str);
+        let iface = interface_name(&f.cluster_id.to_string());
 
         for l in serde_json::from_value::<Vec<Lease>>(f.leases.clone()).unwrap_or_default() {
-            if l.kind == LeaseKind::Node && up(&l.owner) {
-                out.insert(l.owner, l.cidr.first().to_string());
+            if l.kind != LeaseKind::Node {
+                continue;
             }
+
+            let up = field(&l.owner, "state") == Some("ok");
+            let network = field(&l.owner, "network") == Some(forge_catalog::fabric::NETWORK_OK);
+            let node = FabricNode {
+                ip: up.then(|| l.cidr.first().to_string()),
+                network: (up && network).then(|| network_name(&iface)),
+            };
+            out.insert(l.owner, node);
         }
     }
 
     out
+}
+
+/// Names of the nodes whose cluster container network is `ok` in a
+/// fabric's status.
+pub async fn network_node_names(
+    servers: &dyn ServerRepository,
+    status: &Value,
+) -> forge_core::DomainResult<Vec<String>> {
+    let up: Vec<String> = status
+        .get("nodes")
+        .and_then(Value::as_object)
+        .map(|nodes| {
+            nodes
+                .iter()
+                .filter(|(_, ns)| ns.get("network").and_then(Value::as_str) == Some(forge_catalog::fabric::NETWORK_OK))
+                .map(|(id, _)| id.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if up.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    Ok(servers
+        .list_servers(None)
+        .await?
+        .into_iter()
+        .filter(|s| up.contains(&s.id.to_string()))
+        .map(|s| s.display_name.unwrap_or(s.hostname))
+        .collect())
+}
+
+/// The `dns` of a node's part on the cluster network: its own forge-dns on
+/// its mesh address first. Search domains are left to the node, which
+/// knows its zone from `names.json`. `dns:` replaces Docker's resolver, so
+/// nothing is injected unless the node reports forge-dns `running`:
+/// otherwise the containers keep Docker's default resolver.
+fn mesh_dns(
+    mesh: Option<&str>,
+    caps: NodeCaps,
+    internal_ip: &str,
+    second: &[std::net::Ipv4Addr],
+) -> Option<cat::StackDns> {
+    mesh?;
+
+    if !caps.forge_dns_running {
+        return None;
+    }
+
+    let own: std::net::Ipv4Addr = internal_ip.parse().ok()?;
+    let mut servers = vec![own];
+    servers.extend(second.iter().filter(|s| **s != own));
+
+    Some(cat::StackDns { servers, search: Vec::new() })
+}
+
+/// What a node's facts say about the cluster network.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NodeCaps {
+    /// The agent reports the `mesh_network` capability fact.
+    pub mesh: bool,
+    /// The agent reports `forge_dns: running`.
+    pub forge_dns_running: bool,
+}
+
+/// A node's cluster-network capabilities from its facts. Missing or
+/// unreadable facts mean an older agent: no capabilities.
+pub async fn node_caps(facts: &dyn FactsRepository, server: ServerId) -> NodeCaps {
+    match facts.facts_of(server).await {
+        Ok(Some((f, _))) => NodeCaps {
+            mesh: f.get("mesh_network").and_then(Value::as_bool) == Some(true),
+            forge_dns_running: f.get("forge_dns").and_then(Value::as_str) == Some("running"),
+        },
+        Ok(None) => NodeCaps::default(),
+        Err(e) => {
+            tracing::warn!(error = %e, %server, "reading node facts failed; planning without the cluster network");
+            NodeCaps::default()
+        }
+    }
+}
+
+/// Whether a node's agent reports the `mesh_network` capability fact.
+pub async fn mesh_capable(facts: &dyn FactsRepository, server: ServerId) -> bool {
+    node_caps(facts, server).await.mesh
+}
+
+/// Preview notes for the cluster container network (exact texts in
+/// `plans/native-mesh.md` 1.5 and 1.6).
+pub const NOTE_NO_FABRIC: &str = "services are reachable from other nodes only through published ports; create the cluster network to reach them by name";
+
+fn note_not_in_sync(node: &str) -> String {
+    format!("{node}: cluster network not applied yet; services will join it on the next deploy after it is in sync")
+}
+
+fn note_old_agent(node: &str) -> String {
+    format!("{node}: update its agent to put services on the cluster network")
+}
+
+/// Decides a node's `mesh_network` and the note that explains a `None`.
+pub fn decide_mesh(
+    fabric: Option<&FabricNode>,
+    capable: bool,
+    stack_off: bool,
+    node: &str,
+) -> (Option<String>, Option<String>) {
+    if stack_off {
+        return (None, None);
+    }
+
+    let Some(f) = fabric else { return (None, Some(NOTE_NO_FABRIC.to_owned())) };
+    let Some(net) = f.network.clone() else { return (None, Some(note_not_in_sync(node))) };
+
+    if !capable {
+        return (None, Some(note_old_agent(node)));
+    }
+
+    (Some(net), None)
 }
 
 /// Approved, writable directory roots on a node (bind mounts may use them).
@@ -182,7 +341,8 @@ pub async fn bind_roots(files: &dyn FileRepository, server: ServerId) -> Vec<Str
         .collect()
 }
 
-async fn resolve_node(deps: &Deps<'_>, ws: WorkspaceId, all: &[Server], name: &str) -> Result<Server, String> {
+/// A node of workspace `ws` by hostname, console name or id.
+pub async fn resolve_node(deps: &Deps<'_>, ws: WorkspaceId, all: &[Server], name: &str) -> Result<Server, String> {
     if let Some(s) = deps.servers.find_server_by_hostname(ws, name).await.map_err(|e| e.to_string())? {
         return Ok(s);
     }
@@ -274,7 +434,8 @@ async fn plan_unredacted(
         }
     }
 
-    let ips = fabric_ips(deps.fabrics, ws).await;
+    let fabric = fabric_nodes(deps.fabrics, ws).await;
+    let stack_off = interpolated.pointer("/x-forge/mesh") == Some(&Value::Bool(false));
     let sdir = stack_dir(dir, environment, stack);
     let label = format!("{environment}/{stack}");
     let mut report = Report::default();
@@ -285,9 +446,17 @@ async fn plan_unredacted(
         let roots = bind_roots(deps.files, id).await;
         let policy = Policy { allow_privileged, bind_roots: roots.clone(), stack_dir: sdir.clone() };
         let mut r = cat::check(&part, &policy);
-        let internal_ip = ips.get(&id.to_string()).cloned().unwrap_or_else(|| "127.0.0.1".into());
+        let node_fabric = fabric.get(&id.to_string());
+        let internal_ip = node_fabric.and_then(|f| f.ip.clone()).unwrap_or_else(|| "127.0.0.1".into());
         let mut bound = part;
         let ports = cat::bind_ports(&mut bound, &internal_ip, &mut r);
+        let name = server.display_name.clone().unwrap_or_else(|| server.hostname.clone());
+        let caps = node_caps(deps.facts, id).await;
+        let (mesh_network, note) = decide_mesh(node_fabric, caps.mesh, stack_off, &name);
+
+        if let Some(n) = note {
+            r.push("", Severity::Info, n);
+        }
 
         for f in &r.findings {
             if !report.findings.iter().any(|x| x == f) {
@@ -298,13 +467,26 @@ async fn plan_unredacted(
         report.privileged |= r.privileged;
         nodes.push(NodePlan {
             server_id: id,
-            hostname: server.display_name.clone().unwrap_or_else(|| server.hostname.clone()),
+            hostname: name,
             services,
+            dns: mesh_dns(mesh_network.as_deref(), caps, &internal_ip, &deps.forge_dns),
             internal_ip,
             bind_roots: roots,
             ports,
             findings: r.findings,
+            mesh_network,
         });
+    }
+
+    // A service named like another one's replica loses that name.
+    let svc_names: Vec<&str> = interpolated
+        .get("services")
+        .and_then(Value::as_object)
+        .map(|m| m.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+
+    for (svc, other, n) in forge_catalog::names::replica_clashes(&svc_names) {
+        report.push("", Severity::Info, format!("service `{svc}` clashes with replica {n} of `{other}`"));
     }
 
     // Top-level problems (no services, unknown keys) even when nothing was placed.
@@ -339,6 +521,8 @@ pub fn node_part(
         env: env.clone(),
         policy: Policy { allow_privileged, bind_roots: node.bind_roots.clone(), stack_dir: sdir },
         internal_ip: node.internal_ip.clone(),
+        mesh_network: node.mesh_network.clone(),
+        dns: node.dns.clone(),
     })
 }
 
@@ -416,6 +600,7 @@ pub fn preview(plan: &Plan) -> Value {
             "nodes": nodes,
             "policy": if blocked { "blocked" } else if privileged { "privileged" } else { "allowed" },
             "findings": findings,
+            "mesh": mesh_column(plan, name, svc),
         }));
     }
 
@@ -428,6 +613,24 @@ pub fn preview(plan: &Plan) -> Value {
         "privileged": plan.report.privileged,
         "blocked": plan.report.findings.iter().any(|f| f.severity == Severity::Blocked),
     })
+}
+
+/// The preview's per-service `mesh` value: `true`/`false`, or why it is
+/// off (`"off (x-forge.mesh)"`, `"off (network_mode)"`).
+fn mesh_column(plan: &Plan, name: &str, svc: &Value) -> Value {
+    let off = |v: &Value| v.pointer("/x-forge/mesh") == Some(&Value::Bool(false));
+
+    if off(&plan.tree) || off(svc) {
+        return json!("off (x-forge.mesh)");
+    }
+
+    if svc.get("network_mode").is_some() {
+        return json!("off (network_mode)");
+    }
+
+    let joins = plan.nodes.iter().filter(|n| n.services.contains(name)).any(|n| n.mesh_network.is_some());
+
+    json!(joins)
 }
 
 /// A compose document for one container from the **Create container** form.
@@ -678,6 +881,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mesh_dns_needs_a_running_forge_dns() {
+        let up = NodeCaps { mesh: true, forge_dns_running: true };
+        let down = NodeCaps { mesh: true, forge_dns_running: false };
+        let second = [std::net::Ipv4Addr::new(192, 0, 2, 10)];
+
+        let d = mesh_dns(Some("forge-x"), up, "10.64.0.3", &second).unwrap();
+        assert_eq!(d.servers, vec![std::net::Ipv4Addr::new(10, 64, 0, 3), second[0]]);
+        assert!(mesh_dns(Some("forge-x"), down, "10.64.0.3", &second).is_none());
+        assert!(mesh_dns(None, up, "10.64.0.3", &second).is_none());
+    }
+
+    #[test]
     fn compose_parses_with_merge_keys_and_yaml_1_2_scalars() {
         let v = parse_compose(
             "version: '3.8'\nx-common: &c\n  restart: always\nservices:\n  web:\n    <<: *c\n    image: nginx:1.27\n    environment:\n      DEBUG: yes\n      MODE: '0755'\n      N: 0755\n",
@@ -769,5 +984,23 @@ mod tests {
         let bad: ContainerForm =
             serde_json::from_value(json!({ "name": "x", "image": "a", "network": "a b" })).unwrap();
         assert!(bad.to_compose().is_err());
+    }
+
+    #[test]
+    fn mesh_is_decided_from_fabric_fact_and_opt_out() {
+        let up = FabricNode { ip: Some("10.64.0.2".into()), network: Some("forge-forgea1b2c3".into()) };
+        let synced_without_net = FabricNode { ip: Some("10.64.0.2".into()), network: None };
+
+        assert_eq!(decide_mesh(Some(&up), true, false, "lab-b"), (Some("forge-forgea1b2c3".into()), None));
+        assert_eq!(decide_mesh(Some(&up), true, true, "lab-b"), (None, None));
+        assert_eq!(decide_mesh(None, true, false, "lab-b"), (None, Some(NOTE_NO_FABRIC.to_owned())));
+        assert_eq!(
+            decide_mesh(Some(&synced_without_net), true, false, "lab-b").1.unwrap(),
+            "lab-b: cluster network not applied yet; services will join it on the next deploy after it is in sync"
+        );
+        assert_eq!(
+            decide_mesh(Some(&up), false, false, "lab-b"),
+            (None, Some("lab-b: update its agent to put services on the cluster network".to_owned()))
+        );
     }
 }

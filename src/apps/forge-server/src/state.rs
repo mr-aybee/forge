@@ -398,6 +398,8 @@ impl Services {
             envelope: envelope.clone(),
             clock: clock.clone(),
             deploys: Arc::new(store.clone()),
+            fabrics: Arc::new(store.clone()),
+            facts: Arc::new(store.clone()),
         });
         registry.register(app_job.clone());
         let registries = Arc::new(crate::registries::RegistryService {
@@ -548,11 +550,20 @@ impl Services {
             clusters: Arc::new(store.clone()),
             fabrics: Arc::new(store.clone()),
             files: Arc::new(store.clone()),
+            facts: Arc::new(store.clone()),
+            forge_dns: config.dns.second_tier(),
             tenancy: Arc::new(store.clone()),
             stacks: Arc::new(store.clone()),
             apps: Arc::new(store.clone()),
             envelope: envelope.clone(),
             clock: clock.clone(),
+        }));
+        let stack_rollout_engine = Arc::new(std::sync::OnceLock::new());
+        registry.register(Arc::new(crate::jobs::stack_rollout::StackRolloutJob {
+            engine: stack_rollout_engine.clone(),
+            jobs: Arc::new(store.clone()),
+            stacks: Arc::new(store.clone()),
+            poll: Duration::from_secs(1),
         }));
         registry.register(Arc::new(crate::jobs::PackageJob {
             hub: hub.clone(),
@@ -608,6 +619,7 @@ impl Services {
             },
         ));
         let _ = rollout_engine.set(jobs.clone());
+        let _ = stack_rollout_engine.set(jobs.clone());
 
         let mut trust = TrustStore::new();
 

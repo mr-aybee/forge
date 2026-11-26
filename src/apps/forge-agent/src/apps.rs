@@ -985,6 +985,14 @@ async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, Str
 
             apply_container_options(&mut body, spec);
             docker::api("POST", &format!("/containers/create?name={name}"), Some(&body), t).await?;
+
+            // The cluster container network as a second network, so the
+            // default bridge (and its published ports) stays as it was.
+            if let Some(net) = &spec.mesh_network {
+                let connect = json!({ "Container": name });
+                docker::api("POST", &format!("/networks/{net}/connect"), Some(&connect), t).await?;
+            }
+
             docker::api("POST", &format!("/containers/{name}/start"), None, t).await?;
         }
         "start" | "stop" | "restart" => {

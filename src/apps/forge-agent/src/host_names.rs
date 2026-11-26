@@ -63,6 +63,63 @@ pub fn check_list(suffix: &str, entries: &[NameEntry]) -> Result<(), String> {
     Ok(())
 }
 
+/// Checks a record set before it is written: every record and zone under
+/// the suffix (or a reverse zone), and no more records than a names list.
+pub fn check_records(suffix: &str, r: &forge_catalog::names::Records) -> Result<(), String> {
+    check_suffix(suffix)?;
+
+    let under = |n: &str| n == suffix || n.ends_with(&format!(".{suffix}")) || n.ends_with(".in-addr.arpa");
+
+    if let Some(z) = r.zones.iter().find(|z| !under(z)) {
+        return Err(format!("zone {z} is outside .{suffix}"));
+    }
+
+    if r.records.len() > forge_catalog::names::MAX_ENTRIES * 3 {
+        return Err("too many records".into());
+    }
+
+    if let Some(rec) = r.records.iter().find(|x| !under(x.name())) {
+        return Err(format!("record {} is outside .{suffix}", rec.name()));
+    }
+
+    Ok(())
+}
+
+/// Where forge-dns reads its records on a node: its own world-readable
+/// folder (the agent's state folder is private to the agent).
+#[must_use]
+pub fn records_path() -> PathBuf {
+    if cfg!(windows) {
+        return crate::config::StatePaths::default_dir().join(forge_catalog::names::RECORDS_FILE);
+    }
+
+    PathBuf::from("/var/lib/forge-dns").join(forge_catalog::names::RECORDS_FILE)
+}
+
+/// Writes `names.json` for forge-dns: a temporary file renamed over the
+/// old one, readable by everyone (it holds names and addresses only).
+pub async fn write_records(r: &forge_catalog::names::Records) -> Result<(), String> {
+    let text = serde_json::to_vec_pretty(r).map_err(|e| e.to_string())?;
+    let path = records_path();
+    let tmp = path.with_extension("json.tmp");
+
+    if let Some(dir) = path.parent() {
+        tokio::fs::create_dir_all(dir).await.map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+
+    tokio::fs::write(&tmp, text).await.map_err(|e| format!("{}: {e}", tmp.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = std::fs::Permissions::from_mode(0o644);
+        tokio::fs::set_permissions(&tmp, mode).await.map_err(|e| format!("{}: {e}", tmp.display()))?;
+    }
+
+    tokio::fs::rename(&tmp, &path).await.map_err(|e| format!("{}: {e}", path.display()))
+}
+
 /// Applies a `names` list: the node's hosts file and, with `containers`,
 /// those of its Forge containers.
 pub async fn apply(suffix: String, entries: Vec<NameEntry>, containers: bool) -> Result<Value, String> {

@@ -229,6 +229,7 @@ export function toInput(a: Service): ServiceInput {
     stop_timeout_secs: s.stop_timeout_secs ?? 0,
     read_only: s.read_only ?? false,
     log_max_mb: s.log_max_mb ?? 0,
+    ...(a.runtime === "container" && s.mesh === false ? { mesh: false as const } : {}),
     ...(s.swarm ? { swarm: normSwarmSettings(s.swarm) } : {}),
   };
 }
@@ -243,7 +244,8 @@ export const CLEARED_ON_SWITCH: Record<EditableRuntime, string> = {
 export function switchKind(v: ServiceInput, kind: EditableRuntime): ServiceInput {
   const empty = emptyInput(kind);
   if (kind === "systemd") {
-    return { ...v, runtime: kind, image: "", ports: [], volumes: [], entrypoint: "", user: "", hostname: "", labels: [], extra_hosts: [], healthcheck: null, stop_timeout_secs: 0, read_only: false, log_max_mb: 0 };
+    const { mesh: _mesh, ...rest } = v;
+    return { ...rest, runtime: kind, image: "", ports: [], volumes: [], entrypoint: "", user: "", hostname: "", labels: [], extra_hosts: [], healthcheck: null, stop_timeout_secs: 0, read_only: false, log_max_mb: 0 };
   }
   return { ...v, runtime: kind, dependencies: empty.dependencies, working_dir: "", listen_port: null };
 }

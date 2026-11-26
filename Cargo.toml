@@ -51,6 +51,9 @@ http-body-util = "0.1"
 http = "1"
 bytes = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "http2", "cookies", "stream"] }
+# Cluster DNS server (forge-dns, D-173): plain UDP/TCP only, no TLS/DoH/DNSSEC, no OpenSSL.
+hickory-server = { version = "0.26", default-features = false }
+hickory-proto = { version = "0.26", default-features = false, features = ["std"] }
 quick-xml = { version = "0.41", features = ["serialize"] }
 
 # tls / crypto

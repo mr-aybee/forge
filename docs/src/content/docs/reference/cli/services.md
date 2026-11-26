@@ -1253,6 +1253,7 @@ mismatch.
 | `stop_timeout_secs` | integer, seconds | `0` (not set) | none | Container only: the stop timeout |
 | `read_only` | bool | `false` | none | Container only: read-only root filesystem |
 | `log_max_mb` | integer, MB | `0` (not set) | none | Container only: log rotation size |
+| `mesh` | bool | `true` | none | Container only: `false` keeps the container off the node's [cluster container network](/docs/guides/cluster-network/#container-network) |
 
 Example `app.json` for a container:
 

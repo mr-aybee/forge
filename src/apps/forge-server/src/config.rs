@@ -77,6 +77,9 @@ pub struct ServerConfig {
     pub mcp: McpSettings,
     /// Fleet-wide local names in every node's hosts file (D-084).
     pub names: NameSettings,
+    /// The server host's forge-dns, the second tier behind each node's
+    /// (`plans/native-mesh.md` 2.6). Off while `listen` is empty.
+    pub dns: DnsSettings,
     /// Alert rules and alarms (D-087).
     pub alerts: AlertSettings,
     /// Port tunnels from the CLI (D-091, D-100).
@@ -248,6 +251,37 @@ pub struct NameSettings {
 impl Default for NameSettings {
     fn default() -> Self {
         Self { enabled: true, suffix: forge_catalog::names::DEFAULT_SUFFIX.into(), containers: true }
+    }
+}
+
+/// `[dns]`: the server host's forge-dns.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct DnsSettings {
+    /// Addresses nodes reach this host's forge-dns on (`192.0.2.10:53`).
+    /// Empty: no server-host tier; `names.json` is not written here.
+    pub listen: Vec<std::net::SocketAddrV4>,
+    /// Resolvers forge-dns forwards other names to (default: the host's).
+    pub upstreams: Vec<std::net::SocketAddr>,
+    /// Where the server writes `names.json` for its forge-dns. Default
+    /// `/var/lib/forge-dns/names.json`: a world-readable folder, because the
+    /// data folder is private to the server and forge-dns runs as its own user.
+    pub records_file: Option<PathBuf>,
+}
+
+impl DnsSettings {
+    /// The `names.json` this host's forge-dns reads.
+    #[must_use]
+    pub fn records_path(&self) -> PathBuf {
+        self.records_file
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("/var/lib/forge-dns").join(forge_catalog::names::RECORDS_FILE))
+    }
+
+    /// The addresses containers and nodes use as the second resolver.
+    #[must_use]
+    pub fn second_tier(&self) -> Vec<std::net::Ipv4Addr> {
+        self.listen.iter().map(|a| *a.ip()).collect()
     }
 }
 
@@ -783,6 +817,7 @@ impl Default for ServerConfig {
             remote_access: None,
             mcp: McpSettings::default(),
             names: NameSettings::default(),
+            dns: DnsSettings::default(),
             alerts: AlertSettings::default(),
             tunnels: TunnelSettings::default(),
             agent_tls: AgentTlsSettings::default(),

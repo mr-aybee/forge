@@ -22,6 +22,7 @@ use forge_secrets::Envelope;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::node_rpc::RpcError;
 use crate::stacks::{ns_slug, open_env, parse_compose};
 use crate::swarm::SwarmService;
 
@@ -555,6 +556,46 @@ impl SwarmStacks {
         Ok(address_choices(mesh.get(&server.to_string()).map(String::as_str), facts.as_ref(), live.as_deref()))
     }
 
+    /// Removes the cluster container network from every Linux member before
+    /// the cluster becomes a Swarm (`plans/native-mesh.md` 1.3). The checks
+    /// above leave nothing Forge manages on it, so a node that still has
+    /// containers attached holds something outside Forge: the conversion is
+    /// refused naming it. The fabric stays (Swarm's data path uses it). An
+    /// offline node keeps its empty network, which nothing uses.
+    async fn remove_container_networks(&self, cluster: ClusterId, principal: &str) -> DomainResult<()> {
+        let c = self.clusters.get_cluster(cluster).await?;
+
+        if self.fabrics.get_fabric(cluster).await?.is_none() {
+            return Ok(());
+        }
+
+        let iface = forge_catalog::fabric::interface_name(&cluster.to_string());
+        let op = forge_catalog::fabric::FabricOp::NetworkRemove { iface };
+        let nodes = self.servers.list_servers(Some(c.workspace_id)).await?;
+        let mut held = Vec::new();
+
+        for s in nodes.iter().filter(|s| s.cluster_id == Some(cluster) && s.os.eq_ignore_ascii_case("linux")) {
+            let name = s.display_name.clone().unwrap_or_else(|| s.hostname.clone());
+
+            match self.swarm.fabric_on(s.id, principal, &op).await {
+                Ok(_) => {}
+                Err(RpcError::Unreachable(e)) => {
+                    tracing::info!(node = %s.id, error = %e, "node offline; its container network stays");
+                }
+                Err(e) => held.push(format!("{name}: {e}")),
+            }
+        }
+
+        if held.is_empty() {
+            return Ok(());
+        }
+
+        Err(DomainError::Conflict(format!(
+            "remove these containers from the cluster network first: {}",
+            held.join("; ")
+        )))
+    }
+
     /// What stands in the way of switching `cluster` to `to`.
     pub async fn convert_check(&self, cluster: ClusterId, to: ClusterMode) -> DomainResult<ConvertCheck> {
         let c = self.clusters.get_cluster(cluster).await?;
@@ -670,11 +711,15 @@ impl SwarmStacks {
     }
 
     /// Switches the cluster's mode after [`Self::convert_check`] passes.
-    pub async fn convert(&self, cluster: ClusterId, to: ClusterMode) -> DomainResult<ConvertCheck> {
+    pub async fn convert(&self, cluster: ClusterId, to: ClusterMode, principal: &str) -> DomainResult<ConvertCheck> {
         let check = self.convert_check(cluster, to).await?;
         if !check.ok {
             let why: Vec<_> = check.checks.iter().filter(|c| !c.ok).map(|c| c.detail.clone()).collect();
             return Err(DomainError::Conflict(why.join("; ")));
+        }
+
+        if to == ClusterMode::Swarm {
+            self.remove_container_networks(cluster, principal).await?;
         }
 
         self.clusters.set_cluster_mode(cluster, to).await?;

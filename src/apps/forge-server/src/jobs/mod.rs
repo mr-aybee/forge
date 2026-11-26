@@ -13,6 +13,7 @@ pub mod node_bootstrap;
 pub mod node_op;
 pub mod package;
 pub mod stack;
+pub mod stack_rollout;
 pub mod storage;
 pub mod swarm;
 pub mod swarm_rollout;
