@@ -71,7 +71,7 @@ a `forge.stack.yaml` next to its compose file, and deploy it with
    ```
 
    Type `yes` when asked, or pass `--yes`. Forge saves a new revision when
-   the compose text changed and deploys the nodes one at a time.
+   the compose text or the `.env` variables changed and deploys the nodes one at a time.
 
 ## Verify
 

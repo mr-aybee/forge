@@ -469,8 +469,9 @@ environment.
 
 Saves a new revision from a new compose file and/or `.env` file. It does not
 deploy it; run [`forge stacks deploy`](#forge-stacks-deploy) next. A compose
-file identical to the latest revision saves no new revision; a new `.env`
-file still replaces the stored variables. Needs `stack.manage` on the
+file identical to the latest revision, with the same `.env` variables, saves
+no new revision. A changed `.env` file alone saves a new revision, so the
+next deploy or apply reaches every node. Needs `stack.manage` on the
 environment.
 
 **Synopsis**

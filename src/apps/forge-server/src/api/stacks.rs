@@ -481,7 +481,7 @@ pub async fn create_container(
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateInput {
-    /// New compose content (a new revision when it differs).
+    /// New compose content (a new revision when it or the `.env` differs).
     #[serde(default)]
     pub content: Option<String>,
     /// New `.env` content; omitted keeps the stored variables.
@@ -537,10 +537,9 @@ pub(super) async fn update_stack(
     let current =
         state.store.get_revision(id, stack.revision).await?.ok_or_else(|| ApiError::not_found("revision missing"))?;
 
-    let env = match env_input(input.env.as_deref())? {
-        Some(e) => e,
-        None => open_env(&state.envelope, id, stack.env_sealed.as_deref()).map_err(internal)?,
-    };
+    let stored_env = open_env(&state.envelope, id, stack.env_sealed.as_deref()).map_err(internal)?;
+    let env = env_input(input.env.as_deref())?.unwrap_or_else(|| stored_env.clone());
+    let env_changed = env != stored_env;
 
     if input.dir.is_some() {
         let deployed = !state.store.list_nodes(id).await?.is_empty();
@@ -598,7 +597,10 @@ pub(super) async fn update_stack(
 
     let mut new_rev = None;
 
-    if content != current.content {
+    // A changed `.env` is a new revision too, even with the same compose
+    // text: rollouts skip nodes already at the current revision, so an
+    // env-only change would otherwise never reach them.
+    if content != current.content || env_changed {
         let rev = StackRevision {
             stack_id: id,
             revision: 0,
@@ -624,7 +626,7 @@ pub(super) async fn update_stack(
             Some(stack.workspace_id),
             json!({
                 "stack": stack.name, "revision": new_rev.as_ref().map(|r| r.0), "sha256": new_rev.as_ref().map(|r| &r.1),
-                "env_keys": stack.env_keys, "env_changed": input.env.is_some(), "privileged": p.report.privileged,
+                "env_keys": stack.env_keys, "env_changed": env_changed, "privileged": p.report.privileged,
             }),
         )
         .await;

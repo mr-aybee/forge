@@ -96,7 +96,7 @@ its state and health, and is listed as a service of the environment.
 
 1. Open the stack and select **Update**.
 2. Edit the compose file. Leave **.env** blank to keep the stored values.
-3. Select **Save**. A changed file becomes a new revision.
+3. Select **Save**. A changed compose file or `.env` becomes a new revision.
 4. Select **Deploy** to apply it. Tick **Pull images again** to fetch newer
    images with the same tag.
 

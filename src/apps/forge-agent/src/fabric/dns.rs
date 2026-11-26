@@ -104,10 +104,37 @@ async fn resolve_through(iface: &str, mesh_ip: Ipv4Addr) {
 
 /// Starts forge-dns after the first `names.json` arrives, when the network
 /// already configured it.
+/// Also points the cluster interface at it, as [`configure`] does, so the
+/// node resolves the zone without waiting for the repair pass.
 pub async fn on_records_written() {
-    if Path::new(ENV_FILE).exists() && Path::new(BINARY).exists() {
-        let _ = run("systemctl", &["start", UNIT]).await;
+    if !Path::new(BINARY).exists() {
+        return;
     }
+
+    let Ok(env) = tokio::fs::read_to_string(ENV_FILE).await else { return };
+    let _ = run("systemctl", &["start", UNIT]).await;
+
+    let Some(mesh_ip) = listen_ip(&env) else { return };
+
+    if let Some(iface) = iface_of(mesh_ip).await {
+        resolve_through(&iface, mesh_ip).await;
+    }
+}
+
+/// The address in the env file's `--listen <ip>:53`.
+fn listen_ip(env: &str) -> Option<Ipv4Addr> {
+    let rest = env.split("--listen ").nth(1)?;
+    let addr = rest.split_whitespace().next()?;
+
+    addr.parse::<std::net::SocketAddrV4>().ok().map(|a| *a.ip())
+}
+
+/// The interface holding `ip` (`ip -o -4 addr show`).
+async fn iface_of(ip: Ipv4Addr) -> Option<String> {
+    let out = run("ip", &["-o", "-4", "addr", "show"]).await.ok()?;
+    let needle = format!("inet {ip}/");
+
+    out.lines().find(|l| l.contains(&needle)).and_then(|l| l.split_whitespace().nth(1)).map(str::to_owned)
 }
 
 /// Undoes [`configure`] when the fabric is removed: stop and disable the
@@ -140,5 +167,6 @@ mod tests {
 
         assert!(t.contains("FORGE_DNS_ARGS=--listen 10.64.0.3:53\n"));
         assert!(t.contains("names.json"));
+        assert_eq!(listen_ip(&t), Some(Ipv4Addr::new(10, 64, 0, 3)));
     }
 }

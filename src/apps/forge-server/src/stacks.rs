@@ -196,7 +196,7 @@ pub async fn fabric_nodes(fabrics: &dyn FabricRepository, ws: WorkspaceId) -> Ha
             }
 
             let up = field(&l.owner, "state") == Some("ok");
-            let network = field(&l.owner, "network") == Some(crate::api::fabric_reconcile::NETWORK_OK);
+            let network = field(&l.owner, "network") == Some(forge_catalog::fabric::NETWORK_OK);
             let node = FabricNode {
                 ip: up.then(|| l.cidr.first().to_string()),
                 network: (up && network).then(|| network_name(&iface)),
@@ -208,11 +208,54 @@ pub async fn fabric_nodes(fabrics: &dyn FabricRepository, ws: WorkspaceId) -> Ha
     out
 }
 
+/// Names of the nodes whose cluster container network is `ok` in a
+/// fabric's status.
+pub async fn network_node_names(
+    servers: &dyn ServerRepository,
+    status: &Value,
+) -> forge_core::DomainResult<Vec<String>> {
+    let up: Vec<String> = status
+        .get("nodes")
+        .and_then(Value::as_object)
+        .map(|nodes| {
+            nodes
+                .iter()
+                .filter(|(_, ns)| ns.get("network").and_then(Value::as_str) == Some(forge_catalog::fabric::NETWORK_OK))
+                .map(|(id, _)| id.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if up.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    Ok(servers
+        .list_servers(None)
+        .await?
+        .into_iter()
+        .filter(|s| up.contains(&s.id.to_string()))
+        .map(|s| s.display_name.unwrap_or(s.hostname))
+        .collect())
+}
+
 /// The `dns` of a node's part on the cluster network: its own forge-dns on
 /// its mesh address first. Search domains are left to the node, which
-/// knows its zone from `names.json`.
-fn mesh_dns(mesh: Option<&str>, internal_ip: &str, second: &[std::net::Ipv4Addr]) -> Option<cat::StackDns> {
+/// knows its zone from `names.json`. `dns:` replaces Docker's resolver, so
+/// nothing is injected unless the node reports forge-dns `running`:
+/// otherwise the containers keep Docker's default resolver.
+fn mesh_dns(
+    mesh: Option<&str>,
+    caps: NodeCaps,
+    internal_ip: &str,
+    second: &[std::net::Ipv4Addr],
+) -> Option<cat::StackDns> {
     mesh?;
+
+    if !caps.forge_dns_running {
+        return None;
+    }
+
     let own: std::net::Ipv4Addr = internal_ip.parse().ok()?;
     let mut servers = vec![own];
     servers.extend(second.iter().filter(|s| **s != own));
@@ -220,17 +263,34 @@ fn mesh_dns(mesh: Option<&str>, internal_ip: &str, second: &[std::net::Ipv4Addr]
     Some(cat::StackDns { servers, search: Vec::new() })
 }
 
-/// Whether a node's agent reports the `mesh_network` capability fact.
-/// Missing or unreadable means an older agent.
-pub async fn mesh_capable(facts: &dyn FactsRepository, server: ServerId) -> bool {
+/// What a node's facts say about the cluster network.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NodeCaps {
+    /// The agent reports the `mesh_network` capability fact.
+    pub mesh: bool,
+    /// The agent reports `forge_dns: running`.
+    pub forge_dns_running: bool,
+}
+
+/// A node's cluster-network capabilities from its facts. Missing or
+/// unreadable facts mean an older agent: no capabilities.
+pub async fn node_caps(facts: &dyn FactsRepository, server: ServerId) -> NodeCaps {
     match facts.facts_of(server).await {
-        Ok(Some((f, _))) => f.get("mesh_network").and_then(Value::as_bool) == Some(true),
-        Ok(None) => false,
+        Ok(Some((f, _))) => NodeCaps {
+            mesh: f.get("mesh_network").and_then(Value::as_bool) == Some(true),
+            forge_dns_running: f.get("forge_dns").and_then(Value::as_str) == Some("running"),
+        },
+        Ok(None) => NodeCaps::default(),
         Err(e) => {
             tracing::warn!(error = %e, %server, "reading node facts failed; planning without the cluster network");
-            false
+            NodeCaps::default()
         }
     }
+}
+
+/// Whether a node's agent reports the `mesh_network` capability fact.
+pub async fn mesh_capable(facts: &dyn FactsRepository, server: ServerId) -> bool {
+    node_caps(facts, server).await.mesh
 }
 
 /// Preview notes for the cluster container network (exact texts in
@@ -391,8 +451,8 @@ async fn plan_unredacted(
         let mut bound = part;
         let ports = cat::bind_ports(&mut bound, &internal_ip, &mut r);
         let name = server.display_name.clone().unwrap_or_else(|| server.hostname.clone());
-        let capable = mesh_capable(deps.facts, id).await;
-        let (mesh_network, note) = decide_mesh(node_fabric, capable, stack_off, &name);
+        let caps = node_caps(deps.facts, id).await;
+        let (mesh_network, note) = decide_mesh(node_fabric, caps.mesh, stack_off, &name);
 
         if let Some(n) = note {
             r.push("", Severity::Info, n);
@@ -409,7 +469,7 @@ async fn plan_unredacted(
             server_id: id,
             hostname: name,
             services,
-            dns: mesh_dns(mesh_network.as_deref(), &internal_ip, &deps.forge_dns),
+            dns: mesh_dns(mesh_network.as_deref(), caps, &internal_ip, &deps.forge_dns),
             internal_ip,
             bind_roots: roots,
             ports,
@@ -819,6 +879,18 @@ impl ContainerForm {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mesh_dns_needs_a_running_forge_dns() {
+        let up = NodeCaps { mesh: true, forge_dns_running: true };
+        let down = NodeCaps { mesh: true, forge_dns_running: false };
+        let second = [std::net::Ipv4Addr::new(192, 0, 2, 10)];
+
+        let d = mesh_dns(Some("forge-x"), up, "10.64.0.3", &second).unwrap();
+        assert_eq!(d.servers, vec![std::net::Ipv4Addr::new(10, 64, 0, 3), second[0]]);
+        assert!(mesh_dns(Some("forge-x"), down, "10.64.0.3", &second).is_none());
+        assert!(mesh_dns(None, up, "10.64.0.3", &second).is_none());
+    }
 
     #[test]
     fn compose_parses_with_merge_keys_and_yaml_1_2_scalars() {

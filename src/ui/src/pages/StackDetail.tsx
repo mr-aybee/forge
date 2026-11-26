@@ -1,16 +1,15 @@
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { ArrowLeft, Download, FileText, Globe, History, Layers, Loader2, Pencil, Play, PowerOff, RefreshCw, Rocket, RotateCw, Square, Trash2, X } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { ApiError, get } from "../api/client";
+import { ApiError } from "../api/client";
+import { useClusterFabric } from "../api/fabric";
 import { useAllEnvironments, useServers } from "../api/hooks";
 import { type StackDetail as Detail, type StackNode, jobServer, useDeleteStack, useRefreshStack, useStack, useStackServiceAction } from "../api/stacks";
 import { nodeName, type Job } from "../api/types";
 import { errorText, useToast } from "../app/toast";
 import { NodeJobTabs } from "../components/JobLog";
 import { WebhooksTab } from "../components/deploy/WebhooksTab";
-import type { FabricResponse } from "../components/fabric/FabricForm";
 import { Designer, Findings, NodeLink, StateChip, YamlEditor, composeMeshOn } from "../components/stacks/parts";
 import { RevisionsPanel } from "../components/stacks/Revisions";
 import { ServicePorts } from "../components/tunnels/ServicePorts";
@@ -301,12 +300,7 @@ function StackView({ d, tab, setTab, fetching }: { d: Detail; tab: Tab; setTab: 
  * although the node's container network is ready. Empty when anything is unknown.
  */
 function useOffMeshNodes(d: Detail, clusterId: string | null): string[] {
-  const q = useQuery({
-    queryKey: ["fabric", clusterId],
-    queryFn: () => get<FabricResponse>(`/api/v1/clusters/${clusterId}/fabric`).catch(() => null),
-    enabled: !!clusterId,
-    staleTime: 30_000,
-  });
+  const q = useClusterFabric(clusterId);
   const nodes = q.data?.status?.nodes;
   if (!nodes || !composeMeshOn(d.content ?? "")) return [];
   const optedOut = new Set((d.preview?.services ?? []).filter((x) => typeof x.mesh === "string" || x.mesh === false).map((x) => x.name));

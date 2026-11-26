@@ -55,8 +55,8 @@ temporary name and renamed into place. Unknown fields are ignored, so an older
 
 | Path | Role |
 | --- | --- |
-| `/var/lib/forge-agent/names.json` | Node |
-| `/var/lib/forge/names.json` | Server host |
+| `/var/lib/forge-dns/names.json` | Node |
+| `/var/lib/forge-dns/names.json` (`[dns] records_file`) | Server host |
 
 ```json
 {
@@ -101,9 +101,9 @@ CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadOnlyPaths=/var/lib/forge-agent/names.json
+ReadOnlyPaths=/var/lib/forge-dns
 EnvironmentFile=-/etc/forge/forge-dns.env
-ExecStart=/usr/local/bin/forge-dns --file ${FORGE_DNS_FILE} ${FORGE_DNS_ARGS}
+ExecStart=/usr/local/bin/forge-dns --file ${FORGE_DNS_FILE} $FORGE_DNS_ARGS
 Restart=always
 RestartSec=1
 
@@ -111,7 +111,8 @@ RestartSec=1
 WantedBy=multi-user.target
 ```
 
-On the server host `ReadOnlyPaths` names `/var/lib/forge/names.json`.
+On both, `ReadOnlyPaths` names the folder, not the file, so the unit starts
+before the first file exists and sees each renamed-in update.
 `/etc/forge/forge-dns.env` sets `FORGE_DNS_FILE` and `FORGE_DNS_ARGS`
 (for example `--listen 10.64.0.1:53`):
 

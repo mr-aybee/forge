@@ -263,9 +263,21 @@ pub struct DnsSettings {
     pub listen: Vec<std::net::SocketAddrV4>,
     /// Resolvers forge-dns forwards other names to (default: the host's).
     pub upstreams: Vec<std::net::SocketAddr>,
+    /// Where the server writes `names.json` for its forge-dns. Default
+    /// `/var/lib/forge-dns/names.json`: a world-readable folder, because the
+    /// data folder is private to the server and forge-dns runs as its own user.
+    pub records_file: Option<PathBuf>,
 }
 
 impl DnsSettings {
+    /// The `names.json` this host's forge-dns reads.
+    #[must_use]
+    pub fn records_path(&self) -> PathBuf {
+        self.records_file
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("/var/lib/forge-dns").join(forge_catalog::names::RECORDS_FILE))
+    }
+
     /// The addresses containers and nodes use as the second resolver.
     #[must_use]
     pub fn second_tier(&self) -> Vec<std::net::Ipv4Addr> {

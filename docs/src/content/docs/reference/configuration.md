@@ -468,8 +468,9 @@ off by default.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `dns.listen` | list of `IPv4:port` | `[]` | Addresses nodes reach this host's forge-dns on. When set, the server writes `<data_dir>/names.json` with the names of every cluster in every workspace, and sends these IPs to nodes as the second resolver for their containers. Empty: no server-host tier and no file |
+| `dns.listen` | list of `IPv4:port` | `[]` | Addresses nodes reach this host's forge-dns on. When set, the server writes `/var/lib/forge-dns/names.json` (`dns.records_file`) with the names of every cluster in every workspace, and sends these IPs to nodes as the second resolver for their containers. Empty: no server-host tier and no file |
 | `dns.upstreams` | list of `IP:port` | `[]` | Resolvers for names outside the cluster zones. Parsed and checked, but not passed to forge-dns yet: forge-dns forwards to the host's own resolvers (`/etc/resolv.conf`). To use others, add `--upstream <ip:port>` to `FORGE_DNS_ARGS` in `/etc/forge/forge-dns.env` |
+| `dns.records_file` | path | `/var/lib/forge-dns/names.json` | The record file the server writes (mode `0644`) for this host's forge-dns. Its folder must be writable by the server and readable by the `forge-dns` user; `install.sh` creates the default one |
 
 ```toml
 [dns]
@@ -482,7 +483,7 @@ The server does not run forge-dns itself. The `forge-dns.service` unit does.
 it when `dns.listen` is set:
 
 ```sh
-FORGE_DNS_FILE=/var/lib/forge/names.json
+FORGE_DNS_FILE=/var/lib/forge-dns/names.json
 FORGE_DNS_ARGS=--listen 192.0.2.10:53
 ```
 

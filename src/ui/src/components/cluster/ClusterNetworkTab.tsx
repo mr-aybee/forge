@@ -1,8 +1,9 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { Globe, Loader2, Network, Pin, PinOff, RefreshCw, Rocket, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { api, ApiError, get, post } from "../../api/client";
+import { api, ApiError, post } from "../../api/client";
+import { useClusterFabric } from "../../api/fabric";
 import { useClusters } from "../../api/hooks";
 import { errorText, useToast } from "../../app/toast";
 import { blankFabric, FabricForm, type FabricResponse, type FabricSpec, type Lease, meshNetworkName, type NodeSync, validSubnet } from "../fabric/FabricForm";
@@ -14,12 +15,8 @@ export function ClusterNetworkTab({ clusterId }: { clusterId: string }) {
   const cluster = useClusters().data?.find((c) => c.id === clusterId);
   const qc = useQueryClient();
   const toast = useToast();
-  const q = useQuery({
-    queryKey: ["fabric", clusterId],
-    queryFn: () => get<FabricResponse>(`/api/v1/clusters/${clusterId}/fabric`),
-    // Follow the reconciler while it works.
-    refetchInterval: (query) => (query.state.data?.status?.applied_by ? 5_000 : false),
-  });
+  // Follow the reconciler while it works.
+  const q = useClusterFabric(clusterId, { follow: true });
   const [spec, setSpec] = useState<FabricSpec>(blankFabric());
   const [pins, setPins] = useState<Lease[]>([]);
   const [editing, setEditing] = useState(false);
@@ -245,11 +242,6 @@ export function ClusterNetworkTab({ clusterId }: { clusterId: string }) {
             Changing the subnet moves every node to a new instance block. The container network on each node is recreated, which restarts the containers attached to it. Stacks on those nodes must be redeployed to move to the new block; Forge lists them after you save.
           </p>
         )}
-        {data?.status?.applied_by && data.spec && spec.subnet !== data.spec.subnet && (
-          <p className="mt-3 rounded-md border border-warn/40 bg-warn-soft px-3 py-2 text-[13px]">
-            Changing the subnet moves every node to a new instance block. The container network on each node is recreated, which restarts the containers attached to it. Stacks on those nodes must be redeployed to move to the new block; Forge lists them after you save.
-          </p>
-        )}
         <div className="mt-4 flex justify-end gap-2">
           <Button variant="ghost" onClick={() => setEditing(false)}>
             Cancel
@@ -331,9 +323,9 @@ function ContainerNet({ st, name }: { st?: NodeSync; name: string }) {
         <span className="truncate font-mono text-[11px]" title={name}>
           {name}
         </span>
-        {net && <Badge tone={net === "ok" ? "ok" : net === "unsupported" ? "bad" : "warn"}>{net}</Badge>}
+        {net && <Badge tone={net === "ok" ? "ok" : net === "unsupported" || net === "failed" ? "bad" : "warn"}>{net}</Badge>}
       </div>
-      {net === "unsupported" && st?.network_error && (
+      {(net === "unsupported" || net === "failed") && st?.network_error && (
         <div className="truncate text-[11px] text-bad" title={st.network_error}>
           {st.network_error}
         </div>

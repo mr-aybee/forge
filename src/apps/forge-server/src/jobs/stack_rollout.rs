@@ -284,7 +284,7 @@ impl JobHandler for StackRolloutJob {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used)] // reason: tests
 mod tests {
     use super::*;
 

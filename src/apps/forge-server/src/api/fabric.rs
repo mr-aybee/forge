@@ -284,36 +284,20 @@ pub async fn put(
 
     // Nodes whose container network moves with the subnet: their stacks
     // must be redeployed (the helper refuses while containers are attached).
-    let moving = if moved { network_nodes(&state, previous.as_ref()).await? } else { Vec::new() };
+    let moving = if moved {
+        match previous.as_ref() {
+            Some(rec) => crate::stacks::network_node_names(&state.store, &rec.status).await?,
+            None => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
 
     Ok(Json(json!({
         "leases": saved.map(|r| r.leases),
         "restarts_containers": !moving.is_empty(),
         "redeploy_nodes": moving,
     })))
-}
-
-/// Names of the nodes whose cluster container network is up in `rec`.
-async fn network_nodes(state: &AppState, rec: Option<&FabricRecord>) -> ApiResult<Vec<String>> {
-    let Some(rec) = rec else { return Ok(Vec::new()) };
-    let states = super::fabric_reconcile::node_states(&rec.status);
-    let up: Vec<&String> = states
-        .iter()
-        .filter(|(_, ns)| ns.network.as_deref() == Some(super::fabric_reconcile::NETWORK_OK))
-        .map(|(id, _)| id)
-        .collect();
-
-    if up.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let servers = state.store.list_servers(None).await?;
-
-    Ok(servers
-        .into_iter()
-        .filter(|s| up.contains(&&s.id.to_string()))
-        .map(|s| s.display_name.unwrap_or(s.hostname))
-        .collect())
 }
 
 /// Members must allow `server.command` (MFA) for the caller: applying

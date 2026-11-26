@@ -35,14 +35,12 @@ pub struct NamesQuery {
 /// when `stack` is asked for. Authorizes `view` on its environment.
 async fn stack_filter(state: &AppState, caller: &Caller, stack: Option<StackId>) -> ApiResult<Option<String>> {
     let Some(id) = stack else { return Ok(None) };
-    let s = forge_core::stacks::StackRepository::get_stack(&state.store, id)
+    let (environment, app) = crate::names::stack_app(&state.store, &state.store, id)
         .await?
         .ok_or_else(|| ApiError::not_found("stack not found"))?;
-    caller.authorize(Action::View, EntityRef::new(EntityKind::Environment, s.environment_id)).await?;
-    let env = forge_core::ports::TenancyRepository::get_environment(&state.store, s.environment_id).await?;
-    let label = forge_catalog::names::label_from(&env.name).unwrap_or_default();
+    caller.authorize(Action::View, EntityRef::new(EntityKind::Environment, environment)).await?;
 
-    Ok(Some(format!("{label}/{}", s.name)))
+    Ok(Some(app))
 }
 
 /// Whether a row belongs to the asked stack (every row without a filter).

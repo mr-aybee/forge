@@ -4,7 +4,7 @@
 //! a failed node, the `?stack=` names filter, and the roles that may use it.
 //! Running Compose itself needs a Linux node with Docker (lab test): here
 //! every node's deploy fails, which is what the rollout test needs.
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used)] // reason: tests
 
 use std::time::Duration;
 

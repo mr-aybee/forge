@@ -18,10 +18,9 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use forge_catalog::stack_doc::{self, MAX_HEALTH_TIMEOUT, MIN_HEALTH_TIMEOUT, RolloutOrder, StackDoc};
 use forge_catalog::stacks as cat;
-use forge_core::model::{Environment, JobFilter, JobStatus, NewJob};
-use forge_core::ports::{ClusterRepository, JobRepository, ServerRepository, TenancyRepository};
-use forge_core::stacks::{Stack, StackKind, StackRepository};
-use forge_core::{Action, EntityKind, EntityRef, ServerId, StackId};
+use forge_core::model::{Environment, NewJob};
+use forge_core::stacks::{Stack, StackKind};
+use forge_core::{Action, DomainError, EntityKind, EntityRef, ServerId, StackId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -31,6 +30,7 @@ use super::stacks::{
 use crate::auth::{Caller, Ws};
 use crate::error::{ApiError, ApiResult};
 use crate::jobs::stack_rollout::{KIND as ROLLOUT_KIND, RolloutPayload};
+use crate::stack_apply::StackApplyPorts;
 use crate::stacks::{Plan, open_env, preview};
 use crate::state::AppState;
 
@@ -38,8 +38,6 @@ use crate::state::AppState;
 const AUDIT_PLAN: &str = "stack.plan";
 /// Audit action of the rollout start (the existing deploy action).
 const AUDIT_DEPLOY: &str = "stack.deploy";
-/// Most active jobs looked at when checking for a running rollout.
-const ACTIVE_SCAN: u32 = 500;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -129,6 +127,20 @@ pub struct PlanView {
     pub preview: Value,
 }
 
+/// The service over this server's repositories.
+fn ports(state: &AppState) -> StackApplyPorts<'_> {
+    StackApplyPorts { tenancy: &state.store, stacks: &state.store, jobs: &state.store, deps: deps(state) }
+}
+
+/// A placement problem is the caller's (400), like the document's other
+/// errors; anything else maps as usual.
+fn placement(e: DomainError) -> ApiError {
+    match e {
+        DomainError::Invalid(m) => ApiError::bad_request(m),
+        other => other.into(),
+    }
+}
+
 /// A document read and planned, nothing saved.
 struct Prepared {
     doc: StackDoc,
@@ -148,63 +160,6 @@ struct Prepared {
 
 fn invalid(e: impl std::fmt::Display) -> ApiError {
     ApiError::bad_request(e.to_string())
-}
-
-async fn find_environment(state: &AppState, ws: forge_core::WorkspaceId, slug: &str) -> ApiResult<Environment> {
-    state
-        .store
-        .list_environments(ws, None)
-        .await?
-        .into_iter()
-        .find(|n| crate::names::environment_slug(&n.name) == slug)
-        .ok_or_else(|| ApiError::not_found(format!("metadata.environment: no environment `{slug}`")))
-}
-
-/// The stack's default node: the first of `placement.nodes`, the first
-/// node of `placement.cluster`, or the existing stack's.
-async fn default_server(
-    state: &AppState,
-    ws: forge_core::WorkspaceId,
-    doc: &StackDoc,
-    existing: Option<&Stack>,
-) -> ApiResult<ServerId> {
-    let p = &doc.spec.placement;
-
-    if let Some(first) = p.nodes.first() {
-        let all = state.store.list_servers(Some(ws)).await?;
-        let s = crate::stacks::resolve_node(&deps(state), ws, &all, first)
-            .await
-            .map_err(|e| ApiError::bad_request(format!("spec.placement.nodes: {e}")))?;
-
-        return Ok(s.id);
-    }
-
-    if let Some(c) = &p.cluster {
-        let cluster = state
-            .store
-            .list_clusters(ws)
-            .await?
-            .into_iter()
-            .find(|x| x.name == *c)
-            .ok_or_else(|| ApiError::bad_request(format!("spec.placement.cluster: no cluster named `{c}`")))?;
-        let mut nodes: Vec<_> = state
-            .store
-            .list_servers(Some(ws))
-            .await?
-            .into_iter()
-            .filter(|s| s.cluster_id == Some(cluster.id))
-            .collect();
-        nodes.sort_by(|a, b| a.hostname.cmp(&b.hostname));
-
-        return nodes
-            .first()
-            .map(|s| s.id)
-            .ok_or_else(|| ApiError::bad_request(format!("spec.placement.cluster: cluster `{c}` has no nodes")));
-    }
-
-    existing
-        .map(|s| s.default_server)
-        .ok_or_else(|| ApiError::bad_request("spec.placement: name the nodes or the cluster the stack runs on"))
 }
 
 /// Node ids in rollout order: the default node first, then the others in
@@ -230,7 +185,8 @@ async fn prepare(
 ) -> ApiResult<Prepared> {
     let yaml = crate::deploy::parse_yaml(&input.document).map_err(ApiError::bad_request)?;
     let doc = stack_doc::parse(yaml, input.environment.as_deref()).map_err(invalid)?;
-    let environment = find_environment(state, ws, &doc.metadata.environment).await?;
+    let svc = ports(state);
+    let environment = svc.environment(ws, &doc.metadata.environment).await?;
     caller.authorize(Action::StackManage, ns_ref(environment.id)).await?;
 
     // A Swarm cluster's stack is one `docker stack deploy` (D-171), not a
@@ -252,8 +208,8 @@ async fn prepare(
         compose.push_str(&extra);
     }
 
-    let existing = state.store.stack_by_name(environment.id, &doc.metadata.name).await?;
-    let default = default_server(state, ws, &doc, existing.as_ref()).await?;
+    let existing = svc.existing(&environment, &doc.metadata.name).await?;
+    let default = svc.default_server(ws, &doc, existing.as_ref()).await.map_err(placement)?;
 
     let env = match (env_input(input.env.as_deref())?, &existing) {
         (Some(e), _) => e,
@@ -270,17 +226,7 @@ async fn prepare(
         caller.authorize(Action::ServerManage, EntityRef::new(EntityKind::Server, n.server_id)).await?;
     }
 
-    let removes = match &existing {
-        Some(s) => state
-            .store
-            .list_nodes(s.id)
-            .await?
-            .into_iter()
-            .map(|n| n.server_id)
-            .filter(|id| plan.node(*id).is_none())
-            .collect(),
-        None => Vec::new(),
-    };
+    let removes = svc.removes(existing.as_ref(), &plan).await?;
 
     let order = rollout_order(&plan, default, &doc);
 
@@ -296,14 +242,6 @@ async fn prepare(
         order,
         removes,
     })
-}
-
-/// The revision an apply would save: the next one when the content changes.
-async fn revision_next(state: &AppState, p: &Prepared) -> ApiResult<i64> {
-    let Some(s) = &p.existing else { return Ok(1) };
-    let current = state.store.get_revision(s.id, s.revision).await?;
-
-    Ok(if current.is_some_and(|r| r.content == p.compose) { s.revision } else { s.revision + 1 })
 }
 
 fn view(p: &Prepared, revision_next: i64, order: RolloutOrder, health_timeout_s: u64) -> PlanView {
@@ -341,7 +279,7 @@ pub async fn plan(
     Json(input): Json<PlanInput>,
 ) -> ApiResult<Json<PlanView>> {
     let p = prepare(&state, &caller, ws, input).await?;
-    let next = revision_next(&state, &p).await?;
+    let next = ports(&state).revision_next(&state.envelope, p.existing.as_ref(), &p.compose, &p.env).await?;
     let v = view(&p, next, p.doc.spec.rollout.order, p.doc.health_timeout_s());
     caller
         .audit(
@@ -368,25 +306,6 @@ pub struct Applied {
     pub plan: PlanView,
 }
 
-/// A queued or running rollout of `stack`, if any.
-async fn active_rollout(state: &AppState, stack: StackId) -> ApiResult<Option<forge_core::JobId>> {
-    for status in [JobStatus::Queued, JobStatus::Running] {
-        let filter = JobFilter { workspace_id: None, status: Some(status), limit: ACTIVE_SCAN };
-        let found = state
-            .store
-            .list_jobs(&filter)
-            .await?
-            .into_iter()
-            .find(|j| j.kind == ROLLOUT_KIND && j.payload["stack_id"] == json!(stack));
-
-        if let Some(j) = found {
-            return Ok(Some(j.id));
-        }
-    }
-
-    Ok(None)
-}
-
 /// `POST /api/v1/stacks/apply`: create or update the stack from the
 /// document and start its rollout.
 pub async fn apply(
@@ -410,7 +329,7 @@ pub async fn apply(
     }
 
     if let Some(s) = &p.existing
-        && let Some(job) = active_rollout(&state, s.id).await?
+        && let Some(job) = ports(&state).active_rollout(ROLLOUT_KIND, s.id).await?
     {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
@@ -422,7 +341,7 @@ pub async fn apply(
     // Saved first, then the rollout: a failed submit leaves a saved
     // revision that `forge stacks deploy` or another apply rolls out (the
     // save and the start are not one transaction; nothing to undo).
-    let next = revision_next(&state, &p).await?;
+    let next = ports(&state).revision_next(&state.envelope, p.existing.as_ref(), &p.compose, &p.env).await?;
     let note = format!("apply {}", &sha256(&input.document)[..12]);
 
     let stack = match &p.existing {

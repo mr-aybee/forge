@@ -757,6 +757,17 @@ pub fn offerable_interface(name: &str) -> bool {
     !name.is_empty() && !SKIP.iter().any(|p| name.starts_with(p))
 }
 
+/// A node's container-network state in a fabric's status (`network`).
+/// The network is up.
+pub const NETWORK_OK: &str = "ok";
+/// Docker is missing or older than 28; retried when its version changes.
+pub const NETWORK_UNSUPPORTED: &str = "unsupported";
+/// The node has no instance block leased yet.
+pub const NETWORK_WAITING_BLOCK: &str = "waiting for a block";
+/// The node failed to create the network (an overlapping Docker network, a
+/// failed sysctl, an unreachable node); retried on the repair pass.
+pub const NETWORK_FAILED: &str = "failed";
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {

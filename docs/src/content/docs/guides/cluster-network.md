@@ -154,11 +154,11 @@ service editor. The container's inspect view shows its `mesh_ip`.
 
 The **Container network** column in the **Nodes** table on the **Network**
 page shows the network name, a state badge, `Docker <version>`, and the
-error when the state is `unsupported`. The API reports the same fields:
+error when the state is `unsupported` or `failed`. The API reports the same fields:
 
 | Field | Values |
 | --- | --- |
-| `network` | `ok`; `unsupported` (Docker older than 28 or missing); `waiting for a block` (the node has no instance block yet); absent before the first try and on Windows nodes |
+| `network` | `ok`; `unsupported` (Docker older than 28 or missing); `failed` (the node could not create it, for example a Docker network already uses the block); `waiting for a block` (the node has no instance block yet); absent before the first try and on Windows nodes |
 | `network_error` | Why the network is not `ok`, for example `docker 28.0 or newer is needed for the cluster container network (found 27.5.1)` |
 | `docker_version` | The Docker version the node reported |
 
@@ -166,6 +166,10 @@ An `unsupported` node stays **in sync** for WireGuard and is not retried with
 backoff. Forge tries again when the node reports a different Docker version,
 on **Re-sync now**, and on the 10-minute repair pass. Stacks on that node
 deploy without the network.
+
+A `failed` network also leaves the WireGuard part **in sync**: the node keeps
+its mesh address and other nodes keep reaching it. Forge retries the network
+on **Re-sync now** and on the 10-minute repair pass.
 
 :::note[Limits]
 The container network exists on Linux members of Default clusters only.
@@ -231,16 +235,21 @@ up when the network is applied:
 
 1. It writes `/etc/forge/forge-dns.env` with `--listen <mesh ip>:53`.
 2. It enables and starts `forge-dns.service` once the node has its first
-   `/var/lib/forge-agent/names.json`.
+   `/var/lib/forge-dns/names.json`.
 3. With systemd-resolved, it points the cluster interface at forge-dns for
    the cluster zone and its reverse zones. Without it, the node keeps using
    the hosts file.
 
-Stack containers on the container network get `dns` (the node's forge-dns,
+Stack containers on the container network of a node whose facts show
+`forge_dns: running` get `dns` (the node's forge-dns,
 then the server host's when [`[dns] listen`](/docs/reference/configuration/#cluster-dns)
 is set) and `dns_search` from their stack, environment and cluster, unless
 the service sets `dns` itself. A container then reaches `api` in its own
 stack by its short name.
+
+On a node where forge-dns is not running, containers keep Docker's own
+resolver, so they still resolve outside names. Redeploy the stack once
+forge-dns runs to give them cluster names.
 
 Windows members use the hosts file only.
 

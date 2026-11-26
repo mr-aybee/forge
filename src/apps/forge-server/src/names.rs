@@ -972,15 +972,25 @@ pub async fn refresh(state: &AppState) {
 
 /// One record set for the server host's forge-dns: every cluster of every
 /// workspace (`plans/native-mesh.md` 2.6), written atomically to
-/// `<data_dir>/names.json`. A failure is logged; the next pass retries.
+/// `[dns] records_file` (world-readable, 0644, so forge-dns running as its
+/// own user can read it). A failure is logged; the next pass retries.
 async fn write_server_records(state: &AppState, sets: Vec<Records>) {
     let merged = merge_records(sets, state.clock.now().0);
-    let path = state.config.data_dir.join(forge_catalog::names::RECORDS_FILE);
+    let path = state.config.dns.records_path();
 
     let r = tokio::task::spawn_blocking(move || -> Result<(), String> {
         let text = serde_json::to_vec_pretty(&merged).map_err(|e| e.to_string())?;
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
+
+        // The server's umask is 0077; forge-dns is another user
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644))
+                .map_err(|e| format!("{}: {e}", tmp.display()))?;
+        }
 
         std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))
     })
@@ -991,6 +1001,20 @@ async fn write_server_records(state: &AppState, sets: Vec<Records>) {
         Ok(Err(e)) => tracing::warn!(error = %e, "writing the server's names.json failed"),
         Err(e) => tracing::warn!(error = %e, "writing the server's names.json failed"),
     }
+}
+
+/// A compose stack's environment and the `app` value of its name rows
+/// (`<environment label>/<stack>`); `None` when the stack does not exist.
+pub async fn stack_app(
+    stacks: &dyn forge_core::stacks::StackRepository,
+    tenancy: &dyn forge_core::ports::TenancyRepository,
+    id: forge_core::StackId,
+) -> forge_core::DomainResult<Option<(forge_core::EnvironmentId, String)>> {
+    let Some(s) = stacks.get_stack(id).await? else { return Ok(None) };
+    let env = tenancy.get_environment(s.environment_id).await?;
+    let label = forge_catalog::names::label_from(&env.name).unwrap_or_default();
+
+    Ok(Some((s.environment_id, format!("{label}/{}", s.name))))
 }
 
 /// Several clusters' record sets as one.

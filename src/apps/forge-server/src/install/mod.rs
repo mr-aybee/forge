@@ -355,7 +355,7 @@ ProtectSystem=strict
 ProtectHome=yes
 ReadOnlyPaths=/var/lib/forge-dns
 EnvironmentFile=-/etc/forge/forge-dns.env
-ExecStart=/usr/local/bin/forge-dns --file ${{FORGE_DNS_FILE}} ${{FORGE_DNS_ARGS}}
+ExecStart=/usr/local/bin/forge-dns --file ${{FORGE_DNS_FILE}} $FORGE_DNS_ARGS
 Restart=always
 RestartSec=1
 

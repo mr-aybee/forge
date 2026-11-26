@@ -197,7 +197,7 @@ of DNS labels and end in a safe suffix, and each address must parse.
 On a Linux node in a cluster network, the agent also runs
 [forge-dns](/docs/reference/forge-dns/), a small DNS server that listens on
 the node's mesh address, port `53`. The helper writes the cluster's records
-to `/var/lib/forge-agent/names.json`, and forge-dns reloads it within about
+to `/var/lib/forge-dns/names.json`, and forge-dns reloads it within about
 2 seconds. Records have a TTL of 5 seconds.
 
 forge-dns answers more than a hosts file can:
@@ -230,7 +230,7 @@ systemd-resolved, the node changes nothing and the hosts file still serves
 its names.
 
 The **server host tier** is optional. With `[dns] listen` set, the server
-writes `<data_dir>/names.json` with every cluster of every workspace, and
+writes `/var/lib/forge-dns/names.json` (`dns.records_file`) with every cluster of every workspace, and
 its own forge-dns answers when a node's forge-dns is down.
 
 A node's facts report `forge_dns` as `running`, `stopped` or `missing`.

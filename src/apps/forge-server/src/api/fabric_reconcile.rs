@@ -96,10 +96,7 @@ pub struct NodeState {
     pub docker_version: Option<String>,
 }
 
-/// `NodeState::network` values.
-pub const NETWORK_OK: &str = "ok";
-pub const NETWORK_UNSUPPORTED: &str = "unsupported";
-pub const NETWORK_WAITING_BLOCK: &str = "waiting for a block";
+pub use forge_catalog::fabric::{NETWORK_FAILED, NETWORK_OK, NETWORK_UNSUPPORTED, NETWORK_WAITING_BLOCK};
 
 /// Whether an `unsupported` container network should be tried again now
 /// because the node reports a different Docker version than when refused.
@@ -320,14 +317,21 @@ async fn pass(state: &AppState, cluster: ClusterId) -> bool {
 
         let had_key = ns.public_key.is_some();
 
-        let mut result =
-            converge(state, &by, &spec, &iface, &leases, &members, &hosts, &states, node, &mut ns, now).await;
+        let result = converge(state, &by, &spec, &iface, &leases, &members, &hosts, &states, node, &mut ns, now).await;
 
         // Swarm clusters keep the fabric for their data path but have no
         // container network (conversion removed it); Windows nodes neither.
+        // A network failure is recorded on the network fields only: the
+        // WireGuard part stays in sync and other nodes keep their reach.
         if result.is_ok() && !swarm && !node.os.to_lowercase().starts_with("win") {
             let block = leases.iter().find(|l| l.kind == LeaseKind::Block && l.owner == id).map(|l| l.cidr);
-            result = ensure_network(state, &by, &iface, block, node, &mut ns).await;
+
+            if let Err(e) = ensure_network(state, &by, &iface, block, node, &mut ns).await {
+                tracing::info!(%cluster, node = %id, error = %e, "container network failed; retried on the repair pass");
+                ns.step = None;
+                ns.network = Some(NETWORK_FAILED.into());
+                ns.network_error = Some(e);
+            }
         }
 
         match result {

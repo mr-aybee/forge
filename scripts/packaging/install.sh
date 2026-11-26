@@ -801,6 +801,8 @@ DNS_STATE="installed, disabled ([dns] listen is empty)"
 if [ -f "$HERE/dist/forge-dns-linux-$MACH" ]; then
   install -m 0755 "$HERE/dist/forge-dns-linux-$MACH" /usr/local/bin/forge-dns
   id forge-dns >/dev/null 2>&1 || useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin forge-dns
+  # The server writes names.json here (0644); forge-dns only reads the folder
+  install -d -m 0755 -o forge -g forge /var/lib/forge-dns
   DNS_LISTEN="$(conf_list dns listen | tr '\n' ' ' | sed 's/ $//')"
   cat > /etc/systemd/system/forge-dns.service <<EOF
 [Unit]
@@ -817,9 +819,9 @@ CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadOnlyPaths=$DATA_DIR/names.json
+ReadOnlyPaths=/var/lib/forge-dns
 EnvironmentFile=-$CONF_DIR/forge-dns.env
-ExecStart=/usr/local/bin/forge-dns --file \${FORGE_DNS_FILE} \${FORGE_DNS_ARGS}
+ExecStart=/usr/local/bin/forge-dns --file \${FORGE_DNS_FILE} \$FORGE_DNS_ARGS
 Restart=always
 RestartSec=1
 
@@ -832,7 +834,7 @@ EOF
     DNS_ARGS=""
     for a in $DNS_LISTEN; do DNS_ARGS="$DNS_ARGS --listen $a"; done
     for u in $(conf_list dns upstreams); do DNS_ARGS="$DNS_ARGS --upstream $u"; done
-    printf 'FORGE_DNS_FILE=%s\nFORGE_DNS_ARGS=%s\n' "$DATA_DIR/names.json" "${DNS_ARGS# }" > "$CONF_DIR/forge-dns.env"
+    printf 'FORGE_DNS_FILE=%s\nFORGE_DNS_ARGS=%s\n' "/var/lib/forge-dns/names.json" "${DNS_ARGS# }" > "$CONF_DIR/forge-dns.env"
     chmod 0644 "$CONF_DIR/forge-dns.env"
     systemctl enable forge-dns >/dev/null 2>&1
     systemctl restart forge-dns || true
