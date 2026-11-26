@@ -299,9 +299,48 @@ fn summary(status: &[Value]) -> String {
 
 /// `docker compose ps --all --format json`, normalized to
 /// `[{service, name, state, health, status, ports, image, exit_code}]`.
+/// Each row also carries the replica `number` and, when the container is on
+/// the cluster container network, its `mesh_ip` (Compose does not report
+/// addresses, so they come from the Engine API).
 async fn ps(project: &str, dir: &str) -> Result<Vec<Value>, String> {
     let out = compose(project, dir, &["ps", "--all", "--format", "json"], SHORT).await?;
-    Ok(parse_ps(&out))
+    let mut rows = parse_ps(&out);
+
+    let filters = json!({ "label": [format!("com.docker.compose.project={project}")] }).to_string();
+    let path = format!("/containers/json?all=1&filters={}", crate::docker_ops::enc(&filters));
+    let containers = crate::docker_ops::get(&path).await?;
+    add_mesh_addresses(&mut rows, &containers);
+
+    Ok(rows)
+}
+
+/// Adds `number` (label `com.docker.compose.container-number`) and
+/// `mesh_ip` (the address on a `forge-forge…` network) to each `ps` row,
+/// matched by container name. Absent when unknown or not attached.
+pub fn add_mesh_addresses(rows: &mut [Value], containers: &Value) {
+    let Some(list) = containers.as_array() else { return };
+
+    for c in list {
+        let Some(name) = c["Names"].get(0).and_then(Value::as_str).map(|n| n.trim_start_matches('/')) else {
+            continue;
+        };
+
+        let Some(row) = rows.iter_mut().find(|r| r["name"].as_str() == Some(name)) else { continue };
+
+        let number = c["Labels"]["com.docker.compose.container-number"].as_str().and_then(|n| n.parse::<u32>().ok());
+
+        if let Some(n) = number {
+            row["number"] = json!(n);
+        }
+
+        let nets = c.pointer("/NetworkSettings/Networks").and_then(Value::as_object);
+        let mesh = nets.into_iter().flatten().find(|(k, _)| k.starts_with("forge-forge"));
+        let ip = mesh.and_then(|(_, v)| v["IPAddress"].as_str()).filter(|ip| !ip.is_empty());
+
+        if let Some(ip) = ip {
+            row["mesh_ip"] = json!(ip);
+        }
+    }
 }
 
 /// Compose prints a JSON array (older v2) or one object per line (newer).
@@ -382,6 +421,25 @@ mod tests {
         let arr = "[{\"Service\":\"web\",\"State\":\"running\"}]";
         assert_eq!(parse_ps(arr)[0]["state"], "running");
         assert!(parse_ps("").is_empty());
+    }
+
+    #[test]
+    fn ps_rows_get_replica_number_and_mesh_address() {
+        let mut rows = parse_ps("{\"Service\":\"api\",\"Name\":\"p-api-2\"}\n{\"Service\":\"db\",\"Name\":\"p-db-1\"}");
+        let containers = json!([
+            { "Names": ["/p-api-2"], "Labels": { "com.docker.compose.container-number": "2" },
+              "NetworkSettings": { "Networks": {
+                  "p_default": { "IPAddress": "172.18.0.3" },
+                  "forge-forgea1b2c3": { "IPAddress": "10.64.12.4" } } } },
+            { "Names": ["/p-db-1"], "Labels": { "com.docker.compose.container-number": "1" },
+              "NetworkSettings": { "Networks": { "p_default": { "IPAddress": "172.18.0.2" } } } },
+        ]);
+        add_mesh_addresses(&mut rows, &containers);
+
+        assert_eq!(rows[0]["number"], 2);
+        assert_eq!(rows[0]["mesh_ip"], "10.64.12.4");
+        assert_eq!(rows[1]["number"], 1);
+        assert!(rows[1].get("mesh_ip").is_none());
     }
 
     #[test]

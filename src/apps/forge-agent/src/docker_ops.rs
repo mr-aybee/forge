@@ -20,7 +20,7 @@ const MAX_EVENTS: usize = 1000;
 const NO_AUTH: &str = "e30=";
 
 /// Percent-encodes a query value (RFC 3986 unreserved characters stay).
-fn enc(s: &str) -> String {
+pub(crate) fn enc(s: &str) -> String {
     s.bytes()
         .map(|b| {
             if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
@@ -32,7 +32,7 @@ fn enc(s: &str) -> String {
         .collect()
 }
 
-async fn call(
+pub(crate) async fn call(
     method: &str,
     path: &str,
     body: Option<&Value>,
@@ -59,7 +59,7 @@ async fn call(
     Ok(serde_json::from_slice(&bytes).unwrap_or(Value::Null))
 }
 
-async fn get(path: &str) -> Result<Value, String> {
+pub(crate) async fn get(path: &str) -> Result<Value, String> {
     call("GET", path, None, None, QUICK).await
 }
 

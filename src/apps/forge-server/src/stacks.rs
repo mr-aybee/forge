@@ -339,6 +339,7 @@ pub fn node_part(
         env: env.clone(),
         policy: Policy { allow_privileged, bind_roots: node.bind_roots.clone(), stack_dir: sdir },
         internal_ip: node.internal_ip.clone(),
+        mesh_network: None,
     })
 }
 

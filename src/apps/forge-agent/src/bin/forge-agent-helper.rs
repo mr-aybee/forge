@@ -179,7 +179,11 @@ async fn handle(
         HelperRequest::Site { action, spec } => data(forge_agent::sites::site_action(&action, &spec).await),
         HelperRequest::Dns { dns } => data(forge_agent::sites::dns_action(&dns).await),
         HelperRequest::Ingress { ingress } => data(forge_agent::ingress::run_op(&ingress).await),
-        HelperRequest::Fabric { fabric } => data(forge_agent::fabric::run_op(&fabric).await),
+        // A refusal code travels in `data` (`executor::refusal_code`).
+        HelperRequest::Fabric { fabric } => match forge_agent::fabric::run_op(&fabric).await {
+            Ok(v) => data(Ok(v)),
+            Err(e) => e.into_response(),
+        },
         HelperRequest::Names { suffix, entries, containers } => {
             data(forge_agent::host_names::apply(suffix, entries, containers).await)
         }

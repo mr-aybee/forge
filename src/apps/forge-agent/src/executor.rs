@@ -99,25 +99,28 @@ impl LocalExecutor {
     }
 }
 
+/// Runs `cmd` in the helper and keeps the refusal code of a failure.
+async fn helper_coded(cmd: &Command, signed: &SignedCommand) -> Result<Value, CommandError> {
+    let req = HelperRequest::from_command(cmd)?.ok_or("this command needs no helper")?;
+    let r = crate::helper::call_signed(&req, signed, timeout(&req)).await;
+    let code = refusal_code(&r);
+
+    result(cmd, r).map_err(|message| CommandError { message, code })
+}
+
 #[async_trait]
 impl CommandExecutor for LocalExecutor {
     async fn execute_coded(&self, cmd: &Command, signed: &SignedCommand) -> Result<Value, CommandError> {
-        let Command::AgentUpdate(_) = cmd else {
-            return self.execute(cmd, signed).await.map_err(CommandError::from);
-        };
-
-        if !cfg!(target_os = "linux") {
-            return Err(CommandError::refused(
+        match cmd {
+            Command::AgentUpdate(_) if !cfg!(target_os = "linux") => Err(CommandError::refused(
                 RefusalCode::Unsupported,
                 "self-update is available for Linux nodes; reinstall the agent instead",
-            ));
+            )),
+            // Fabric refusals (an old or missing Docker for the container
+            // network) are told apart too, so the server does not retry them.
+            Command::AgentUpdate(_) | Command::FabricAction(_) => helper_coded(cmd, signed).await,
+            _ => self.execute(cmd, signed).await.map_err(CommandError::from),
         }
-
-        let req = HelperRequest::from_command(cmd)?.ok_or("this command needs no helper")?;
-        let r = crate::helper::call_signed(&req, signed, timeout(&req)).await;
-        let code = refusal_code(&r);
-
-        result(cmd, r).map_err(|message| CommandError { message, code })
     }
 
     async fn execute(&self, cmd: &Command, signed: &SignedCommand) -> Result<Value, String> {
@@ -150,6 +153,10 @@ impl CommandExecutor for LocalExecutor {
                 // (D-114), and whether the node can update its own agent.
                 "container_exec": caps.container_exec,
                 "self_update": caps.self_update,
+                // Understands the cluster container network: stack parts
+                // with `mesh_network`, `NetworkEnsure`/`NetworkRemove`
+                // (plans/native-mesh.md). Older agents omit it.
+                "mesh_network": cfg!(unix),
                 "helper_ok": helper_ok,
                 }))
             }
