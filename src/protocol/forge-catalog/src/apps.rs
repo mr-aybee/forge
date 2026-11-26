@@ -134,7 +134,7 @@ pub struct AppSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub swarm: Option<crate::swarm_service::SwarmSettings>,
     /// Container: Docker name of the node's cluster container network to
-    /// connect to (`plans/native-mesh.md` 1.7). Set only for agents that
+    /// connect to (D-172). Set only for agents that
     /// report the `mesh_network` fact, because older ones refuse unknown
     /// fields.
     #[serde(default, skip_serializing_if = "Option::is_none")]

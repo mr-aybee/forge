@@ -920,6 +920,15 @@ forge stacks validate [OPTIONS]
 | `-f`, `--file <FILE>` | path, or `-` for stdin | `forge.stack.yaml` | no | The stack document | `-f deploy/forge.stack.yaml` |
 | `--environment <SLUG>` | environment slug | `metadata.environment` | no | Read the document for this environment; its `overrides` entry is merged in | `--environment staging` |
 
+**Examples**
+
+```sh
+# Check a stack file without contacting nodes
+forge stacks validate -f forge.stack.yaml
+# Validate against another environment
+forge stacks validate -f forge.stack.yaml --environment lab
+```
+
 **Example**
 
 ```console
@@ -950,6 +959,13 @@ forge stacks plan [OPTIONS]
 | --- | --- | --- | --- | --- | --- |
 | `-f`, `--file <FILE>` | path, or `-` for stdin | `forge.stack.yaml` | no | The stack document | `-f forge.stack.yaml` |
 | `--environment <SLUG>` | environment slug | `metadata.environment` | no | Plan for this environment instead | `--environment staging` |
+
+**Examples**
+
+```sh
+# Show what apply would change
+forge stacks plan -f forge.stack.yaml --environment lab
+```
 
 **Example**
 
@@ -992,6 +1008,15 @@ forge stacks apply [OPTIONS]
 | `--timeout <MINUTES>` | integer | `60` | no | Longest wait with `--wait` | `--timeout 30` |
 | `--yes` | flag | off | no | Start without asking | `--yes` |
 
+**Examples**
+
+```sh
+# Apply and wait for the rollout
+forge stacks apply -f forge.stack.yaml --environment lab --wait
+# In CI: no prompt, wait up to 20 minutes
+forge stacks apply -f forge.stack.yaml --yes --wait --timeout 20
+```
+
 The global `--non-interactive` flag also starts without asking.
 
 **Example**
@@ -1029,6 +1054,13 @@ Compose app templates and their variables
 forge stacks templates [OPTIONS]
 ```
 
+**Examples**
+
+```sh
+# Templates you can create a stack from
+forge stacks templates
+```
+
 ### forge stacks from-template
 
 Create a compose stack from a template
@@ -1048,4 +1080,13 @@ forge stacks from-template [OPTIONS] --environment <ENVIRONMENT> --node <NODE> <
 | `--environment` | string | - | no | Environment (id or name) | - |
 | `--node` | string | - | no | Node it runs on (id, host name or name) | - |
 | `--set` | flag | - | no | <KEY=VALUE> A variable (`KEY=VALUE`, repeat). Empty secrets are generated | - |
+
+**Examples**
+
+```sh
+# Create a stack from a template on one node
+forge stacks from-template <template-id> <stack-name> --environment lab --node lab-b
+# Override template values
+forge stacks from-template <template-id> <stack-name> --environment lab --node lab-b --set PORT=8080
+```
 

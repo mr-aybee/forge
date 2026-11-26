@@ -523,6 +523,11 @@ Removes `<SHA256>` from the set. Prints `unchanged:` when it was not pinned.
 | --- | --- | --- | --- | --- | --- |
 | `<SHA256>` | hex string | none | Yes | The fingerprint to remove | `sha256:<fingerprint>` |
 
+```sh
+# Remove a pinned key
+sudo /usr/local/bin/forge-agent --state-dir /var/lib/forge-agent pins remove sha256:<fingerprint>
+```
+
 ### forge-agent pins fetch
 
 Connects to the agent endpoint, prints the key fingerprint it presents and
@@ -534,6 +539,13 @@ trust on first use: whoever answers on that address is trusted.
 | --- | --- | --- | --- | --- | --- |
 | `--server` | URL | `server_url` from `agent.toml` | No | Agent endpoint to ask | `--server https://192.0.2.10:3843` |
 | `--yes` | flag | off | No | Pin without asking (scripts) | `--yes` |
+
+```sh
+# Show the key the server presents and pin it after you confirm
+sudo /usr/local/bin/forge-agent --state-dir /var/lib/forge-agent pins fetch
+# Ask a specific agent endpoint
+sudo /usr/local/bin/forge-agent --state-dir /var/lib/forge-agent pins fetch --server https://192.0.2.10:3843
+```
 
 ```text
 $ sudo /usr/local/bin/forge-agent --state-dir /var/lib/forge-agent pins fetch --server https://192.0.2.10:3843
@@ -565,6 +577,12 @@ alone (`nothing to reset`); use `pins remove` to drop a key.
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
 | `--yes` | flag | off | No | Reset without asking (scripts) | `--yes` |
+
+```sh
+# Move an unreadable pin file aside, then pin the server key again
+sudo /usr/local/bin/forge-agent --state-dir /var/lib/forge-agent pins reset
+sudo /usr/local/bin/forge-agent --state-dir /var/lib/forge-agent pins fetch
+```
 
 ```text
 $ sudo /usr/local/bin/forge-agent --state-dir /var/lib/forge-agent pins reset

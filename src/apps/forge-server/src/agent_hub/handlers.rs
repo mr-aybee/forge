@@ -261,7 +261,7 @@ pub(super) async fn heartbeat(
     crate::facts::maybe_collect(&state, server.id, server.agent_version != hb.agent_version);
 
     // Compose containers that changed since the last push: stored rows and
-    // names follow them between deploys (plans/native-mesh.md 1.8).
+    // names follow them between deploys (D-172).
     if let Some(st) = &hb.stack_states {
         let (state, id, json) = (state.clone(), server.id, st.states_json.clone());
         tokio::spawn(async move { crate::stack_states::ingest(&state, id, &json).await });

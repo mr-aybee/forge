@@ -329,7 +329,7 @@ if [ -n "$HELPER_SHA" ]; then
   step "install -m 0755 forge-agent-helper /usr/local/bin/forge-agent-helper"
   install -m 0755 "$TMP/forge-agent-helper" /usr/local/bin/forge-agent-helper
 fi
-# Cluster DNS (plans/native-mesh.md 2.4): installed when offered; the agent
+# Cluster DNS (D-173): installed when offered; the agent
 # configures and starts it once the node is on a cluster network.
 if [ -n "$DNS_SHA" ] && command -v systemctl >/dev/null 2>&1; then
   step "curl -fsSL $FORGE_URL/agent/download/linux/$ARCH/forge-dns"

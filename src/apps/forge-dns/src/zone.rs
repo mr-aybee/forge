@@ -1,5 +1,5 @@
-//! The in-memory answer map built from `names.json` (`plans/native-mesh.md`
-//! 2.3 and 2.4). A map is immutable once built; a reload builds a new one and
+//! The in-memory answer map built from `names.json` (D-173,
+//! D-175). A map is immutable once built; a reload builds a new one and
 //! swaps it in whole.
 
 use std::collections::{HashMap, HashSet};

@@ -239,8 +239,7 @@ pub struct StackLabels<'a> {
 /// Builds a full name from labels and a cluster (`None` when invalid).
 pub type NameBuilder<'a> = dyn Fn(&[&str], Option<ClusterId>) -> Option<String> + 'a;
 
-/// The `stack-service` and `replica` rows of one stack (`plans/native-mesh.md`
-/// 2.1). Only running containers on the cluster network have an address,
+/// The `stack-service` and `replica` rows of one stack (D-175). Only running containers on the cluster network have an address,
 /// and only services with a container port get a name. `name` builds a
 /// full name from labels and the cluster.
 pub fn stack_rows(
@@ -971,7 +970,7 @@ pub async fn refresh(state: &AppState) {
 }
 
 /// One record set for the server host's forge-dns: every cluster of every
-/// workspace (`plans/native-mesh.md` 2.6), written atomically to
+/// workspace (D-175), written atomically to
 /// `[dns] records_file` (world-readable, 0644, so forge-dns running as its
 /// own user can read it). A failure is logged; the next pass retries.
 async fn write_server_records(state: &AppState, sets: Vec<Records>) {

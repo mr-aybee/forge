@@ -266,6 +266,15 @@ forge tunnel list [--all]
 | --- | --- | --- | --- | --- | --- |
 | `--all` | flag | off | no | Everyone's tunnels | `--all` |
 
+**Examples**
+
+```sh
+# Your open tunnels
+forge tunnel list
+# Everyone's tunnels (needs user.manage)
+forge tunnel list --all
+```
+
 **Output**
 
 ```text
@@ -296,6 +305,13 @@ forge tunnel close <ID>
 | --- | --- | --- | --- | --- | --- |
 | `<id>` | tunnel id | — | yes | From `forge tunnel list`. `--id <ID>` still works for older scripts | `765e21345c4863d054354e2e5eac428e` |
 
+**Examples**
+
+```sh
+# Close one tunnel
+forge tunnel close <tunnel-id>
+```
+
 **Output**
 
 ```text
@@ -315,6 +331,15 @@ Local only; needs no permission and does not contact the server.
 
 ```text
 forge tunnel ports
+```
+
+**Examples**
+
+```sh
+# Remembered local ports
+forge tunnel ports
+# As JSON
+forge -o json tunnel ports
 ```
 
 **Output**
@@ -347,6 +372,15 @@ forge tunnel ports forget <TARGET>
 | --- | --- | --- | --- | --- | --- |
 | `<target>` | key, target name or node name | — | yes | A whole key as `forge tunnel ports` shows it, or a target name (`site`, `seq-b/seq`) or node name, which forgets every mapping of that target or node | `site` |
 
+**Examples**
+
+```sh
+# Forget every mapping of one target
+forge tunnel ports forget site
+# Forget one exact mapping
+forge tunnel ports forget app:site@lab-b:8080
+```
+
 **Output**
 
 ```text
@@ -377,6 +411,15 @@ forge tunnel grants list [--all]
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
 | `--all` | flag | off | no | Expired and revoked grants too | `--all` |
+
+**Examples**
+
+```sh
+# Your tunnel grants
+forge tunnel grants list
+# Everyone's grants
+forge tunnel grants list --all
+```
 
 **Output**
 
@@ -475,6 +518,13 @@ forge tunnel grants revoke [OPTIONS] <ID>
 | --- | --- | --- | --- | --- | --- |
 | `<id>` | grant id | — | yes | From `forge tunnel grants list` | `01900000-0000-7000-8000-000000000041` |
 | `--yes` | flag | off | no | Do not ask first. Required with `--non-interactive` or without a terminal; the tunnels opened through the grant close | `--yes` |
+
+**Examples**
+
+```sh
+# Revoke a grant without prompting
+forge tunnel grants revoke <grant-id> --yes
+```
 
 **Output**
 

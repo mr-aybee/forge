@@ -1,5 +1,5 @@
 //! Compose container states pushed by agents between deploys
-//! (`plans/native-mesh.md` 1.8): each stack node's stored rows follow the
+//! (D-172): each stack node's stored rows follow the
 //! node's containers, and names follow the rows.
 
 use std::collections::{BTreeMap, HashMap};

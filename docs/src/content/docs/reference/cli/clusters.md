@@ -1017,6 +1017,15 @@ forge clusters swarm status [OPTIONS] <CLUSTER>
 | --- | --- | --- | --- | --- | --- |
 | `<cluster>` | string | - | yes | Cluster id or name | - |
 
+**Examples**
+
+```sh
+# Swarm state, managers and members of a cluster
+forge clusters swarm status <cluster>
+# The same as JSON
+forge -o json clusters swarm status <cluster>
+```
+
 ### forge clusters swarm join
 
 Add a node to the cluster's swarm; the first node creates it
@@ -1040,6 +1049,17 @@ forge clusters swarm join [OPTIONS] <CLUSTER> <NODE>
 | `--wait` | flag | - | no | Wait for the job to finish (exit 10 when it fails) | - |
 | `--timeout` | integer | `900` | no | Seconds `--wait` waits | - |
 
+**Examples**
+
+```sh
+# Start the swarm on the first node (always a manager)
+forge clusters swarm join <cluster> lab-a --advertise-addr 192.0.2.10 --wait
+# Add a worker and wait up to 10 minutes
+forge clusters swarm join <cluster> lab-b --wait --timeout 600
+# Add a second manager
+forge clusters swarm join <cluster> lab-c --role manager --wait
+```
+
 ### forge clusters swarm leave
 
 Remove a node from the swarm
@@ -1060,6 +1080,15 @@ forge clusters swarm leave [OPTIONS] <CLUSTER> <NODE>
 | `--yes` | flag | - | no | Skip the confirmation prompt | - |
 | `--wait` | flag | - | no | Wait for the job to finish (exit 10 when it fails) | - |
 | `--timeout` | integer | `900` | no | Seconds `--wait` waits | - |
+
+**Examples**
+
+```sh
+# Take a node out of the swarm
+forge clusters swarm leave <cluster> lab-b --yes --wait
+# Force a node that cannot leave cleanly
+forge clusters swarm leave <cluster> lab-b --force --yes
+```
 
 ### forge clusters swarm node
 
@@ -1082,6 +1111,17 @@ forge clusters swarm node [OPTIONS] <CLUSTER> <NODE>
 | `--label` | flag | - | no | <KEY=VALUE> Replace the node's labels with these (`KEY=VALUE`, repeat) | - |
 | `--clear-labels` | flag | - | no | Remove every label | - |
 
+**Examples**
+
+```sh
+# Drain a member before maintenance
+forge clusters swarm node <cluster> lab-b --availability drain
+# Promote a worker to manager
+forge clusters swarm node <cluster> lab-c --role manager
+# Replace the member's labels
+forge clusters swarm node <cluster> lab-b --label zone=a --label disk=ssd
+```
+
 ### forge clusters swarm rotate-tokens
 
 Rotate the swarm's join tokens
@@ -1100,4 +1140,13 @@ forge clusters swarm rotate-tokens [OPTIONS] <CLUSTER>
 | `--worker` | flag | - | no | Rotate the worker join token | - |
 | `--manager` | flag | - | no | Rotate the manager join token | - |
 | `--yes` | flag | - | no | Skip the confirmation prompt | - |
+
+**Examples**
+
+```sh
+# Rotate the worker join token
+forge clusters swarm rotate-tokens <cluster> --worker --yes
+# Rotate both join tokens
+forge clusters swarm rotate-tokens <cluster> --worker --manager --yes
+```
 

@@ -25,6 +25,13 @@ Deploy webhooks of the workspace
 forge webhooks list [OPTIONS]
 ```
 
+**Examples**
+
+```sh
+# Webhooks you can see
+forge webhooks list
+```
+
 ### forge webhooks create
 
 Create one; its URL and signing secret are printed once
@@ -45,6 +52,15 @@ forge webhooks create [OPTIONS] --service <SERVICE> <NAME>
 | `--signature` | string | `none` | no | none, github, gitlab or forge | - |
 | `--tag-pattern` | string | - | no | Tags a delivery may deploy (`v*`); needs a signature | - |
 | `--disabled` | flag | - | no | Create or keep it disabled | - |
+
+**Examples**
+
+```sh
+# A GitHub-signed webhook that deploys only release tags
+forge webhooks create gh-release --service <service> --signature github --tag-pattern 'v*'
+# Create it disabled
+forge webhooks create staging-hook --service <service> --disabled
+```
 
 ### forge webhooks update
 
@@ -68,6 +84,15 @@ forge webhooks update [OPTIONS] --service <SERVICE> <WEBHOOK> <NAME>
 | `--tag-pattern` | string | - | no | Tags a delivery may deploy (`v*`); needs a signature | - |
 | `--disabled` | flag | - | no | Create or keep it disabled | - |
 
+**Examples**
+
+```sh
+# Change the signature and tag pattern
+forge webhooks update <webhook> gh-release --service <service> --signature github --tag-pattern 'v*'
+# Disable a webhook
+forge webhooks update <webhook> gh-release --service <service> --disabled
+```
+
 ### forge webhooks delete
 
 Delete a webhook; its URL stops working
@@ -84,6 +109,13 @@ forge webhooks delete [OPTIONS] <WEBHOOK>
 | --- | --- | --- | --- | --- | --- |
 | `<webhook>` | string | - | yes | Webhook id or name | - |
 | `--yes` | flag | - | no | Skip the confirmation prompt | - |
+
+**Examples**
+
+```sh
+# Delete a webhook without prompting
+forge webhooks delete <webhook> --yes
+```
 
 ### forge webhooks rotate
 
@@ -102,6 +134,13 @@ forge webhooks rotate [OPTIONS] <WEBHOOK>
 | `<webhook>` | string | - | yes | Webhook id or name | - |
 | `--yes` | flag | - | no | Skip the confirmation prompt | - |
 
+**Examples**
+
+```sh
+# Issue a new URL and secret; the old ones stop working
+forge webhooks rotate <webhook> --yes
+```
+
 ### forge webhooks deliveries
 
 Recent deliveries and their outcome
@@ -117,4 +156,11 @@ forge webhooks deliveries [OPTIONS] <WEBHOOK>
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
 | `<webhook>` | string | - | yes | Webhook id or name | - |
+
+**Examples**
+
+```sh
+# Recent deliveries of a webhook
+forge webhooks deliveries <webhook>
+```
 

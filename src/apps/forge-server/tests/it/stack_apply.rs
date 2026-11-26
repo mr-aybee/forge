@@ -1,5 +1,5 @@
 //! `forge.stack.yaml` through `POST /stacks/plan` and `POST /stacks/apply`
-//! (`plans/native-mesh.md` 3, D-174): field-path errors, the plan's
+//! (D-174): field-path errors, the plan's
 //! findings for a cluster without a network, the rollout that stops after
 //! a failed node, the `?stack=` names filter, and the roles that may use it.
 //! Running Compose itself needs a Linux node with Docker (lab test): here

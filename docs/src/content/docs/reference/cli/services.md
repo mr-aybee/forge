@@ -524,6 +524,17 @@ missing one exits with `2` and names the flag.
 | `--volume <VOLUME>` | `HOST_PATH:CONTAINER_PATH[:ro]` or `VOLUME_NAME:CONTAINER_PATH[:ro]`; repeatable | none | no | A container volume. Given at all, the flags replace the file's whole `volumes` list | `--volume /srv/forge/apps/shop-prod/web/html:/usr/share/nginx/html:ro` |
 | `--restart <BOOL>` | `true` or `false` | the server's default, `true` | no | Restart it when it stops | `--restart false` |
 
+**Examples**
+
+```sh
+# A container service
+forge services create --environment lab --name web --runtime container --image nginx:1.27 --port 8080:80
+# A systemd service with an environment variable
+forge services create --environment lab --name api --runtime systemd --command "python3 -m http.server 8080" --listen-port 8080 --env PORT=8080
+# From a JSON definition
+forge services create --environment lab --file service.json
+```
+
 Fields without a flag need `--file`: `working_dir`, `env_files`,
 `dependencies`, `cpu_millis`, `memory_mb`, `entrypoint`, `user`, `hostname`,
 `labels`, `extra_hosts`, `healthcheck`, `stop_timeout_secs`, `read_only` and
@@ -1310,6 +1321,13 @@ forge services swarm status [OPTIONS] <SERVICE>
 | `<service>` | string | - | yes | Service id or name | - |
 | `--environment` | string | - | no | The service's environment (id or name), when the name is ambiguous | - |
 
+**Examples**
+
+```sh
+# Replicas and tasks of a Swarm service
+forge services swarm status <service> --environment lab
+```
+
 ### forge services swarm deploy
 
 Apply the current spec to the swarm (skipped when unchanged)
@@ -1328,6 +1346,13 @@ forge services swarm deploy [OPTIONS] <SERVICE>
 | `--environment` | string | - | no | The service's environment (id or name), when the name is ambiguous | - |
 | `--wait` | flag | - | no | Wait for the job to finish (exit 10 when it fails) | - |
 | `--timeout` | integer | `900` | no | Seconds `--wait` waits | - |
+
+**Examples**
+
+```sh
+# Deploy the service to the swarm and wait
+forge services swarm deploy <service> --environment lab --wait
+```
 
 ### forge services swarm scale
 
@@ -1349,6 +1374,15 @@ forge services swarm scale [OPTIONS] <SERVICE> <REPLICAS>
 | `--wait` | flag | - | no | Wait for the job to finish (exit 10 when it fails) | - |
 | `--timeout` | integer | `900` | no | Seconds `--wait` waits | - |
 
+**Examples**
+
+```sh
+# Run five replicas
+forge services swarm scale <service> 5 --wait
+# Stop every replica without removing the service
+forge services swarm scale <service> 0 --wait
+```
+
 ### forge services swarm restart
 
 Restart every task, one batch at a time
@@ -1367,6 +1401,13 @@ forge services swarm restart [OPTIONS] <SERVICE>
 | `--environment` | string | - | no | The service's environment (id or name), when the name is ambiguous | - |
 | `--wait` | flag | - | no | Wait for the job to finish (exit 10 when it fails) | - |
 | `--timeout` | integer | `900` | no | Seconds `--wait` waits | - |
+
+**Examples**
+
+```sh
+# Restart every task, one update at a time
+forge services swarm restart <service> --wait
+```
 
 ### forge services swarm rollback
 
@@ -1388,6 +1429,13 @@ forge services swarm rollback [OPTIONS] <SERVICE>
 | `--wait` | flag | - | no | Wait for the job to finish (exit 10 when it fails) | - |
 | `--timeout` | integer | `900` | no | Seconds `--wait` waits | - |
 
+**Examples**
+
+```sh
+# Go back to the previous spec
+forge services swarm rollback <service> --yes --wait
+```
+
 ### forge services swarm remove
 
 Remove the Swarm service (the Forge service stays)
@@ -1408,6 +1456,13 @@ forge services swarm remove [OPTIONS] <SERVICE>
 | `--wait` | flag | - | no | Wait for the job to finish (exit 10 when it fails) | - |
 | `--timeout` | integer | `900` | no | Seconds `--wait` waits | - |
 
+**Examples**
+
+```sh
+# Remove the service from the swarm
+forge services swarm remove <service> --environment lab --yes --wait
+```
+
 ### forge services swarm logs
 
 The last lines of the service's logs
@@ -1425,4 +1480,11 @@ forge services swarm logs [OPTIONS] <SERVICE>
 | `<service>` | string | - | yes | Service id or name | - |
 | `--environment` | string | - | no | The service's environment (id or name), when the name is ambiguous | - |
 | `--tail` | integer | `200` | no | Lines from the end | - |
+
+**Examples**
+
+```sh
+# The last 200 log lines of every task
+forge services swarm logs <service> --tail 200
+```
 

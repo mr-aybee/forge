@@ -422,7 +422,7 @@ pub fn interface_name(cluster_id: &str) -> String {
 /// MTU of the mesh: 1500 minus the WireGuard/UDP/IPv4 overhead.
 pub const MESH_MTU: u16 = 1420;
 /// Docker name of a node's cluster container network for `iface`: a routed
-/// bridge on the node's instance block (`plans/native-mesh.md` step 1).
+/// bridge on the node's instance block (D-172).
 #[must_use]
 pub fn network_name(iface: &str) -> String {
     format!("forge-{iface}")

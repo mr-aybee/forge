@@ -1530,8 +1530,7 @@ pub struct StackPart {
     /// helpers refuse unknown fields.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh_network: Option<String>,
-    /// Resolvers for services on the cluster network (`plans/native-mesh.md`
-    /// 2.5). Only with `mesh_network`.
+    /// Resolvers for services on the cluster network (D-173). Only with `mesh_network`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dns: Option<StackDns>,
 }

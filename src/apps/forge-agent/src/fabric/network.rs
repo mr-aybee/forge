@@ -1,4 +1,4 @@
-//! The node's cluster container network (`plans/native-mesh.md` step 1): a
+//! The node's cluster container network (D-172): a
 //! routed Docker bridge on the node's instance block, which every mesh peer
 //! already routes, so containers get addresses other nodes reach directly.
 //! No masquerade and no inbound filtering on it (routed gateway mode, Docker

@@ -168,7 +168,7 @@ pub struct AppJob {
     /// Which copy (slot) of a service serves on each node (#73).
     pub deploys: Arc<dyn forge_core::deploy::DeploymentRepository>,
     /// Cluster networks and node facts: whether a container joins the
-    /// node's cluster container network (`plans/native-mesh.md` 1.7).
+    /// node's cluster container network (D-172).
     pub fabrics: Arc<dyn forge_core::ports::FabricRepository>,
     pub facts: Arc<dyn forge_core::tags::FactsRepository>,
 }

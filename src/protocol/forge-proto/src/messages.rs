@@ -132,7 +132,7 @@ pub struct Heartbeat {
     #[prost(string, repeated, tag = "11")]
     pub pinned_server_keys: Vec<String>,
     /// The node's compose containers, when they changed since the last
-    /// push (`plans/native-mesh.md` 1.8): names follow replicas without
+    /// push (D-172): names follow replicas without
     /// waiting for a deploy. Absent from older agents and when unchanged.
     #[prost(message, optional, tag = "12")]
     pub stack_states: Option<StackStates>,

@@ -54,7 +54,7 @@ pub struct Agent {
     /// The container log batch the spool holds, for the helper.
     container_ack: u64,
     /// Compose container rows last pushed (hash) and when: names follow
-    /// replicas between deploys (`plans/native-mesh.md` 1.8).
+    /// replicas between deploys (D-172).
     stack_push: (u64, Option<Instant>),
     /// Spool, local log listener and uploader (D-142); `None` when the
     /// spool folder cannot be opened (the agent then runs without it).
