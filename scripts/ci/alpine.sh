@@ -22,7 +22,7 @@ set -euo pipefail
 # DuckDB once until duckdb-prebuilt.yml has published for the new rustc.
 IMAGE="rust:1.100.0-alpine3.22@sha256:f8ddfd4b265d9a9e7fd7c36821af4a55771aee2ac3894294687a66c709319be9"
 REPO="${FORGE_DUCKDB_REPO:-ghcr.io/orbyntech/forge-duckdb}"
-SERVER_PKGS=(-p forge-server -p forge-agent -p forge-plugin-runner -p forge-analytics-worker)
+SERVER_PKGS=(-p forge-server -p forge-agent -p forge-plugin-runner -p forge-analytics-worker -p forge-dns)
 
 cmd=${1:?usage: alpine.sh build|ref|restore|pack <target> ...}
 target=${2:?usage: alpine.sh $cmd <target>}

@@ -58,6 +58,7 @@ pub mod rate_limit;
 pub mod registries;
 pub mod request_origin;
 pub mod service_ports;
+pub mod stack_states;
 pub mod stacks;
 pub mod state;
 pub mod swarm;

@@ -806,6 +806,9 @@ pub enum DnsCmd {
         /// Only `node` or `service` names.
         #[arg(long, value_parser = ["node", "service"])]
         kind: Option<String>,
+        /// Only this compose stack's service and replica names (stack id).
+        #[arg(long)]
+        stack: Option<String>,
     },
     /// Show or change the suffix every local name ends in.
     #[command(subcommand)]
@@ -843,11 +846,18 @@ pub async fn dns(g: &Global, cmd: DnsCmd) -> Result<()> {
     let mut api = connect(g, &t).await?;
 
     match cmd {
-        DnsCmd::List { workspace, kind } => {
-            let path = match workspace {
-                Some(w) => format!("/api/v1/names?workspace={}", urlencoding(&w)),
-                None => "/api/v1/names".to_owned(),
-            };
+        DnsCmd::List { workspace, kind, stack } => {
+            let mut q = Vec::new();
+
+            if let Some(w) = workspace {
+                q.push(format!("workspace={}", urlencoding(&w)));
+            }
+
+            if let Some(s) = stack {
+                q.push(format!("stack={}", urlencoding(&s)));
+            }
+
+            let path = if q.is_empty() { "/api/v1/names".to_owned() } else { format!("/api/v1/names?{}", q.join("&")) };
 
             let v = api.get(&path).await?;
             let mut rows: Vec<Value> = v["names"].as_array().cloned().unwrap_or_default();

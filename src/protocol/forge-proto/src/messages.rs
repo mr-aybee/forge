@@ -131,6 +131,20 @@ pub struct Heartbeat {
     /// acknowledgement of an announced next key. Empty from older agents.
     #[prost(string, repeated, tag = "11")]
     pub pinned_server_keys: Vec<String>,
+    /// The node's compose containers, when they changed since the last
+    /// push (`plans/native-mesh.md` 1.8): names follow replicas without
+    /// waiting for a deploy. Absent from older agents and when unchanged.
+    #[prost(message, optional, tag = "12")]
+    pub stack_states: Option<StackStates>,
+}
+
+/// The node's compose containers, grouped by stack.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct StackStates {
+    /// JSON object: stack label (`<environment>/<stack>`) → rows
+    /// `{service, name, number, state, health, mesh_ip}`.
+    #[prost(string, tag = "1")]
+    pub states_json: String,
 }
 
 /// Most container lines in one heartbeat.
@@ -1022,6 +1036,17 @@ pub struct HostNames {
     /// outside it and suffixes that could be public domains.
     #[prost(string, tag = "3")]
     pub suffix: String,
+    /// JSON object `forge_catalog::names::Records` with the full record set
+    /// for forge-dns (A, SRV, PTR, TTL). Empty from older servers; the agent
+    /// then writes no `names.json`.
+    #[prost(string, tag = "4")]
+    pub records_json: String,
+    /// The zone forge-dns is authoritative for, e.g. `c1.local`.
+    #[prost(string, tag = "5")]
+    pub zone: String,
+    /// Addresses of the server-host forge-dns, for the second tier; may be empty.
+    #[prost(string, repeated, tag = "6")]
+    pub upstream_forge_dns: Vec<String>,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -1132,6 +1157,9 @@ mod oneof_tests {
                 entries_json: "[]".into(),
                 containers: true,
                 suffix: "local".into(),
+                records_json: "{}".into(),
+                zone: "c1.local".into(),
+                upstream_forge_dns: vec!["192.0.2.10".into()],
             }),
             command_body::Command::TunnelOpen(TunnelOpen {
                 connection_id: "c1".into(),

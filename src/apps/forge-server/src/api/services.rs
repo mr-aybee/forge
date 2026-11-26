@@ -210,6 +210,9 @@ pub struct AppInput {
     #[serde(default)]
     #[schemars(with = "Option<Value>")]
     pub swarm: Option<forge_catalog::swarm_service::SwarmSettings>,
+    /// Container: join the node's cluster container network (default on).
+    #[serde(default)]
+    pub mesh: Option<bool>,
 }
 
 const fn yes() -> bool {
@@ -290,6 +293,14 @@ fn apply(state: &AppState, app: &mut Service, ns_slug: &str, input: AppInput) ->
 
     if let (Some(h), Some(spec)) = (health, app.spec.as_object_mut()) {
         spec.insert("health".into(), h);
+    }
+
+    // Only the opt-out is stored: absent means on.
+    if input.mesh == Some(false)
+        && app.runtime == "container"
+        && let Some(spec) = app.spec.as_object_mut()
+    {
+        spec.insert("mesh".into(), json!(false));
     }
 
     app.updated_at = state.clock.now();

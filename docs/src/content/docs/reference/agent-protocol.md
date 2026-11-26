@@ -253,6 +253,30 @@ command-key signature and that the announcement names this node before it
 writes the pin file. An agent with no pins (enrolled before pinning, against an
 older server) keeps checking the Forge CA and the host name.
 
+## Local names
+
+The server sends a signed `HostNames` command with a node's
+[local names](/docs/concepts/local-names/). The agent sends its compose
+containers back so names follow replicas without a deploy.
+
+| Message | Field | Type | Meaning |
+| --- | --- | --- | --- |
+| `HostNames` | `entries_json` (1) | string | JSON array of `{"name", "ip"}` for the hosts-file block. Sent to every node |
+| | `containers` (2) | bool | Also write the block into the node's Forge container hosts files |
+| | `suffix` (3) | string | The suffix every name ends in. The node refuses names outside it |
+| | `records_json` (4) | string | JSON `Records` for forge-dns (A, SRV, PTR, TTL): the node's cluster set. Empty outside a fabric and from older servers; the agent then writes no `names.json` |
+| | `zone` (5) | string | The zone forge-dns answers for, `<cluster>.<suffix>`. The node also derives the containers' `dns_search` from it |
+| | `upstream_forge_dns` (6) | repeated string | The IPs of the server host's forge-dns (`[dns] listen`); may be empty |
+| `Heartbeat` | `stack_states` (12) | `StackStates` | The node's compose containers. Sent only when they changed, at most every 10 seconds. Absent from older agents |
+| `StackStates` | `states_json` (1) | string | JSON object: stack label (`<environment>/<stack>`) → rows `{service, name, number, state, health, mesh_ip}` |
+
+The agent reads its containers through the helper on every heartbeat. That
+request is read-only and unsigned. The server merges the rows by container
+name into each stack node's stored state (`state`, `health`, `number`,
+`mesh_ip`, `service`), keeps `ports` and `image` from the last deploy, drops
+containers that vanished, and rebuilds the names. See
+[forge-dns](/docs/reference/forge-dns/) for the `names.json` format.
+
 ## Long-poll
 
 When no command is pending, the hub holds the heartbeat for

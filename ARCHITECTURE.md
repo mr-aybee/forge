@@ -420,6 +420,20 @@ heartbeat. The root helper (Windows: the agent) checks the suffix and every
 entry again and rewrites only the marked block of `/etc/hosts` and of each
 Forge container's hosts file, in place. See D-084.
 
+**Cluster DNS.** Inside a Default cluster's fabric, `names.rs` also builds
+names for compose stack services (`<svc>.<stack>.<env>.<cluster>.<suffix>`,
+healthy containers only) and replicas (`<svc>-<n>…`), with the containers'
+mesh addresses, plus SRV and PTR records. Agents keep these current by
+sending `Heartbeat.stack_states` when their containers change. `HostNames`
+carries the cluster's record set (`records_json`) and zone; the helper
+writes it to `/var/lib/forge-agent/names.json`, and `forge-dns`, a separate
+unprivileged binary (`src/apps/forge-dns`, hickory), serves it on the node's
+mesh address and forwards other names to the host's resolvers. Containers
+on the cluster network use it through `dns`/`dns_search`; the node uses it
+through interface-scoped systemd-resolved. With `[dns] listen` set, the
+server writes `<data_dir>/names.json` for every cluster and a forge-dns on
+the server host is the second tier. See D-173 and D-175.
+
 **Port tunnels.** `forge tunnel open` holds a control WebSocket and opens
 one data WebSocket per local TCP connection. For each, the server signs a
 `TunnelOpen` (with a single-use stream token) to the node; the agent dials

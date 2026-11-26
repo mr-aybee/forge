@@ -394,7 +394,8 @@ pub struct DocError {
 }
 
 impl DocError {
-    fn new(path: &str, message: impl Into<String>) -> Self {
+    /// A problem at a dotted `path` (empty for the whole document).
+    pub fn new(path: &str, message: impl Into<String>) -> Self {
         Self { path: path.to_owned(), message: message.into() }
     }
 }
@@ -702,7 +703,9 @@ impl ArtifactSpec {
     }
 }
 
-fn valid_subpath(p: &str) -> bool {
+/// A relative path without `.` or `..` components (empty is allowed).
+#[must_use]
+pub fn valid_subpath(p: &str) -> bool {
     p.is_empty()
         || (p.len() <= 256
             && !p.starts_with('/')

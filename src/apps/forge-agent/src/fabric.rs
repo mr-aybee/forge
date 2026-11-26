@@ -20,6 +20,8 @@ use tokio::process::Command;
 use crate::executor::CommandError;
 
 #[cfg(unix)]
+pub mod dns;
+#[cfg(unix)]
 mod network;
 
 const T: Duration = Duration::from_secs(120);
@@ -391,6 +393,9 @@ pub async fn run_op(op: &FabricOp) -> Result<Value, CommandError> {
             // The container network goes first: with containers still on
             // it, the fabric stays and the control plane reports the node.
             network_remove(iface).await?;
+
+            #[cfg(unix)]
+            dns::remove(iface).await;
 
             let out = remove(iface).await?;
             write_hosts(iface, &[])?;

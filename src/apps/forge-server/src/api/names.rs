@@ -24,6 +24,32 @@ pub struct NamesQuery {
     #[serde(default)]
     #[schemars(with = "Option<String>")]
     pub workspace: Option<WorkspaceId>,
+    /// Only the `stack-service` and `replica` names of this compose stack
+    /// (`forge stacks apply` prints them); `view` on its environment.
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub stack: Option<StackId>,
+}
+
+/// The `app` value of a stack's name rows (`<environment label>/<stack>`)
+/// when `stack` is asked for. Authorizes `view` on its environment.
+async fn stack_filter(state: &AppState, caller: &Caller, stack: Option<StackId>) -> ApiResult<Option<String>> {
+    let Some(id) = stack else { return Ok(None) };
+    let s = forge_core::stacks::StackRepository::get_stack(&state.store, id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("stack not found"))?;
+    caller.authorize(Action::View, EntityRef::new(EntityKind::Environment, s.environment_id)).await?;
+    let env = forge_core::ports::TenancyRepository::get_environment(&state.store, s.environment_id).await?;
+    let label = forge_catalog::names::label_from(&env.name).unwrap_or_default();
+
+    Ok(Some(format!("{label}/{}", s.name)))
+}
+
+/// Whether a row belongs to the asked stack (every row without a filter).
+fn in_stack(r: &crate::names::NameRow, app: Option<&str>) -> bool {
+    let stack_kind = r.kind == crate::names::KIND_STACK_SERVICE || r.kind == crate::names::KIND_REPLICA;
+
+    app.is_none_or(|a| stack_kind && r.app.as_deref() == Some(a))
 }
 
 /// `GET /api/v1/names`: every name the caller may see (nodes and services
@@ -34,6 +60,7 @@ pub async fn list(
     caller: Caller,
     Query(q): Query<NamesQuery>,
 ) -> ApiResult<Json<Value>> {
+    let app = stack_filter(&state, &caller, q.stack).await?;
     let servers = state.store.list_servers(q.workspace).await?;
     let allowed = caller.can_many(Action::View, servers.iter().map(|s| server_ref(s.id)).collect()).await;
     let visible: HashMap<ServerId, WorkspaceId> =
@@ -45,7 +72,7 @@ pub async fn list(
     for ws in workspaces.iter().filter_map(|w| w.parse::<WorkspaceId>().ok()) {
         let fleet = crate::names::fleet(&state, ws).await.map_err(|e| ApiError::from(DomainError::internal(e)))?;
 
-        for r in fleet.rows.iter().filter(|r| visible.contains_key(&r.server_id)) {
+        for r in fleet.rows.iter().filter(|r| visible.contains_key(&r.server_id) && in_stack(r, app.as_deref())) {
             let mut v = serde_json::to_value(r).unwrap_or_default();
             v["workspace_id"] = json!(ws);
             names.push(v);

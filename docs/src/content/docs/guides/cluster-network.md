@@ -30,8 +30,8 @@ itself, without Swarm or Kubernetes.
 Forge connects nodes with an encrypted WireGuard mesh only; there is no
 unencrypted routed mode. Service IPs are reserved in the address plan
 but not configured on nodes, and there is no firewall between environments and
-clusters and no internal DNS resolver yet. Names resolve through the hosts
-file (see [Internal names](#internal-names)).
+clusters. Names resolve through the hosts file and, on Linux members,
+through forge-dns (see [Internal names](#internal-names)).
 :::
 
 ## Create the network
@@ -149,7 +149,8 @@ A native service with runtime `container` joins too: after Forge creates
 the container, it connects it to the network as a second network. The
 default bridge and published ports stay as they are. Set `"mesh": false` in
 the [service definition](/docs/reference/cli/services/#service-definition)
-to keep it off. The container's inspect view shows its `mesh_ip`.
+to keep it off, or clear **Cluster network** under **Ports** in the
+service editor. The container's inspect view shows its `mesh_ip`.
 
 The **Container network** column in the **Nodes** table on the **Network**
 page shows the network name, a state badge, `Docker <version>`, and the
@@ -219,6 +220,30 @@ It lists:
 Forge rewrites the block on every network pass (about every 20 seconds), so
 names follow deploys and moves. Lines outside the block are never touched.
 
+### forge-dns
+
+Each Linux member also runs [forge-dns](/docs/reference/forge-dns/) on its
+mesh address, port `53`. It serves the cluster's
+[local names](/docs/concepts/local-names/#forge-dns), including one name per
+compose stack service (`<svc>.<stack>.<environment>.<cluster>.<suffix>`)
+and per replica (`<svc>-<n>...`), plus SRV and PTR records. Forge sets it
+up when the network is applied:
+
+1. It writes `/etc/forge/forge-dns.env` with `--listen <mesh ip>:53`.
+2. It enables and starts `forge-dns.service` once the node has its first
+   `/var/lib/forge-agent/names.json`.
+3. With systemd-resolved, it points the cluster interface at forge-dns for
+   the cluster zone and its reverse zones. Without it, the node keeps using
+   the hosts file.
+
+Stack containers on the container network get `dns` (the node's forge-dns,
+then the server host's when [`[dns] listen`](/docs/reference/configuration/#cluster-dns)
+is set) and `dns_search` from their stack, environment and cluster, unless
+the service sets `dns` itself. A container then reaches `api` in its own
+stack by its short name.
+
+Windows members use the hosts file only.
+
 ## Remove the network
 
 Removing the network needs `workspace.manage` on the cluster. When the
@@ -239,7 +264,9 @@ addresses.
 4. If asked, confirm in **Verify it's you**.
 
 Forge removes the container network first, then takes the interface off
-every online member and removes the hosts block. A container network that
+every online member and removes the hosts block. It also stops and disables
+`forge-dns`, reverts the interface's systemd-resolved settings and deletes
+`/etc/forge/forge-dns.env` and `names.json`. A container network that
 still has containers attached is not removed, and its node is reported as
 not cleaned. Offline members keep a dead interface; the toast names them so you
 can remove it by hand. The page then shows **Set up the cluster network**
@@ -260,6 +287,11 @@ answers `{ "not_cleaned": [...] }` with the members it could not clean.
 - On a Linux member with Docker 28 or newer,
   `docker network inspect forge-<interface>` shows the node's instance block
   as the subnet.
+- On a Linux member, `systemctl is-active forge-dns` prints `active`, and
+  `dig +short @<mesh-ip> <node>.<cluster>.<suffix>` answers with the node's
+  mesh address. The node's facts show `forge_dns: running`.
+- From a stack container, `getent hosts <svc>.<stack>` lists one address per
+  healthy replica.
 
 ## Troubleshooting
 
@@ -275,6 +307,9 @@ answers `{ "not_cleaned": [...] }` with the members it could not clean.
 | **retrying** with `network forge-… has <n> containers on subnet <old>; redeploy stacks to move to <new>` | The subnet changed while containers use the old block | Redeploy the stacks on that node |
 | The preview says `update its agent to put services on the cluster network` | The agent does not report the `mesh_network` fact | [Update the agent](/docs/guides/update-agents/), then redeploy |
 | **Not on the cluster network** on a stack | The stack was deployed before the node's network was `ok` | Select **Redeploy** |
+| `forge_dns: missing` | The node was installed from a package without forge-dns | Reinstall the agent package; agent self-update does not install forge-dns yet |
+| `forge_dns: stopped` | The node has no `names.json` yet, or forge-dns failed | Wait for the next names pass; else read `journalctl -u forge-dns` |
+| A stack service has no name | It has no port in `ports:` or `expose:`, is off the cluster network, or no replica is healthy | Add `expose:`, redeploy onto the network, or fix the health check. The replica names `<svc>-<n>` still resolve |
 | The subnet is refused | Not a private IPv4 range between /16 and /24, or it overlaps | Pick another range, or keep the suggestion |
 
 ## Next steps

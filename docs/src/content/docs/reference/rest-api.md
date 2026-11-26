@@ -824,7 +824,7 @@ environment of the project and their services.
 | DELETE | `/servers/{id}` | `server.manage` — same body and confirmations as revoke → `204`. Revokes the agent certificate, then deletes the node and its data in one transaction: facts, saved logins, SSH and Docker settings, file roots, uploads and grants, installations, app instances, stack parts, deploy slots and events, object store memberships, tunnels and tunnel grants, observations, alarms, DNS label, tags, role bindings and access assignments scoped to `server:<id>`. Queued jobs on the node are cancelled. A stack whose default node it was moves to another of its nodes, or is deleted when it has none. The audit log and the revocation entry stay. The host name and DNS name are free afterwards. `400` hostname mismatch, `403` missing or wrong code, `404` unknown node, `409` the control node. Audited as `server.remove` with `hostname`, `display_name`, `cluster_id`, `cert_serial` |
 | PUT | `/servers/{id}/name` | `server.rename` — `{name}` sets the console display name (empty restores the hostname); the machine hostname is unchanged. A node that has no local name yet takes it from this name; an existing local name does not change. Audited as `server.rename` |
 | PUT | `/servers/{id}/dns-name` | `server.rename` — `{label}` sets the node's DNS label; empty goes back to a derived label that no other node has. Audited as `server.dns_rename`. [Details](#local-names) |
-| GET | `/names?workspace=<id>` | `view` per node — the [local names](#local-names) of nodes and services on nodes you can see |
+| GET | `/names?workspace=<id>&stack=<id>` | `view` per node — the [local names](#local-names) of nodes and services on nodes you can see. `stack` keeps only that compose stack's `stack-service` and `replica` names and needs `view` on its environment |
 | GET | `/names/suffix` | `view` on the workspace — the suffix of every local name and where it comes from. [Details](#local-names) |
 | PUT | `/names/suffix` | `system.update` on the platform, MFA-verified session — `{suffix}` sets the suffix of every local name; empty clears the runtime setting. Audited as `names.suffix.update`. [Details](#local-names) |
 | GET | `/servers/{id}/metrics?since=<ms>` | `view` — in-memory samples newer than `since` and the node's mounted `volumes`; marks the node as watched (its agent then reports every few seconds) |
@@ -3103,6 +3103,8 @@ returned; responses carry `env_keys` only.
 | --- | --- | --- | --- |
 | GET | `/stacks?environment_id=&server_id=` | `view` (filtered) | `[{stack, nodes}]`. `server_id` keeps stacks with a part on, or created from, that node |
 | POST | `/stacks/preview` | `stack.manage` on the environment and `server.manage` on the node | `{environment_id, server_id, name?, content, env?, dir?}` → the preview (below), plus `can_privileged`. The node must be in the environment's organization. Nothing is saved |
+| POST | `/stacks/plan` | `stack.manage` on the document's environment + `server.manage` on each node | A [`forge.stack.yaml`](/docs/reference/stack-yaml/): `{document, compose?, env?, environment?}` → the [stack plan](#stack-plan). `compose` is the compose file's text (omit with `spec.compose.inline`); `env` the `.env` text (omitted keeps an existing stack's variables); `environment` replaces `metadata.environment`. Saves nothing; audited as `stack.plan` |
+| POST | `/stacks/apply` | as `/stacks/plan` (+ `stack.privileged` for host-access settings) | `{document, compose?, env?, environment?, order?, health_timeout_s?}` → `202 {job_id, stack_id, revision, plan}`. Creates (`stack.create`) or updates (`stack.update`, `default_server` moves to the document's first node) the stack, saving a revision noted `apply <sha256 of the document>[:12]` when the compose text changed, then starts a `stack.rollout` job (audited as `stack.deploy`). `order` (`node-by-node`, `all-at-once`) and `health_timeout_s` (10–3600) override the document. `400` when the document or plan is refused (the message names the field), `404` unknown environment, `409` `rollout_running` while a rollout of the stack is queued or running. Environments on a Swarm cluster are refused |
 | POST | `/stacks` | `stack.manage` + `server.manage` on `server_id` | `{environment_id, server_id, name, content, env?, dir?, note?}` → `201 {stack, preview}`. `400` when a setting is never allowed; privileged stacks can be saved |
 | POST | `/stacks/containers` | as `POST /stacks` | **Create container**: `{environment_id, server_id, dir?, start = true, container}` → `201 {stack, preview, jobs}` |
 | GET | `/stacks/{id}` | `view` | `{stack, content, dir, nodes, preview}`; `preview` is `{error}` when the stack no longer plans (a node is gone) |
@@ -3121,6 +3123,48 @@ returned; responses carry `env_keys` only.
 **Node part**: `{stack_id, server_id, services, selected, revision, status, state: [{service, name, number, state, health, status, image, exit_code, ports, mesh_ip?}], last_job_id, last_error}`; `status` is `deploying`, `deployed`, `failed`, `stopping`, `starting`, `pulling` or `removing`.
 **Preview**: `{services: [{name, image, command, ports: [{host_ip, published, target, protocol, public}], volumes, environment: [{key, value}], depends_on, healthcheck, restart, expose, nodes, policy: allowed|privileged|blocked, findings, mesh}], nodes: [{server_id, hostname, services, internal_ip, ports, findings}], findings, privileged, blocked}`. Values of secret-looking variables are masked; `${VAR}` references are shown as written. `mesh` is `true` when the service joins the [cluster network](/docs/reference/compose-extensions/#cluster-network) on some node, `false` when it does not, or `"off (x-forge.mesh)"` / `"off (network_mode)"`. In a state row, `number` is the Compose container number and `mesh_ip` the container's address on the cluster network (absent when not attached). Every field comes from the file as written, and `.env` values are replaced by `${VAR}` in `findings`, `ports` and errors.
 **Create container** `container`: `{name, image, command?, entrypoint?, ports: [{container, host?, protocol = tcp, public = false}], env: [{key, value}], volumes: [{source, target, read_only}], restart = unless-stopped, cpus?, memory_mb?, network?, healthcheck?: {test, interval = "30s"}, labels?, expose?: http|https}`. `network: host` or `none` becomes `network_mode`; `host` needs `stack.privileged` to start. Variables are stored in the sealed `.env` and referenced as `${KEY}`.
+
+### Stack plan
+
+`POST /stacks/plan` answers:
+
+```json
+{
+  "action": "create",
+  "stack_id": null,
+  "stack": "orders",
+  "environment_id": "…",
+  "environment": "prod",
+  "order": "node-by-node",
+  "health_timeout_s": 300,
+  "revision_next": 1,
+  "nodes": [{"server_id": "…", "hostname": "lab-b", "services": ["api"], "internal_ip": "127.0.0.1", "bind_roots": [], "ports": [], "findings": [], "mesh_network": null}],
+  "removes": [],
+  "mesh": {"enabled": true, "nodes_in_sync": [], "nodes_not_in_sync": ["lab-b"]},
+  "findings": [{"service": "", "severity": "info", "message": "services are reachable from other nodes only through published ports; create the cluster network to reach them by name"}],
+  "privileged": false,
+  "blocked": false,
+  "preview": {"services": [], "nodes": [], "findings": [], "privileged": false, "blocked": false}
+}
+```
+
+`action` is `create` or `update`; `stack_id` is set for an update.
+`revision_next` is the revision `apply` saves (the current one when the
+compose text is unchanged). `nodes` are in rollout order: the stack's default
+node first, then `placement.nodes` order, then by name. `removes` are nodes
+of the current revision that no longer run a service; the rollout takes them
+down after every node is live. A node is in `mesh.nodes_in_sync` when its
+services join the [cluster network](/docs/reference/compose-extensions/#cluster-network)
+on this deploy (`mesh_network` is set). `preview` is the stack editor's
+[preview](#compose-stacks).
+
+The `stack.rollout` job (resource: the environment) deploys the nodes with
+one `stack.action` job each, in order (`node-by-node`, waiting for each) or
+together (`all-at-once`). A failed node fails the rollout with
+`stopped at node <i> of <n>: …; <k> later node(s) were not deployed`; nodes
+not yet started are left as they were. A node already at the revision with
+reported containers is skipped. The job's `state.nodes` lists each node's
+outcome.
 
 Services deployed from a stack are listed under [Services](#services)
 with runtime `compose-service`; `PUT`, `DELETE`, placement, deploy and

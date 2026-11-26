@@ -197,8 +197,22 @@ async fn handle(
             Ok(v) => data(Ok(v)),
             Err(e) => e.into_response(),
         },
-        HelperRequest::Names { suffix, entries, containers } => {
-            data(forge_agent::host_names::apply(suffix, entries, containers).await)
+        HelperRequest::Names { suffix, entries, containers, records } => {
+            let r = forge_agent::host_names::apply(suffix, entries, containers).await;
+
+            match (r, records) {
+                (Ok(mut v), Some(rec)) => match forge_agent::host_names::write_records(&rec).await {
+                    Ok(()) => {
+                        #[cfg(unix)]
+                        forge_agent::fabric::dns::on_records_written().await;
+
+                        v["records"] = serde_json::json!(rec.records.len());
+                        data(Ok(v))
+                    }
+                    Err(e) => HelperResponse::failed(e),
+                },
+                (r, _) => data(r),
+            }
         }
         HelperRequest::Storage { storage } => store_request(&storage, progress.as_ref()).await,
         HelperRequest::Files { files } => data(forge_agent::files::run_async(files).await),
@@ -258,6 +272,10 @@ async fn handle(
             Some(c) => data(c.handle(telemetry).await.and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))),
             None => HelperResponse::failed("container telemetry needs `forge-agent-helper serve`"),
         },
+        #[cfg(unix)]
+        HelperRequest::StackStates {} => data(forge_agent::stacks::states().await),
+        #[cfg(not(unix))]
+        HelperRequest::StackStates {} => HelperResponse::failed("compose stacks need a Linux node"),
         #[cfg(not(unix))]
         HelperRequest::ContainerTelemetry { .. } => {
             HelperResponse::failed("containers are not supported on this OS yet")

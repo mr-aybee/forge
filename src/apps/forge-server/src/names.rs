@@ -28,8 +28,12 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use forge_catalog::fabric::Cidr;
 use forge_catalog::fabric::{Lease, LeaseKind};
-use forge_catalog::names::{NameEntry, PublishedPort, check_label, label_from, published_port};
+use forge_catalog::names::{
+    NameEntry, PublishedPort, RecordInput, Records, SrvPort, build_records, check_label, first_container_port,
+    label_from, published_port,
+};
 use forge_core::model::{AgentStatus, Server, Service, ServiceInstance};
 use forge_core::ports::{
     ClusterRepository, FabricRepository, ServerRepository, ServiceRepository, SettingsRepository, TenancyRepository,
@@ -166,7 +170,8 @@ pub async fn stored_labels(state: &AppState, ws: WorkspaceId) -> Result<StoredLa
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NameRow {
     pub name: String,
-    /// `node` or `service`.
+    /// `node`, `service`, `stack-service` (every healthy replica of a
+    /// compose service) or `replica` (one compose container).
     pub kind: &'static str,
     pub server_id: ServerId,
     /// The node's label (for a service, the node running it).
@@ -185,6 +190,103 @@ pub struct NameRow {
     /// Service: ports published on the node.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub ports: Vec<PublishedPort>,
+    /// Stack service: the port its SRV record names (forge-dns only, never
+    /// the hosts file).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub srv: Option<SrvPort>,
+}
+
+/// Row kinds.
+pub const KIND_NODE: &str = "node";
+pub const KIND_SERVICE: &str = "service";
+pub const KIND_STACK_SERVICE: &str = "stack-service";
+pub const KIND_REPLICA: &str = "replica";
+
+/// One compose container as the stack node state records it.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct StateRow {
+    #[serde(default)]
+    pub service: String,
+    #[serde(default)]
+    pub number: Option<u32>,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub health: Option<String>,
+    #[serde(default)]
+    pub mesh_ip: Option<Ipv4Addr>,
+}
+
+/// A deployed stack, as names need it.
+#[derive(Debug, Clone)]
+pub struct StackNames {
+    pub workspace_id: WorkspaceId,
+    pub environment_id: forge_core::EnvironmentId,
+    pub stack: String,
+    /// Compose services with a container port: the first one and its protocol.
+    pub ports: HashMap<String, (u16, String)>,
+    /// Container rows of every node part.
+    pub rows: Vec<(ServerId, StateRow)>,
+}
+
+/// Where one stack's names live besides the stack itself.
+#[derive(Debug)]
+pub struct StackLabels<'a> {
+    pub environment: &'a str,
+    pub cluster: Option<ClusterId>,
+}
+
+/// Builds a full name from labels and a cluster (`None` when invalid).
+pub type NameBuilder<'a> = dyn Fn(&[&str], Option<ClusterId>) -> Option<String> + 'a;
+
+/// The `stack-service` and `replica` rows of one stack (`plans/native-mesh.md`
+/// 2.1). Only running containers on the cluster network have an address,
+/// and only services with a container port get a name. `name` builds a
+/// full name from labels and the cluster.
+pub fn stack_rows(
+    st: &StackNames,
+    labels: &StackLabels<'_>,
+    node_label: &dyn Fn(ServerId) -> String,
+    name: &NameBuilder<'_>,
+) -> Vec<NameRow> {
+    let mut out = Vec::new();
+    let Some(stack) = label_from(&st.stack) else { return out };
+
+    for (server, r) in &st.rows {
+        let (Some(ip), Some((port, proto))) = (r.mesh_ip, st.ports.get(&r.service)) else { continue };
+        let Some(svc) = label_from(&r.service) else { continue };
+
+        if r.state != "running" {
+            continue;
+        }
+
+        let row = |name: String, kind: &'static str, srv: Option<SrvPort>| NameRow {
+            name,
+            kind,
+            server_id: *server,
+            node: node_label(*server),
+            cluster_id: labels.cluster,
+            address: None,
+            mesh_address: Some(ip),
+            app: Some(format!("{}/{}", labels.environment, st.stack)),
+            ports: Vec::new(),
+            srv,
+        };
+        let healthy = r.health.as_deref().is_none_or(|h| h.is_empty() || h == "healthy");
+
+        if healthy && let Some(n) = name(&[&svc, &stack, labels.environment], labels.cluster) {
+            let srv = SrvPort { service: svc.clone(), port: *port, proto: proto.clone() };
+            out.push(row(n, KIND_STACK_SERVICE, Some(srv)));
+        }
+
+        let replica = r.number.map(|n| format!("{svc}-{n}"));
+
+        if let Some(n) = replica.and_then(|rep| name(&[&rep, &stack, labels.environment], labels.cluster)) {
+            out.push(row(n, KIND_REPLICA, None));
+        }
+    }
+
+    out
 }
 
 /// Everything the lists are built from, for one workspace.
@@ -194,6 +296,10 @@ pub struct Fleet {
     pub servers: Vec<Server>,
     pub labels: HashMap<ServerId, NodeLabel>,
     pub rows: Vec<NameRow>,
+    /// Cluster labels, for each cluster's zone (`<cluster>.<suffix>`).
+    pub clusters: HashMap<ClusterId, String>,
+    /// Fabric subnets: their addresses get PTR records.
+    pub subnets: HashMap<ClusterId, Cidr>,
 }
 
 impl Fleet {
@@ -295,6 +401,8 @@ struct Shared {
     apps: HashMap<ServiceId, Service>,
     /// The address in the stored facts, for nodes with no live connection.
     stored_address: HashMap<ServerId, String>,
+    /// Deployed stacks with their container rows.
+    stacks: Vec<StackNames>,
 }
 
 async fn load_shared(state: &AppState, servers: &[Server]) -> Result<Shared, String> {
@@ -328,7 +436,51 @@ async fn load_shared(state: &AppState, servers: &[Server]) -> Result<Shared, Str
         HashMap::new()
     };
 
-    Ok(Shared { suffix, instances, apps, stored_address })
+    let stacks = load_stacks(state).await.map_err(e)?;
+
+    Ok(Shared { suffix, instances, apps, stored_address, stacks })
+}
+
+/// Every deployed stack with the container ports of its compose services
+/// and its nodes' container rows. One revision read per deployed stack.
+async fn load_stacks(state: &AppState) -> forge_core::DomainResult<Vec<StackNames>> {
+    use forge_core::stacks::StackRepository;
+
+    let mut out = Vec::new();
+
+    for st in state.store.list_stacks(None).await?.into_iter().filter(|s| s.deployed_revision > 0) {
+        let Some(rev) = state.store.get_revision(st.id, st.deployed_revision).await? else { continue };
+
+        // A stored revision that no longer parses names nothing; its deploy
+        // already failed on the same text.
+        let tree = match crate::stacks::parse_compose(&rev.content) {
+            Ok(t) => t,
+            Err(err) => {
+                tracing::debug!(stack = %st.id, error = %err, "deployed revision does not parse; no names");
+                continue;
+            }
+        };
+
+        let services = tree.get("services").and_then(serde_json::Value::as_object).cloned().unwrap_or_default();
+        let ports = services.iter().filter_map(|(k, v)| Some((k.clone(), first_container_port(v)?))).collect();
+        let mut rows = Vec::new();
+
+        for node in state.store.list_nodes(st.id).await? {
+            // Rows are what the agent reported; a malformed one is skipped.
+            let list: Vec<serde_json::Value> = node.state.as_array().cloned().unwrap_or_default();
+            rows.extend(list.into_iter().filter_map(|v| serde_json::from_value(v).ok()).map(|r| (node.server_id, r)));
+        }
+
+        out.push(StackNames {
+            workspace_id: st.workspace_id,
+            environment_id: st.environment_id,
+            stack: st.name,
+            ports,
+            rows,
+        });
+    }
+
+    Ok(out)
 }
 
 /// Builds one workspace's fleet.
@@ -406,7 +558,7 @@ async fn build_fleet(
         if let Some(n) = name(&[&l.label], s.cluster_id) {
             rows.push(NameRow {
                 name: n,
-                kind: "node",
+                kind: KIND_NODE,
                 server_id: s.id,
                 node: l.label.clone(),
                 cluster_id: s.cluster_id,
@@ -414,6 +566,7 @@ async fn build_fleet(
                 mesh_address: mesh.get(&s.id).copied(),
                 app: None,
                 ports: Vec::new(),
+                srv: None,
             });
         }
     }
@@ -439,7 +592,7 @@ async fn build_fleet(
             .collect();
         rows.push(NameRow {
             name: full,
-            kind: "service",
+            kind: KIND_SERVICE,
             server_id: i.server_id,
             node: labels.get(&i.server_id).map(|l| l.label.clone()).unwrap_or_default(),
             // The service's address follows its node's fabric.
@@ -448,15 +601,53 @@ async fn build_fleet(
             mesh_address: mesh.get(&i.server_id).copied(),
             app: Some(format!("{}/{}", ns.name, app.name)),
             ports,
+            srv: None,
         });
     }
 
-    // A service name that equals a node name: the node keeps it.
-    let nodes: HashSet<String> = rows.iter().filter(|r| r.kind == "node").map(|r| r.name.clone()).collect();
-    rows.retain(|r| r.kind == "node" || !nodes.contains(&r.name));
-    rows.sort_by(|a, b| a.name.cmp(&b.name).then(a.node.cmp(&b.node)));
+    // Stacks: every running container on the cluster network.
+    let node_label = |id: ServerId| labels.get(&id).map(|l| l.label.clone()).unwrap_or_default();
 
-    Ok(Fleet { suffix, servers, labels, rows })
+    for st in shared.stacks.iter().filter(|s| s.workspace_id == ws) {
+        let Some(ns) = environments.get(&st.environment_id) else { continue };
+        let Some(env) = label_from(&ns.name) else { continue };
+        let l = StackLabels { environment: &env, cluster: ns.cluster_id };
+        rows.extend(stack_rows(st, &l, &node_label, &name));
+    }
+
+    resolve_clashes(&mut rows);
+    rows.sort_by(|a, b| a.name.cmp(&b.name).then(a.node.cmp(&b.node)).then(a.mesh_address.cmp(&b.mesh_address)));
+    rows.dedup_by(|a, b| a.name == b.name && a.mesh_address == b.mesh_address && a.address == b.address);
+
+    let subnets = fabric_subnets(&state.store.list_fabrics(Some(ws)).await.map_err(e)?);
+
+    Ok(Fleet { suffix, servers, labels, rows, clusters, subnets })
+}
+
+/// A service name that equals a node name: the node keeps it. A replica
+/// name that equals a service or stack-service name: the service keeps it.
+pub fn resolve_clashes(rows: &mut Vec<NameRow>) {
+    let nodes: HashSet<String> = rows.iter().filter(|r| r.kind == KIND_NODE).map(|r| r.name.clone()).collect();
+    rows.retain(|r| r.kind == KIND_NODE || !nodes.contains(&r.name));
+
+    let services: HashSet<String> = rows
+        .iter()
+        .filter(|r| r.kind == KIND_SERVICE || r.kind == KIND_STACK_SERVICE)
+        .map(|r| r.name.clone())
+        .collect();
+    rows.retain(|r| r.kind != KIND_REPLICA || !services.contains(&r.name));
+}
+
+/// Each applied fabric's subnet.
+fn fabric_subnets(fabrics: &[forge_core::model::FabricRecord]) -> HashMap<ClusterId, Cidr> {
+    fabrics
+        .iter()
+        .filter_map(|f| {
+            let spec: forge_catalog::fabric::FabricSpec = serde_json::from_value(f.spec.clone()).ok()?;
+
+            Some((f.cluster_id, spec.subnet))
+        })
+        .collect()
 }
 
 /// A node's full name in its workspace, for the API.
@@ -467,8 +658,19 @@ pub fn node_name(fleet: &Fleet, id: ServerId) -> Option<&NameRow> {
 
 // ------------------------------------------------------------- sync
 
-/// A node's list and its hash.
-type Desired = (u64, Arc<Vec<NameEntry>>);
+/// What one node is sent: its hosts-file list and, inside a fabric, its
+/// cluster's record set for forge-dns.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NodeNames {
+    pub entries: Vec<NameEntry>,
+    /// `None` outside a fabric (no forge-dns there).
+    pub records: Option<Records>,
+    /// The zone `records` answer for (`<cluster>.<suffix>`); empty without.
+    pub zone: String,
+}
+
+/// A node's names and their hash.
+type Desired = (u64, Arc<NodeNames>);
 
 impl Fleet {
     /// Every node's list. Two nodes get the same list unless they sit in
@@ -488,14 +690,43 @@ impl Fleet {
             let d = built
                 .entry(key)
                 .or_insert_with(|| {
-                    let list = self.entries_for(s);
-                    (hash(&list), Arc::new(list))
+                    let names = NodeNames { entries: self.entries_for(s), ..self.records_for(s.cluster_id) };
+                    (hash(&names), Arc::new(names))
                 })
                 .clone();
             out.insert(s.id, d);
         }
 
         out
+    }
+
+    /// The record set of a cluster with a fabric: every row in it with a
+    /// mesh address. `generated_at_ms` is set when it is sent, so the hash
+    /// changes only with the records.
+    fn records_for(&self, cluster: Option<ClusterId>) -> NodeNames {
+        let Some(c) = cluster else { return NodeNames::default() };
+
+        let (Some(subnet), Some(label)) = (self.subnets.get(&c), self.clusters.get(&c)) else {
+            return NodeNames::default();
+        };
+
+        let zone = format!("{label}.{}", self.suffix);
+        let inputs: Vec<RecordInput> = self
+            .rows
+            .iter()
+            .filter(|r| r.cluster_id == Some(c))
+            .filter_map(|r| {
+                Some(RecordInput {
+                    name: r.name.clone(),
+                    ip: r.mesh_address?,
+                    srv: r.srv.clone(),
+                    ptr_preferred: r.kind == KIND_REPLICA || r.kind == KIND_NODE,
+                })
+            })
+            .collect();
+        let records = build_records(std::slice::from_ref(&zone), &inputs, &[*subnet], 0);
+
+        NodeNames { entries: Vec::new(), records: Some(records), zone }
     }
 }
 
@@ -529,11 +760,16 @@ pub fn poke() {
     wake().notify_one();
 }
 
-fn hash(entries: &[NameEntry]) -> u64 {
-    // FNV-1a over the rendered lines: stable across restarts.
-    entries
-        .iter()
-        .flat_map(|e| format!("{}\t{}\n", e.ip, e.name).into_bytes())
+fn hash(names: &NodeNames) -> u64 {
+    // FNV-1a over the rendered lines and records: stable across restarts.
+    let lines = names.entries.iter().flat_map(|e| format!("{}\t{}\n", e.ip, e.name).into_bytes());
+
+    // Records serialise deterministically (sorted); an error hashes as empty.
+    let records = names.records.as_ref().and_then(|r| serde_json::to_vec(&r.records).ok()).unwrap_or_default();
+
+    lines
+        .chain(names.zone.bytes())
+        .chain(records)
         .fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
 }
 
@@ -556,7 +792,7 @@ pub fn node_sync(id: ServerId) -> Option<NodeSync> {
     let sent = s.sent.get(&id);
 
     Some(NodeSync {
-        names: list.len(),
+        names: list.entries.len(),
         in_sync: sent.is_some_and(|(sh, _)| sh == h),
         synced_at_ms: sent.map(|(_, at)| *at),
         error: s.failed.get(&id).map(|f| f.2.clone()),
@@ -639,9 +875,25 @@ fn spawn_send(state: &AppState, server: ServerId, (h, list): Desired, suffix: St
     });
 }
 
-async fn send(state: &AppState, server: ServerId, list: &[NameEntry], suffix: String) -> Result<(), String> {
-    let entries_json = serde_json::to_string(list).map_err(|e| e.to_string())?;
-    let cmd = Command::HostNames(HostNames { entries_json, containers: state.config.names.containers, suffix });
+async fn send(state: &AppState, server: ServerId, names: &NodeNames, suffix: String) -> Result<(), String> {
+    let entries_json = serde_json::to_string(&names.entries).map_err(|e| e.to_string())?;
+
+    let records_json = match &names.records {
+        Some(r) => {
+            let stamped = Records { generated_at_ms: state.clock.now().0, ..r.clone() };
+            serde_json::to_string(&stamped).map_err(|e| e.to_string())?
+        }
+        None => String::new(),
+    };
+
+    let cmd = Command::HostNames(HostNames {
+        entries_json,
+        containers: state.config.names.containers,
+        suffix,
+        records_json,
+        zone: names.zone.clone(),
+        upstream_forge_dns: state.config.dns.second_tier().iter().map(ToString::to_string).collect(),
+    });
     let (body, signed) =
         state.signer.issue(&server.to_string(), SYSTEM_PRINCIPAL, cmd, state.clock.now(), Duration::from_secs(120));
     state.hub.enqueue(server, &body.operation_id, signed).map_err(|e| e.to_string())?;
@@ -681,12 +933,24 @@ pub async fn refresh(state: &AppState) {
     }
 
     let mut desired = HashMap::new();
+    let mut all_records: Vec<Records> = Vec::new();
+    let serve_here = !state.config.dns.listen.is_empty();
 
     for (ws, servers) in by_ws.into_values() {
         match build_fleet(state, ws, servers, &shared).await {
-            Ok(f) => desired.extend(f.lists()),
+            Ok(f) => {
+                desired.extend(f.lists());
+
+                if serve_here {
+                    all_records.extend(f.clusters.keys().filter_map(|c| f.records_for(Some(*c)).records));
+                }
+            }
             Err(e) => tracing::warn!(error = %e, "building local names failed"),
         }
+    }
+
+    if serve_here {
+        write_server_records(state, all_records).await;
     }
 
     let now = state.clock.now().0;
@@ -703,6 +967,54 @@ pub async fn refresh(state: &AppState) {
 
     for (id, d) in due {
         spawn_send(state, id, d, shared.suffix.clone());
+    }
+}
+
+/// One record set for the server host's forge-dns: every cluster of every
+/// workspace (`plans/native-mesh.md` 2.6), written atomically to
+/// `<data_dir>/names.json`. A failure is logged; the next pass retries.
+async fn write_server_records(state: &AppState, sets: Vec<Records>) {
+    let merged = merge_records(sets, state.clock.now().0);
+    let path = state.config.data_dir.join(forge_catalog::names::RECORDS_FILE);
+
+    let r = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let text = serde_json::to_vec_pretty(&merged).map_err(|e| e.to_string())?;
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
+
+        std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))
+    })
+    .await;
+
+    match r {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!(error = %e, "writing the server's names.json failed"),
+        Err(e) => tracing::warn!(error = %e, "writing the server's names.json failed"),
+    }
+}
+
+/// Several clusters' record sets as one.
+#[must_use]
+pub fn merge_records(sets: Vec<Records>, now_ms: i64) -> Records {
+    let mut zones: Vec<String> = Vec::new();
+    let mut records = Vec::new();
+
+    for s in sets {
+        zones.extend(s.zones);
+        records.extend(s.records);
+    }
+
+    zones.sort();
+    zones.dedup();
+    records.sort();
+    records.dedup();
+
+    Records {
+        version: forge_catalog::names::RECORDS_VERSION,
+        generated_at_ms: now_ms,
+        zones,
+        ttl: forge_catalog::names::RECORDS_TTL,
+        records,
     }
 }
 
@@ -822,11 +1134,14 @@ mod tests {
             mesh_address: mesh.map(Ipv4Addr::from),
             app: None,
             ports: vec![],
+            srv: None,
         };
         let fleet = Fleet {
             suffix: "local".into(),
             servers: vec![],
             labels: HashMap::new(),
+            clusters: HashMap::new(),
+            subnets: HashMap::new(),
             rows: vec![
                 row(&a, "a.lab.local", "192.168.1.10", Some([10, 64, 0, 1])),
                 row(&b, "b.lab.local", "192.168.1.11", Some([10, 64, 0, 2])),
@@ -839,14 +1154,15 @@ mod tests {
         let for_x = fleet.entries_for(&x);
         assert!(for_x.contains(&NameEntry { name: "b.lab.local".into(), ip: "192.168.1.11".parse().unwrap() }));
         assert!(for_x.contains(&NameEntry { name: "x.local".into(), ip: "127.0.0.1".parse().unwrap() }), "itself");
-        assert_eq!(hash(&for_a), hash(&fleet.entries_for(&a)), "stable");
+        let names = |e: Vec<NameEntry>| NodeNames { entries: e, ..NodeNames::default() };
+        assert_eq!(hash(&names(for_a)), hash(&names(fleet.entries_for(&a))), "stable");
     }
 
     #[test]
     fn sends_are_due_on_change_reconnect_and_after_the_resend_gap() {
         let id = ServerId::new();
         let mut s = Sync::default();
-        let list = Arc::new(vec![]);
+        let list = Arc::new(NodeNames::default());
         s.desired.insert(id, (7, list.clone()));
         assert!(due_now(&mut s, id, 0).is_some());
         assert!(due_now(&mut s, id, 0).is_none(), "in flight");
@@ -892,15 +1208,23 @@ mod tests {
                 mesh_address: s.cluster_id.map(|_| Ipv4Addr::new(10, 64, 0, u8::try_from(i + 1).unwrap())),
                 app: None,
                 ports: vec![],
+                srv: None,
             })
             .collect();
-        let fleet = Fleet { suffix: "local".into(), servers: servers.clone(), labels: HashMap::new(), rows };
+        let fleet = Fleet {
+            suffix: "local".into(),
+            servers: servers.clone(),
+            labels: HashMap::new(),
+            rows,
+            clusters: HashMap::new(),
+            subnets: HashMap::new(),
+        };
         let lists = fleet.lists();
 
         for s in &servers {
             let own = fleet.entries_for(s);
-            assert_eq!(*lists[&s.id].1, own, "{}", s.hostname);
-            assert_eq!(lists[&s.id].0, hash(&own));
+            assert_eq!(lists[&s.id].1.entries, own, "{}", s.hostname);
+            assert_eq!(lists[&s.id].0, hash(&NodeNames { entries: own, ..NodeNames::default() }));
         }
 
         assert!(Arc::ptr_eq(&lists[&servers[0].id].1, &lists[&servers[1].id].1), "same fabric shares one list");
@@ -912,7 +1236,7 @@ mod tests {
     fn a_changed_list_waits_for_the_change_gap() {
         let id = ServerId::new();
         let mut s = Sync::default();
-        s.desired.insert(id, (2, Arc::new(vec![])));
+        s.desired.insert(id, (2, Arc::new(NodeNames::default())));
         s.sent.insert(id, (1, 0));
         let gap = i64::try_from(CHANGE_GAP.as_millis()).unwrap();
         assert!(due_now(&mut s, id, gap - 1).is_none(), "sent a moment ago");
@@ -920,7 +1244,76 @@ mod tests {
 
         // A first send never waits.
         let new = ServerId::new();
-        s.desired.insert(new, (2, Arc::new(vec![])));
+        s.desired.insert(new, (2, Arc::new(NodeNames::default())));
         assert!(due_now(&mut s, new, 0).is_some());
+    }
+
+    fn state_row(service: &str, n: u32, ip: &str, health: &str, state: &str) -> (ServerId, StateRow) {
+        let row = StateRow {
+            service: service.into(),
+            number: Some(n),
+            state: state.into(),
+            health: Some(health.into()),
+            mesh_ip: Some(ip.parse().unwrap()),
+        };
+
+        (ServerId::new(), row)
+    }
+
+    #[test]
+    fn stack_rows_name_healthy_replicas_and_every_running_one() {
+        let st = StackNames {
+            workspace_id: WorkspaceId::new(),
+            environment_id: forge_core::EnvironmentId::new(),
+            stack: "orders".into(),
+            ports: HashMap::from([("api".to_owned(), (8080, "tcp".to_owned()))]),
+            rows: vec![
+                state_row("api", 1, "10.64.10.2", "healthy", "running"),
+                state_row("api", 2, "10.64.12.4", "", "running"),
+                state_row("api", 3, "10.64.12.5", "unhealthy", "running"),
+                state_row("api", 4, "10.64.12.6", "", "exited"),
+                state_row("redis", 1, "10.64.12.7", "", "running"),
+            ],
+        };
+        let c = ClusterId::new();
+        let labels = StackLabels { environment: "prod", cluster: Some(c) };
+        let name = |l: &[&str], _: Option<ClusterId>| Some(format!("{}.c1.local", l.join(".")));
+        let rows = stack_rows(&st, &labels, &|_| "lab-b".into(), &name);
+        let svc: Vec<_> = rows.iter().filter(|r| r.kind == KIND_STACK_SERVICE).collect();
+        let reps: Vec<&str> = rows.iter().filter(|r| r.kind == KIND_REPLICA).map(|r| r.name.as_str()).collect();
+
+        assert_eq!(svc.len(), 2, "two healthy or unchecked replicas");
+        assert!(svc.iter().all(|r| r.name == "api.orders.prod.c1.local" && r.address.is_none()));
+        assert_eq!(svc[0].srv.as_ref().unwrap().port, 8080);
+        assert_eq!(
+            reps,
+            vec!["api-1.orders.prod.c1.local", "api-2.orders.prod.c1.local", "api-3.orders.prod.c1.local"]
+        );
+        assert!(!rows.iter().any(|r| r.name.starts_with("redis")), "no port, no name");
+    }
+
+    #[test]
+    fn a_replica_name_loses_to_a_service_name() {
+        let mk = |name: &str, kind: &'static str| NameRow {
+            name: name.into(),
+            kind,
+            server_id: ServerId::new(),
+            node: String::new(),
+            cluster_id: None,
+            address: None,
+            mesh_address: None,
+            app: None,
+            ports: vec![],
+            srv: None,
+        };
+        let mut rows = vec![
+            mk("api-2.orders.prod.local", KIND_STACK_SERVICE),
+            mk("api-2.orders.prod.local", KIND_REPLICA),
+            mk("api-1.orders.prod.local", KIND_REPLICA),
+        ];
+        resolve_clashes(&mut rows);
+
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.kind != KIND_REPLICA || r.name == "api-1.orders.prod.local"));
     }
 }

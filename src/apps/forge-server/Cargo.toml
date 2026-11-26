@@ -30,7 +30,7 @@ forge-jobs.workspace = true
 forge-audit.workspace = true
 forge-pki.workspace = true
 forge-proto.workspace = true
-forge-catalog.workspace = true
+forge-catalog = { workspace = true, features = ["yaml"] }
 forge-alerts.workspace = true
 forge-rules.workspace = true
 forge-secrets.workspace = true

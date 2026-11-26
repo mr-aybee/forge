@@ -62,6 +62,7 @@ mod scale;
 mod server_settings;
 mod sftp;
 mod silences;
+mod stack_apply;
 mod stack_versions;
 mod stacks;
 mod swarm;

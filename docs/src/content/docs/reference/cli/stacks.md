@@ -29,6 +29,10 @@ capture.
 | `create` (also with `--dry-run`) | `server.manage` | the node in `--node` | no |
 | `deploy`, `rollback` | `server.manage` | each node the stack deploys to | no |
 | `deploy`, `rollback` of a stack with host-access settings | `stack.privileged` | the stack's environment | yes (step-up) |
+| `plan`, `apply` | `stack.manage` | the document's environment | no |
+| `plan`, `apply` | `server.manage` | each node the stack runs on | no |
+| `apply` of a stack with host-access settings | `stack.privileged` | the document's environment | yes (step-up) |
+| `validate` | none (offline) | — | no |
 
 `stack.manage` is in the `platform_admin`, `workspace_admin`, `operator` and
 `developer` roles. `stack.privileged` is in `platform_admin` and
@@ -51,6 +55,9 @@ capture.
 | [`forge stacks refresh`](#forge-stacks-refresh) | Reads the service state from every node again |
 | [`forge stacks down`](#forge-stacks-down) | Stops and removes the stack's containers |
 | [`forge stacks delete`](#forge-stacks-delete) | Deletes a stack that is down on every node |
+| [`forge stacks validate`](#forge-stacks-validate) | Checks a `forge.stack.yaml` and the files it names, offline |
+| [`forge stacks plan`](#forge-stacks-plan) | Shows what applying a `forge.stack.yaml` would do |
+| [`forge stacks apply`](#forge-stacks-apply) | Creates or updates a stack from a `forge.stack.yaml` and rolls it out |
 
 ### forge stacks list
 
@@ -882,6 +889,128 @@ signed in; `4` no `stack.manage`; `6` no such stack; `7` the stack still runs
 on a node.
 
 **See also**: [`forge stacks down`](#forge-stacks-down).
+
+## Stack documents
+
+These commands read a [`forge.stack.yaml`](/docs/reference/stack-yaml/). Paths
+in the document (`spec.compose.file`, `spec.compose.envFile`) are relative to
+the document's folder; the CLI reads them and sends their text, the server
+never reads files. For a walkthrough, see
+[Deploy a stack from YAML](/docs/guides/deploy-stack-with-yaml/).
+
+### forge stacks validate
+
+Checks a stack document offline: every field (errors name the field path),
+the override for the environment, that the compose and `.env` files exist,
+and that several `placement.nodes` come with per-service placement. Policy
+checks of the compose file need the server; run
+[`forge stacks plan`](#forge-stacks-plan) for those.
+
+**Synopsis**
+
+```text
+forge stacks validate [OPTIONS]
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `-f`, `--file <FILE>` | path, or `-` for stdin | `forge.stack.yaml` | no | The stack document | `-f deploy/forge.stack.yaml` |
+| `--environment <SLUG>` | environment slug | `metadata.environment` | no | Read the document for this environment; its `overrides` entry is merged in | `--environment staging` |
+
+**Example**
+
+```console
+$ forge stacks validate -f forge.stack.yaml -o json
+{"valid":true,"stack":"orders","environment":"prod","order":"node-by-node","health_timeout_s":300,"placement":{"cluster":"c1"},"mesh":true,"env_file":true}
+```
+
+**Exit status**: `0` valid; `1` the document is refused (the message names
+the field, for example `spec.rollout.healthTimeout: between 10s and 1h`); `2`
+the document file cannot be read.
+
+### forge stacks plan
+
+Sends the document to `POST /api/v1/stacks/plan` and prints what `apply`
+would do: create or update, the next revision, the nodes in rollout order
+with their services, nodes the new revision leaves, the cluster network per
+node and every finding. Saves nothing.
+
+**Synopsis**
+
+```text
+forge stacks plan [OPTIONS]
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `-f`, `--file <FILE>` | path, or `-` for stdin | `forge.stack.yaml` | no | The stack document | `-f forge.stack.yaml` |
+| `--environment <SLUG>` | environment slug | `metadata.environment` | no | Plan for this environment instead | `--environment staging` |
+
+**Example**
+
+```console
+$ forge stacks plan -f forge.stack.yaml
+Stack        orders in prod (update, revision 7)
+Rollout      node-by-node, health timeout 5m
+Nodes
+  lab-b                api, worker
+  lab-c                api
+Network      cluster network on lab-b; not in sync: lab-c
+info         lab-c: cluster network not applied yet; services will join it on the next deploy after it is in sync
+```
+
+**Exit status**: `0` the plan can be applied; `1` the document or the plan
+is refused (blocked findings, unknown node or cluster); `4` no permission.
+
+### forge stacks apply
+
+Plans the document, prints the plan, asks for confirmation, then calls
+`POST /api/v1/stacks/apply`: the stack is created or updated (a new revision
+noted `apply <first 12 hex digits of the document's SHA-256>` when the
+compose text changed) and a `stack.rollout` job deploys it node by node or
+all at once. With `--wait` it follows the job and, when the stack is live,
+prints its cluster names from `GET /api/v1/names?stack=<id>`.
+
+**Synopsis**
+
+```text
+forge stacks apply [OPTIONS]
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `-f`, `--file <FILE>` | path, or `-` for stdin | `forge.stack.yaml` | no | The stack document | `-f forge.stack.yaml` |
+| `--environment <SLUG>` | environment slug | `metadata.environment` | no | Apply to this environment instead; its `overrides` entry is merged in | `--environment prod` |
+| `--wait` | flag | off | no | Follow the rollout until it ends | `--wait` |
+| `--timeout <MINUTES>` | integer | `60` | no | Longest wait with `--wait` | `--timeout 30` |
+| `--yes` | flag | off | no | Start without asking | `--yes` |
+
+The global `--non-interactive` flag also starts without asking.
+
+**Example**
+
+```console
+$ forge stacks apply -f forge.stack.yaml --wait --yes
+…
+stack orders revision 7 is live on 2 nodes
+names:
+  api.orders.prod.c1.local      10.64.10.2, 10.64.12.4
+  worker.orders.prod.c1.local   10.64.10.3
+```
+
+**Exit status**: `0` the stack is live (or the rollout started, without
+`--wait`); `1` the document or the plan is refused; `2` a node failed and
+later nodes were not deployed; `7` a rollout of this stack is already
+running; `8` `--wait` timed out (the rollout keeps running).
+
+**See also**: [`forge stacks plan`](#forge-stacks-plan),
+[Stack YAML](/docs/reference/stack-yaml/).
 
 ## Templates
 

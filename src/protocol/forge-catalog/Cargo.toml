@@ -12,6 +12,11 @@ publish.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 forge-core.workspace = true
+serde-saphyr = { workspace = true, optional = true }
+
+[features]
+# Bounded YAML reading of Forge documents (server and CLI; not the agent).
+yaml = ["dep:serde-saphyr"]
 
 [lints]
 workspace = true

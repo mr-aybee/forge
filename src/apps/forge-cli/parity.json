@@ -237,6 +237,8 @@
     "GET /api/v1/stacks": "forge stacks list",
     "POST /api/v1/stacks": "forge stacks create",
     "POST /api/v1/stacks/preview": "forge stacks create --dry-run",
+    "POST /api/v1/stacks/plan": "forge stacks plan",
+    "POST /api/v1/stacks/apply": "forge stacks apply",
     "DELETE /api/v1/stacks/{id}": "forge stacks delete",
     "GET /api/v1/stacks/{id}": "forge stacks show",
     "PUT /api/v1/stacks/{id}": "forge stacks update",

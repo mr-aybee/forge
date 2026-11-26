@@ -74,6 +74,21 @@ that says why a node's services do not join:
 | `<node>: cluster network not applied yet; services will join it on the next deploy after it is in sync` | The node's mesh or container network is not up (including Docker older than 28) |
 | `<node>: update its agent to put services on the cluster network` | The agent does not report the `mesh_network` fact |
 
+### DNS on the cluster network
+
+The helper also sets DNS on every service it attached to the cluster
+network, unless the service sets `dns` itself:
+
+| Key | Value |
+| --- | --- |
+| `dns` | The node's mesh address, then each IP of the server's [`[dns] listen`](/docs/reference/configuration/#cluster-dns) |
+| `dns_search` | `<stack>.<environment>.<zone>`, `<environment>.<zone>`, `<zone>`, where `<zone>` is `<cluster>.<suffix>`. Not set when the service sets its own `dns_search` |
+
+The node derives `dns_search` from the zone it was sent with its names.
+Both resolvers run [forge-dns](/docs/reference/forge-dns/). See
+[Local names](/docs/concepts/local-names/#stack-names) for the names a stack
+gets.
+
 ## Placement
 
 | Syntax | Meaning |

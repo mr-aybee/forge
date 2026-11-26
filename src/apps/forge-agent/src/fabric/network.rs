@@ -162,21 +162,21 @@ async fn find(iface: &str) -> Result<(Option<Value>, Vec<Value>), String> {
 }
 
 /// Checks that `subnet` lies inside the address prefix of `iface`, so the
-/// mesh routes it to this node.
-async fn inside_interface(iface: &str, subnet: &Cidr) -> Result<(), String> {
+/// mesh routes it to this node. Returns the node's mesh address.
+async fn inside_interface(iface: &str, subnet: &Cidr) -> Result<std::net::Ipv4Addr, String> {
     let text = run("ip", &["-j", "addr", "show", iface]).await?;
     let links: Value = serde_json::from_str(&text).map_err(|e| format!("ip addr {iface}: {e}"))?;
     let addrs = links.pointer("/0/addr_info").and_then(Value::as_array).cloned().unwrap_or_default();
 
-    let inside = addrs.iter().any(|a| {
-        let (Some(ip), Some(len)) = (a["local"].as_str(), a["prefixlen"].as_u64()) else { return false };
-        let (Ok(ip), Ok(len)) = (ip.parse(), u8::try_from(len)) else { return false };
+    let inside = addrs.iter().find_map(|a| {
+        let (Some(ip), Some(len)) = (a["local"].as_str(), a["prefixlen"].as_u64()) else { return None };
+        let (Ok(ip), Ok(len)) = (ip.parse::<std::net::Ipv4Addr>(), u8::try_from(len)) else { return None };
 
-        Cidr::new(ip, len).is_ok_and(|net| net.contains_net(subnet))
+        Cidr::new(ip, len).is_ok_and(|net| net.contains_net(subnet)).then_some(ip)
     });
 
-    if inside {
-        return Ok(());
+    if let Some(ip) = inside {
+        return Ok(ip);
     }
 
     Err(format!("{subnet} is not inside the addresses of {iface}"))
@@ -207,7 +207,7 @@ pub async fn ensure(iface: &str, subnet: &Cidr, mtu: u16) -> Result<Value, Comma
     let version = version["Version"].as_str().unwrap_or_default().to_owned();
     version_gate(&version)?;
 
-    inside_interface(iface, subnet).await?;
+    let mesh_ip = inside_interface(iface, subnet).await?;
 
     let (current, others) = find(iface).await?;
     let step = plan_ensure(iface, subnet, mtu, current.as_ref(), &others)?;
@@ -222,7 +222,11 @@ pub async fn ensure(iface: &str, subnet: &Cidr, mtu: u16) -> Result<Value, Comma
 
     ensure_forwarding().await?;
 
+    // Name service on the mesh address; never fails the network.
+    let dns = super::dns::configure(iface, mesh_ip).await;
+
     Ok(json!({
+        "forge_dns": dns,
         "name": network_name(iface),
         "subnet": subnet.to_string(),
         "created": step != EnsureStep::Keep,

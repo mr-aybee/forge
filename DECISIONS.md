@@ -5970,3 +5970,43 @@ hand.
 **Why.** The mesh already routes each node's block, so a routed bridge gives every container a cluster-reachable address without touching WireGuard peers, NAT or per-container keys, and Docker allocates the addresses.
 
 **Trade-offs.** Docker 28 is required for the feature. There is no filtering between environments on this network. Moving to a new subnet needs a redeploy of the stacks on affected nodes.
+
+## D-173 forge-dns: a standalone cluster DNS binary on hickory
+
+**Decision.** Cluster names (`plans/native-mesh.md` 2.3, 2.4) are served by a new binary, `forge-dns` (`src/apps/forge-dns`), built on `hickory-server` and `hickory-proto` 0.26 with default features off: plain UDP and TCP only, no DoT, DoH, DoQ, DNSSEC or resolver features, so no TLS stack and no OpenSSL enters the tree. It reads `names.json` (`forge_catalog::names::Records`), polls the file's mtime and size every 2 s instead of using `notify`, swaps the answer map in whole and keeps the old map on a parse failure. Names outside the zones are forwarded to the upstreams in order (1 s each) with no cache. It runs as its own systemd unit `forge-dns.service` (user `forge-dns`, only `CAP_NET_BIND_SERVICE`) on nodes and, when `[dns] listen` is set, on the server host.
+
+- **Licence.** hickory-server, hickory-proto and hickory-net are `MIT OR Apache-2.0`; their remaining new transitive crates are permissive and `cargo deny check` passes.
+- **Until a valid file is read** every query is REFUSED: the zones are not known yet, and forwarding would leak cluster names upstream.
+
+**Why.** A separate process keeps a resolver bug or restart away from the agent and the server, needs only the low-port capability, and can be restarted when its listen address changes without touching the agent. hickory is the maintained pure-Rust DNS server; writing a parser ourselves would mean owning truncation, EDNS and TCP framing. PowerDNS or CoreDNS would be one more foreign package per node for a few hundred records.
+
+**Trade-offs.** One more binary in the release and on every node (a few MB). No caching: every forwarded query costs a round trip to the upstream. The 2 s poll means a name follows a change within about 2 s plus the TTL.
+
+## D-174 forge.stack.yaml and the stack.rollout job
+
+**Decision.** A compose stack can be described by a `forge/v1` `Stack` document (`forge_catalog::stack_doc::StackDoc`, `plans/native-mesh.md` 3): the stack's name and environment, its compose file (`file` or `inline`) and `.env` file, placement (`nodes` or `cluster`), `network.mesh` and the rollout (`order`, `healthTimeout` 10 s–1 h), with per-environment `overrides` limited to `placement`, `network`, `rollout` and `compose.envFile`. Unknown fields anywhere are refused with their dotted path. `forge stacks validate / plan / apply` read the document and the files it names and send their text; the server never reads files. `POST /stacks/plan` has no side effects (audited as `stack.plan`); `POST /stacks/apply` reuses the stack create and update paths (a revision noted `apply <sha256>[:12]`) and starts a `stack.rollout` job.
+
+- **Into the compose file.** `placement.cluster` and `network.mesh: false` become a top-level `x-forge` block (`cluster`, `mesh`) appended to the compose text before it is saved, and `forge_catalog::stacks::placements` reads a top-level `x-forge.cluster` as the default placement. The saved revision therefore deploys the same way from the console and `forge stacks deploy`. A compose file with its own top-level `x-forge` must agree with the document.
+- **Rollout job.** `stack.rollout` deploys the nodes through the ordinary per-node `stack.action` jobs, one at a time and waiting for each (`node-by-node`) or all together (`all-at-once`); a failed node fails the rollout and later nodes are not started. Child jobs carry the idempotency key `stack.rollout:<rollout>:<node>:<op>` and a node already at the revision with reported containers is skipped, so a re-run after a crash starts nothing twice. Nodes the new revision leaves are taken down only after every node is live. The engine re-authorizes `stack.manage` (or `stack.privileged`) before the step and each child job is authorized again. One step loops over the nodes, with the progress in the job's state, rather than one engine step per node, since a job's step list is fixed.
+- **Permissions.** `stack.manage` on the environment and `server.manage` on each node, as the stack editor needs; no new Cedar action. Swarm environments are refused (D-171 deploys those as one `docker stack deploy`).
+- **Health timeout.** It bounds how long the rollout waits for each node (plus 20 minutes for pulls). The helper's own `docker compose up --wait-timeout` stays at 600 s until the agent takes the value from the command.
+- **CLI exit status.** `0` live, `1` document or plan refused, `2` a node failed, `7` a rollout is already running, `8` the wait timed out.
+
+**Why.** Deploying a stack from a repository needs its placement and rollout next to the compose file, without hand-written API calls. Reusing the per-node job keeps one deploy path, one policy check and one audit trail; the rollout only orders them.
+
+**Trade-offs.** The compose text saved by an apply carries the appended `x-forge` block, and a top-level `x-forge` in the compose file cannot be merged with the document's. The health timeout does not yet reach Compose's `--wait-timeout`. Exit `2` for a failed node differs from `forge deploy`'s `10`.
+
+## D-175 Cluster names for stack services and replicas, served by forge-dns on every fabric node
+
+**Decision.** Inside a Default cluster's fabric, every compose stack service with a container port (`ports:` or `expose:`) gets `<svc>.<stack>.<env>.<cluster>.<suffix>` with one A record per running container that is healthy or has no health check, and every running container gets `<svc>-<n>.<stack>.<env>.<cluster>.<suffix>`, `n` being the Compose container number. The addresses are the containers' `mesh_ip`s (D-172), so these rows carry no outside address and reach only nodes of the same fabric. Each Linux fabric node runs forge-dns (D-173) on its mesh address, fed by `/var/lib/forge-agent/names.json`; the server host runs a second tier when `[dns] listen` is set. The hosts file stays on every node.
+
+- **Coexistence.** A node name still wins over a service name. A replica name equal to a service or stack-service name is dropped and the stack plan says so as an Info finding. Stack and native services with the same name do not collide: the DNS names differ (`api.orders.prod…` against `orders.prod…`), so the existing row-name refusal stays as it is.
+- **Sick replicas.** The stack-service name leaves out unhealthy and starting containers; the replica name keeps them for debugging.
+- **Freshness.** The agent reads its compose containers through the helper (read-only, unsigned) on every heartbeat and sends `Heartbeat.stack_states` only when they changed, at most every 10 s. The server merges the rows by container name into each stack node's stored state and rebuilds names; ports and image come from the last deploy.
+- **Records.** SRV `_<svc>._<proto>.<name>` with the first container port, in forge-dns only. PTR for every A inside the fabric subnet, preferring a replica's or node's name; reverse zones are widened to whole octets.
+- **Clients.** Containers on the cluster network get `dns: [<node mesh ip>, <[dns] listen ips>…]` unless they set `dns`. `dns_search` is computed on the node from the zone it receives (`<stack>.<env>.<zone>`, `<env>.<zone>`, `<zone>`), not by the server. The node itself uses forge-dns through interface-scoped `resolvectl` only when systemd-resolved runs; otherwise the hosts file serves it. Windows nodes and nodes outside a fabric keep the hosts file only.
+- **Wire.** `HostNames` gains `records_json` (4), `zone` (5) and `upstream_forge_dns` (6); older agents ignore them and keep the hosts file.
+
+**Why.** Container addresses change on every redeploy and scale, and a hosts file cannot carry ports, round robin or reverse names. A resolver on each node keeps lookups local and working when the server is down; the server tier covers a node whose resolver is stopped. Using Compose's container number keeps replica names stable across restarts without a Forge-side slot table.
+
+**Trade-offs.** Native container services still resolve to the node's mesh address. A name follows a change in up to about 10 s (state push) plus 2 s (file poll) plus the 5 s TTL. Agent self-update does not update forge-dns yet; a node gets a newer forge-dns from the package. Nodes without systemd-resolved do not get SRV or PTR answers for their own lookups.

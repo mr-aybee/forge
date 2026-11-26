@@ -60,6 +60,7 @@ mod session;
 mod settings;
 mod silences;
 mod sites;
+mod stack_apply;
 mod stacks;
 mod storage;
 mod storage_grants;
@@ -347,6 +348,8 @@ pub fn router(state: AppState) -> Router {
         .route("/sites", get(sites::list).post(sites::create))
         .route("/stacks", get(stacks::list).post(stacks::create))
         .route("/stacks/preview", post(stacks::preview_stack))
+        .route("/stacks/plan", post(stack_apply::plan))
+        .route("/stacks/apply", post(stack_apply::apply))
         .route("/stacks/containers", post(stacks::create_container))
         .route("/stacks/{id}", get(stacks::get).put(stacks::update).delete(stacks::delete))
         .route("/stacks/{id}/revisions", get(stacks::revisions))

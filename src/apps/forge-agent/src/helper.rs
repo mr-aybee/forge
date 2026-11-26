@@ -116,6 +116,10 @@ pub enum HelperRequest {
     ContainerTelemetry {
         telemetry: crate::container_telemetry::TelemetryRequest,
     },
+    /// The node's compose containers by stack (`crate::stacks::states`):
+    /// read-only, and Forge learns the same rows from every deploy, so the
+    /// agent may ask without a signed command.
+    StackStates {},
     /// What this helper can do, for the agent's facts: `container_exec`
     /// is true only when the helper verifies commands with a pin (D-114).
     /// Read-only, so the agent may ask without a signed command.
@@ -141,6 +145,10 @@ pub enum HelperRequest {
         suffix: String,
         entries: Vec<forge_catalog::names::NameEntry>,
         containers: bool,
+        /// The cluster's record set for forge-dns (`names.json`); `None`
+        /// outside a fabric and from older servers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        records: Option<Box<forge_catalog::names::Records>>,
     },
     /// A command exactly as Forge signed it (base64url of the protobuf
     /// `SignedCommand`). The helper verifies the signature with the key it
@@ -431,8 +439,13 @@ impl HelperRequest {
                 process.validate().map_err(|e| format!("rejected: {e}"))?;
                 Ok(req)
             }
-            Self::Names { suffix, entries, .. } => {
+            Self::Names { suffix, entries, records, .. } => {
                 crate::host_names::check_list(suffix, entries).map_err(|e| format!("rejected: {e}"))?;
+
+                if let Some(r) = records {
+                    crate::host_names::check_records(suffix, r).map_err(|e| format!("rejected: {e}"))?;
+                }
+
                 Ok(req)
             }
             Self::HealthPolicy { health, .. } => {
@@ -558,6 +571,11 @@ impl HelperRequest {
                 suffix: h.suffix.clone(),
                 entries: serde_json::from_str(&h.entries_json).map_err(|e| format!("invalid name list: {e}"))?,
                 containers: h.containers,
+                records: if h.records_json.is_empty() {
+                    None
+                } else {
+                    Some(serde_json::from_str(&h.records_json).map_err(|e| format!("invalid records: {e}"))?)
+                },
             },
             C::FabricAction(f) => Self::Fabric {
                 fabric: serde_json::from_str(&f.op_json).map_err(|e| format!("invalid fabric operation: {e}"))?,
@@ -597,6 +615,7 @@ impl HelperRequest {
                 | Self::ContainerState { .. }
                 | Self::HealthCheck { .. }
                 | Self::ContainerTelemetry { .. }
+                | Self::StackStates {}
         )
     }
 }

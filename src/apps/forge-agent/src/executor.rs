@@ -99,6 +99,16 @@ impl LocalExecutor {
     }
 }
 
+#[cfg(unix)]
+async fn forge_dns_status() -> &'static str {
+    crate::fabric::dns::status().await
+}
+
+#[cfg(not(unix))]
+async fn forge_dns_status() -> &'static str {
+    "missing"
+}
+
 /// Runs `cmd` in the helper and keeps the refusal code of a failure.
 async fn helper_coded(cmd: &Command, signed: &SignedCommand) -> Result<Value, CommandError> {
     let req = HelperRequest::from_command(cmd)?.ok_or("this command needs no helper")?;
@@ -158,6 +168,8 @@ impl CommandExecutor for LocalExecutor {
                 // (plans/native-mesh.md). Older agents omit it.
                 "mesh_network": cfg!(unix),
                 "docker_version": caps.docker_version,
+                // forge-dns on fabric nodes: running, stopped or missing.
+                "forge_dns": forge_dns_status().await,
                 "helper_ok": helper_ok,
                 }))
             }

@@ -105,6 +105,9 @@ pub struct Deps<'a> {
     pub fabrics: &'a dyn FabricRepository,
     pub files: &'a dyn FileRepository,
     pub facts: &'a dyn FactsRepository,
+    /// The server host's forge-dns addresses (`[dns] listen`), after each
+    /// node's own in a stack's `dns`.
+    pub forge_dns: Vec<std::net::Ipv4Addr>,
 }
 
 /// One node's share of a stack.
@@ -124,6 +127,10 @@ pub struct NodePlan {
     /// Docker name of the cluster container network the node's services
     /// join, when the node can take it (`plans/native-mesh.md` 1.6).
     pub mesh_network: Option<String>,
+    /// Resolvers for those services: the node's forge-dns (its mesh
+    /// address), then the server host's.
+    #[serde(skip)]
+    pub dns: Option<cat::StackDns>,
 }
 
 /// A planned stack: the raw tree, its interpolated form and the nodes.
@@ -201,6 +208,18 @@ pub async fn fabric_nodes(fabrics: &dyn FabricRepository, ws: WorkspaceId) -> Ha
     out
 }
 
+/// The `dns` of a node's part on the cluster network: its own forge-dns on
+/// its mesh address first. Search domains are left to the node, which
+/// knows its zone from `names.json`.
+fn mesh_dns(mesh: Option<&str>, internal_ip: &str, second: &[std::net::Ipv4Addr]) -> Option<cat::StackDns> {
+    mesh?;
+    let own: std::net::Ipv4Addr = internal_ip.parse().ok()?;
+    let mut servers = vec![own];
+    servers.extend(second.iter().filter(|s| **s != own));
+
+    Some(cat::StackDns { servers, search: Vec::new() })
+}
+
 /// Whether a node's agent reports the `mesh_network` capability fact.
 /// Missing or unreadable means an older agent.
 pub async fn mesh_capable(facts: &dyn FactsRepository, server: ServerId) -> bool {
@@ -262,7 +281,8 @@ pub async fn bind_roots(files: &dyn FileRepository, server: ServerId) -> Vec<Str
         .collect()
 }
 
-async fn resolve_node(deps: &Deps<'_>, ws: WorkspaceId, all: &[Server], name: &str) -> Result<Server, String> {
+/// A node of workspace `ws` by hostname, console name or id.
+pub async fn resolve_node(deps: &Deps<'_>, ws: WorkspaceId, all: &[Server], name: &str) -> Result<Server, String> {
     if let Some(s) = deps.servers.find_server_by_hostname(ws, name).await.map_err(|e| e.to_string())? {
         return Ok(s);
     }
@@ -389,12 +409,24 @@ async fn plan_unredacted(
             server_id: id,
             hostname: name,
             services,
+            dns: mesh_dns(mesh_network.as_deref(), &internal_ip, &deps.forge_dns),
             internal_ip,
             bind_roots: roots,
             ports,
             findings: r.findings,
             mesh_network,
         });
+    }
+
+    // A service named like another one's replica loses that name.
+    let svc_names: Vec<&str> = interpolated
+        .get("services")
+        .and_then(Value::as_object)
+        .map(|m| m.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+
+    for (svc, other, n) in forge_catalog::names::replica_clashes(&svc_names) {
+        report.push("", Severity::Info, format!("service `{svc}` clashes with replica {n} of `{other}`"));
     }
 
     // Top-level problems (no services, unknown keys) even when nothing was placed.
@@ -430,6 +462,7 @@ pub fn node_part(
         policy: Policy { allow_privileged, bind_roots: node.bind_roots.clone(), stack_dir: sdir },
         internal_ip: node.internal_ip.clone(),
         mesh_network: node.mesh_network.clone(),
+        dns: node.dns.clone(),
     })
 }
 

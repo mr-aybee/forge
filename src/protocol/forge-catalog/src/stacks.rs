@@ -1213,6 +1213,11 @@ pub enum Placement {
 pub fn placements(tree: &Value) -> Result<BTreeMap<String, Placement>, String> {
     let mut out = BTreeMap::new();
 
+    // A top-level `x-forge.cluster` places every service without its own
+    // placement on each node of that cluster (`spec.placement.cluster` of a
+    // `forge.stack.yaml`).
+    let default_cluster = tree.pointer("/x-forge/cluster").and_then(Value::as_str);
+
     for (name, svc) in tree.get("services").and_then(Value::as_object).into_iter().flatten() {
         let node = svc.pointer("/x-forge/node").and_then(Value::as_str);
         let cluster = svc.pointer("/x-forge/cluster").and_then(Value::as_str);
@@ -1234,7 +1239,7 @@ pub fn placements(tree: &Value) -> Result<BTreeMap<String, Placement>, String> {
             (Some(n), None, []) => Placement::Node(n.to_owned()),
             (Some(n), None, [h]) if h == n => Placement::Node(n.to_owned()),
             (None, Some(c), []) => Placement::Cluster(c.to_owned()),
-            (None, None, []) => Placement::Default,
+            (None, None, []) => default_cluster.map_or(Placement::Default, |c| Placement::Cluster(c.to_owned())),
             (None, None, [h]) => Placement::Node(h.clone()),
             _ => return Err(format!("{name}: the placement names more than one node")),
         };
@@ -1525,6 +1530,23 @@ pub struct StackPart {
     /// helpers refuse unknown fields.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh_network: Option<String>,
+    /// Resolvers for services on the cluster network (`plans/native-mesh.md`
+    /// 2.5). Only with `mesh_network`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns: Option<StackDns>,
+}
+
+/// `dns`/`dns_search` written on every service attached to the cluster
+/// network that sets no `dns` itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StackDns {
+    /// The node's forge-dns first, then the server host's.
+    pub servers: Vec<std::net::Ipv4Addr>,
+    /// Search domains, most specific first. Empty: the node derives them
+    /// from the zone of its `names.json`.
+    #[serde(default)]
+    pub search: Vec<String>,
 }
 
 impl StackPart {
@@ -1576,6 +1598,10 @@ impl StackPart {
 
         if let Some(net) = &self.mesh_network {
             add_mesh_network(&mut tree, net);
+
+            if let Some(dns) = &self.dns {
+                add_dns(&mut tree, dns);
+            }
         }
 
         Ok((escape_dollars(&tree), ports))
@@ -1655,6 +1681,35 @@ pub fn add_mesh_network(tree: &mut Value, docker_name: &str) {
 
     if let Value::Object(nets) = top.entry("networks").or_insert_with(|| json!({})) {
         nets.entry(MESH_NETWORK_KEY).or_insert_with(|| json!({ "external": true, "name": docker_name }));
+    }
+}
+
+/// Writes `dns` and `dns_search` on every service attached to the cluster
+/// network (see [`add_mesh_network`]) that sets no `dns` itself. Docker's
+/// embedded resolver forwards to these in order.
+pub fn add_dns(tree: &mut Value, dns: &StackDns) {
+    if dns.servers.is_empty() {
+        return;
+    }
+
+    let Some(services) = tree.get_mut("services").and_then(Value::as_object_mut) else { return };
+
+    for svc in services.values_mut().filter_map(Value::as_object_mut) {
+        let attached = match svc.get("networks") {
+            Some(Value::Array(l)) => l.iter().any(|n| n.as_str() == Some(MESH_NETWORK_KEY)),
+            Some(Value::Object(m)) => m.contains_key(MESH_NETWORK_KEY),
+            _ => false,
+        };
+
+        if !attached || svc.contains_key("dns") {
+            continue;
+        }
+
+        svc.insert("dns".into(), json!(dns.servers.iter().map(ToString::to_string).collect::<Vec<_>>()));
+
+        if !dns.search.is_empty() && !svc.contains_key("dns_search") {
+            svc.insert("dns_search".into(), json!(dns.search));
+        }
     }
 }
 

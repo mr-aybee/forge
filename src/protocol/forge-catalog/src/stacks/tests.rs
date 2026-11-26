@@ -314,6 +314,7 @@ fn parts_are_rechecked_and_literal_on_the_node() {
         policy: Policy { stack_dir: dir.into(), ..policy() },
         internal_ip: "10.0.0.5".into(),
         mesh_network: None,
+        dns: None,
     };
     let dir = "/opt/forge/stacks/web/shop";
     let ok =
@@ -514,6 +515,7 @@ fn system_paths_win_over_the_stack_folder() {
         policy: Policy { stack_dir: "/var/lib/docker/overlay2".into(), ..p },
         internal_ip: "10.0.0.5".into(),
         mesh_network: None,
+        dns: None,
     };
     assert!(part.prepare().is_err());
     assert!(!StackOp::Ps { project: "forge-web-shop".into(), dir: "/etc/forge/x".into() }.validate().is_ok());
@@ -542,6 +544,7 @@ fn env_values_are_redacted_from_messages() {
         policy: policy(),
         internal_ip: "10.0.0.5".into(),
         mesh_network: None,
+        dns: None,
     };
     let e = part.prepare().unwrap_err();
     assert!(!e.contains("very-secret") && e.contains("${SRC}"), "{e}");
@@ -642,10 +645,27 @@ fn prepared_part_joins_the_mesh_and_keeps_service_opt_out() {
         policy: policy(),
         internal_ip: "10.0.0.5".into(),
         mesh_network: Some(MESH.into()),
+        dns: None,
     };
     let (tree, _) = part.prepare().unwrap();
 
     assert_eq!(tree.pointer("/services/api/networks").unwrap(), &json!(["default", "forge-mesh"]));
     assert!(tree.pointer("/services/web/networks").is_none());
     assert_eq!(tree.pointer("/networks/forge-mesh/name").unwrap(), MESH);
+}
+
+#[test]
+fn dns_goes_only_on_meshed_services_without_their_own() {
+    let mut t = meshed(json!({ "services": {
+        "api": { "image": "x" },
+        "own": { "image": "x", "dns": ["192.0.2.53"] },
+        "off": { "image": "x", "x-forge": { "mesh": false } },
+    }}));
+    let dns = StackDns { servers: vec!["10.64.12.1".parse().unwrap()], search: vec!["prod.c1.local".into()] };
+    add_dns(&mut t, &dns);
+
+    assert_eq!(t.pointer("/services/api/dns").unwrap(), &json!(["10.64.12.1"]));
+    assert_eq!(t.pointer("/services/api/dns_search").unwrap(), &json!(["prod.c1.local"]));
+    assert_eq!(t.pointer("/services/own/dns").unwrap(), &json!(["192.0.2.53"]));
+    assert!(t.pointer("/services/off/dns").is_none());
 }
