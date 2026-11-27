@@ -1983,6 +1983,21 @@ rm -f report-header
 | GET | `/services/{id}/export` | `view` on the service — `{yaml}`: the service as a services file. Secret variables are left out |
 | GET | `/environments/{id}/services/export` | `view` on the environment — `{yaml}`: every container and native service of the environment (stack and Swarm services are left out) |
 
+`console` (optional, in `POST` / `PUT /services/{id}`) is the service's web
+console link: `{port, path?, scheme?}`. `port` is 1 to 65535, `path` starts
+with `/` (default `/`, no spaces or `\`), `scheme` is `http` (default) or
+`https`. A bad link answers `400`. `null` or leaving it out removes it. It is
+stored on the service (`spec.console`) and never sent to a node.
+
+`GET /services/{id}` adds two fields when they are not empty:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `console_urls` | `[{server_id, hostname, url}]` | Where **Open console** goes. When an ingress endpoint of the workspace routes to the service at `console.port` (a typed `app` target, in the default rule or a path rule), one entry per such endpoint: its first non-wildcard domain, with its scheme (`https` with TLS) and port, and `server_id: null`. Otherwise one entry per node the service is placed on: the node's address (where its agent connects from, else its saved facts, else its host name) at `console.port`. Forge builds the URL only: no proxy, no sign-in |
+| `shell_targets` | `[{server_id, container}]` | Where **Open shell** goes, for each node the caller holds `container.exec` (container service) or `terminal.open` (native service) on. `container` is the container name for the existing container shell (`/servers/{id}/containers/{container_id}/shell`); `null` for a native service, which opens the node terminal. Empty for a Swarm service. A hint: the shell endpoints authorize and audit each session |
+
+The list endpoint leaves both out.
+
 `can_deploy` (boolean) tells the console whether the caller holds `deploy`
 on the service (directly or through its environment), so it can disable actions it knows would be
 refused. It is a hint: every action is still authorized when it runs.

@@ -1,7 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { useBlocker } from "@tanstack/react-router";
-import { Check, ChevronLeft, ChevronRight, Copy, LayoutGrid, List, ListTree, Loader2, Lock, type LucideIcon, MoreHorizontal, Rows3, Search, X } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, LayoutGrid, List, ListTree, Loader2, Lock, type LucideIcon, MoreHorizontal, Rows3, Search, X } from "lucide-react";
 import { useEffect, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type TdHTMLAttributes } from "react";
 import { createPortal } from "react-dom";
 import { useToast } from "../app/toast";
@@ -632,6 +632,26 @@ export function RowMenu({ actions, label = "Actions" }: { actions: RowAction[]; 
         <button aria-label={label} className="press inline-grid size-8 place-items-center rounded-md text-muted hover:bg-panel-2 focus-visible:outline-2 focus-visible:outline-accent hover:text-fg data-[state=open]:bg-panel-2 data-[state=open]:text-fg">
           <MoreHorizontal className="size-4" />
         </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content align="end" sideOffset={4} className={menuContent}>
+          <MenuItems actions={actions} />
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
+/** A labelled button that opens a menu of actions, for one action with several targets (such as one per node). */
+export function MenuButton({ actions, children, title }: { actions: RowAction[]; children: ReactNode; title?: string }) {
+  if (!actions.some((a) => !a.hidden)) return null;
+  return (
+    <DropdownMenu.Root modal={false}>
+      <DropdownMenu.Trigger asChild>
+        <Button title={title} className="data-[state=open]:border-accent/60 data-[state=open]:text-accent">
+          {children}
+          <ChevronDown className="size-3.5 opacity-70" />
+        </Button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content align="end" sideOffset={4} className={menuContent}>

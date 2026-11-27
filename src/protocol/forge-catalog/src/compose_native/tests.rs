@@ -201,6 +201,17 @@ fn refusals_name_the_key() {
         (json!({ "environment": ["TOKEN"] }), "services.web.environment[0]", "shell environment"),
         (json!({ "networks": ["backend"] }), "services.web.networks", "not declared"),
         (json!({ "x-forge": { "strategy": "canary" } }), "services.web.x-forge.strategy", "forge.deploy.yaml"),
+        (json!({ "x-forge": { "console": { "port": 0 } } }), "services.web.x-forge.console", "1-65535"),
+        (
+            json!({ "x-forge": { "console": { "port": 80, "host": "x" } } }),
+            "services.web.x-forge.console.host",
+            "unknown key",
+        ),
+        (
+            json!({ "x-forge": { "console": { "port": 80, "scheme": "ftp" } } }),
+            "services.web.x-forge.console",
+            "unknown variant",
+        ),
         (json!({ "stop_grace_period": "soon" }), "services.web.stop_grace_period", "duration"),
     ] {
         let msg = refused(&web(extra.clone()));
@@ -251,7 +262,7 @@ fn sizes_durations_and_cpus_read_like_docker() {
 fn a_stored_spec_reads_back_with_its_orchestration() {
     let spec = json!({
         "environment": "prod", "image": "redis:7", "ports": ["6379:6379"], "restart": true,
-        "cap_drop": ["ALL"], "on_node_failure": "move", "mesh": false,
+        "cap_drop": ["ALL"], "on_node_failure": "move", "mesh": false, "console": { "port": 9001 },
         "orchestration": { "mode": "global", "node_tags": { "zone": "eu" } },
         "swarm": null,
     });
@@ -262,6 +273,7 @@ fn a_stored_spec_reads_back_with_its_orchestration() {
     assert_eq!(s.orchestration.mode, ServiceMode::Global);
     assert_eq!(s.on_node_failure, Some(NodeFailurePolicy::Move));
     assert_eq!(s.mesh, Some(false));
+    assert_eq!(s.console.as_ref().map(|c| (c.port, c.path.as_str())), Some((9001, "/")));
     assert!(from_stored("x", "compose-service", &spec, vec![]).is_err());
 }
 
@@ -308,6 +320,7 @@ services:
       update_config: { parallelism: 1, order: stop-first }
     x-forge:
       on_node_failure: alert
+      console: { port: 8443, path: /admin, scheme: https }
   db:
     image: postgres:17
     volumes: ["pg:/var/lib/postgresql/data"]
@@ -385,4 +398,12 @@ fn file_secrets_and_undeclared_sources_are_refused() {
         "secrets": { "a": { "external": true }, "b": { "external": true } },
     });
     assert!(refused(&clash).contains("named `a`"));
+}
+
+#[test]
+fn the_console_link_is_read_with_its_defaults() {
+    let s = one(json!({ "image": "minio:1", "x-forge": { "console": { "port": 9001 } } }));
+    let c = s.console.unwrap();
+
+    assert_eq!((c.port, c.path.as_str(), c.scheme), (9001, "/", crate::console_link::ConsoleScheme::Http));
 }

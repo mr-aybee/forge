@@ -541,6 +541,9 @@ missing one exits with `2` and names the flag.
 | `--network <NAME>` | Docker network name; repeatable | none | no | An existing Docker network on the node to connect the container to as well | `--network backend` |
 | `--secret <ITEM[:TARGET]>` | vault item name with an optional path; repeatable | none | no | Mount credential vault item ITEM as a secret file at TARGET (default `/run/secrets/<ITEM>`; a relative TARGET goes under `/run/secrets`). Only the name is sent. Given at all, `--secret` and `--config` together replace the whole list. Referencing a new item needs a platform administrator with MFA | `--secret "DB password:db_password"` |
 | `--config <ITEM[:TARGET]>` | vault item name with an optional absolute path; repeatable | none | no | Mount credential vault item ITEM as a config file (mode `0444`) at TARGET (default `/<ITEM>`). The last `:` separates the target | `--config "api-config:/etc/api/app.conf"` |
+| `--console-port <PORT>` | integer, 0 to 65535 | none | no | The port of the service's web console, for **Open console** on the service page (a container: the published host port). `0` removes the link | `--console-port 9001` |
+| `--console-path <PATH>` | path starting with `/` | `/` | no | The path of the console page. Without `--console-port`, the service must already have a console link | `--console-path /admin` |
+| `--console-scheme <SCHEME>` | enum: `http`, `https` | `http` | no | The scheme of the console URL | `--console-scheme https` |
 
 **Examples**
 
@@ -553,6 +556,8 @@ forge services create --environment lab --name api --runtime systemd --command "
 forge services create --environment lab --file service.json
 # A container that mounts a vault item as /run/secrets/db_password
 forge services create --environment lab --name api --runtime container --image registry.example/api:2 --secret "DB password:db_password"
+# A container with a web console on port 9001, served over HTTPS at /admin
+forge services create --environment lab --name minio --runtime container --image minio/minio:RELEASE.2025-04-22T22-12-26Z --port 9001:9001 --console-port 9001 --console-path /admin --console-scheme https
 ```
 
 Fields without a flag need `--file`: `working_dir`, `env_files`,
@@ -711,6 +716,9 @@ forge services update [OPTIONS] <SERVICE>
 | `--network <NAME>` | Docker network name; repeatable | keep | no | An existing Docker network on the node to connect the container to as well | `--network backend` |
 | `--secret <ITEM[:TARGET]>` | vault item name with an optional path; repeatable | keep | no | Mount credential vault item ITEM as a secret file at TARGET (default `/run/secrets/<ITEM>`; a relative TARGET goes under `/run/secrets`). Only the name is sent. Given at all, `--secret` and `--config` together replace the whole list. Referencing a new item needs a platform administrator with MFA | `--secret "DB password:db_password"` |
 | `--config <ITEM[:TARGET]>` | vault item name with an optional absolute path; repeatable | keep | no | Mount credential vault item ITEM as a config file (mode `0444`) at TARGET (default `/<ITEM>`). The last `:` separates the target | `--config "api-config:/etc/api/app.conf"` |
+| `--console-port <PORT>` | integer, 0 to 65535 | keep | no | The port of the service's web console, for **Open console** on the service page. `0` removes the link | `--console-port 9001` |
+| `--console-path <PATH>` | path starting with `/` | keep (`/` for a new link) | no | The path of the console page. Without `--console-port`, the service must already have a console link | `--console-path /admin` |
+| `--console-scheme <SCHEME>` | enum: `http`, `https` | keep (`http` for a new link) | no | The scheme of the console URL | `--console-scheme https` |
 | `--environment <ENVIRONMENT>` | environment id or name | — | no | Look the name up in this environment only. It does not move the service | `--environment shop-prod` |
 | `--yes` | flag | off | no | Skip the confirmation prompt | `--yes` |
 
@@ -739,6 +747,12 @@ printf '%s' "$TOKEN" | forge services update web --secret-env API_TOKEN --yes
 
 # Replace the whole definition from a file
 forge services update web --file app.json --yes
+
+# Add an Open console link at https://<address>:9001/admin
+forge services update minio --console-port 9001 --console-path /admin --console-scheme https --yes
+
+# Remove the console link
+forge services update minio --console-port 0 --yes
 ```
 
 **Output**

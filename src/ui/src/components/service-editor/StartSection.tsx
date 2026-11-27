@@ -1,5 +1,6 @@
 import type { ServiceInput } from "../../api/types";
 import { Input, Mono } from "../ui";
+import { ConsoleFields } from "./ConsoleFields";
 import { FormField, Grid, NumberInput, RestartFields } from "./parts";
 
 /** Systemd: start command, working directory, restart and listening port. */
@@ -47,6 +48,7 @@ export function StartSection({ value, set, home }: { value: ServiceInput; set: (
         )}
       </FormField>
       <RestartFields value={value} set={set} systemd />
+      <ConsoleFields value={value} set={set} />
     </Grid>
   );
 }

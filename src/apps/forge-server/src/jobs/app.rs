@@ -68,7 +68,8 @@ pub fn build_spec(app: &Service, envelope: Option<&Envelope>) -> Result<AppSpec,
     // `mesh` (default on) is the service's choice; the job decides the
     // network per node (`AppJob::attach_mesh`), so it never reaches a node.
     // `on_node_failure` is the reconciler's (D-177); it never reaches a
-    // node either, nor does the orchestration of a services file (D-178).
+    // node either, nor does the orchestration of a services file (D-178)
+    // or the console link (a URL the console opens).
     // The secret and config file references are resolved into values by
     // the deploy step (`AppJob::resolved_spec`), never here (D-179).
     let mut refs = Vec::new();
@@ -77,6 +78,7 @@ pub fn build_spec(app: &Service, envelope: Option<&Envelope>) -> Result<AppSpec,
         m.remove("mesh");
         m.remove("on_node_failure");
         m.remove(forge_catalog::compose_native::SPEC_KEY);
+        m.remove(forge_catalog::console_link::SPEC_KEY);
 
         if let Some(r) = m.remove(forge_catalog::secret_files::SPEC_KEY).filter(|r| !r.is_null()) {
             refs = serde_json::from_value::<Vec<forge_catalog::secret_files::FileRef>>(r)

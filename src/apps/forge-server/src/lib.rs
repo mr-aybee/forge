@@ -58,6 +58,7 @@ pub mod rate_limit;
 pub mod reconcile;
 pub mod registries;
 pub mod request_origin;
+pub mod service_console;
 pub mod service_files;
 pub mod service_jobs;
 pub mod service_ports;

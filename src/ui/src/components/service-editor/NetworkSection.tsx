@@ -1,5 +1,6 @@
 import type { ServiceInput } from "../../api/types";
 import { Mono } from "../ui";
+import { ConsoleFields } from "./ConsoleFields";
 import { Check, Grid, ListEditor, SubBlock } from "./parts";
 import { HOST_RE, NETWORK_RE, PORT_RE, ipOk } from "./sections";
 
@@ -36,6 +37,7 @@ export function NetworkSection({ value, set }: { value: ServiceInput; set: (p: P
       <SubBlock title="DNS servers" hint="IP addresses, at most 8. Empty: the node's resolvers (or cluster DNS on the cluster network).">
         <ListEditor label="DNS server" values={value.dns} onChange={(dns) => set({ dns })} placeholder="192.0.2.53" validate={ipOk} addLabel="Add DNS server" />
       </SubBlock>
+      <ConsoleFields value={value} set={set} />
     </Grid>
   );
 }

@@ -1,7 +1,8 @@
 //! The typed container spec (`plans/service-orchestration.md` step 1):
 //! restart policy, capabilities, ulimits, tmpfs, DNS, sysctls, devices, init
 //! and networks are stored and validated; added capabilities need
-//! `stack.privileged`; and an edit based on an old version is refused (409).
+//! `stack.privileged`; an edit based on an old version is refused (409);
+//! and the service page gets its console link URLs and shell targets (step 5).
 #![allow(clippy::unwrap_used)]
 
 use reqwest::StatusCode;
@@ -140,4 +141,66 @@ async fn added_capabilities_need_stack_privileged() {
     // Without a step-up (MFA) the deploy is refused before a job exists.
     let (s, r) = admin.post(&format!("/api/v1/services/{id}/deploy"), json!({})).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "{r}");
+}
+
+#[tokio::test]
+async fn the_service_page_gets_its_console_urls_and_shell_targets() {
+    use forge_core::ports::SiteRepository;
+    use forge_core::tags::FactsRepository;
+
+    let h = start().await;
+    let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+    let ns = environment(&admin).await;
+    let server = node(&h).await;
+    h.app.state.store.put_facts(server, &json!({ "address": "192.0.2.10" }), forge_core::Timestamp(1)).await.unwrap();
+
+    // A bad link is refused when saved.
+    let (s, r) = admin.post("/api/v1/services", body(&ns, json!({ "console": { "port": 9001, "path": "ui" } }))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{r}");
+
+    let link = json!({ "console": { "port": 9001, "path": "/ui", "scheme": "https" } });
+    let (s, app) = admin.post("/api/v1/services", body(&ns, link)).await;
+    assert_eq!(s, StatusCode::CREATED, "{app}");
+    let id = app["id"].as_str().unwrap().to_owned();
+    let path = format!("/api/v1/services/{id}");
+    let (s, r) =
+        admin.put(&format!("{path}/instances"), json!([{ "server_id": server.to_string(), "role": "active" }])).await;
+    assert!(s.is_success(), "{r}");
+
+    // No ingress endpoint: the node's address at the console port.
+    let (_, got) = admin.get(&path).await;
+    assert_eq!(
+        got["console_urls"],
+        json!([{ "server_id": server.to_string(), "hostname": "192.0.2.10", "url": "https://192.0.2.10:9001/ui" }])
+    );
+    assert_eq!(got["shell_targets"], json!([{ "server_id": server.to_string(), "container": "forge-app-uat-cache" }]));
+
+    // An endpoint that routes to the console port wins, with its own scheme.
+    let site = forge_core::model::Site {
+        id: "console-site".into(),
+        workspace_id: h.default_org.parse().unwrap(),
+        name: "cache".into(),
+        config: json!({
+            "spec": { "domains": ["cache.example.com"], "tls": "off" },
+            "targets": [{ "kind": "app", "service_id": id, "port": 9001 }],
+            "edges": [],
+        }),
+        edge_status: json!({}),
+        created_at: forge_core::Timestamp(0),
+        updated_at: forge_core::Timestamp(0),
+    };
+    h.app.state.store.put_site(&site).await.unwrap();
+    let (_, got) = admin.get(&path).await;
+    assert_eq!(
+        got["console_urls"],
+        json!([{ "server_id": null, "hostname": "cache.example.com", "url": "http://cache.example.com/ui" }])
+    );
+
+    // Removing the link removes the URLs; the list endpoint never carries them.
+    let (s, r) = admin.put(&path, body(&ns, json!({ "console": null }))).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    let (_, got) = admin.get(&path).await;
+    assert!(got.get("console_urls").is_none() && got["spec"].get("console").is_none(), "{got}");
+    let (_, list) = admin.get("/api/v1/services").await;
+    assert!(list.as_array().unwrap().iter().all(|a| a.get("shell_targets").is_none()), "{list}");
 }

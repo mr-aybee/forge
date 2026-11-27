@@ -100,6 +100,76 @@ pub struct AppFlags {
     /// absolute path, default `/<ITEM>`); repeat for more.
     #[arg(long = "config", value_name = "ITEM[:TARGET]")]
     pub configs: Vec<String>,
+    /// Port of the service's web console, for the console's **Open
+    /// console** link; 0 removes the link.
+    #[arg(long, value_name = "PORT")]
+    pub console_port: Option<u16>,
+    /// Path of the console page (default `/`).
+    #[arg(long, value_name = "PATH")]
+    pub console_path: Option<String>,
+    /// Scheme of the console page: http (default) or https.
+    #[arg(long, value_enum, value_name = "SCHEME")]
+    pub console_scheme: Option<ConsoleScheme>,
+}
+
+/// The scheme of `--console-scheme`.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsoleScheme {
+    Http,
+    Https,
+}
+
+impl ConsoleScheme {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Https => "https",
+        }
+    }
+}
+
+/// Applies `--console-port`, `--console-path` and `--console-scheme` to
+/// the definition's console link (`console`).
+fn apply_console(b: &mut Map<String, Value>, f: &AppFlags) -> Result<()> {
+    use forge_catalog::console_link::SPEC_KEY;
+
+    if f.console_port == Some(0) {
+        if f.console_path.is_some() || f.console_scheme.is_some() {
+            return Err(CliError::usage(
+                "--console-port 0 removes the console link; drop --console-path and --console-scheme",
+            ));
+        }
+
+        b.remove(SPEC_KEY);
+
+        return Ok(());
+    }
+
+    if f.console_port.is_none() && f.console_path.is_none() && f.console_scheme.is_none() {
+        return Ok(());
+    }
+
+    let mut link = b.get(SPEC_KEY).filter(|v| v.is_object()).cloned().unwrap_or_else(|| json!({}));
+
+    if let Some(p) = f.console_port {
+        link["port"] = json!(p);
+    }
+
+    if let Some(p) = &f.console_path {
+        link["path"] = json!(p);
+    }
+
+    if let Some(s) = f.console_scheme {
+        link["scheme"] = json!(s.as_str());
+    }
+
+    let parsed: forge_catalog::console_link::ConsoleLink = serde_json::from_value(link.clone()).map_err(|_| {
+        CliError::usage("--console-path and --console-scheme need --console-port (the service has no console link)")
+    })?;
+    parsed.validate().map_err(CliError::usage)?;
+    b.insert(SPEC_KEY.into(), link);
+
+    Ok(())
 }
 
 /// `ITEM[:TARGET]` of `--secret` or `--config` as a secret file reference.
@@ -193,6 +263,9 @@ impl AppFlags {
             || !self.networks.is_empty()
             || !self.secrets.is_empty()
             || !self.configs.is_empty()
+            || self.console_port.is_some()
+            || self.console_path.is_some()
+            || self.console_scheme.is_some()
     }
 }
 
@@ -438,6 +511,8 @@ pub fn apply(body: &mut Value, changes: Changes<'_>) -> Result<()> {
         b.insert("init".into(), json!(i));
     }
 
+    apply_console(b, f)?;
+
     if !f.secrets.is_empty() || !f.configs.is_empty() {
         use forge_catalog::secret_files::FileKind;
 
@@ -628,6 +703,31 @@ mod tests {
         let missing = s(&["NOPE"]);
         let e = apply(&mut body, Changes { flags: &AppFlags::default(), secrets: Vec::new(), unset_env: &missing });
         assert!(e.is_err_and(|e| e.exit == Exit::Usage));
+    }
+
+    #[test]
+    fn console_flags_set_change_and_remove_the_link() {
+        let mut body = json!({ "runtime": "container", "image": "minio:1" });
+        let set = AppFlags { console_port: Some(9001), ..AppFlags::default() };
+        assert!(apply(&mut body, Changes::of(&set)).is_ok());
+        assert_eq!(body["console"], json!({ "port": 9001 }));
+
+        let change = AppFlags {
+            console_path: Some("/admin".into()),
+            console_scheme: Some(ConsoleScheme::Https),
+            ..AppFlags::default()
+        };
+        assert!(apply(&mut body, Changes::of(&change)).is_ok());
+        assert_eq!(body["console"], json!({ "port": 9001, "path": "/admin", "scheme": "https" }));
+
+        let clear = AppFlags { console_port: Some(0), ..AppFlags::default() };
+        assert!(apply(&mut body, Changes::of(&clear)).is_ok());
+        assert!(body.get("console").is_none());
+
+        let no_port = AppFlags { console_path: Some("/x".into()), ..AppFlags::default() };
+        assert!(apply(&mut body, Changes::of(&no_port)).is_err_and(|e| e.exit == Exit::Usage));
+        let bad_path = AppFlags { console_port: Some(80), console_path: Some("x".into()), ..AppFlags::default() };
+        assert!(apply(&mut body, Changes::of(&bad_path)).is_err_and(|e| e.message.contains("start with")));
     }
 
     #[test]

@@ -696,6 +696,7 @@ fn input_from(fs: &FileService, existing: Option<&Service>) -> AppInput {
         options: s.options.clone(),
         orchestration: Some(fs.orchestration.clone()),
         secret_files: s.secret_files.clone(),
+        console: fs.console.clone(),
         version: None,
     }
 }
