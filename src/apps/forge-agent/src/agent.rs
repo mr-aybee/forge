@@ -56,6 +56,8 @@ pub struct Agent {
     /// Compose container rows last pushed (hash) and when: names follow
     /// replicas between deploys (D-172).
     stack_push: (u64, Option<Instant>),
+    /// Native service container rows last pushed (hash) and when (D-177).
+    app_push: (u64, Option<Instant>),
     /// Spool, local log listener and uploader (D-142); `None` when the
     /// spool folder cannot be opened (the agent then runs without it).
     analytics: Option<crate::node_analytics::NodeAnalytics>,
@@ -158,6 +160,7 @@ impl Agent {
             containers: forge_proto::messages::ContainerTelemetryConfig { enabled: true, exclude: Vec::new() },
             container_ack: 0,
             stack_push: (0, None),
+            app_push: (0, None),
             analytics,
             pins,
             pins_broken: false,
@@ -178,6 +181,7 @@ impl Agent {
         let results: Vec<CommandResult> = std::mem::take(&mut self.pending_results);
         let containers = self.poll_containers().await;
         let (stack_states, stack_hash) = self.poll_stack_states().await.unzip();
+        let (app_states, app_hash) = self.poll_app_states().await.unzip();
         let mut metrics = self.sampler.sample();
         let now = crate::node_analytics::now_ms();
 
@@ -212,6 +216,7 @@ impl Agent {
             spool,
             pinned_server_keys: self.pins.fingerprints(),
             stack_states,
+            app_states,
         };
 
         let body = match self.link.request(http::Method::POST, paths::HEARTBEAT, hb.encode_to_vec()).await {
@@ -228,6 +233,10 @@ impl Agent {
         // Only a delivered push counts: a failed heartbeat resends it
         if let Some(h) = stack_hash {
             self.stack_push = (h, Some(Instant::now()));
+        }
+
+        if let Some(h) = app_hash {
+            self.app_push = (h, Some(Instant::now()));
         }
 
         let resp = HeartbeatResponse::decode(body.as_slice())?;
@@ -273,31 +282,17 @@ impl Agent {
     /// hash, when they changed since the last delivered push and the gap
     /// has passed. The caller records the hash once the heartbeat succeeds.
     async fn poll_stack_states(&mut self) -> Option<(forge_proto::messages::StackStates, u64)> {
-        if cfg!(not(unix)) || !tokio::fs::try_exists(crate::helper::SOCKET).await.unwrap_or(false) {
-            return None;
-        }
-
-        if self.stack_push.1.is_some_and(|at| at.elapsed() < STACK_PUSH_GAP) {
-            return None;
-        }
-
-        let r = crate::helper::call(&crate::helper::HelperRequest::StackStates {}, CONTAINER_POLL).await;
-
-        let Some(data) = r.data.filter(|_| r.ok) else {
-            tracing::debug!(error = ?r.error, "compose container states unavailable");
-            return None;
-        };
-
-        let states_json = data.to_string();
-        let h = states_json
-            .bytes()
-            .fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
-
-        if h == self.stack_push.0 {
-            return None;
-        }
+        let (states_json, h) = poll_states(crate::helper::HelperRequest::StackStates {}, self.stack_push).await?;
 
         Some((forge_proto::messages::StackStates { states_json }, h))
+    }
+
+    /// The native service container rows to push with this heartbeat and
+    /// their hash, on the same terms as [`Self::poll_stack_states`] (D-177).
+    async fn poll_app_states(&mut self) -> Option<(forge_proto::messages::AppStates, u64)> {
+        let (states_json, h) = poll_states(crate::helper::HelperRequest::AppStates {}, self.app_push).await?;
+
+        Some((forge_proto::messages::AppStates { states_json }, h))
     }
 
     /// Asks the helper for container lines and samples, acknowledging the
@@ -819,4 +814,34 @@ fn current_rss() -> u64 {
     sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, ProcessRefreshKind::nothing().with_memory());
 
     sys.process(pid).map_or(0, sysinfo::Process::memory)
+}
+
+/// Asks the helper for container rows (`req`) and returns them with their
+/// hash when they changed since `last` (hash, when pushed) and the push gap
+/// has passed. `None` without a helper, or when it cannot answer.
+async fn poll_states(req: crate::helper::HelperRequest, last: (u64, Option<Instant>)) -> Option<(String, u64)> {
+    if cfg!(not(unix)) || !tokio::fs::try_exists(crate::helper::SOCKET).await.unwrap_or(false) {
+        return None;
+    }
+
+    if last.1.is_some_and(|at| at.elapsed() < STACK_PUSH_GAP) {
+        return None;
+    }
+
+    let r = crate::helper::call(&req, CONTAINER_POLL).await;
+
+    let Some(data) = r.data.filter(|_| r.ok) else {
+        tracing::debug!(error = ?r.error, "container states unavailable");
+        return None;
+    };
+
+    let states_json = data.to_string();
+    let h =
+        states_json.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+
+    if h == last.0 {
+        return None;
+    }
+
+    Some((states_json, h))
 }

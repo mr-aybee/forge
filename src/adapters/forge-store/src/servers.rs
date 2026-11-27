@@ -24,6 +24,7 @@ fn server_row(r: &AnyRow) -> DomainResult<Server> {
         last_seen_at: opt_ts(r, "last_seen_at")?,
         cert_serial: opt_text(r, "cert_serial")?,
         cert_not_after: opt_ts(r, "cert_not_after")?,
+        drained: flag(r, "drained")?,
         created_at: ts(r, "created_at")?,
     })
 }
@@ -243,6 +244,17 @@ impl ServerRepository for Store {
             .execute(self.pool())
             .await
             .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn set_drained(&self, id: ServerId, drained: bool) -> DomainResult<()> {
+        sqlx::query("UPDATE servers SET drained = $1 WHERE id = $2")
+            .bind(b(drained))
+            .bind(id.to_string())
+            .execute(self.pool())
+            .await
+            .map_err(db_err)?;
+
         Ok(())
     }
 

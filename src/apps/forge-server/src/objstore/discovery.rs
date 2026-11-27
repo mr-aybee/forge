@@ -391,6 +391,7 @@ mod tests {
             last_seen_at: None,
             cert_serial: None,
             cert_not_after: None,
+            drained: false,
             created_at: forge_core::Timestamp(0),
         };
         let f = found(&server, &list[0], &inspect, None);

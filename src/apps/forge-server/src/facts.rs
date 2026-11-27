@@ -135,6 +135,8 @@ fn keep(v: &Value) -> Value {
         "mesh_network",
         // Typed container options on app specs (service orchestration step 1).
         "container_options",
+        // Pushes native service container states (D-177).
+        "app_states",
         "docker_version",
         "forge_dns",
     ] {

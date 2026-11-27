@@ -465,6 +465,9 @@ impl StackJob {
                     last_job_id: Some(ctx.job.id),
                     last_error: None,
                     updated_at: now,
+                    desired: forge_core::model::InstanceDesired::Running,
+                    deployed_release: None,
+                    exit_code: None,
                 })
                 .await
                 .map_err(retry)?;

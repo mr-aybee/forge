@@ -16,7 +16,7 @@ use std::time::Duration;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use forge_core::model::{EnvVar, Job, JobStatus, NewJob, Service, ServiceInstance};
+use forge_core::model::{EnvVar, Job, JobStatus, Service, ServiceInstance};
 use forge_core::ports::{
     InstallationRepository, JobRepository, ServerRepository, ServiceRepository, TenancyRepository,
 };
@@ -213,6 +213,12 @@ pub struct AppInput {
     /// Container: join the node's cluster container network (default on).
     #[serde(default)]
     pub mesh: Option<bool>,
+    /// What the service reconciler does when the node is lost: `move` or
+    /// `alert` (D-177). Absent: move a container without local data,
+    /// alert otherwise.
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub on_node_failure: Option<forge_core::model::NodeFailurePolicy>,
     /// Restart policy, capabilities, ulimits, tmpfs, DNS, sysctls, devices,
     /// init and extra networks.
     #[serde(flatten)]
@@ -257,6 +263,8 @@ struct StoredSpec<'a> {
     /// Only the opt-out is stored: absent means on.
     #[serde(skip_serializing_if = "Option::is_none")]
     mesh: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    on_node_failure: Option<forge_core::model::NodeFailurePolicy>,
 }
 
 /// The 409 message when a service changed after the editor loaded it.
@@ -340,6 +348,7 @@ fn apply(state: &AppState, app: &mut Service, ns_slug: &str, input: AppInput) ->
         options: &input.options,
         health,
         mesh,
+        on_node_failure: input.on_node_failure,
     };
     app.spec = serde_json::to_value(&stored)
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?;
@@ -517,6 +526,16 @@ pub async fn place(
     let wanted: HashSet<ServerId> = placements.iter().map(|p| p.server_id).collect();
     let actor = caller.principal().to_string();
 
+    // A drained node takes no new placements (D-177); checked before
+    // anything changes.
+    for p in placements.iter().filter(|p| !existing.iter().any(|i| i.server_id == p.server_id)) {
+        let server = state.store.get_server(p.server_id).await.map_err(|_| ApiError::not_found("server not found"))?;
+
+        if server.drained {
+            return Err(ApiError::conflict("this node is drained: undrain it before placing services on it"));
+        }
+    }
+
     for i in &existing {
         if !wanted.contains(&i.server_id) {
             if i.status == "pending" {
@@ -551,6 +570,9 @@ pub async fn place(
             last_job_id: None,
             last_error: None,
             updated_at: state.clock.now(),
+            desired: forge_core::model::InstanceDesired::Running,
+            deployed_release: None,
+            exit_code: None,
         });
         inst.role = p.role;
         state.store.put_instance(&inst).await?;
@@ -562,7 +584,7 @@ pub async fn place(
 
     if crate::app_roots::spec_for(&app).is_some() {
         for server in new_nodes {
-            prepare_jobs.push(submit(&state, &caller, &app, server, "prepare", 0, "", &[]).await?.id);
+            prepare_jobs.push(submit(&state, &caller, Submit::plain(&app, server, "prepare")).await?.id);
         }
     }
 
@@ -598,40 +620,38 @@ async fn privileged_mounts(
     Ok(mounts)
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn submit(
-    state: &AppState,
-    caller: &Caller,
-    app: &Service,
+/// Submits one action on `app`'s instance on `server` as the caller.
+async fn submit(state: &AppState, caller: &Caller, req: Submit<'_>) -> ApiResult<Job> {
+    let job = crate::service_jobs::app_action_job(crate::service_jobs::AppActionRequest {
+        app: req.app,
+        server: req.server,
+        action: req.action,
+        tail: req.tail,
+        cursor: req.cursor,
+        privileged_mounts: req.privileged_mounts,
+        principal: caller.principal(),
+        context: caller.ctx(),
+        idempotency_key: None,
+    });
+
+    Ok(state.jobs.submit(job).await?)
+}
+
+/// What [`submit`] runs.
+struct Submit<'a> {
+    app: &'a Service,
     server: ServerId,
-    action: &str,
+    action: &'a str,
     tail: u32,
-    cursor: &str,
-    privileged_mounts: &[String],
-) -> ApiResult<Job> {
-    Ok(state
-        .jobs
-        .submit(NewJob {
-            kind: "app.action".into(),
-            workspace_id: Some(app.workspace_id),
-            // The service itself, so a grant on one service is enough (#13).
-            // Privileged mounts need `stack.privileged`, which is held per
-            // environment, so those jobs stay on the environment.
-            resource: if privileged_mounts.is_empty() { svc_ref(app.id) } else { ns_ref(app.environment_id) },
-            principal: caller.principal(),
-            context: caller.ctx(),
-            idempotency_key: None,
-            payload: json!({
-                "service_id": app.id,
-                "server_id": server,
-                "action": action,
-                "tail": tail,
-                "cursor": cursor,
-                "privileged_mounts": privileged_mounts,
-            }),
-            max_attempts: 2,
-        })
-        .await?)
+    cursor: &'a str,
+    privileged_mounts: &'a [String],
+}
+
+impl<'a> Submit<'a> {
+    /// `action` on `server` with no log tail and no privileged mounts.
+    const fn plain(app: &'a Service, server: ServerId, action: &'a str) -> Self {
+        Self { app, server, action, tail: 0, cursor: "", privileged_mounts: &[] }
+    }
 }
 
 pub async fn deploy(
@@ -673,7 +693,10 @@ pub async fn deploy(
     let mut jobs = installs;
 
     for (i, m) in instances.iter().zip(&mounts) {
-        jobs.push(submit(&state, &caller, &app, i.server_id, "deploy", 0, "", m).await?);
+        jobs.push(
+            submit(&state, &caller, Submit { privileged_mounts: m, ..Submit::plain(&app, i.server_id, "deploy") })
+                .await?,
+        );
     }
 
     let privileged: Vec<&String> =
@@ -793,7 +816,19 @@ pub async fn action(
 
     let mounts =
         if req.action == "deploy" { privileged_mounts(&state, &caller, &app, server).await? } else { Vec::new() };
-    let job = submit(&state, &caller, &app, server, &req.action, req.tail.clamp(0, 5000), &req.cursor, &mounts).await?;
+    let job = submit(
+        &state,
+        &caller,
+        Submit {
+            app: &app,
+            server,
+            action: &req.action,
+            tail: req.tail.clamp(0, 5000),
+            cursor: &req.cursor,
+            privileged_mounts: &mounts,
+        },
+    )
+    .await?;
 
     if needed == Action::Deploy {
         caller

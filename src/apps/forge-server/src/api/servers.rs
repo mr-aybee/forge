@@ -419,3 +419,33 @@ pub async fn rename(
 
     Ok(Json(state.store.get_server(id).await?))
 }
+
+/// Audit name of draining a node.
+pub const AUDIT_DRAIN: &str = "server.drain";
+/// Audit name of undraining a node.
+pub const AUDIT_UNDRAIN: &str = "server.undrain";
+
+/// `POST /api/v1/servers/{id}/drain` (`node.drain`): placement skips the
+/// node and the service reconciler moves its movable services elsewhere.
+pub async fn drain(State(state): State<AppState>, caller: Caller, Path(id): Path<ServerId>) -> ApiResult<Json<Server>> {
+    set_drained(&state, &caller, id, true).await
+}
+
+/// `POST /api/v1/servers/{id}/undrain` (`node.drain`): the node takes new
+/// placements again.
+pub async fn undrain(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<ServerId>,
+) -> ApiResult<Json<Server>> {
+    set_drained(&state, &caller, id, false).await
+}
+
+async fn set_drained(state: &AppState, caller: &Caller, id: ServerId, drained: bool) -> ApiResult<Json<Server>> {
+    caller.authorize(Action::NodeDrain, server_ref(id)).await?;
+    let server = state.reconciler.set_drained(id, drained).await?;
+    let action = if drained { AUDIT_DRAIN } else { AUDIT_UNDRAIN };
+    caller.audit(action, &server_ref(id), Some(server.workspace_id), json!({ "hostname": server.hostname })).await;
+
+    Ok(Json(server))
+}

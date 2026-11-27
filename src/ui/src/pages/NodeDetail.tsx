@@ -2,10 +2,10 @@ import * as Tabs from "@radix-ui/react-tabs";
 import { IpTags, leaseOf, useClusterFabric } from "../components/IpTag";
 import { Credentials } from "../components/vault/Credentials";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { Activity, ArrowRightLeft, Boxes, Container, Cpu, FolderOpen, Gauge, Info, KeyRound, Layers, Package, Pencil, Radio, ShieldX, SquareTerminal, Trash2 } from "lucide-react";
+import { Activity, ArrowDownToLine, ArrowRightLeft, Boxes, Container, Cpu, FolderOpen, Gauge, Info, KeyRound, Layers, Package, Pencil, Radio, ShieldX, SquareTerminal, Trash2 } from "lucide-react";
 import { useState } from "react";
 
-import { useAllEnvironments, useAssignServer, useClusters, useJobs, useMe, useServer, useServerCommand } from "../api/hooks";
+import { useAllEnvironments, useAssignServer, useClusters, useDrainServer, useJobs, useMe, useServer, useServerCommand } from "../api/hooks";
 import { nodeFacts, nodeName, type Role, type Server } from "../api/types";
 import { isShell, sessionLabel, useTerminals } from "../app/terminals";
 import { errorText, useToast } from "../app/toast";
@@ -23,7 +23,7 @@ import { nodeSpecs, useLatestMetrics } from "../components/NodeTable";
 import { TagEditor } from "../components/TagEditor";
 import { FileExplorer } from "./Files";
 import { PinToggle } from "../components/Pins";
-import { Badge, Button, ErrorNote, Field, IconButton, Input, Mono, Panel, Select, Skeleton, Status, ago, bytes, time } from "../components/ui";
+import { Badge, Button, Confirm, ErrorNote, Field, IconButton, Input, Mono, Panel, Select, Skeleton, Status, ago, bytes, time } from "../components/ui";
 import { ProcessPanel } from "../components/ProcessPanel";
 import { AddAlertButton } from "../components/alerts/AddAlert";
 
@@ -105,6 +105,8 @@ export function NodeDetail() {
   const [confirmRevoke, setConfirmRevoke] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  const [confirmDrain, setConfirmDrain] = useState(false);
+  const drain = useDrainServer();
   // Hooks before the early return below (rules of hooks).
   const bindings = useMe().data?.bindings;
   const platformAdmin = (Array.isArray(bindings) ? bindings : []).some((b) => b.role === "platform_admin");
@@ -143,6 +145,7 @@ export function NodeDetail() {
             <PinToggle kind="node" id={n.id} label={nodeName(n)} sublabel={cluster?.name} />
             <Badge tone={n.role === "control" ? "accent" : "muted"}>{n.role === "control" ? "Control plane" : "Worker"}</Badge>
             <Status value={n.status} />
+            {n.drained && <Badge tone="warn">Drained</Badge>}
           </h1>
           <p className="truncate text-xs text-muted">
             {n.display_name && <span className="font-mono">{n.hostname} · </span>}
@@ -164,6 +167,15 @@ export function NodeDetail() {
           <Button variant="primary" disabled={n.status === "revoked"} title={n.status === "revoked" ? "The node's agent is revoked" : undefined} onClick={() => terminals.open(n)}>
             <SquareTerminal className="size-4" /> Open terminal
           </Button>
+          {n.drained ? (
+            <Button disabled={drain.isPending} title="Take new placements on this node again" onClick={() => drain.mutate({ id: n.id, drained: false })}>
+              <ArrowDownToLine className="size-4" /> Undrain
+            </Button>
+          ) : (
+            <Button disabled={n.status === "revoked"} title="Skip this node for placement and move its movable services" onClick={() => setConfirmDrain(true)}>
+              <ArrowDownToLine className="size-4" /> Drain
+            </Button>
+          )}
           <Button variant="danger" disabled={n.status === "revoked"} title={n.status === "revoked" ? "Already revoked" : undefined} onClick={() => setConfirmRevoke(true)}>
             <ShieldX className="size-4" /> Revoke
           </Button>
@@ -289,6 +301,17 @@ export function NodeDetail() {
       <RevokeNodeDialog node={n} open={confirmRevoke} onOpenChange={setConfirmRevoke} />
       <RevokeNodeDialog node={n} mode="remove" open={confirmRemove} onOpenChange={setConfirmRemove} onRemoved={() => void navigate({ to: "/nodes" })} />
       <RenameNodeDialog node={n} open={renaming} onOpenChange={setRenaming} />
+      {confirmDrain && (
+        <Confirm
+          open
+          onOpenChange={setConfirmDrain}
+          title={`Drain ${nodeName(n)}?`}
+          body="New placements skip this node. Container services without local data move to other nodes; services with volumes stay and raise the Service stranded alert."
+          confirmLabel="Drain"
+          busy={drain.isPending}
+          onConfirm={() => drain.mutate({ id: n.id, drained: true }, { onSuccess: () => setConfirmDrain(false) })}
+        />
+      )}
     </>
   );
 }

@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 
 use crate::common::*;
 
-async fn node(h: &Harness, hostname: &str) -> forge_core::ServerId {
+pub(crate) async fn node(h: &Harness, hostname: &str) -> forge_core::ServerId {
     let server = forge_core::model::Server {
         id: forge_core::ServerId::new(),
         workspace_id: h.default_org.parse().unwrap(),
@@ -37,6 +37,7 @@ async fn node(h: &Harness, hostname: &str) -> forge_core::ServerId {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: forge_core::Timestamp(0),
     };
     forge_core::ports::ServerRepository::create_server(&h.app.state.store, &server).await.unwrap();
@@ -45,7 +46,7 @@ async fn node(h: &Harness, hostname: &str) -> forge_core::ServerId {
 }
 
 /// A container service `name` in a new environment, placed on `server`.
-async fn container(admin: &Client, name: &str, server: forge_core::ServerId) -> String {
+pub(crate) async fn container(admin: &Client, name: &str, server: forge_core::ServerId) -> String {
     let (_, cl) = admin.post("/api/v1/clusters", json!({ "name": format!("{name}-lab") })).await;
     let (_, group) = admin.post("/api/v1/projects", json!({ "name": format!("{name}-app") })).await;
     let (s, ns) = admin
@@ -72,7 +73,7 @@ async fn container(admin: &Client, name: &str, server: forge_core::ServerId) -> 
 /// Plays the node's agent until dropped: polls for commands like a heartbeat
 /// and answers them. `docker` is whether the node has a Docker Engine now;
 /// installing the `docker` package turns it on.
-struct FakeNode {
+pub(crate) struct FakeNode {
     docker: Arc<AtomicBool>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -83,7 +84,7 @@ impl Drop for FakeNode {
     }
 }
 
-fn fake_node(h: &Harness, server: forge_core::ServerId, docker: bool) -> FakeNode {
+pub(crate) fn fake_node(h: &Harness, server: forge_core::ServerId, docker: bool) -> FakeNode {
     let hub = h.app.state.hub.clone();
     let docker = Arc::new(AtomicBool::new(docker));
     let has_docker = docker.clone();

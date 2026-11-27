@@ -246,6 +246,7 @@ async fn ssh_is_used_only_with_an_explicit_login() {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: forge_core::Timestamp(0),
     };
     let old = add("linux");

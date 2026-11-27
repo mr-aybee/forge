@@ -232,6 +232,7 @@ mod tests {
             last_seen_at: None,
             cert_serial: None,
             cert_not_after: cert.map(Timestamp),
+            drained: false,
             created_at: Timestamp(1),
         }
     }
@@ -267,6 +268,9 @@ mod tests {
             last_job_id: None,
             last_error: None,
             updated_at: Timestamp(1),
+            desired: forge_core::model::InstanceDesired::Running,
+            deployed_release: None,
+            exit_code: None,
         };
         let st = instance_samples(std::slice::from_ref(&i), SERVICE_INSTANCE_STATE, P);
         assert_eq!(values(&st), vec![None], "no reported state is unknown");

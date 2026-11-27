@@ -24,6 +24,7 @@ fn node(h: &Harness, hostname: &str, status: AgentStatus) -> Server {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: forge_core::Timestamp(0),
     }
 }

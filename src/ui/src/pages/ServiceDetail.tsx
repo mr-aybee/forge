@@ -517,7 +517,7 @@ function StackServiceDetail({ a, ns, hostOf }: { a: Service; ns?: Environment; h
                     )}
                   </Td>
                   <Td>
-                    <Status value={i.status === "deployed" ? "succeeded" : i.status === "failed" ? "failed" : i.status?.endsWith("ing") ? "running" : "pending"} />
+                    <Status value={i.status === "deployed" ? "succeeded" : i.status === "failed" || i.status === "stranded" ? "failed" : i.status === "drifted" ? "degraded" : i.status?.endsWith("ing") ? "running" : "pending"} />
                     <span className="ml-1.5 text-xs text-muted">{i.status ?? "—"}</span>
                   </Td>
                   <Td><InstanceStateChip s={liveState(i, nodes.find((n) => n.id === i.server_id))} /></Td>

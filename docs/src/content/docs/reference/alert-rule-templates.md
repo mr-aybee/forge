@@ -67,6 +67,7 @@ In the console: the service's **Health Checks** tab, **Add alert**, or
 | `service-health-flapping` | Health flapping | warning | `health.readiness.{check}` | state in `failing` | repeated, `count` `3`, `window_ms` `900000`, `min_spacing_ms` `0` | trigger no longer met, hold `0` |
 | `service-instance-failed` | Instance failed | critical | `app.instance.state` | state in `failed` | sustained, `for_ms` `60000` | trigger no longer holds, hold `0` |
 | `service-deploy-failed` | Deployment failed | major | `app.deploy.status` | state in `failed` | immediate | trigger no longer holds, hold `0` |
+| `service-stranded` | Service stranded | critical | `app.deploy.status` | state in `stranded` | immediate | trigger no longer holds, hold `0` |
 
 ## Database templates
 

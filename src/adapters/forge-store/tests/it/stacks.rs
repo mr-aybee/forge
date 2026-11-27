@@ -38,6 +38,7 @@ async fn seed() -> (Store, tempfile::TempDir, WorkspaceId, EnvironmentId, Server
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: Timestamp(1),
     };
     s.create_server(&server).await.unwrap();
@@ -201,6 +202,7 @@ fn node(ws: WorkspaceId, hostname: &str) -> Server {
         last_seen_at: None,
         cert_serial: Some("ab12".into()),
         cert_not_after: None,
+        drained: false,
         created_at: Timestamp(1),
     }
 }

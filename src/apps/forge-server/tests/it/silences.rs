@@ -124,6 +124,7 @@ async fn node(h: &Harness, name: &str) -> ServerId {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: h.app.state.clock.now(),
     };
     h.app.state.store.create_server(&s).await.unwrap();

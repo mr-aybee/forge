@@ -26,6 +26,8 @@ pass an id instead. A name that matches no node you can see exits with `6`.
 | [`forge nodes command`](#forge-nodes-command) | Sends a read-only command to a node as a job |
 | [`forge nodes rename`](#forge-nodes-rename) | Sets the display name shown in the console |
 | [`forge nodes dns-name`](#forge-nodes-dns-name) | Sets the node's local DNS name (`<label>.local`) |
+| [`forge nodes drain`](#forge-nodes-drain) | Drains a node: placement skips it and its movable services move |
+| [`forge nodes undrain`](#forge-nodes-undrain) | Undrains a node: it takes new placements again |
 | [`forge nodes files …`](/docs/reference/cli/nodes-files/) | Browses and manages files on a node (separate page) |
 | [`forge nodes revoke`](#forge-nodes-revoke) | Revokes a node's agent certificate |
 | [`forge nodes enroll-token`](#forge-nodes-enroll-token) | Creates a one-time enrollment token for a new node |
@@ -517,6 +519,91 @@ Exit codes:
 
 **See also**: [Rename a node and reach services by name](/docs/guides/local-names/),
 [`forge dns list`](/docs/reference/cli/dns/).
+
+### forge nodes drain
+
+Drains a node. New placements skip it, and the service reconciler moves its
+container services without local data (no volumes, devices or App Store env
+files) to other nodes, then removes them from this node. Services with local
+data stay, are marked `stranded` and raise the `service-stranded` alert. Needs
+`node.drain` on the node (**Operator** or higher); audited as `server.drain`.
+See [Keep services running](/docs/guides/services/#keep-services-running).
+
+**Synopsis**
+
+```text
+forge nodes drain <NODE> [--yes]
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | node id, host name or display name | — | yes | The node to drain | `lab-b` |
+| `--yes` | flag | off | no | Skip the confirmation prompt | `--yes` |
+
+**Examples**
+
+```sh
+# Drain a node before maintenance
+forge nodes drain <node>
+
+# Drain without a prompt (scripts)
+forge nodes drain <node> --yes
+```
+
+**Output**
+
+The node in the same shape as [`forge nodes get`](#forge-nodes-get), with
+`drained: true`. Not captured on a live system.
+
+Exit codes:
+
+- `0`: success.
+- `2`: `<node>` is ambiguous, or you declined the prompt.
+- `3`: not signed in.
+- `4`: you lack `node.drain` on the node.
+- `6`: no such node.
+
+**See also**: [`forge nodes undrain`](#forge-nodes-undrain).
+
+### forge nodes undrain
+
+Undrains a node, so placement uses it again. Services that moved away stay
+where they are. Needs `node.drain` on the node; audited as `server.undrain`.
+
+**Synopsis**
+
+```text
+forge nodes undrain <NODE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<node>` | node id, host name or display name | — | yes | The node to undrain | `lab-b` |
+
+**Examples**
+
+```sh
+# Take a node back into service after maintenance
+forge nodes undrain <node>
+```
+
+**Output**
+
+The node with `drained: false`. Not captured on a live system.
+
+Exit codes:
+
+- `0`: success.
+- `2`: `<node>` is ambiguous.
+- `3`: not signed in.
+- `4`: you lack `node.drain` on the node.
+- `6`: no such node.
+
+**See also**: [`forge nodes drain`](#forge-nodes-drain).
 
 ### forge nodes revoke
 

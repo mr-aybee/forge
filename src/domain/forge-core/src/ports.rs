@@ -257,6 +257,11 @@ pub trait ServerRepository: Send + Sync + std::fmt::Debug {
         Err(crate::error::DomainError::Internal("deleting nodes is not supported by this store".into()))
     }
     async fn set_certificate(&self, id: ServerId, serial: &str, not_after: Timestamp) -> DomainResult<()>;
+    /// Drains (or undrains) a node (D-177). Idempotent.
+    async fn set_drained(&self, id: ServerId, drained: bool) -> DomainResult<()> {
+        let _ = (id, drained);
+        Err(crate::error::DomainError::Internal("draining nodes is not supported by this store".into()))
+    }
     /// Marks agents that have not been seen since `cutoff` as offline; returns their ids.
     async fn mark_stale_offline(&self, cutoff: Timestamp) -> DomainResult<Vec<ServerId>>;
     /// Sets a node's DNS label (D-084); `explicit`: a user chose it. A label
@@ -529,6 +534,45 @@ pub trait ServiceRepository: Send + Sync + std::fmt::Debug {
     async fn delete_instance(&self, app: ServiceId, server: ServerId) -> DomainResult<()>;
     /// The services placed on one node (one query).
     async fn list_server_services(&self, server: ServerId) -> DomainResult<Vec<Service>>;
+    /// Records what the node reports for an instance (D-177): its state and
+    /// last exit code, without touching status or the last job. `false`
+    /// when there is no such instance.
+    async fn observe_instance(
+        &self,
+        app: ServiceId,
+        server: ServerId,
+        observed: &InstanceObservation,
+    ) -> DomainResult<bool> {
+        let _ = (app, server, observed);
+        Err(crate::error::DomainError::Internal("instance reports are not supported by this store".into()))
+    }
+    /// Sets an instance's status to `to` only while it is still `from`
+    /// (D-177), so a background change never overwrites a job's. `false`
+    /// when it was not `from`.
+    async fn swap_instance_status(&self, app: ServiceId, server: ServerId, change: &StatusSwap) -> DomainResult<bool> {
+        let _ = (app, server, change);
+        Err(crate::error::DomainError::Internal("instance status changes are not supported by this store".into()))
+    }
+}
+
+/// What a node reported for a service instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceObservation {
+    /// The container state (`running`, `exited`, …); `None` when the node
+    /// has no container for it.
+    pub state: Option<String>,
+    pub exit_code: Option<i64>,
+    pub at: Timestamp,
+}
+
+/// A conditional instance status change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusSwap {
+    pub from: String,
+    pub to: String,
+    /// Replaces `last_error` when set; `Some("")` clears it.
+    pub error: Option<String>,
+    pub at: Timestamp,
 }
 
 /// Who last saved a service's health policy while it referred to

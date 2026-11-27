@@ -55,8 +55,10 @@ pub mod perms;
 pub mod pins;
 pub mod public_address;
 pub mod rate_limit;
+pub mod reconcile;
 pub mod registries;
 pub mod request_origin;
+pub mod service_jobs;
 pub mod service_ports;
 pub mod stack_apply;
 pub mod stack_states;
@@ -150,6 +152,7 @@ impl App {
         }));
 
         tasks.push(tokio::spawn(state.jobs.clone().run(rx.clone())));
+        tasks.push(tokio::spawn(state.reconciler.clone().run(rx.clone())));
         tasks.push(tokio::spawn(api::fabric_reconcile::run(state.clone(), rx.clone())));
         tasks.push(tokio::spawn(names::run(state.clone(), rx.clone())));
         tasks.push(tokio::spawn(alerting::run(state.clone(), rx.clone())));

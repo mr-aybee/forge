@@ -67,6 +67,8 @@ pub struct Services {
     /// Container shells waiting for their node to dial back (D-114).
     pub exec_streams: crate::container_exec::ExecStreams,
     pub jobs: Arc<JobEngine>,
+    /// Keeps services in their desired state (D-177).
+    pub reconciler: Arc<crate::reconcile::ServiceReconciler>,
     pub plugins: Arc<PluginHost>,
     pub ca: Arc<CertificateAuthority>,
     /// The control-plane key agents pin and its rotation (D-167).
@@ -619,6 +621,19 @@ impl Services {
             },
         ));
         let _ = rollout_engine.set(jobs.clone());
+        let reconciler = Arc::new(crate::reconcile::ServiceReconciler::new(crate::reconcile::ReconcilerPorts {
+            services: Arc::new(store.clone()),
+            servers: Arc::new(store.clone()),
+            deploys: Arc::new(store.clone()),
+            job_repo: Arc::new(store.clone()),
+            users: Arc::new(store.clone()),
+            settings: Arc::new(store.clone()),
+            files: Arc::new(store.clone()),
+            facts: Arc::new(store.clone()),
+            audit: audit.clone(),
+            clock: clock.clone(),
+            jobs: jobs.clone(),
+        }));
         let _ = stack_rollout_engine.set(jobs.clone());
 
         let mut trust = TrustStore::new();
@@ -757,6 +772,7 @@ impl Services {
             deploy,
             exec_streams: crate::container_exec::ExecStreams::default(),
             jobs,
+            reconciler,
             plugins,
             ca,
             agent_keys,

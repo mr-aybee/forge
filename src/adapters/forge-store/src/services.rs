@@ -1,6 +1,8 @@
 use async_trait::async_trait;
-use forge_core::model::{EnvVar, Service, ServiceInstance};
-use forge_core::ports::{HealthAuthority, HealthAuthorityRepository, ServiceRepository};
+use forge_core::model::{EnvVar, InstanceDesired, Service, ServiceInstance};
+use forge_core::ports::{
+    HealthAuthority, HealthAuthorityRepository, InstanceObservation, ServiceRepository, StatusSwap,
+};
 use forge_core::*;
 use serde_json::{Value, json};
 use sqlx::any::AnyRow;
@@ -60,6 +62,9 @@ fn instance_row(r: &AnyRow) -> DomainResult<ServiceInstance> {
         last_job_id: opt_parsed(r, "last_job_id")?,
         last_error: opt_text(r, "last_error")?,
         updated_at: ts(r, "updated_at")?,
+        desired: InstanceDesired::parse(&text(r, "desired")?),
+        deployed_release: opt_text(r, "deployed_release")?,
+        exit_code: opt_int(r, "exit_code")?,
     })
 }
 
@@ -181,10 +186,12 @@ impl ServiceRepository for Store {
 
     async fn put_instance(&self, i: &ServiceInstance) -> DomainResult<()> {
         sqlx::query(
-            "INSERT INTO service_instances (service_id, server_id, role, status, state, last_job_id, last_error, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "INSERT INTO service_instances (service_id, server_id, role, status, state, last_job_id, last_error, updated_at,
+                                            desired, deployed_release, exit_code)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
              ON CONFLICT (service_id, server_id) DO UPDATE SET role = $3, status = $4, state = $5, last_job_id = $6,
-                                                          last_error = $7, updated_at = $8",
+                                                          last_error = $7, updated_at = $8, desired = $9,
+                                                          deployed_release = $10, exit_code = $11",
         )
         .bind(i.service_id.to_string())
         .bind(i.server_id.to_string())
@@ -194,6 +201,9 @@ impl ServiceRepository for Store {
         .bind(i.last_job_id.map(|j| j.to_string()))
         .bind(i.last_error.clone())
         .bind(i.updated_at.0)
+        .bind(i.desired.as_str())
+        .bind(i.deployed_release.clone())
+        .bind(i.exit_code)
         .execute(self.pool())
         .await
         .map_err(db_err)?;
@@ -264,6 +274,46 @@ impl ServiceRepository for Store {
             .await
             .map_err(db_err)?;
         rows.iter().map(instance_row).collect()
+    }
+
+    async fn observe_instance(
+        &self,
+        app: ServiceId,
+        server: ServerId,
+        observed: &InstanceObservation,
+    ) -> DomainResult<bool> {
+        let done = sqlx::query(
+            "UPDATE service_instances SET state = $3, exit_code = $4, updated_at = $5
+             WHERE service_id = $1 AND server_id = $2",
+        )
+        .bind(app.to_string())
+        .bind(server.to_string())
+        .bind(observed.state.clone())
+        .bind(observed.exit_code)
+        .bind(observed.at.0)
+        .execute(self.pool())
+        .await
+        .map_err(db_err)?;
+
+        Ok(done.rows_affected() > 0)
+    }
+
+    async fn swap_instance_status(&self, app: ServiceId, server: ServerId, change: &StatusSwap) -> DomainResult<bool> {
+        let done = sqlx::query(
+            "UPDATE service_instances SET status = $4, last_error = CASE WHEN $5 IS NULL THEN last_error WHEN $5 = '' THEN NULL ELSE $5 END, updated_at = $6
+             WHERE service_id = $1 AND server_id = $2 AND status = $3",
+        )
+        .bind(app.to_string())
+        .bind(server.to_string())
+        .bind(&change.from)
+        .bind(&change.to)
+        .bind(change.error.clone())
+        .bind(change.at.0)
+        .execute(self.pool())
+        .await
+        .map_err(db_err)?;
+
+        Ok(done.rows_affected() > 0)
     }
 
     async fn delete_instance(&self, app: ServiceId, server: ServerId) -> DomainResult<()> {

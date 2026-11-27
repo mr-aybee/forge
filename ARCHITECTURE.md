@@ -571,6 +571,21 @@ Apps outside the fleet still post to `POST /api/events/raw` on
 `forge-server`, which checks the key and forwards the body to the worker.
 See D-142.
 
+**Service reconciler.** Agents push the state of each native service
+container (label `forge.app`) in `Heartbeat.app_states` when it changes.
+`forge-server` records it on the instance and marks it `drifted` when no
+container runs the release of the last deploy. Every 15 s the
+`ServiceReconciler` (`src/apps/forge-server/src/reconcile.rs`, ports only)
+starts exited containers on online nodes (at most 5 times in 30 minutes,
+then `failed`), and strands instances whose node is offline past
+`services.node_grace_secs` or drained: a container without local data is
+deployed on another eligible node first, anything else raises
+`service-stranded`. Each action is an `app.action` job submitted as the
+principal of the instance's last job, so the job runner authorizes every
+step as that person; the reconciler's decisions are audited as
+`system:reconciler`. Services with an active deployment are skipped. See
+D-177.
+
 **Plugins.** Upload manifest + component + publisher signature → verify →
 admin approves requested permissions → install → enable. Invocation spawns the
 runner with budgets; budget exhaustion stops it and quarantines the plugin.

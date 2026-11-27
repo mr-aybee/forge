@@ -84,6 +84,7 @@ async fn resolver_builds_full_ancestry() {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: Timestamp(1),
     };
     s.create_server(&server).await.unwrap();
@@ -233,6 +234,7 @@ async fn cluster_membership_adds_second_parent() {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: Timestamp(1),
     };
     s.create_server(&server).await.unwrap();
@@ -303,6 +305,7 @@ async fn resolve_many_matches_resolve_for_servers() {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: Timestamp(1),
     };
     let (a, b, c) = (mk("a", Some(env.id)), mk("b", None), mk("c", Some(env.id)));
@@ -410,6 +413,7 @@ async fn node_labels_are_unique_per_workspace() {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: Timestamp(1),
     };
     let (a, b) = (node("a"), node("b"));
@@ -712,6 +716,7 @@ async fn swarm_rows_round_trip_and_go_with_the_cluster() {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: Timestamp(1),
     };
     store.create_server(&server).await.unwrap();

@@ -183,6 +183,8 @@ pub fn router(state: AppState) -> Router {
         // servers
         .route("/servers", get(servers::list))
         .route("/servers/{id}", get(servers::get).patch(clusters::assign).delete(servers::remove))
+        .route("/servers/{id}/drain", post(servers::drain))
+        .route("/servers/{id}/undrain", post(servers::undrain))
         .route("/clusters", get(clusters::list).post(clusters::create))
         .route("/nodes/probe", post(nodes::probe))
         .route("/nodes/onboard", post(nodes::onboard))

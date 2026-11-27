@@ -324,6 +324,7 @@ async fn terminal_requires_mfa_and_a_valid_login() {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: forge_core::Timestamp(0),
     };
     forge_core::ports::ServerRepository::create_server(&h.app.state.store, &server).await.unwrap();
@@ -377,6 +378,7 @@ async fn app_store_lists_catalog_and_guards_installs() {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: forge_core::Timestamp(0),
     };
     forge_core::ports::ServerRepository::create_server(&h.app.state.store, &server).await.unwrap();
@@ -544,6 +546,7 @@ async fn sites_validate_preview_and_need_mfa_to_apply() {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: forge_core::Timestamp(0),
     };
     forge_core::ports::ServerRepository::create_server(&h.app.state.store, &server).await.unwrap();
@@ -597,6 +600,7 @@ fn test_node(
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: forge_core::Timestamp(0),
     }
 }
@@ -896,6 +900,9 @@ async fn cluster_profiles_validate_scope_and_feed_ingress_endpoints() {
                 last_job_id: None,
                 last_error: None,
                 updated_at: now,
+                desired: forge_core::model::InstanceDesired::Running,
+                deployed_release: None,
+                exit_code: None,
             },
         )
         .await

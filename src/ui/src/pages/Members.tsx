@@ -35,6 +35,7 @@ const ACTIONS: { group: string; id: string; label: string; roles: Role[]; mfa?: 
   { group: "Nodes", id: "process.manage", label: "End processes and change their priority", roles: ["platform_admin", "workspace_admin", "operator"], mfa: true },
   { group: "Nodes", id: "network.tunnel", label: "Open tunnels to services in an environment (forge tunnel)", roles: ["platform_admin", "workspace_admin", "operator", "developer"], mfa: true },
   { group: "Nodes", id: "network.tunnel.any", label: "Open tunnels to raw node ports", roles: ["platform_admin", "workspace_admin"], mfa: true },
+  { group: "Nodes", id: "node.drain", label: "Drain and undrain nodes", roles: ["platform_admin", "workspace_admin", "operator"] },
   { group: "Nodes", id: "server.rename", label: "Rename nodes (console name and DNS name)", roles: ["platform_admin", "workspace_admin", "operator"] },
   { group: "Alerts", id: "alert.view", label: "See alarms and alert rules", roles: ["platform_admin", "workspace_admin", "operator", "developer", "dba", "auditor"] },
   { group: "Alerts", id: "alert.manage", label: "Manage alert rules and acknowledge alarms", roles: ["platform_admin", "workspace_admin", "operator"] },

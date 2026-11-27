@@ -1287,6 +1287,7 @@ mismatch.
 | `read_only` | bool | `false` | none | Container only: read-only root filesystem |
 | `log_max_mb` | integer, MB | `0` (not set) | none | Container only: log rotation size |
 | `mesh` | bool | `true` | none | Container only: `false` keeps the container off the node's [cluster container network](/docs/guides/cluster-network/#container-network) |
+| `on_node_failure` | `move`, `alert`, or absent | absent | none | What the [service reconciler](/docs/guides/services/#keep-services-running) does when the node is offline past `services.node_grace_secs` or drained. Absent: `move` for a container with no volumes, devices or env files, `alert` otherwise. A systemd service is never moved. Set it with `--file` |
 | `restart_policy` | `no`, `always`, `unless-stopped`, `on-failure`, or absent | absent | `--restart-policy` | When the service is restarted. When it is absent, `restart` decides: `true` is `unless-stopped`. A native service maps it onto systemd `Restart=` |
 | `restart_max_attempts` | integer, 0 to 1000 | `0` (no limit) | `--restart-max-attempts` | `on-failure` only: stop restarting after this many restarts. A clean exit (status 0) is never restarted. A deploy or a manual start begins a new count |
 | `cap_add` | list of capability names | `[]` | `--cap-add` | Container only: Linux capabilities to add, such as `NET_ADMIN`. Deploying needs `stack.privileged` |

@@ -442,6 +442,13 @@ export const useRemoveServer = () =>
       api<void>("DELETE", `/api/v1/servers/${b.id}`, { confirm_hostname: b.confirm_hostname, totp_code: b.totp_code }),
     [["servers"], ["stacks"], ["names"]],
   );
+/** Drains (`drained: true`) or undrains a node (`node.drain`). */
+export const useDrainServer = () =>
+  useAction(
+    (b: { id: string; drained: boolean }) => api<Server>("POST", `/api/v1/servers/${b.id}/${b.drained ? "drain" : "undrain"}`),
+    [["servers"], ["server"]],
+  );
+
 export const useRenameServer = () =>
   useAction((b: { id: string; name: string }) => api<Server>("PUT", `/api/v1/servers/${b.id}/name`, { name: b.name }), [["servers"], ["server"]]);
 

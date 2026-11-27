@@ -171,6 +171,9 @@ impl CommandExecutor for LocalExecutor {
                 // devices, init and extra networks on app specs
                 // (plans/service-orchestration.md step 1).
                 "container_options": true,
+                // Pushes native service container states for the service
+                // reconciler (D-177).
+                "app_states": cfg!(unix),
                 "docker_version": caps.docker_version,
                 // forge-dns on fabric nodes: running, stopped or missing.
                 "forge_dns": forge_dns_status().await,

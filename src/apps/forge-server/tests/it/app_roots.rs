@@ -25,6 +25,7 @@ async fn node(h: &Harness, os: &str) -> forge_core::model::Server {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: forge_core::Timestamp(0),
     };
     forge_core::ports::ServerRepository::create_server(&h.app.state.store, &server).await.unwrap();
