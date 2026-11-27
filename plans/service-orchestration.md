@@ -166,7 +166,7 @@ One PR.
   | `deploy.placement.max_replicas_per_node` | accepted only as `1` |
   | `deploy.resources.reservations` | checked against node capacity at placement |
   | `deploy.rollback_config` | rollback batch size and order |
-  | `secrets`, `configs` | see step 3a |
+  | `secrets`, `configs` | vault items, step 3a (D-179) |
   | `x-forge` | the extensions in the parity section |
 
 - Rejected with a message naming the key: `build`, `deploy.endpoint_mode`,

@@ -1400,6 +1400,11 @@ fn app_summary(
     s.insert("instances".into(), Value::Array(instance_rows(&v["instances"], names)));
     s.insert("updated_at".into(), v["updated_at"].clone());
 
+    // A vault item it mounts as a file changed since its last deploy (D-179).
+    if !v["secrets_changed_at"].is_null() {
+        s.insert("redeploy".into(), json!("needed: a vault item it mounts as a file changed; deploy it again"));
+    }
+
     Value::Object(s)
 }
 

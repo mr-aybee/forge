@@ -3,10 +3,10 @@
  * each kind shows (in rail order), per-section status for the rail markers,
  * and the conversions between a service and its editable input. No React.
  */
-import { Activity, Boxes, Cpu, HardDrive, Network, Package, ServerCog, Settings2, SquareTerminal, Variable, Container, IdCard, Layers, Shield, Play, type LucideIcon } from "lucide-react";
+import { Activity, Boxes, KeyRound, Cpu, HardDrive, Network, Package, ServerCog, Settings2, SquareTerminal, Variable, Container, IdCard, Layers, Shield, Play, type LucideIcon } from "lucide-react";
 
 import { defaultSwarmSettings, normSwarmSettings } from "../../api/swarm";
-import type { EditableRuntime, RestartPolicy, Service, ServiceInput, ServiceRuntime } from "../../api/types";
+import type { EditableRuntime, RestartPolicy, SecretFileRef, Service, ServiceInput, ServiceRuntime } from "../../api/types";
 
 /** The kinds a user picks between, shown as two large cards. */
 export const KINDS: { id: EditableRuntime; label: string; icon: LucideIcon; description: string; needs: string }[] = [
@@ -32,7 +32,7 @@ export const RUNTIMES: { id: ServiceRuntime; label: string; icon: LucideIcon; he
   { id: "compose-service", label: "Compose service", icon: Container, help: "Registered by a compose stack; managed on its stack." },
 ];
 
-export type SectionId = "basics" | "runtime" | "start" | "resources" | "env" | "storage" | "health" | "advanced" | "image" | "network" | "run" | "volumes" | "security" | "swarm";
+export type SectionId = "basics" | "runtime" | "start" | "resources" | "env" | "storage" | "health" | "advanced" | "image" | "network" | "run" | "volumes" | "security" | "swarm" | "files";
 
 export interface SectionMeta {
   id: SectionId;
@@ -56,17 +56,18 @@ const S: Record<SectionId, SectionMeta> = {
   volumes: { id: "volumes", label: "Storage", icon: HardDrive, hint: "Bind mounts and in-memory tmpfs mounts." },
   health: { id: "health", label: "Health checks", icon: Activity, hint: "How Forge and Docker decide that the service is healthy." },
   advanced: { id: "advanced", label: "Advanced", icon: Settings2, hint: "Rarely needed options." },
+  files: { id: "files", label: "Secrets & configs", icon: KeyRound, hint: "Credential vault items mounted as read-only files. Only names are stored; values are written on the node at deploy." },
   swarm: { id: "swarm", label: "Swarm", icon: Layers, hint: "Replicas, where tasks may run, and how updates and restarts roll out." },
 };
 
 export const SECTIONS: Record<EditableRuntime, SectionMeta[]> = {
-  systemd: [S.basics, S.runtime, S.start, S.resources, S.env, S.storage, S.health, S.advanced],
-  container: [S.basics, S.image, S.run, S.network, S.volumes, S.resources, S.security, S.env, S.health, { ...S.advanced, hint: "Labels, log rotation, and the whole container as compose YAML." }],
+  systemd: [S.basics, S.runtime, S.start, S.resources, S.env, S.files, S.storage, S.health, S.advanced],
+  container: [S.basics, S.image, S.run, S.network, S.volumes, S.resources, S.security, S.env, S.files, S.health, { ...S.advanced, hint: "Labels, log rotation, and the whole container as compose YAML." }],
 };
 
 /** The sections of an input: a container in a Swarm cluster (`swarm` set) also gets the Swarm section. */
 export const sectionsFor = (v: ServiceInput): SectionMeta[] =>
-  v.runtime === "container" && v.swarm ? [...SECTIONS.container.slice(0, 3), S.swarm, ...SECTIONS.container.slice(3)] : SECTIONS[v.runtime];
+  v.runtime === "container" && v.swarm ? [...SECTIONS.container.slice(0, 3), S.swarm, ...SECTIONS.container.slice(3).filter((s) => s.id !== "files")] : SECTIONS[v.runtime];
 
 /** The input for an environment in (or out of) a Swarm cluster: container with settings, or no `swarm` at all. */
 export function forSwarm(v: ServiceInput, swarm: boolean): ServiceInput {
@@ -123,6 +124,20 @@ export const privilegedOf = (v: ServiceInput): string[] => [
   ...v.devices.filter((d) => d.host).map((d) => `device:${d.host}`),
   ...v.sysctls.filter(([k]) => k).map(([k]) => `sysctl:${k}`),
 ];
+
+/** The file name of a secret file: its target's last part (as on the server). */
+export const fileName = (f: SecretFileRef) => f.target.split("/").pop() ?? "";
+/** Mirrors forge_catalog::secret_files::check_target (the server is authoritative). */
+export const targetOk = (t: string) => {
+  if (!t.startsWith("/") || t.length > 255) return false;
+  const parts = t.slice(1).split("/");
+  return parts.every((p) => p && p !== "." && p !== ".." && /^[A-Za-z0-9._@+-]+$/.test(p)) && !["proc", "sys", "dev"].includes(parts[0] ?? "");
+};
+/** The default target of a new file for a vault item name. */
+export const defaultTarget = (kind: SecretFileRef["kind"], item: string) => {
+  const name = item.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "_") || "file";
+  return kind === "secret" ? `/run/secrets/${name}` : `/etc/${name}`;
+};
 
 export type SectionStatus = "complete" | "needs" | "error";
 
@@ -210,6 +225,15 @@ export function sectionIssues(id: SectionId, v: ServiceInput, b: BasicsState): {
       if (w.update.max_failure_ratio < 0 || w.update.max_failure_ratio > 1) errors.push("Failure ratio: 0 to 1.");
       break;
     }
+    case "files": {
+      const names = v.secret_files.map(fileName);
+      if (v.secret_files.some((f) => !f.item.trim())) needs.push("Pick a vault item for every file.");
+      if (v.secret_files.some((f) => !targetOk(f.target))) errors.push("Targets: absolute paths of plain names, not under /proc, /sys or /dev.");
+      if (names.some((n, i) => n && names.indexOf(n) !== i)) errors.push("Two files have the same file name.");
+      if (v.secret_files.some((f) => f.mode !== undefined && (!Number.isInteger(f.mode) || f.mode < 0 || f.mode > 0o777))) errors.push("Mode: octal permission bits up to 0777.");
+      if (v.secret_files.length > 50) errors.push("At most 50 files.");
+      break;
+    }
     case "runtime":
     case "storage":
       break;
@@ -259,6 +283,7 @@ export const emptyInput = (runtime: EditableRuntime = "container"): ServiceInput
   devices: [],
   init: false,
   networks: [],
+  secret_files: [],
 });
 
 const arr = <T,>(v: T[] | undefined | null): T[] => (Array.isArray(v) ? v : []);
@@ -303,6 +328,7 @@ export function toInput(a: Service): ServiceInput {
     devices: arr(s.devices).filter((d) => d && typeof d.host === "string").map((d) => ({ host: d.host, container: d.container ?? "", permissions: d.permissions ?? "" })),
     init: s.init === true,
     networks: arr(s.networks).filter(isStr),
+    secret_files: arr(s.secret_files).filter((f) => f && typeof f.item === "string" && typeof f.target === "string"),
     ...(typeof a.version === "number" ? { version: a.version } : {}),
     ...(a.runtime === "container" && s.mesh === false ? { mesh: false as const } : {}),
     ...(s.swarm ? { swarm: normSwarmSettings(s.swarm) } : {}),

@@ -993,6 +993,7 @@ mod tests {
             updated_at: Timestamp(0),
             version: 0,
             source: String::new(),
+            secrets_changed_at: None,
         };
         assert_eq!(policy(&app), NodeFailurePolicy::Move);
 

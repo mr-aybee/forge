@@ -61,6 +61,26 @@ the right nodes and deployed without Docker Swarm.
 In the console, open **New service** or a service and use the **YAML** tab:
 edit the file, choose **Plan** to see the changes and **Apply** to run them.
 
+### Mount secrets and configs
+
+Store each value as a credential vault item first (**Vault** → **New item**;
+the password field holds the value). Then declare it `external: true` at the
+top level and list it under the service:
+
+```yaml
+services:
+  api:
+    image: registry.example/api:2
+    secrets: [db_password]
+secrets:
+  db_password: { external: true, name: "DB password" }
+```
+
+The container reads it at `/run/secrets/db_password`. Applying a file that
+adds a vault item needs a platform administrator with MFA. When you rotate
+the item, the service shows **deploy it again** until its next deploy. See
+[Secrets and configs](/docs/reference/services-yaml/#secrets-and-configs).
+
 ## Verify
 
 - `forge services plan` on the same file shows every service as `unchanged`.
@@ -75,6 +95,9 @@ edit the file, choose **Plan** to see the changes and **Apply** to run them.
 | `… 3 nodes wanted, 2 eligible` | Too few nodes match: offline, drained, wrong cluster, constraints or reservations | Lower `replicas`, add nodes or relax the constraints |
 | `… is managed by the services file …` (409) | Another file applied a service of that name | Change it in that file, or rename it |
 | `… changed since the plan was made` (409) | Someone saved the service in between | Run the apply again |
+| `secrets.db.file: the server never reads files …` | A secret or config uses `file:` | Store the value in the vault and declare it `external: true` |
+| `no credential vault item is named …` | The name does not match a vault item | Fix `name:` or create the item |
+| Deploy fails with `… update the agent first` | The node's agent cannot write secret files | Update the agent on that node |
 | A removed service stays listed for a while | Its `remove` jobs are still running | It is deleted once its instances are gone |
 
 ## Next steps

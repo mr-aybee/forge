@@ -5,6 +5,7 @@ import type { EditableRuntime, ServiceInput } from "../../api/types";
 import { Confirm } from "../ui";
 import { AdvancedSection, YamlToggle } from "./AdvancedSection";
 import { EnvSection } from "./EnvSection";
+import { FilesSection } from "./FilesSection";
 import { HealthSection } from "./HealthSection";
 import { ImageSection } from "./ImageSection";
 import { PrivilegedHint, SectionCard } from "./parts";
@@ -84,6 +85,8 @@ export function ServiceEditor({ value, onChange, mode, basics, basicsState, fact
         return { node: <ResourcesSection value={value} set={set} /> };
       case "env":
         return { node: <EnvSection value={value} set={set} mode={ui.envMode} onMode={(envMode) => setUi((u) => ({ ...u, envMode }))} packages={packages} /> };
+      case "files":
+        return { node: <FilesSection value={value} set={set} /> };
       case "storage":
         return { node: <StorageSection home={facts.home} envFile={facts.envFile} serviceId={serviceId} /> };
       case "volumes":

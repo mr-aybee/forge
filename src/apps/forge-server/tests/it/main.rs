@@ -62,6 +62,7 @@ mod resume;
 mod scale;
 mod server_settings;
 mod service_files;
+mod service_secrets;
 mod service_spec;
 mod sftp;
 mod silences;

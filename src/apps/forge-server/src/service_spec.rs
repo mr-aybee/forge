@@ -5,7 +5,10 @@
 use std::collections::HashSet;
 
 use forge_catalog::compose_native::{Orchestration, SPEC_KEY};
+use forge_catalog::secret_files::FileRef;
+use forge_core::WorkspaceId;
 use forge_core::model::{EnvVar, Service};
+use forge_core::ports::ServiceRepository;
 use forge_core::{DomainError, DomainResult, Timestamp};
 use forge_secrets::Envelope;
 use serde::{Deserialize, Serialize};
@@ -98,6 +101,12 @@ pub struct AppInput {
     #[serde(default)]
     #[schemars(with = "Option<Value>")]
     pub orchestration: Option<Orchestration>,
+    /// Secret and config files: credential vault items by name, mounted
+    /// into a container or given to a native service in a folder (D-179).
+    /// Names only, never values.
+    #[serde(default)]
+    #[schemars(with = "Vec<Value>")]
+    pub secret_files: Vec<FileRef>,
     /// Update only: the `version` the editor loaded. A different stored
     /// version fails with 409 instead of overwriting someone else's change.
     #[serde(default)]
@@ -143,6 +152,8 @@ struct StoredSpec<'a> {
     on_node_failure: Option<forge_core::model::NodeFailurePolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     orchestration: Option<Value>,
+    #[serde(skip_serializing_if = "<[FileRef]>::is_empty")]
+    secret_files: &'a [FileRef],
 }
 
 const fn yes() -> bool {
@@ -164,6 +175,15 @@ pub fn apply_input(
 
     if let Some(s) = &input.swarm {
         s.validate().map_err(DomainError::Invalid)?;
+    }
+
+    forge_catalog::secret_files::validate_refs(&input.secret_files)
+        .map_err(|m| DomainError::Invalid(format!("secret files: {m}")))?;
+
+    if input.swarm.is_some() && !input.secret_files.is_empty() {
+        return Err(DomainError::Invalid(
+            "a Swarm service mounts Swarm secrets and configs (swarm.secrets, swarm.configs), not vault files".into(),
+        ));
     }
 
     let mut seen = HashSet::new();
@@ -238,10 +258,62 @@ pub fn apply_input(
         mesh,
         on_node_failure: input.on_node_failure,
         orchestration,
+        secret_files: &input.secret_files,
     };
     app.spec = serde_json::to_value(&stored).map_err(DomainError::internal)?;
     app.updated_at = now;
     build_spec(app, None).map_err(DomainError::Invalid)?;
 
     Ok(())
+}
+
+/// The vault item names `refs` uses that `old` (the stored spec, if any)
+/// does not: referencing one needs the same permission as using a vault
+/// item elsewhere (D-171, D-179).
+#[must_use]
+pub fn new_vault_items(old: Option<&Value>, refs: &[FileRef]) -> Vec<String> {
+    let before = stored_refs(old);
+    let mut out: Vec<String> =
+        refs.iter().filter(|r| !before.iter().any(|b| b.item == r.item)).map(|r| r.item.clone()).collect();
+    out.sort();
+    out.dedup();
+
+    out
+}
+
+/// The secret and config file references of a stored spec (none when it
+/// has none, or for a spec saved before they existed).
+#[must_use]
+pub fn stored_refs(spec: Option<&Value>) -> Vec<FileRef> {
+    let Some(v) = spec.and_then(|s| s.get(forge_catalog::secret_files::SPEC_KEY)).filter(|v| !v.is_null()) else {
+        return Vec::new();
+    };
+
+    // Written by `apply_input` from validated refs; a value that does not
+    // read back is reported where it matters (`build_spec` refuses it).
+    serde_json::from_value(v.clone()).unwrap_or_default()
+}
+
+/// Marks every service of workspace `ws` that mounts vault item `item` as
+/// a file as needing a redeploy (D-179), after the item was rotated or
+/// renamed at `at`. Returns the names of the services marked.
+pub async fn mark_vault_item_changed(
+    services: &dyn ServiceRepository,
+    ws: WorkspaceId,
+    item: &str,
+    at: Timestamp,
+) -> DomainResult<Vec<String>> {
+    let all = services.list_services(None).await?;
+    let mut using: Vec<&Service> = Vec::new();
+
+    for s in all.iter().filter(|s| s.workspace_id == ws) {
+        if stored_refs(Some(&s.spec)).iter().any(|r| r.item == item) {
+            using.push(s);
+        }
+    }
+
+    let ids: Vec<_> = using.iter().map(|s| s.id).collect();
+    services.mark_secrets_changed(&ids, at).await?;
+
+    Ok(using.iter().map(|s| s.name.clone()).collect())
 }

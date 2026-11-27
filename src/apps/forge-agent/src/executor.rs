@@ -171,6 +171,9 @@ impl CommandExecutor for LocalExecutor {
                 // devices, init and extra networks on app specs
                 // (plans/service-orchestration.md step 1).
                 "container_options": true,
+                // Writes secret and config files of app specs (`files`,
+                // D-179) and mounts them. Older agents omit it.
+                "service_files": cfg!(unix),
                 // Pushes native service container states for the service
                 // reconciler (D-177).
                 "app_states": cfg!(unix),

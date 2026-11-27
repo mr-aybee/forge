@@ -158,8 +158,8 @@ fn refusals_name_the_key() {
         (json!({ "build": "." }), "services.web.build", "image"),
         (json!({ "privileged": true }), "services.web.privileged", "cap_add"),
         (json!({ "network_mode": "host" }), "services.web.network_mode", "host networking"),
-        (json!({ "secrets": ["db"] }), "services.web.secrets", "later release"),
-        (json!({ "configs": ["c"] }), "services.web.configs", "later release"),
+        (json!({ "secrets": ["db"] }), "services.web.secrets[0]", "not declared"),
+        (json!({ "configs": [{ "target": "/x" }] }), "services.web.configs[0].source", "required"),
         (json!({ "env_file": ".env" }), "services.web.env_file", "inlines"),
         (json!({ "colour": "blue" }), "services.web.colour", "unknown key"),
         (json!({ "deploy": { "endpoint_mode": "vip" } }), "services.web.deploy.endpoint_mode", "cluster DNS"),
@@ -208,7 +208,6 @@ fn refusals_name_the_key() {
         assert!(msg.contains(why), "{extra}: {msg}");
     }
 
-    assert!(refused(&json!({ "services": { "web": { "image": "x" } }, "secrets": {} })).contains("later release"));
     assert!(
         refused(&json!({ "services": { "web": { "image": "x" } }, "include": [] })).starts_with("include: unknown key")
     );
@@ -327,4 +326,63 @@ networks:
     let again = parse(&crate::yaml::parse_document(&written).unwrap()).unwrap();
 
     assert_eq!(first, again, "{written}");
+}
+
+#[cfg(feature = "yaml")]
+#[test]
+fn secrets_and_configs_name_vault_items_and_export_back() {
+    let tree = json!({
+        "services": { "api": {
+            "image": "x",
+            "secrets": ["db_password", { "source": "tls", "target": "key.pem", "mode": "0440", "uid": "1000" }],
+            "configs": [{ "source": "app_conf", "target": "/etc/app/app.conf" }],
+        } },
+        "secrets": {
+            "db_password": { "external": true },
+            "tls": { "external": true, "name": "API TLS key" },
+        },
+        "configs": { "app_conf": { "external": true, "name": "api-config" } },
+    });
+    let svc = parse(&tree).unwrap().services.remove(0);
+    let files = &svc.spec.secret_files;
+    let by = |item: &str| files.iter().find(|f| f.item == item).unwrap();
+
+    assert_eq!(files.len(), 3);
+    assert_eq!(by("db_password").target, "/run/secrets/db_password");
+    assert_eq!(by("db_password").effective_mode(), 0o400);
+    assert_eq!(by("API TLS key").target, "/run/secrets/key.pem");
+    assert_eq!((by("API TLS key").mode, by("API TLS key").uid), (Some(0o440), Some(1000)));
+    assert_eq!(by("api-config").kind, crate::secret_files::FileKind::Config);
+    assert_eq!(by("api-config").target, "/etc/app/app.conf");
+    assert_eq!(by("api-config").effective_mode(), 0o444);
+
+    // Export writes references only and reads back to the same files.
+    let written = export(None, std::slice::from_ref(&svc));
+    let again = parse(&crate::yaml::parse_document(&written).unwrap()).unwrap().services.remove(0);
+    assert_eq!(again.spec.secret_files, svc.spec.secret_files, "{written}");
+    assert!(written.contains("API TLS key"));
+}
+
+#[test]
+fn file_secrets_and_undeclared_sources_are_refused() {
+    let with = |top: Value| {
+        let mut t = json!({ "services": { "api": { "image": "x", "secrets": ["db"] } } });
+        t["secrets"] = top;
+        t
+    };
+
+    assert!(
+        refused(&with(json!({ "db": { "file": "./db.txt" } })))
+            .starts_with("secrets.db.file: the server never reads files")
+    );
+    assert!(refused(&with(json!({ "db": { "environment": "DB" } }))).contains("vault"));
+    assert!(refused(&with(json!({ "db": {} }))).starts_with("secrets.db.external: must be true"));
+    assert!(refused(&with(json!({ "db": { "external": true, "driver": "x" } }))).starts_with("secrets.db.driver"));
+    assert!(refused(&with(json!({ "other": { "external": true } }))).contains("`db` is not declared"));
+
+    let clash = json!({
+        "services": { "api": { "image": "x", "secrets": ["a", { "source": "b", "target": "a" }] } },
+        "secrets": { "a": { "external": true }, "b": { "external": true } },
+    });
+    assert!(refused(&clash).contains("named `a`"));
 }

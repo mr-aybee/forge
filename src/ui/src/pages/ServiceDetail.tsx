@@ -257,6 +257,11 @@ function ServicePage({ appId }: { appId: string }) {
       <div className="-mt-2 mb-4">
         <TagEditor kind="service" id={a.id} />
       </div>
+      {a.secrets_changed_at != null && (
+        <p role="status" className="mb-4 rounded border border-warn/30 bg-warn-soft px-3 py-2 text-xs text-warn">
+          A vault item this service mounts as a file changed {ago(a.secrets_changed_at)}. Its nodes still have the old value: deploy it again.
+        </p>
+      )}
       <IpTags
         tags={[
           { label: "Service IP", value: leaseOf(fabric, "service", a.id) },

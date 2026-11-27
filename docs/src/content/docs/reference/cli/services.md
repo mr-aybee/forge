@@ -149,7 +149,7 @@ for a systemd service the unit
 (`<environment>-<service>`); the spec without empty fields (container-only fields
 are left out for systemd services); the environment, with secret values
 hidden; and one line per instance with the node's name, role, status and
-state. `forge services get` is an alias. Needs `view` on the service's
+state. When a vault item the service mounts as a file was rotated after its last deploy, a `redeploy` line says it needs a deploy (in JSON: `secrets_changed_at`, epoch ms, `null` otherwise). `forge services get` is an alias. Needs `view` on the service's
 environment.
 
 **Synopsis**
@@ -539,6 +539,8 @@ missing one exits with `2` and names the flag.
 | `--tmpfs <PATH[:SIZE_MB]>` | container path with an optional size; repeatable | none | no | A tmpfs mount. Without a size, Docker's default applies | `--tmpfs /tmp:64` |
 | `--init <BOOL>` | `true` or `false` | none | no | Run Docker's init as PID 1, which reaps zombie processes and forwards signals; `--init` alone means `true` | `--init` |
 | `--network <NAME>` | Docker network name; repeatable | none | no | An existing Docker network on the node to connect the container to as well | `--network backend` |
+| `--secret <ITEM[:TARGET]>` | vault item name with an optional path; repeatable | none | no | Mount credential vault item ITEM as a secret file at TARGET (default `/run/secrets/<ITEM>`; a relative TARGET goes under `/run/secrets`). Only the name is sent. Given at all, `--secret` and `--config` together replace the whole list. Referencing a new item needs a platform administrator with MFA | `--secret "DB password:db_password"` |
+| `--config <ITEM[:TARGET]>` | vault item name with an optional absolute path; repeatable | none | no | Mount credential vault item ITEM as a config file (mode `0444`) at TARGET (default `/<ITEM>`). The last `:` separates the target | `--config "api-config:/etc/api/app.conf"` |
 
 **Examples**
 
@@ -549,6 +551,8 @@ forge services create --environment lab --name web --runtime container --image n
 forge services create --environment lab --name api --runtime systemd --command "python3 -m http.server 8080" --listen-port 8080 --env PORT=8080
 # From a JSON definition
 forge services create --environment lab --file service.json
+# A container that mounts a vault item as /run/secrets/db_password
+forge services create --environment lab --name api --runtime container --image registry.example/api:2 --secret "DB password:db_password"
 ```
 
 Fields without a flag need `--file`: `working_dir`, `env_files`,
@@ -705,6 +709,8 @@ forge services update [OPTIONS] <SERVICE>
 | `--tmpfs <PATH[:SIZE_MB]>` | container path with an optional size; repeatable | keep | no | A tmpfs mount. Without a size, Docker's default applies | `--tmpfs /tmp:64` |
 | `--init <BOOL>` | `true` or `false` | keep | no | Run Docker's init as PID 1, which reaps zombie processes and forwards signals; `--init` alone means `true` | `--init` |
 | `--network <NAME>` | Docker network name; repeatable | keep | no | An existing Docker network on the node to connect the container to as well | `--network backend` |
+| `--secret <ITEM[:TARGET]>` | vault item name with an optional path; repeatable | keep | no | Mount credential vault item ITEM as a secret file at TARGET (default `/run/secrets/<ITEM>`; a relative TARGET goes under `/run/secrets`). Only the name is sent. Given at all, `--secret` and `--config` together replace the whole list. Referencing a new item needs a platform administrator with MFA | `--secret "DB password:db_password"` |
+| `--config <ITEM[:TARGET]>` | vault item name with an optional absolute path; repeatable | keep | no | Mount credential vault item ITEM as a config file (mode `0444`) at TARGET (default `/<ITEM>`). The last `:` separates the target | `--config "api-config:/etc/api/app.conf"` |
 | `--environment <ENVIRONMENT>` | environment id or name | — | no | Look the name up in this environment only. It does not move the service | `--environment shop-prod` |
 | `--yes` | flag | off | no | Skip the confirmation prompt | `--yes` |
 
@@ -717,6 +723,8 @@ stdin cannot be combined.
 **Examples**
 
 ```sh
+# Mount another vault item; the given --secret/--config flags replace the list
+forge services update api --environment lab --secret "DB password:db_password" --config "api-config:/etc/api/app.conf"
 # A new image; ports, volumes and variables stay
 forge services update web --image nginx:1.28 --yes && forge services deploy web --wait --yes
 
@@ -1457,6 +1465,7 @@ mismatch.
 | `devices` | list of `{host, container, permissions}` | `[]` | none | Container only: host devices under `/dev/`. `permissions` is drawn from `rwm` and defaults to `rwm`. Deploying needs `stack.privileged` |
 | `init` | bool | `false` | `--init` | Container only: run Docker's init as PID 1 |
 | `networks` | list of Docker network names | `[]` | `--network` | Container only: existing networks on the node to connect to as well, at most 10 |
+| `secret_files` | list of `{kind: secret\|config, item, target, mode?, uid?, gid?}` | `[]` | `--secret`, `--config` | Credential vault items mounted as files, by name (D-179). `target` is an absolute path; `mode` defaults to `0400` (secret) or `0444` (config). At most 50. Values never appear here |
 | `version` | integer | absent | none | Update only: the `version` you read. If the service was saved since then, the update fails with `409` |
 
 Example `app.json` for a container:

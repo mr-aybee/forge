@@ -534,6 +534,18 @@ pub trait ServiceRepository: Send + Sync + std::fmt::Debug {
     async fn delete_instance(&self, app: ServiceId, server: ServerId) -> DomainResult<()>;
     /// The services placed on one node (one query).
     async fn list_server_services(&self, server: ServerId) -> DomainResult<Vec<Service>>;
+    /// Marks services as needing a redeploy because a vault item they
+    /// mount as a file changed at `at` (D-179). Keeps an earlier mark.
+    async fn mark_secrets_changed(&self, ids: &[ServiceId], at: Timestamp) -> DomainResult<()> {
+        let _ = (ids, at);
+        Err(crate::error::DomainError::Internal("secret file marks are not supported by this store".into()))
+    }
+    /// Clears that mark when it is no later than `deploy_started` (a deploy
+    /// that began before the change does not carry the new value).
+    async fn clear_secrets_changed(&self, id: ServiceId, deploy_started: Timestamp) -> DomainResult<()> {
+        let _ = (id, deploy_started);
+        Err(crate::error::DomainError::Internal("secret file marks are not supported by this store".into()))
+    }
     /// Records what the node reports for an instance (D-177): its state and
     /// last exit code, without touching status or the last job. `false`
     /// when there is no such instance.

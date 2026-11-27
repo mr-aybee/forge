@@ -50,6 +50,7 @@ fn app_row(r: &AnyRow) -> DomainResult<Service> {
         updated_at: ts(r, "updated_at")?,
         version: int(r, "version")?,
         source: text(r, "source")?,
+        secrets_changed_at: opt_ts(r, "secrets_changed_at")?,
     })
 }
 
@@ -245,6 +246,30 @@ impl ServiceRepository for Store {
         .await
         .map_err(db_err)?;
         rows.iter().map(app_row).collect()
+    }
+
+    async fn mark_secrets_changed(&self, ids: &[ServiceId], at: Timestamp) -> DomainResult<()> {
+        for id in ids {
+            sqlx::query("UPDATE services SET secrets_changed_at = $1 WHERE id = $2 AND secrets_changed_at IS NULL")
+                .bind(at.0)
+                .bind(id.to_string())
+                .execute(self.pool())
+                .await
+                .map_err(db_err)?;
+        }
+
+        Ok(())
+    }
+
+    async fn clear_secrets_changed(&self, id: ServiceId, deploy_started: Timestamp) -> DomainResult<()> {
+        sqlx::query("UPDATE services SET secrets_changed_at = NULL WHERE id = $1 AND secrets_changed_at <= $2")
+            .bind(id.to_string())
+            .bind(deploy_started.0)
+            .execute(self.pool())
+            .await
+            .map_err(db_err)?;
+
+        Ok(())
     }
 
     async fn list_cluster_services(&self, cluster: ClusterId) -> DomainResult<(Vec<Service>, Vec<ServiceInstance>)> {

@@ -35,6 +35,7 @@ pub mod ingress;
 pub mod integration;
 pub mod names;
 pub mod placement;
+pub mod secret_files;
 pub mod sites;
 pub mod stack_doc;
 pub mod stack_templates;

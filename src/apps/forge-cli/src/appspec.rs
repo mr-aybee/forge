@@ -90,6 +90,51 @@ pub struct AppFlags {
     /// Existing Docker network to connect to as well; repeat for more.
     #[arg(long = "network", value_name = "NAME")]
     pub networks: Vec<String>,
+    /// Mount credential vault item ITEM as a secret file, at TARGET
+    /// (default `/run/secrets/<ITEM>`; a relative TARGET goes under
+    /// `/run/secrets`); repeat for more. Only the name is sent, never a
+    /// value. Given at all, `--secret` and `--config` replace the list.
+    #[arg(long = "secret", value_name = "ITEM[:TARGET]")]
+    pub secrets: Vec<String>,
+    /// Mount credential vault item ITEM as a config file at TARGET (an
+    /// absolute path, default `/<ITEM>`); repeat for more.
+    #[arg(long = "config", value_name = "ITEM[:TARGET]")]
+    pub configs: Vec<String>,
+}
+
+/// `ITEM[:TARGET]` of `--secret` or `--config` as a secret file reference.
+/// The last `:` separates the target, so an item name with a `:` needs a
+/// target.
+fn parse_file_ref(spec: &str, kind: forge_catalog::secret_files::FileKind) -> Result<Value> {
+    let (item, target) = match spec.rsplit_once(':') {
+        Some((i, t)) if !t.is_empty() => (i, Some(t)),
+        _ => (spec, None),
+    };
+
+    let item = item.trim();
+
+    if item.is_empty() {
+        return Err(CliError::usage(format!("--{} {spec}: name a credential vault item", flag_of(kind))));
+    }
+
+    let r = forge_catalog::secret_files::FileRef {
+        kind,
+        item: item.to_owned(),
+        target: forge_catalog::secret_files::FileRef::target_for(kind, item, target),
+        mode: None,
+        uid: None,
+        gid: None,
+    };
+    r.validate().map_err(|m| CliError::usage(format!("--{} {spec}: {m}", flag_of(kind))))?;
+
+    serde_json::to_value(&r).map_err(|e| CliError::usage(e.to_string()))
+}
+
+const fn flag_of(kind: forge_catalog::secret_files::FileKind) -> &'static str {
+    match kind {
+        forge_catalog::secret_files::FileKind::Secret => "secret",
+        forge_catalog::secret_files::FileKind::Config => "config",
+    }
 }
 
 /// A restart policy (`--restart-policy`).
@@ -146,6 +191,8 @@ impl AppFlags {
             || !self.tmpfs.is_empty()
             || self.init.is_some()
             || !self.networks.is_empty()
+            || !self.secrets.is_empty()
+            || !self.configs.is_empty()
     }
 }
 
@@ -391,6 +438,22 @@ pub fn apply(body: &mut Value, changes: Changes<'_>) -> Result<()> {
         b.insert("init".into(), json!(i));
     }
 
+    if !f.secrets.is_empty() || !f.configs.is_empty() {
+        use forge_catalog::secret_files::FileKind;
+
+        let mut refs = Vec::new();
+
+        for s in &f.secrets {
+            refs.push(parse_file_ref(s, FileKind::Secret)?);
+        }
+
+        for c in &f.configs {
+            refs.push(parse_file_ref(c, FileKind::Config)?);
+        }
+
+        b.insert(forge_catalog::secret_files::SPEC_KEY.into(), Value::Array(refs));
+    }
+
     for key in changes.unset_env {
         let had = b.get("env").and_then(Value::as_array).is_some_and(|l| l.iter().any(|e| e["key"] == *key));
         if !had {
@@ -602,6 +665,31 @@ mod tests {
         assert_eq!(parse(&["t", "--init"]).ok(), Some(Some(true)));
         assert_eq!(parse(&["t", "--init", "false"]).ok(), Some(Some(false)));
         assert_eq!(parse(&["t"]).ok(), Some(None));
+    }
+
+    #[test]
+    fn secret_and_config_flags_send_vault_item_names_only() {
+        let flags = AppFlags {
+            secrets: s(&["db password", "api-token:token"]),
+            configs: s(&["nginx conf:/etc/nginx/nginx.conf"]),
+            ..AppFlags::default()
+        };
+        let mut body = definition(&json!({ "runtime": "container", "spec": {}, "env": [] }));
+        assert!(apply(&mut body, Changes::of(&flags)).is_err(), "`db password` makes no valid default path");
+
+        let flags = AppFlags {
+            secrets: s(&["db password:db", "api-token"]),
+            configs: s(&["nginx conf:/etc/nginx/nginx.conf"]),
+            ..AppFlags::default()
+        };
+        assert!(apply(&mut body, Changes::of(&flags)).is_ok());
+        let files = &body["secret_files"];
+        assert_eq!(files[0], json!({ "kind": "secret", "item": "db password", "target": "/run/secrets/db" }));
+        assert_eq!(files[1]["target"], "/run/secrets/api-token");
+        assert_eq!(files[2], json!({ "kind": "config", "item": "nginx conf", "target": "/etc/nginx/nginx.conf" }));
+
+        let bad = AppFlags { configs: s(&[":/etc/x"]), ..AppFlags::default() };
+        assert!(apply(&mut body, Changes::of(&bad)).is_err());
     }
 
     #[test]

@@ -879,6 +879,9 @@ impl DeployJob {
         d.state = DeploymentState::Succeeded;
         d.finished_at = Some(self.clock.now());
         self.save(&mut d).await.map_err(stop_error)?;
+
+        // Every copy now runs the vault values as they were when it started (D-179).
+        self.apps.clear_secrets_changed(app.id, ctx.job.created_at).await.map_err(retry)?;
         self.event(d.id, "info", None, format!("release {} is live", d.release_number)).await;
         let principal = ctx.job.principal.to_string();
         self.audit(

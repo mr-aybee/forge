@@ -477,6 +477,21 @@ export interface ServiceSpec {
   init?: boolean;
   /** Existing Docker networks to join as well. */
   networks?: string[];
+  /** Secret and config files: credential vault items by name (D-179). */
+  secret_files?: SecretFileRef[];
+}
+
+/** A credential vault item mounted as a file. Names only: values never reach the browser. */
+export interface SecretFileRef {
+  kind: "secret" | "config";
+  /** The vault item's name. */
+  item: string;
+  /** Absolute path in the container; its last part is the file name in a native service's folder. */
+  target: string;
+  /** Permission bits; absent means 0400 (secret) or 0444 (config). */
+  mode?: number;
+  uid?: number;
+  gid?: number;
 }
 
 export type RestartPolicy = "no" | "always" | "unless-stopped" | "on-failure";
@@ -546,6 +561,8 @@ export interface Service {
   version?: number;
   /** The caller may deploy, start, stop and restart it (a hint; the server still authorizes). Absent on older servers. */
   can_deploy?: boolean;
+  /** A vault item it mounts as a file changed after its last deploy (epoch ms): deploy it again. */
+  secrets_changed_at?: number | null;
 }
 
 /** Per-node health status of one service (`GET /services/health-summary`). */
@@ -602,6 +619,7 @@ export interface ServiceInput {
   devices: DeviceMount[];
   init: boolean;
   networks: string[];
+  secret_files: SecretFileRef[];
   /** Update: the version the editor loaded (409 when it changed since). */
   version?: number;
 }

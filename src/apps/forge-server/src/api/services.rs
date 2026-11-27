@@ -192,7 +192,10 @@ pub async fn create(
         updated_at: now,
         version: 0,
         source: String::new(),
+        secrets_changed_at: None,
     };
+    let items = crate::service_spec::new_vault_items(None, &input.secret_files);
+    super::vault::authorize_item_names(&state, &caller, ns.workspace_id, &items, "service.create").await?;
     apply(&state, &mut app, &crate::names::environment_slug(&ns.name), input)?;
     state.swarm.check_runtime(ns.id, &app.runtime).await?;
 
@@ -207,7 +210,7 @@ pub async fn create(
             "service.create",
             &ns_ref(ns_id),
             Some(app.workspace_id),
-            json!({ "service": app.name, "runtime": app.runtime }),
+            json!({ "service": app.name, "runtime": app.runtime, "vault_items": items }),
         )
         .await;
 
@@ -232,6 +235,8 @@ pub async fn update(
         return Err(ApiError::conflict(CHANGED_SINCE_OPENED));
     }
 
+    let items = crate::service_spec::new_vault_items(Some(&app.spec), &input.secret_files);
+    super::vault::authorize_item_names(&state, &caller, app.workspace_id, &items, AUDIT_UPDATE).await?;
     apply(&state, &mut app, &ns_slug, input)?;
     state.swarm.check_runtime(app.environment_id, &app.runtime).await?;
 
@@ -260,7 +265,7 @@ pub async fn update(
             AUDIT_UPDATE,
             &ns_ref(app.environment_id),
             Some(app.workspace_id),
-            json!({ "service": app.name, "env_keys": keys }),
+            json!({ "service": app.name, "env_keys": keys, "vault_items": items }),
         )
         .await;
 
