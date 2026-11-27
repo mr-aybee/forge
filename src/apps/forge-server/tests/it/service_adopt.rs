@@ -141,7 +141,10 @@ async fn adoption_reads_the_container_without_recreating_it_and_the_first_deploy
     assert_eq!(svc["spec"]["image"], "rustfs/rustfs:1.0.6");
     assert_eq!(svc["spec"]["ports"], json!(["19000:9000", "19001:9001"]));
     assert_eq!(svc["spec"]["volumes"], json!(["media-data:/data"]));
-    assert_eq!((r["instance"]["status"].as_str(), r["instance"]["state"].as_str()), (Some("deployed"), Some("active")));
+    assert_eq!(
+        (r["instance"]["status"].as_str(), r["instance"]["state"].as_str()),
+        (Some("deployed"), Some("running"))
+    );
     assert!(!r.to_string().contains(SECRET), "{r}");
 
     // Only the inspect reached the node: nothing was recreated.

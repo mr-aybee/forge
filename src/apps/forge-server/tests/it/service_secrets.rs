@@ -210,3 +210,39 @@ async fn referencing_a_vault_item_needs_its_use_permission_and_a_new_agent() {
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{r}");
     assert!(r.to_string().contains("never reads files"), "{r}");
 }
+
+#[tokio::test]
+async fn attaching_a_vault_item_needs_an_elevated_key_when_called_with_an_api_key() {
+    let h = start().await;
+    let mut admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
+    step_up(&mut admin).await;
+    admin.post("/api/v1/vault/items", json!({ "name": "db password", "username": "", "password": FIRST })).await;
+    let ns = environment(&admin, "ci").await;
+    let (_, plain) = admin.post("/api/v1/api-keys", json!({ "name": "plain" })).await;
+    let (s, elevated) = admin.post("/api/v1/api-keys", json!({ "name": "ci", "elevated": true })).await;
+    assert_eq!(s, StatusCode::CREATED, "{elevated}");
+
+    let key = |secret: &Value| {
+        let mut c = Client::anonymous(&h.base);
+        c.bearer = Some(secret.as_str().unwrap().to_owned());
+
+        c
+    };
+
+    // A plain key is refused with a hint, and the denial is audited.
+    let (s, r) = key(&plain["secret"]).post("/api/v1/services", service(&ns, "web")).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{r}");
+    assert!(r.to_string().contains("elevated API key") && r.to_string().contains("forge auth login"), "{r}");
+    let (_, audit) = admin.get("/api/v1/audit?action=service.create").await;
+    assert!(audit.to_string().contains("denied") && audit.to_string().contains("elevated API key"), "{audit}");
+
+    // An elevated key of a platform administrator may attach it.
+    let (s, r) = key(&elevated["secret"]).post("/api/v1/services", service(&ns, "web")).await;
+    assert_eq!(s, StatusCode::CREATED, "{r}");
+
+    // Revealing the password still refuses every API key.
+    let (_, items) = admin.get("/api/v1/vault/items").await;
+    let item = items[0]["id"].as_str().unwrap().to_owned();
+    let (s, r) = key(&elevated["secret"]).post(&format!("/api/v1/vault/items/{item}/reveal"), json!({})).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{r}");
+}

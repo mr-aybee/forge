@@ -1,6 +1,6 @@
 ---
 title: forge clusters
-description: List, show, create, update and delete clusters, save and apply a cluster's ingress profile, and read its live ingress state and routing table.
+description: List, show, create, update and delete clusters, set up the cluster network, save and apply a cluster's ingress profile, and read its live ingress state and routing table.
 sidebar:
   order: 18
 ---
@@ -23,6 +23,9 @@ Every command takes the [global flags](/docs/reference/cli/#global-flags).
 | `update`, `delete`, `ingress set` | `workspace.manage` | the cluster | **Admin**, **Platform admin** | no |
 | `ingress apply`, `ingress remove` | `view` and `proxy.manage` | the cluster; each edge of the profile | **Operator**, **Admin**, **Platform admin** | yes |
 | `ingress set`, `ingress apply` with custom Nginx directives (`nginx.custom`) | `server.command` | each edge of the profile | **Operator**, **Admin**, **Platform admin** | yes |
+| `network get`, `network suggest` | `view` | the cluster | Every role | no |
+| `network set` | `workspace.manage` | the cluster | **Admin**, **Platform admin** | no |
+| `network apply`, `network resync`, `network remove` (once applied) | `workspace.manage` and `server.command` | the cluster; each member node (`resync`: that node) | **Admin**, **Platform admin** | yes |
 
 On a terminal the CLI asks for your authenticator code when a command needs
 an MFA-verified session. With `--non-interactive` it exits with `5`; run
@@ -44,6 +47,12 @@ the [Cedar schema](/docs/reference/cedar-schema/).
 | [`forge clusters ingress set`](#forge-clusters-ingress-set) | Saves the ingress profile from `--edge` and `--mode`, from a JSON file, or both |
 | [`forge clusters ingress apply`](#forge-clusters-ingress-apply) | Pushes the saved profile to its edge nodes |
 | [`forge clusters ingress remove`](#forge-clusters-ingress-remove) | Takes the ingress configuration off the edge nodes |
+| [`forge clusters network get`](#forge-clusters-network-get) | Shows the cluster network's plan and each node's state |
+| [`forge clusters network suggest`](#forge-clusters-network-suggest) | Shows the next free subnet and the default domain |
+| [`forge clusters network set`](#forge-clusters-network-set) | Saves the cluster network plan |
+| [`forge clusters network apply`](#forge-clusters-network-apply) | Brings every member node to the plan |
+| [`forge clusters network resync`](#forge-clusters-network-resync) | Retries one node now |
+| [`forge clusters network remove`](#forge-clusters-network-remove) | Removes the cluster network from the nodes |
 
 Where a command takes `<cluster>`, give the cluster's id, its name or its
 abbreviation. Names and abbreviations are matched without regard to case
@@ -885,6 +894,277 @@ unreachable; `10` an edge failed (`ingress_failed`).
 
 **See also**: [`forge clusters ingress get`](#forge-clusters-ingress-get),
 [Ingress](/docs/guides/ingress/).
+
+## Cluster network
+
+The cluster network is the encrypted WireGuard mesh between the cluster's
+nodes and the container network on each node. These commands drive the same
+endpoints as **Clusters** → *cluster* → **Network** in the console. For the
+task, see [Cluster network](/docs/guides/cluster-network/).
+
+### forge clusters network get
+
+Shows the cluster network's plan and what each member node last reported.
+`forge clusters network show` is an alias. Needs `view` on the cluster.
+
+**Synopsis**
+
+```text
+forge clusters network get [OPTIONS] <CLUSTER>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<cluster>` | cluster id, name or abbreviation | — | yes | The cluster | `lab` |
+
+**Examples**
+
+```sh
+# The plan and the state of each node
+forge clusters network get lab
+# Nodes that are not ok
+forge -o json clusters network get lab | jq '.result.status.nodes | map_values(select(.state != "ok"))'
+```
+
+**Output**
+
+The table output is a summary:
+
+```text
+cluster   lab
+subnet    10.64.0.0/16
+domain    lab.forge.internal
+port      51820
+applied   yes
+nodes:
+  NODE   AGENT   ADDRESS     MESH_IP    STATE  NETWORK  ERROR
+  lab-b  online  192.0.2.11  10.64.0.1  ok     ok       -
+  lab-c  online  192.0.2.12  10.64.0.2  ok     ok       -
+```
+
+| Line | Meaning |
+| --- | --- |
+| `subnet`, `domain`, `port` | The saved plan |
+| `endpoints` | Manual public endpoints, `<node>=<host>:<port>`. Shown only when there are some |
+| `applied` | `yes` once the plan has been applied; ``no (run `forge clusters network apply`)`` before that |
+| `nodes` | One row per member. `STATE` is `pending`, `ok`, `waiting` (peers without keys yet), `retrying` or `failed`, and `not applied` before the first try. `NETWORK` is the node's container network: `ok`, `unsupported` or `waiting for a block`; `-` before the first try and on Windows. `ERROR` is the last mesh or container network error |
+
+A cluster without a network prints:
+
+```text
+cluster  lab
+network  none (save one with `forge clusters network set`)
+```
+
+With `-o json` the result is the server's
+answer: `spec`, `layout`, `pins`, `leases`, `status`, `members` and
+`services`.
+
+Exit codes: `0` success; `3` not signed in; `4` no `view`; `6` no such cluster.
+
+### forge clusters network suggest
+
+Shows the next free subnet in the pool and the default domain for the
+cluster. Saves nothing. Needs `view` on the cluster.
+
+**Synopsis**
+
+```text
+forge clusters network suggest [OPTIONS] <CLUSTER>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<cluster>` | cluster id, name or abbreviation | — | yes | The cluster | `lab` |
+| `--prefix <PREFIX>` | integer, 16–24 | `16` | no | The prefix length of the suggested subnet | `--prefix 20` |
+
+**Examples**
+
+```sh
+# The next free /16 and the default domain
+forge clusters network suggest lab
+# A smaller block
+forge clusters network suggest lab --prefix 24
+```
+
+**Output**
+
+```text
+subnet  10.65.0.0/16
+pool    10.64.0.0/10
+domain  lab.forge.internal
+taken   [...]
+```
+
+`taken` lists the subnets already in use and by what. Exit codes: `0`
+success; `2` the prefix is outside 16–24; `4` no `view`; `6` no such
+cluster; `7` no free block of that size is left in the pool.
+
+### forge clusters network set
+
+Saves the cluster network plan. It does not touch the nodes: run
+[`forge clusters network apply`](#forge-clusters-network-apply) next. Flags
+you leave out keep the saved values. A cluster without a network takes the
+suggested subnet and domain for what you leave out, and port `51820`. Needs
+`workspace.manage` on the cluster (**Admin** or **Platform admin**).
+Audited as `fabric.update`.
+
+**Synopsis**
+
+```text
+forge clusters network set [OPTIONS] <CLUSTER>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<cluster>` | cluster id, name or abbreviation | — | yes | The cluster | `lab` |
+| `--subnet <CIDR>` | private IPv4 CIDR, /16 to /24 | the saved subnet, else the suggestion | no | The subnet the mesh and the container networks use | `--subnet 10.64.0.0/16` |
+| `--domain <DOMAIN>` | DNS name | the saved domain, else the suggestion | no | The internal DNS domain | `--domain lab.forge.internal` |
+| `--port <PORT>` | integer, 1–65535 | the saved port, else `51820` | no | The WireGuard listen port on every node | `--port 51821` |
+| `--endpoint <NODE=HOST:PORT>` | node and `host:port`; repeatable | the saved endpoints | no | A node's public endpoint, such as a port forward on a router. Given at all, the list replaces the saved one | `--endpoint lab-b=192.0.2.11:51820` |
+
+**Examples**
+
+```sh
+# A new network with the suggested subnet and domain
+forge clusters network set lab
+# A chosen subnet and domain
+forge clusters network set lab --subnet 10.64.0.0/16 --domain lab.forge.internal
+# A node behind NAT with a port forward
+forge clusters network set lab --endpoint lab-b=192.0.2.11:51820
+```
+
+**Output**
+
+```text
+leases               [...]
+restarts_containers  false
+redeploy_nodes       []
+```
+
+Moving an applied network to a new subnet recreates the container networks:
+`restarts_containers` is `true` and `redeploy_nodes` names the nodes whose
+stacks you redeploy after the apply. Exit codes: `0` success; `2` the
+subnet, domain, port or an endpoint is not valid; `4` no `workspace.manage`;
+`6` no such cluster or node; `7` the subnet overlaps another cluster's.
+
+### forge clusters network apply
+
+Brings every member node to the saved plan. The server then keeps them
+there. Asks first unless you pass `--yes`. Needs `workspace.manage` on the
+cluster and `server.command` on every member, with an MFA-verified session.
+Audited as `fabric.apply`.
+
+**Synopsis**
+
+```text
+forge clusters network apply [OPTIONS] <CLUSTER>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<cluster>` | cluster id, name or abbreviation | — | yes | The cluster | `lab` |
+| `--wait` | flag | off | no | Wait until every node reports `ok` or `failed`, then print the node table | `--wait` |
+| `--wait-timeout-secs <WAIT_TIMEOUT_SECS>` | integer, seconds | `300` | no | How long `--wait` waits | `--wait-timeout-secs 600` |
+| `--yes` | flag | off | no | Skip the confirmation prompt | `--yes` |
+
+**Examples**
+
+```sh
+# Apply and wait for every node
+forge clusters network apply lab --yes --wait
+# Apply and follow it later
+forge clusters network apply lab --yes
+```
+
+**Output**
+
+Without `--wait`: `nodes`, the number of members. With `--wait`: the node
+table of [`get`](#forge-clusters-network-get). Exit codes: `0` success; `1`
+you did not answer `yes`; `4` no `workspace.manage` or `server.command`;
+`5` needs an MFA-verified session; `6` no such cluster, or it has no network
+yet; `8` `--wait` timed out (an offline node never settles; the server
+keeps trying); `10` a node failed.
+
+### forge clusters network resync
+
+Retries one node now, without waiting for its back-off. Needs
+`workspace.manage` on the cluster and `server.command` on the node, with an
+MFA-verified session. Audited as `fabric.resync`.
+
+**Synopsis**
+
+```text
+forge clusters network resync [OPTIONS] <CLUSTER> <NODE>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<cluster>` | cluster id, name or abbreviation | — | yes | The cluster | `lab` |
+| `<node>` | node id, hostname or display name | — | yes | The node to retry | `lab-c` |
+
+**Examples**
+
+```sh
+# Retry a failed node after fixing its firewall
+forge clusters network resync lab lab-c
+```
+
+**Output**
+
+`Retrying lab-c now.` on stderr; with `-o json`,
+`{cluster_id, server_id, resync: "started"}`. Exit codes: `0` success; `4`
+no `workspace.manage` or `server.command`; `5` needs an MFA-verified
+session; `6` no such cluster or node, or the cluster has no network.
+
+### forge clusters network remove
+
+Removes the cluster network. When it was applied, each online member first
+loses its container network, then its mesh interface. Asks first unless you
+pass `--yes`. Needs `workspace.manage` on the cluster and, once applied,
+`server.command` on every member with an MFA-verified session. Audited as
+`fabric.delete`.
+
+**Synopsis**
+
+```text
+forge clusters network remove [OPTIONS] <CLUSTER>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<cluster>` | cluster id, name or abbreviation | — | yes | The cluster | `lab` |
+| `--yes` | flag | off | no | Skip the confirmation prompt | `--yes` |
+
+**Examples**
+
+```sh
+# Remove the network from every node
+forge clusters network remove lab --yes
+```
+
+**Output**
+
+```text
+not_cleaned  [lab-c]
+```
+
+`not_cleaned` names the members that were offline or did not answer; they
+keep a dead interface until you remove it by hand. Exit codes: `0` success;
+`1` you did not answer `yes`; `4` no `workspace.manage` or
+`server.command`; `5` needs an MFA-verified session; `6` no such cluster.
 
 ## Cluster spec
 

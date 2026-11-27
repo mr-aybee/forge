@@ -368,7 +368,7 @@ node.agent.status           state   online|offline|pending            servers   
 node.cpu.percent            number  percent                           servers        agent
 node.disk.max_used_percent  number  percent                           servers        agent
 node.load.per_cpu           number  ratio                             servers        agent
-app.instance.state          state   active|inactive|failed            services   control_plane
+app.instance.state          state   active|inactive|failed|running|exited services   control_plane
 package.state               state   running|stopped|not-installed     installations  control_plane
 tls.cert.expires_in_days    number  days                              certificates   control_plane
 health.readiness.{check}    state   pending|passing|failing|disabled  services   probe

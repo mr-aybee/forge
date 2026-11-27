@@ -331,8 +331,10 @@ forge services update api --environment shop-prod \
 ```
 
 :::note
-Referencing a vault item needs a platform administrator signed in with MFA
-(`secret.read`); API keys cannot. Anyone who may deploy the service can
+Referencing a vault item needs a platform administrator with MFA
+(`secret.read`): a signed-in session, or an elevated API key (from CI, for
+example). A plain API key is refused with `403`; sign in with
+`forge auth login` or create an elevated key (`forge api-keys create --elevated`). Anyone who may deploy the service can
 deploy it again afterwards. Rotating or renaming the item marks every service
 that mounts it: the service page and `forge services show` say it needs a
 deploy, until the next successful one. Swarm services use Swarm secrets

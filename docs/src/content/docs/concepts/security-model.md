@@ -240,6 +240,11 @@ name. The server unseals a value only inside the deploy job and sends it only
 in the signed command to the node; it never reaches an API response, the
 browser, an audit record or a log. On the node the files live in a
 root-owned folder per service under `/var/lib/forge-agent/secrets/`.
+Attaching an item to a service or a Swarm secret needs a platform
+administrator with `secret.read` and MFA. An elevated API key counts, because
+the value goes to a node and never back to the caller; a plain API key does
+not. Revealing a password still needs a browser session: no API key, elevated
+or not, can read a value back.
 
 ## Port tunnels
 

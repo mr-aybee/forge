@@ -50,6 +50,15 @@ through forge-dns (see [Internal names](#internal-names)).
 4. Enter the **Internal domain**, for example `lab.forge.internal`.
 5. Select **Create network**.
 
+From the command line ([`forge clusters network`](/docs/reference/cli/clusters/#cluster-network)):
+
+```sh
+# See the suggested subnet and domain
+forge clusters network suggest <cluster>
+# Save the plan: flags you leave out take the suggestion
+forge clusters network set <cluster> --subnet 10.64.0.0/16 --domain lab.forge.internal
+```
+
 The network is always an **Encrypted mesh (WireGuard)**. It works across
 clouds, data centres and home labs behind NAT. In the API, `spec.mode` is
 `mesh` and may be left out; `routed` is refused with `400`.
@@ -72,6 +81,13 @@ removing it updates the plan straight away.
 1. On the cluster's **Network** page, select **Apply network**.
 2. If asked, confirm in **Verify it's you**.
 
+From the command line, `--wait` waits until every node reports `ok` or
+`failed` and prints the node table:
+
+```sh
+forge clusters network apply <cluster> --yes --wait
+```
+
 For each member, Forge:
 
 1. installs WireGuard if it is missing (`wireguard-tools` on Linux,
@@ -92,7 +108,9 @@ Who connects to whom:
 
 If a node is behind NAT but has a port forward, open its row menu in
 **Nodes** on the **Network** page and select **Set public endpoint**. Enter
-the `host:port` the router forwards to the node's WireGuard port.
+the `host:port` the router forwards to the node's WireGuard port. From the
+command line, `forge clusters network set <cluster> --endpoint <node-name>=192.0.2.10:51820`
+does the same; the `--endpoint` list replaces the saved one.
 
 A background job then keeps every node in sync. It acts as the person who
 last selected **Apply network** (or **Re-apply network**), and checks their
@@ -112,7 +130,8 @@ denial and you can apply again yourself.
 - A member that is offline when a node is revoked keeps the revoked peer in
   its WireGuard config until it reconnects and is updated.
 - Healthy nodes are re-checked every 10 minutes, which repairs drift.
-- **Re-sync now** in a node's row menu retries it at once.
+- **Re-sync now** in a node's row menu retries it at once
+  (`forge clusters network resync <cluster> <node-name>`).
 
 ## Container network
 
@@ -281,13 +300,16 @@ not cleaned. Offline members keep a dead interface; the toast names them so you
 can remove it by hand. The page then shows **Set up the cluster network**
 again.
 
-The API equivalent is `DELETE /api/v1/clusters/<cluster-id>/fabric`. It
-answers `{ "not_cleaned": [...] }` with the members it could not clean.
+From the command line, `forge clusters network remove <cluster> --yes`
+does the same. The API equivalent is
+`DELETE /api/v1/clusters/<cluster-id>/fabric`. Both answer
+`{ "not_cleaned": [...] }` with the members they could not clean.
 
 ## Verify
 
 - The **Status** column on the **Network** page shows **in sync** for every
-  node.
+  node, and `forge clusters network get <cluster>` shows `ok` in `STATE` for
+  each.
 - On a Linux member, `sudo wg show` lists the cluster interface with a
   recent handshake for each peer.
 - From one member, `ping <other-hostname>.<domain>` answers from the other

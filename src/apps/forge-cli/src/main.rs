@@ -25,6 +25,7 @@ mod error;
 mod filescmd;
 mod ingresscmd;
 mod login;
+mod networkcmd;
 mod notifycmd;
 mod out;
 mod parity;

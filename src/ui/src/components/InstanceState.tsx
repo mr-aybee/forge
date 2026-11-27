@@ -12,7 +12,7 @@ export interface LiveState {
   why: string;
 }
 
-const RUNNING = new Set(["active", "running", "activating", "reloading"]);
+export const RUNNING_STATES = new Set(["active", "running", "activating", "reloading"]);
 const STOPPED = new Set(["inactive", "exited", "stopped", "dead", "removed", "created", "paused"]);
 
 /**
@@ -29,7 +29,7 @@ export function liveState(i: Pick<ServiceInstance, "status" | "state" | "last_er
   if (status === "pending") return { kind: "not-deployed", label: "not deployed", tone: "muted", why: "Placed but not deployed to this node yet" };
   if (status.endsWith("ing")) return { kind: "changing", label: status, tone: "warn", why: `A job is in progress: ${status}` };
   if (status === "failed" && !state) return { kind: "failed", label: "failed", tone: "bad", why: i.last_error ?? "The last deployment failed" };
-  if (RUNNING.has(state)) return { kind: "running", label: "running", tone: "ok", why: `Node reported "${i.state}"` };
+  if (RUNNING_STATES.has(state)) return { kind: "running", label: "running", tone: "ok", why: `Node reported "${i.state}"` };
   if (state === "failed") return { kind: "failed", label: "failed", tone: "bad", why: i.last_error ?? `Node reported "${i.state}"` };
   if (STOPPED.has(state)) return { kind: "stopped", label: "stopped", tone: "warn", why: `Node reported "${i.state}"` };
   if (status === "failed") return { kind: "failed", label: "failed", tone: "bad", why: i.last_error ?? "The last job failed" };

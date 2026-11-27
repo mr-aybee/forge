@@ -4,6 +4,7 @@ import type { Service, Environment } from "../api/types";
 import { RUNTIMES } from "./service-editor/sections";
 import { StackBadge, isStackService } from "./stacks/StackBadge";
 import { usePinAction } from "./Pins";
+import { RUNNING_STATES } from "./InstanceState";
 import { Badge, RowMenu, Status, Table, Td, ago, time } from "./ui";
 
 /**
@@ -21,7 +22,7 @@ export function ServiceTable({ apps, environments }: { apps: Service[]; environm
       {rows.map((a) => {
         const rt = RUNTIMES.find((r) => r.id === a.runtime);
         const inst = Array.isArray(a.instances) ? a.instances : [];
-        const up = inst.filter((i) => i.state === "active").length;
+        const up = inst.filter((i) => !!i.state && RUNNING_STATES.has(i.state)).length;
         const env = environments ? envOf(a.environment_id) : undefined;
         const detail = a.runtime === "container" || isStackService(a) ? a.spec?.image : a.spec?.command;
         return (
