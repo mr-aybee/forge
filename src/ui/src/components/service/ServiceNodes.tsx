@@ -10,7 +10,8 @@ import { Badge, RowMenu, type RowAction, ago, time, useRowMenu } from "../ui";
 /** The deploy result chip: what the last job did on the node. */
 function DeployChip({ i }: { i: ServiceInstance }) {
   const busy = i.status.endsWith("ing");
-  const tone = i.status === "deployed" ? "ok" : i.status === "failed" ? "bad" : busy ? "warn" : "muted";
+  const tone =
+    i.status === "deployed" ? "ok" : i.status === "failed" || i.status === "stranded" ? "bad" : busy || i.status === "drifted" ? "warn" : "muted";
   const label = i.status === "pending" ? "not deployed" : i.status || "—";
   return (
     <span className="inline-flex" title={`Deploy: ${label}${i.updated_at ? ` · ${time(i.updated_at)} (${ago(i.updated_at)})` : ""}${i.last_error ? `\n${i.last_error}` : ""}`}>

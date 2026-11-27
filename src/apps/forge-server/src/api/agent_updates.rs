@@ -733,6 +733,7 @@ mod tests {
             last_seen_at: Some(now),
             cert_serial: None,
             cert_not_after: None,
+            drained: false,
             created_at: now,
         };
         state.store.create_server(&node).await.unwrap();

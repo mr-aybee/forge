@@ -77,6 +77,7 @@ async fn env() -> Env {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: Timestamp(1),
     };
     store.create_server(&node).await.unwrap();

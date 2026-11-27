@@ -127,6 +127,8 @@ export interface Server {
   cert_serial: string | null;
   cert_not_after: number | null;
   created_at: number;
+  /** Drained (D-177): placement skips it and movable services move off. Absent on older servers. */
+  drained?: boolean;
   /** Collected system facts; absent on older servers. Read via `nodeFacts`. */
   facts?: NodeFacts | null;
   /** Tags such as `active` or `dc:fra1`; absent on older servers. Read via `nodeTags`. */
@@ -520,6 +522,12 @@ export interface ServiceInstance {
   last_job_id: string | null;
   last_error: string | null;
   updated_at: number;
+  /** `running` or `stopped`: what the service reconciler keeps it at (D-177). Absent on older servers. */
+  desired?: "running" | "stopped";
+  /** Release of the last successful deploy; another one on the node is `drifted`. */
+  deployed_release?: string | null;
+  /** Exit code of the container when it last exited. */
+  exit_code?: number | null;
 }
 
 export interface Service {

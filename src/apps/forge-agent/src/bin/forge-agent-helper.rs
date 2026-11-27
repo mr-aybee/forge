@@ -276,6 +276,10 @@ async fn handle(
         HelperRequest::StackStates {} => data(forge_agent::stacks::states().await),
         #[cfg(not(unix))]
         HelperRequest::StackStates {} => HelperResponse::failed("compose stacks need a Linux node"),
+        #[cfg(unix)]
+        HelperRequest::AppStates {} => data(forge_agent::apps::app_states().await),
+        #[cfg(not(unix))]
+        HelperRequest::AppStates {} => HelperResponse::failed("service containers need a Linux node"),
         #[cfg(not(unix))]
         HelperRequest::ContainerTelemetry { .. } => {
             HelperResponse::failed("containers are not supported on this OS yet")

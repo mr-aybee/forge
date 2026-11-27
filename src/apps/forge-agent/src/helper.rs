@@ -120,6 +120,9 @@ pub enum HelperRequest {
     /// read-only, and Forge learns the same rows from every deploy, so the
     /// agent may ask without a signed command.
     StackStates {},
+    /// The node's native service containers (`crate::apps::app_states`):
+    /// read-only, so the agent may ask without a signed command (D-177).
+    AppStates {},
     /// What this helper can do, for the agent's facts: `container_exec`
     /// is true only when the helper verifies commands with a pin (D-114).
     /// Read-only, so the agent may ask without a signed command.
@@ -616,6 +619,7 @@ impl HelperRequest {
                 | Self::HealthCheck { .. }
                 | Self::ContainerTelemetry { .. }
                 | Self::StackStates {}
+                | Self::AppStates {}
         )
     }
 }

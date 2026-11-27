@@ -110,6 +110,11 @@ namespace Forge {
   action "server.rename" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
     appliesTo { principal: [User], resource: [Server], context: RequestContext };
 
+  // Drain or undrain a node (D-177): placement skips a drained node and
+  // the service reconciler moves its movable services elsewhere.
+  action "node.drain" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
+    appliesTo { principal: [User], resource: [Server], context: RequestContext };
+
   // End processes (one or a whole tree) and change process priority on a
   // node (root-equivalent: MFA guardrail).
   action "process.manage" in ["role:platform_admin", "role:workspace_admin", "role:operator"]

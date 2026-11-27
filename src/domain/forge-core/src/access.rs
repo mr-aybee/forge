@@ -99,6 +99,10 @@ pub enum Action {
     /// Rename a node: its console name and its DNS label (D-084).
     #[serde(rename = "server.rename")]
     ServerRename,
+    /// Drain or undrain a node (D-177): placement skips it and the service
+    /// reconciler moves its movable services elsewhere.
+    #[serde(rename = "node.drain")]
+    NodeDrain,
     /// See alarms and alert rules (#11).
     #[serde(rename = "alert.view")]
     AlertView,
@@ -236,7 +240,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 55] = [
+    pub const ALL: [Action; 56] = [
         Action::View,
         Action::AuditRead,
         Action::WorkspaceCreate,
@@ -250,6 +254,7 @@ impl Action {
         Action::NetworkTunnel,
         Action::NetworkTunnelAny,
         Action::ServerRename,
+        Action::NodeDrain,
         Action::AlertView,
         Action::AlertManage,
         Action::NotificationManage,
@@ -310,6 +315,7 @@ impl Action {
             Action::NetworkTunnel => "network.tunnel",
             Action::NetworkTunnelAny => "network.tunnel.any",
             Action::ServerRename => "server.rename",
+            Action::NodeDrain => "node.drain",
             Action::AlertView => "alert.view",
             Action::AlertManage => "alert.manage",
             Action::NotificationManage => "notification.manage",

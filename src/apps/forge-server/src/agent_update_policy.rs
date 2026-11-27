@@ -140,6 +140,7 @@ mod tests {
             last_seen_at: Some(Timestamp(0)),
             cert_serial: None,
             cert_not_after: None,
+            drained: false,
             created_at: Timestamp(0),
         }
     }

@@ -501,7 +501,9 @@ impl DeployService {
 
     /// Nodes for a `placement`: named nodes or every node of the
     /// workspace, filtered by tags, cut to `replicas` (nodes the service
-    /// already runs on first, then online ones, then by name).
+    /// already runs on first, then online ones, then by name). Drained
+    /// nodes are skipped (D-177); with `replicas`, offline nodes are too
+    /// when enough online ones match.
     async fn place(
         &self,
         ws: WorkspaceId,
@@ -547,6 +549,7 @@ impl DeployService {
             });
         }
 
+        picked.retain(|s| !s.drained);
         picked.sort_by_key(|s| {
             (
                 !current.contains(&s.id),
@@ -557,11 +560,17 @@ impl DeployService {
         });
 
         if let Some(n) = p.replicas {
+            let online = picked.iter().filter(|s| s.status == AgentStatus::Online).count();
+
+            if online >= n as usize {
+                picked.retain(|s| s.status == AgentStatus::Online);
+            }
+
             picked.truncate(n as usize);
         }
 
         if picked.is_empty() {
-            return Err(DomainError::Invalid("no node matches spec.placement".into()));
+            return Err(DomainError::Invalid("no node matches spec.placement (drained nodes are skipped)".into()));
         }
 
         Ok(picked.into_iter().map(|s| s.id).collect())
@@ -602,6 +611,9 @@ impl DeployService {
                     last_job_id: None,
                     last_error: None,
                     updated_at: now,
+                    desired: forge_core::model::InstanceDesired::Running,
+                    deployed_release: None,
+                    exit_code: None,
                 })
                 .await?;
         }

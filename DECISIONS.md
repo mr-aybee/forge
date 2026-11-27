@@ -6031,3 +6031,19 @@ hand.
 **Why.** Swarm parity in native mode (later steps: reconciler, Compose-format apply) needs every common container setting as a typed value that the console, the CLI and a file can all describe. Typed values let the policy check each setting, and the version stops two editors from silently overwriting each other.
 
 **Trade-offs.** Two fields describe restarts during the transition (`restart` and `restart_policy`). The domain `Service.spec` is still a `Value`; only the API's write path is typed. Extra networks must already exist on the node, because Forge does not create them.
+
+## D-177 Service orchestration in native mode, step 2: the service reconciler and node drain
+
+**Decision.** A `ServiceReconciler` (`src/apps/forge-server/src/reconcile.rs`, ports and the `Clock` only) keeps native services in their desired state.
+
+- **Reports.** Agents push their native service containers (label `forge.app`) in the optional `Heartbeat.app_states` field (tag 13) on change, with the same 10-second gap as stack states, and report the fact `app_states`. The server stores the state and exit code on the instance without touching its status. A container missing from the report is `missing`.
+- **Desired state.** Migration 0006 adds `service_instances.desired` (`running`/`stopped`, set by start, restart, deploy and stop; instances already stopped become `stopped`), `deployed_release` (set when a deploy succeeds) and `exit_code`, and `servers.drained`.
+- **Rules.** Every 15 s, for instances that are `deployed` or `drifted`, of services with no active deployment and not run by Swarm: an exited or dead container on an online node is started, a missing one deployed, at most once per 2 minutes; after 5 tries in 30 minutes the instance is `failed`. A node offline past `services.node_grace_secs` (default 300) or drained strands its instances. Drift (no container runs the deployed release) is shown as `drifted` and never redeployed automatically.
+- **Movable.** A container with no volumes, no devices and no App Store env files. `on_node_failure: move | alert` (service spec, stripped before it reaches a node) overrides the default; systemd services are never moved. A move puts a `pending` placement on the eligible node (online, not drained, Linux, same workspace and cluster, not hosting it, fewest instances) and submits its deploy, then strands the old instance; the old one is removed once its node answers. Otherwise the instance is stranded and the `service-stranded` alert template fires.
+- **Who acts.** There is no system principal. Each job is submitted as the principal and authorization context of the instance's last job, so the job runner authorizes each step as that person, and runs only while that person exists and is enabled; otherwise the reconciler audits `service.reconcile.refused` once and does nothing. The reconciler's own decisions are audited with actor `system:reconciler`.
+- **Drain.** New action `node.drain` (Operator and up, no MFA, like `server.rename`), `POST /servers/{id}/drain|undrain`, `forge nodes drain|undrain`, and a console action. Placement skips drained nodes; rule placement with `replicas` also skips offline nodes when enough online ones match.
+
+**Why.** Swarm parity in native mode: services recover from crashes and lost nodes without a person, while data-holding services never move silently.
+
+**Trade-offs.** A move is not atomic: a crash between the new placement and its job leaves a pending placement. Systemd units are only restarted when a job recorded them as failed, because agents push container states only. Restart backoff lives in memory and resets when the server restarts.
+

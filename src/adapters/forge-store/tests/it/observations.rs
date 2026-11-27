@@ -182,6 +182,7 @@ async fn seeded() -> (Store, tempfile::TempDir, ServerId, ServiceId) {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: Timestamp(1),
     };
     s.create_server(&server).await.unwrap();
@@ -208,6 +209,9 @@ async fn seeded() -> (Store, tempfile::TempDir, ServerId, ServiceId) {
         last_job_id: None,
         last_error: None,
         updated_at: Timestamp(1),
+        desired: forge_core::model::InstanceDesired::Running,
+        deployed_release: None,
+        exit_code: None,
     })
     .await
     .unwrap();
@@ -253,4 +257,41 @@ async fn observations_of_deleted_resources_are_removed() {
     assert_eq!(left.len(), 1);
     assert_eq!(left[0].key, node_key);
     assert_eq!(s.head().await.unwrap(), 3, "transitions stay");
+}
+
+#[tokio::test]
+async fn reconciler_columns_round_trip_and_status_swaps_are_conditional() {
+    let (s, _d, server, app) = seeded().await;
+    let mut i = s.list_instances(app).await.unwrap().remove(0);
+    assert_eq!((i.desired, i.deployed_release.as_deref(), i.exit_code), (InstanceDesired::Running, None, None));
+
+    i.desired = InstanceDesired::Stopped;
+    i.deployed_release = Some("4".into());
+    s.put_instance(&i).await.unwrap();
+
+    let seen = InstanceObservation { state: Some("exited".into()), exit_code: Some(137), at: Timestamp(5) };
+    assert!(s.observe_instance(app, server, &seen).await.unwrap());
+    assert!(!s.observe_instance(app, ServerId::new(), &seen).await.unwrap(), "no such instance");
+
+    let got = s.list_instances(app).await.unwrap().remove(0);
+    assert_eq!(
+        (got.desired, got.deployed_release.as_deref(), got.state.as_deref(), got.exit_code, got.status.as_str()),
+        (InstanceDesired::Stopped, Some("4"), Some("exited"), Some(137), "deployed")
+    );
+
+    let swap = |from: &str, to: &str, error: Option<&str>| StatusSwap {
+        from: from.into(),
+        to: to.into(),
+        error: error.map(str::to_owned),
+        at: Timestamp(6),
+    };
+    assert!(!s.swap_instance_status(app, server, &swap("failed", "stranded", None)).await.unwrap());
+    assert!(s.swap_instance_status(app, server, &swap("deployed", "stranded", Some("offline"))).await.unwrap());
+    let got = s.list_instances(app).await.unwrap().remove(0);
+    assert_eq!((got.status.as_str(), got.last_error.as_deref()), ("stranded", Some("offline")));
+    assert!(s.swap_instance_status(app, server, &swap("stranded", "deployed", Some(""))).await.unwrap());
+    assert_eq!(s.list_instances(app).await.unwrap()[0].last_error, None, "an empty error clears it");
+
+    s.set_drained(server, true).await.unwrap();
+    assert!(s.get_server(server).await.unwrap().drained);
 }

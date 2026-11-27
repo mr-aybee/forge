@@ -216,6 +216,10 @@ pub struct Server {
     pub cert_serial: Option<String>,
     pub cert_not_after: Option<Timestamp>,
     pub created_at: Timestamp,
+    /// Drained (D-177): placement skips the node and the service
+    /// reconciler moves its movable services elsewhere.
+    #[serde(default)]
+    pub drained: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -947,6 +951,54 @@ pub struct ServiceInstance {
     pub last_job_id: Option<JobId>,
     pub last_error: Option<String>,
     pub updated_at: Timestamp,
+    /// What the instance should be doing (D-177): `running` (start,
+    /// restart, deploy) or `stopped` (stop).
+    #[serde(default)]
+    pub desired: InstanceDesired,
+    /// The release label of the last successful deploy (empty outside
+    /// deployments); a container reporting another one is `drifted`.
+    #[serde(default)]
+    pub deployed_release: Option<String>,
+    /// Exit code of the container when the node last reported it exited.
+    #[serde(default)]
+    pub exit_code: Option<i64>,
+}
+
+/// What a service instance should be doing (D-177).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstanceDesired {
+    #[default]
+    Running,
+    Stopped,
+}
+
+impl InstanceDesired {
+    /// The stored form.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Stopped => "stopped",
+        }
+    }
+
+    /// Reads the stored form; anything unknown is `running`.
+    #[must_use]
+    pub fn parse(s: &str) -> Self {
+        if s == "stopped" { Self::Stopped } else { Self::Running }
+    }
+}
+
+/// What the service reconciler does with a service whose node is offline
+/// past the grace period or drained (D-177).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeFailurePolicy {
+    /// Deploy it on another eligible node.
+    Move,
+    /// Mark it stranded and alert; do nothing else.
+    Alert,
 }
 
 /// A personal API key. Only a SHA-256 of the secret is stored; the full key

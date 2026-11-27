@@ -113,6 +113,7 @@ pub(super) async fn enroll(
         last_seen_at: None,
         cert_serial: Some(issued.serial_hex.clone()),
         cert_not_after: Some(issued.not_after),
+        drained: false,
         created_at: now,
     };
 
@@ -265,6 +266,13 @@ pub(super) async fn heartbeat(
     if let Some(st) = &hb.stack_states {
         let (state, id, json) = (state.clone(), server.id, st.states_json.clone());
         tokio::spawn(async move { crate::stack_states::ingest(&state, id, &json).await });
+    }
+
+    // Native service containers that changed since the last push: the
+    // reconciler records their state and drift (D-177).
+    if let Some(st) = &hb.app_states {
+        let (reconciler, id, json) = (state.reconciler.clone(), server.id, st.states_json.clone());
+        tokio::spawn(async move { reconciler.observe_node(id, &json).await });
     }
 
     // The fleet's names (D-084): on change, on reconnect and every few minutes.

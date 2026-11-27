@@ -401,6 +401,8 @@ block, and the cluster's subnet and domain.
 | `failed` | The service failed, or its last deployment failed. Hover for the error |
 | `node offline` | The node's agent is offline, so Forge cannot tell. Hover for the last reported state |
 | `deploying`, `starting`, … | A job is running on that node |
+| `drifted` | The container on the node runs another release than the last deploy. Deploy again to clear it |
+| `stranded` | The node is offline past the grace period or drained. Forge moved the service, or it has local data and stays (alert `service-stranded`) |
 | `not deployed` | Placed on the node but not deployed yet |
 | `unknown` | The node has not reported a state yet |
 
@@ -412,6 +414,47 @@ when two services on one node declare the same **Listening port**. It updates li
 node goes offline or comes back. For startup, readiness and liveness checks,
 including Forge's default check that connects to the service's **Listening
 port**, see [Configure health checks](/docs/guides/health-checks/).
+
+## Keep services running
+
+Forge's service reconciler checks every instance every 15 seconds and acts
+as the person who ran its last job (deploy, start or restart). It skips a
+service while a deployment of it runs. Each action is a job under
+**Operations → Jobs** and is audited as `system:reconciler`.
+
+- **Exited container.** On an online node, an instance that should run
+  (you did not stop it) and whose container exited is started again; a
+  missing container is deployed again. Forge waits 2 minutes between tries
+  and gives up after 5 tries in 30 minutes: the instance turns `failed` with
+  the reason. Start or deploy it by hand after you fix the cause. Systemd
+  services are started again when their last reported state is `failed`.
+- **Drift.** A container that runs another release than the last deploy
+  marks the instance `drifted`. Forge does not redeploy on its own.
+- **Lost node.** When a node is offline longer than
+  `services.node_grace_secs` (default 300), or drained, its instances turn
+  `stranded`. A container with no volumes, devices or env files is first
+  deployed on another online, undrained Linux node of the same cluster that
+  does not run it yet, the one with the fewest services first. When the old
+  node answers again, Forge removes the old instance. Anything else stays
+  and raises the `service-stranded` alert; it counts as deployed again when
+  its node is back and not drained. Set `on_node_failure` to `move` or
+  `alert` in the service spec to choose (see
+  [service spec fields](/docs/reference/cli/services/)).
+- **Drain.** On a node's page select **Drain** (or run
+  `forge nodes drain <node-name>`; needs `node.drain`, **Operator** or
+  higher). New placements skip the node and movable services leave it.
+  **Undrain** takes it back.
+
+:::note
+If the person who last ran an instance was removed or disabled, Forge does
+nothing for it and audits `service.reconcile.refused`. Deploy it again as
+someone else.
+:::
+
+:::caution
+Agents older than this release do not report container states, so exited
+containers on those nodes are not restarted. Update the agent.
+:::
 
 ## Runtime dependencies
 
@@ -537,6 +580,9 @@ the form as you type.
 | Deploy waits, then fails on a runtime | A runtime install failed on the node | Open the install job under **Packages → Installed**, fix the cause, deploy again |
 | A runtime install fails with `Could not get lock /var/lib/dpkg/lock-frontend` | Another apt or dpkg run (outside Forge) held the lock for more than five minutes | Wait for that run to finish (`ps -C apt-get,dpkg`), then deploy again |
 | A runtime install is refused | Installing needs `package.manage` with MFA | Verify with MFA, or ask an operator to deploy |
+| An instance is `failed` with "stopped 5 times in 30 minutes" | The container keeps exiting, so Forge stopped restarting it | Read its logs, fix the cause, then **Start** or **Deploy** |
+| An instance is `stranded` and did not move | It has local data, `on_node_failure` is `alert`, or no other eligible node exists | Bring the node back, or place the service elsewhere and remove the stranded instance |
+| An exited container is not restarted | The node's agent does not report container states, or the person who last ran it was removed (`service.reconcile.refused` in the audit log) | Update the agent, or deploy once as an active user |
 | A variable value is rejected | Values may not contain line breaks | Put multi-line content in a file and point the variable at it |
 
 ## Next steps

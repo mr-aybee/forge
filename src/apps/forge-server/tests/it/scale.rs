@@ -110,6 +110,7 @@ async fn api_stays_fast_with_1000_nodes_and_15000_apps() {
             last_seen_at: Some(now),
             cert_serial: None,
             cert_not_after: None,
+            drained: false,
             created_at: now,
         };
         s.create_server(&sv).await.unwrap();
@@ -168,6 +169,9 @@ async fn api_stays_fast_with_1000_nodes_and_15000_apps() {
                 last_job_id: None,
                 last_error: None,
                 updated_at: now,
+                desired: forge_core::model::InstanceDesired::Running,
+                deployed_release: None,
+                exit_code: None,
             })
             .await
             .unwrap();

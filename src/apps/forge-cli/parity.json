@@ -167,6 +167,8 @@
     "GET /api/v1/servers/{id}/report": "forge nodes report <node>",
     "GET /api/v1/analytics/status": "forge nodes analytics",
     "PUT /api/v1/servers/{id}/name": "forge nodes rename",
+    "POST /api/v1/servers/{id}/drain": "forge nodes drain",
+    "POST /api/v1/servers/{id}/undrain": "forge nodes undrain",
     "PUT /api/v1/servers/{id}/dns-name": "forge nodes dns-name",
     "GET /api/v1/names": "forge dns list",
     "GET /api/v1/names/suffix": "forge dns suffix get",

@@ -165,7 +165,7 @@ const DEFS: &[Def] = &[
     ),
     state(
         APP_DEPLOY_STATUS,
-        &["pending", "deploying", "deployed", "failed"],
+        &["pending", "deploying", "deployed", "failed", "drifted", "stranded"],
         ScopeKind::Services,
         "A service instance's deployment status, per node.",
     ),
@@ -674,6 +674,16 @@ fn build() -> Vec<AlertTemplate> {
             APP_DEPLOY_STATUS,
             Services,
             spec(is(&["failed"]), Mode::Immediate, plain()),
+        ),
+        t(
+            "service-stranded",
+            Service,
+            "Service stranded",
+            "An instance's node is offline past the grace period or drained, and the service was not moved.",
+            Critical,
+            APP_DEPLOY_STATUS,
+            Services,
+            spec(is(&["stranded"]), Mode::Immediate, plain()),
         ),
         // Databases (package installations).
         t(

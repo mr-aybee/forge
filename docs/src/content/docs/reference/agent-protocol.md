@@ -268,6 +268,7 @@ containers back so names follow replicas without a deploy.
 | | `zone` (5) | string | The zone forge-dns answers for, `<cluster>.<suffix>`. The node also derives the containers' `dns_search` from it |
 | | `upstream_forge_dns` (6) | repeated string | The IPs of the server host's forge-dns (`[dns] listen`); may be empty |
 | `Heartbeat` | `stack_states` (12) | `StackStates` | The node's compose containers. Sent only when they changed, at most every 10 seconds. Absent from older agents |
+| `Heartbeat` | `app_states` (13) | `AppStates` | The node's native service containers (label `forge.app`) as a JSON array of `{app, slot, release, state, exit_code, container_id}`. Sent only when they changed, at most every 10 seconds. Agents that send it report the fact `app_states: true`. Absent from older agents |
 | `StackStates` | `states_json` (1) | string | JSON object: stack label (`<environment>/<stack>`) → rows `{service, name, number, state, health, mesh_ip}` |
 
 The agent reads its containers through the helper on every heartbeat. That

@@ -136,6 +136,22 @@ pub struct Heartbeat {
     /// waiting for a deploy. Absent from older agents and when unchanged.
     #[prost(message, optional, tag = "12")]
     pub stack_states: Option<StackStates>,
+    /// The node's native service containers (label `forge.app`), when they
+    /// changed since the last push (D-177): the service reconciler restarts
+    /// exited ones and marks drift. Absent from older agents and when
+    /// unchanged.
+    #[prost(message, optional, tag = "13")]
+    pub app_states: Option<AppStates>,
+}
+
+/// The node's native service containers.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct AppStates {
+    /// JSON array of rows `{app, slot, release, state, exit_code,
+    /// container_id}`; `app` is the `forge.app` label
+    /// (`<environment>/<service>`).
+    #[prost(string, tag = "1")]
+    pub states_json: String,
 }
 
 /// The node's compose containers, grouped by stack.

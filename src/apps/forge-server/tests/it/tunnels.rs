@@ -117,6 +117,9 @@ async fn site_app(h: &Harness, admin: &Client, node: &str, port: u16) -> (String
             last_job_id: None,
             last_error: None,
             updated_at: h.app.state.clock.now(),
+            desired: forge_core::model::InstanceDesired::Running,
+            deployed_release: None,
+            exit_code: None,
         })
         .await
         .unwrap();
@@ -450,6 +453,7 @@ async fn tunnel_rows_survive_a_restart_as_closed_and_packages_are_listed() {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: forge_core::Timestamp(0),
     };
     h.app.state.store.create_server(&server).await.unwrap();

@@ -57,6 +57,7 @@ mod observations;
 mod passkeys;
 mod pins;
 mod process_actions;
+mod reconcile;
 mod resume;
 mod scale;
 mod server_settings;

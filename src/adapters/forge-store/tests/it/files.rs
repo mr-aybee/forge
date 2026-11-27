@@ -27,6 +27,7 @@ async fn seed() -> (Store, tempfile::TempDir, WorkspaceId, ServerId) {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: Timestamp(1),
     };
     s.create_server(&server).await.unwrap();

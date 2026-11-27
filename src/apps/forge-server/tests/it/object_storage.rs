@@ -60,6 +60,7 @@ async fn node_in(
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: forge_core::Timestamp(0),
     };
     forge_core::ports::ServerRepository::create_server(&h.app.state.store, &server).await.unwrap();
@@ -929,6 +930,9 @@ async fn a_bucket_attached_to_an_service_reaches_it_as_environment() {
             last_job_id: None,
             last_error: None,
             updated_at: forge_core::Timestamp(1),
+            desired: forge_core::model::InstanceDesired::Running,
+            deployed_release: None,
+            exit_code: None,
         })
         .await
         .unwrap();

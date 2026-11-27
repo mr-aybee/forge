@@ -489,6 +489,16 @@ FORGE_DNS_ARGS=--listen 192.0.2.10:53
 
 Nodes must reach the listen address on UDP and TCP port `53`.
 
+### Service reconciler
+
+A runtime setting, kept in the settings store and changed with
+`forge settings set` or `PUT /api/v1/settings/{key}` (`workspace.manage`); no
+restart.
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `services.node_grace_secs` | integer, seconds | `300` | How long a node may be offline before the [service reconciler](/docs/guides/services/#keep-services-running) treats its services as lost and moves or strands them. Example: `600` |
+
 ## Environment overrides
 
 `FORGE_DATA_DIR`, `FORGE_DATABASE_URL`, `FORGE_API_LISTEN`,

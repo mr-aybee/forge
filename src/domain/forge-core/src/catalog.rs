@@ -71,6 +71,12 @@ impl Action {
                 info("Nodes", "Manage nodes", "Maintenance, labels, diagnostics, revoke and remove nodes.", Write)
             }
             Action::ServerRename => info("Nodes", "Rename nodes", "Change a node's console name and DNS label.", Write),
+            Action::NodeDrain => info(
+                "Nodes",
+                "Drain nodes",
+                "Drain a node so placement skips it and its movable services move elsewhere; undrain it.",
+                Write,
+            ),
             Action::ServerCommand => {
                 info("Nodes", "Run commands", "Run commands on a node as root (reboot, scripts).", Admin)
             }

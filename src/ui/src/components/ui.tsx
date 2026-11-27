@@ -228,6 +228,8 @@ const tone: Record<string, string> = {
   removing: "warn",
   degraded: "warn",
   removed: "muted",
+  drifted: "warn",
+  stranded: "bad",
 };
 
 const toneClass: Record<string, string> = {

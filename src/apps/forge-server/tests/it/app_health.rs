@@ -23,6 +23,7 @@ async fn fleet_node(h: &Harness, hostname: &str) {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: forge_core::Timestamp(0),
     };
     forge_core::ports::ServerRepository::create_server(&h.app.state.store, &server).await.unwrap();
@@ -253,6 +254,7 @@ async fn node_reports_become_instance_status_and_go_unknown_when_offline() {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: forge_core::Timestamp(0),
     };
     forge_core::ports::ServerRepository::create_server(&h.app.state.store, &server).await.unwrap();
@@ -283,6 +285,9 @@ async fn node_reports_become_instance_status_and_go_unknown_when_offline() {
                 last_job_id: None,
                 last_error: None,
                 updated_at: forge_core::Timestamp(1),
+                desired: forge_core::model::InstanceDesired::Running,
+                deployed_release: None,
+                exit_code: None,
             })
             .await
             .unwrap();
@@ -396,6 +401,9 @@ async fn a_saved_policy_is_sent_to_the_nodes_and_configured_checks_decide_the_st
             last_job_id: None,
             last_error: None,
             updated_at: forge_core::Timestamp(1),
+            desired: forge_core::model::InstanceDesired::Running,
+            deployed_release: None,
+            exit_code: None,
         })
         .await
         .unwrap();
@@ -554,6 +562,9 @@ async fn a_real_agent_runs_configured_checks_and_reports_them() {
             last_job_id: None,
             last_error: None,
             updated_at: forge_core::Timestamp(1),
+            desired: forge_core::model::InstanceDesired::Running,
+            deployed_release: None,
+            exit_code: None,
         },
     )
     .await
@@ -680,6 +691,9 @@ async fn vault_header_values_reach_a_node_on_the_savers_authority_only() {
             last_job_id: None,
             last_error: None,
             updated_at: forge_core::Timestamp(1),
+            desired: forge_core::model::InstanceDesired::Running,
+            deployed_release: None,
+            exit_code: None,
         })
         .await
         .unwrap();
@@ -848,6 +862,9 @@ async fn a_policy_with_a_remote_target_carries_the_fleets_addresses() {
             last_job_id: None,
             last_error: None,
             updated_at: forge_core::Timestamp(1),
+            desired: forge_core::model::InstanceDesired::Running,
+            deployed_release: None,
+            exit_code: None,
         })
         .await
         .unwrap();

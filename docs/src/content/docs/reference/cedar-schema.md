@@ -85,6 +85,7 @@ out at every assignable scope.
 | `network.tunnel` † | ✓ | ✓ | ✓ | ✓ | | | |
 | `network.tunnel.any` † | ✓ | ✓ | | | | | |
 | `server.rename` | ✓ | ✓ | ✓ | | | | |
+| `node.drain` | ✓ | ✓ | ✓ | | | | |
 | `alert.view` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | |
 | `alert.manage` | ✓ | ✓ | ✓ | | | | |
 | `log.read` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | |

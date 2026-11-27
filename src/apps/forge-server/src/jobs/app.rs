@@ -66,8 +66,11 @@ pub fn build_spec(app: &Service, envelope: Option<&Envelope>) -> Result<AppSpec,
 
     // `mesh` (default on) is the service's choice; the job decides the
     // network per node (`AppJob::attach_mesh`), so it never reaches a node.
+    // `on_node_failure` is the reconciler's (D-177); it never reaches a
+    // node either.
     if let Some(m) = v.as_object_mut() {
         m.remove("mesh");
+        m.remove("on_node_failure");
     }
 
     v["name"] = json!(app.name);
@@ -525,11 +528,17 @@ impl AppJob {
         );
         self.hub.enqueue(p.server_id, &body.operation_id, signed).map_err(StepError::Retryable)?;
         ctx.set_state("operation_id", json!(body.operation_id));
+        ctx.set_state("release", json!(spec.release));
         let busy = busy_status(&p.action);
+        let desired = desired_after(&p.action);
 
         self.update(&p, ctx, |i| {
             if let Some(b) = busy {
                 i.status = b.into();
+            }
+
+            if let Some(d) = desired {
+                i.desired = d;
             }
 
             i.last_error = None;
@@ -585,8 +594,29 @@ impl AppJob {
         }
 
         let state = out.get("state").and_then(Value::as_str).map(str::to_owned);
+        let release = ctx.state_value("release").and_then(Value::as_str).map(str::to_owned);
 
-        self.update(&p, ctx, |i| settle(i, &p.action, state)).await
+        self.update(&p, ctx, |i| {
+            settle(i, &p.action, state);
+
+            if p.action == "deploy" {
+                i.deployed_release = release;
+            }
+        })
+        .await
+    }
+}
+
+/// What an instance should be doing after `action` (D-177); `None` for
+/// actions that leave it as it was (status, logs, prepare, remove).
+#[must_use]
+pub fn desired_after(action: &str) -> Option<forge_core::model::InstanceDesired> {
+    use forge_core::model::InstanceDesired;
+
+    match action {
+        "deploy" | "start" | "restart" => Some(InstanceDesired::Running),
+        "stop" => Some(InstanceDesired::Stopped),
+        _ => None,
     }
 }
 
@@ -594,8 +624,13 @@ impl AppJob {
 /// node answered with. Not every answer has one (a container's `follow`
 /// segment only carries log lines): the last known state then stays, so
 /// reading logs never makes a running instance look stopped (issue #64).
+/// Reading status or logs keeps a `drifted` or `stranded` mark: only a
+/// change made on the node clears it (D-177).
 fn settle(i: &mut forge_core::model::ServiceInstance, action: &str, reported: Option<String>) {
-    if i.status != "pending" || action == "deploy" {
+    let read = matches!(action, "status" | "logs" | "follow");
+    let marked = matches!(i.status.as_str(), "drifted" | "stranded");
+
+    if (i.status != "pending" || action == "deploy") && !(read && marked) {
         i.status = "deployed".into();
     }
 
@@ -701,6 +736,9 @@ mod tests {
             last_job_id: None,
             last_error: None,
             updated_at: forge_core::Timestamp(0),
+            desired: forge_core::model::InstanceDesired::Running,
+            deployed_release: None,
+            exit_code: None,
         }
     }
 

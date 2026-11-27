@@ -122,6 +122,7 @@ async fn the_database_stopped_template_fires_on_a_stopped_installation() {
         last_seen_at: None,
         cert_serial: None,
         cert_not_after: None,
+        drained: false,
         created_at: Timestamp(0),
     };
     store.create_server(&node).await.unwrap();

@@ -546,6 +546,16 @@ pub enum NodesCmd {
     /// goes back to the one derived from its name. Every node's hosts file
     /// follows.
     DnsName { node: String, label: String },
+    /// Drain a node: placement skips it and Forge moves its movable services
+    /// to other nodes; services with local data stay and raise an alert.
+    Drain {
+        node: String,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Undrain a node: it takes new placements again.
+    Undrain { node: String },
     /// Browse and manage files on a node (File Explorer).
     #[command(subcommand)]
     Files(crate::filescmd::FilesCmd),
@@ -712,6 +722,24 @@ pub async fn nodes(g: &Global, cmd: NodesCmd) -> Result<()> {
             let v = api
                 .call(reqwest::Method::PUT, &format!("/api/v1/servers/{id}/dns-name"), Some(&json!({ "label": label })))
                 .await?;
+            show(g, &v, None)
+        }
+        NodesCmd::Drain { node, yes } => {
+            let s = resolve_node(&mut api, &node).await?;
+            let id = s["id"].as_str().unwrap_or_default().to_owned();
+            let hostname = s["hostname"].as_str().unwrap_or_default();
+            let question = format!(
+                "Drain node {hostname} ({id})? New placements skip it, and its services without local data move to \
+                 other nodes."
+            );
+            confirm(g, yes, &question)?;
+
+            let v = api.post(&format!("/api/v1/servers/{id}/drain"), &json!({})).await?;
+            show(g, &v, None)
+        }
+        NodesCmd::Undrain { node } => {
+            let id = resolve_node(&mut api, &node).await?["id"].as_str().unwrap_or_default().to_owned();
+            let v = api.post(&format!("/api/v1/servers/{id}/undrain"), &json!({})).await?;
             show(g, &v, None)
         }
         NodesCmd::Files(_) | NodesCmd::Extra(_) => Ok(()),

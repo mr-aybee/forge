@@ -1496,6 +1496,49 @@ pub async fn run(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, Strin
     }
 }
 
+/// Every native service container on the node (label `forge.app`), for the
+/// service reconciler (D-177): `{app, slot, release, state, exit_code,
+/// container_id}` rows sorted by app and slot.
+pub async fn app_states() -> Result<Value, String> {
+    let filters = json!({ "label": ["forge.app"] }).to_string();
+    let path = format!("/containers/json?all=1&filters={}", crate::docker_ops::enc(&filters));
+    let list = crate::docker_ops::get(&path).await?;
+
+    Ok(group_app_states(&list))
+}
+
+/// The rows of [`app_states`] from a `GET /containers/json` answer.
+#[must_use]
+pub fn group_app_states(list: &Value) -> Value {
+    let mut rows: Vec<Value> = Vec::new();
+
+    for c in list.as_array().into_iter().flatten() {
+        let labels = &c["Labels"];
+        let Some(app) = labels["forge.app"].as_str() else { continue };
+
+        rows.push(json!({
+            "app": app,
+            "slot": labels["forge.slot"].as_str().unwrap_or_default(),
+            "release": labels["forge.release"].as_str().unwrap_or_default(),
+            "state": c["State"].as_str().unwrap_or_default(),
+            "exit_code": exit_code(c["Status"].as_str().unwrap_or_default()),
+            "container_id": c["Id"].as_str().unwrap_or_default(),
+        }));
+    }
+
+    rows.sort_by(|a, b| (a["app"].as_str(), a["slot"].as_str()).cmp(&(b["app"].as_str(), b["slot"].as_str())));
+
+    Value::Array(rows)
+}
+
+/// The exit code in a Docker status line such as `Exited (137) 2 minutes ago`.
+fn exit_code(status: &str) -> Option<i64> {
+    let rest = status.strip_prefix("Exited (")?;
+    let end = rest.find(')')?;
+
+    rest[..end].parse().ok()
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -1697,5 +1740,22 @@ mod tests {
         std::os::unix::fs::symlink(other.path(), home.path().join(".forge")).unwrap();
         assert!(open_forge_dir(h, false, me()).is_err());
         assert!(other.path().join("run.sh").exists());
+    }
+
+    #[test]
+    fn app_states_carry_labels_state_and_exit_code() {
+        let list = json!([
+            {"Id": "c2", "State": "exited", "Status": "Exited (137) 2 minutes ago",
+             "Labels": {"forge.app": "prod/web", "forge.slot": "b", "forge.release": "4"}},
+            {"Id": "c1", "State": "running", "Status": "Up 3 hours", "Labels": {"forge.app": "prod/api"}},
+            {"Id": "c3", "State": "running", "Status": "Up", "Labels": {}},
+        ]);
+        let rows = group_app_states(&list);
+
+        assert_eq!(rows.as_array().map(Vec::len), Some(2));
+        assert_eq!(rows[0]["app"], "prod/api");
+        assert_eq!(rows[0]["exit_code"], Value::Null);
+        assert_eq!(rows[1]["release"], "4");
+        assert_eq!(rows[1]["exit_code"], 137);
     }
 }
