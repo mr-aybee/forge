@@ -378,7 +378,7 @@ impl HealthSecrets {
                 _ => return Err(Denial::ItemMissing),
             };
 
-            let plain = p.envelope.open(&item.sealed, &crate::jobs::storage::vault_aad(*id)).map_err(|_| {
+            let plain = p.envelope.open(&item.sealed, &crate::jobs::vault_aad(*id)).map_err(|_| {
                 tracing::error!(app = %w.app.name, item = %id, "a vault item for a health check could not be opened");
                 Denial::Internal
             })?;

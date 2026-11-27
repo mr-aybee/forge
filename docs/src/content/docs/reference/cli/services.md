@@ -1,6 +1,6 @@
 ---
 title: forge services
-description: Create, change, place, deploy, inspect and delete services, and attach buckets to them, from the command line.
+description: Create, adopt, change, place, deploy, inspect and delete services from the command line.
 sidebar:
   order: 9
 ---
@@ -29,8 +29,8 @@ other [`forge stacks`](/docs/reference/cli/stacks/) commands for them. `list` an
 
 | Commands | Cedar action | Scope | MFA |
 | --- | --- | --- | --- |
-| `list`, `show`, `action … status`, `logs`, `storage list` | `view` | the service's environment | no |
-| `create`, `update`, `place`, `remove`, `action … start`, `stop`, `restart`, `deploy`, `delete`, `storage attach`, `storage detach` | `deploy` | the service's environment | no |
+| `list`, `show`, `action … status`, `logs` | `view` | the service's environment | no |
+| `create`, `update`, `place`, `remove`, `action … start`, `stop`, `restart`, `deploy`, `delete`, `adopt` | `deploy` | the service's environment | no |
 | `place` | `server.manage` | each node in `--node` | no |
 | `plan`, `apply`, `scale` | `deploy` | the environment | no |
 | `apply`, `scale` | `server.manage` | each node a service is added to | no |
@@ -39,10 +39,10 @@ other [`forge stacks`](/docs/reference/cli/stacks/) commands for them. `list` an
 | `files …` | `file.read`, `file.write` (changes) | the app root on each node | changes: yes |
 | `deploy` when a node lacks a runtime the definition lists in `dependencies`, or Docker Engine for a container | `package.manage` | each node that lacks it | yes (step-up) |
 | `deploy` with a container volume outside the app's folder and the node's approved file roots | `stack.privileged` | the service's environment | yes |
-| `storage attach` of a bucket whose store does not belong to the service's environment, or that is attached to a service of another environment | `storage.manage` | the store | yes |
+| `adopt` | `server.manage`, `container.inspect_env` | the node | `container.inspect_env`: yes |
 
 `deploy` is in the `platform_admin`, `workspace_admin`, `operator` and
-`developer` roles. `package.manage` and `storage.manage` are in
+`developer` roles. `package.manage` is in
 `platform_admin`, `workspace_admin` and `operator`; `stack.privileged` is in
 `platform_admin` and `workspace_admin`. See the
 [Cedar schema](/docs/reference/cedar-schema/).
@@ -60,9 +60,7 @@ other [`forge stacks`](/docs/reference/cli/stacks/) commands for them. `list` an
 | [`forge services create`](#forge-services-create) | Creates a service from flags, from a JSON definition, or both |
 | [`forge services update`](#forge-services-update) | Changes single fields of a service's definition, or replaces it from a file |
 | [`forge services place`](#forge-services-place) | Sets the nodes the service is placed on, each as active or standby |
-| [`forge services storage list`](#forge-services-storage-list) | Lists the buckets attached to a service |
-| [`forge services storage attach`](#forge-services-storage-attach) | Attaches a bucket of a managed store to a service |
-| [`forge services storage detach`](#forge-services-storage-detach) | Detaches a bucket and revokes its access key |
+| [`forge services adopt`](#forge-services-adopt) | Turns a running container into a service without restarting it |
 | [`forge services logs`](#forge-services-logs) | Prints or follows one instance's log lines |
 | [`forge services remove`](#forge-services-remove) | Takes the service off one node |
 | [`forge services files ls`](#forge-services-files-ls) | Lists a folder of the app root on its nodes |
@@ -845,221 +843,59 @@ service belongs to a Compose stack.
 **See also**: [`forge services deploy`](#forge-services-deploy),
 [`forge services remove`](#forge-services-remove).
 
-### forge services storage list
+### forge services adopt
 
-Lists the buckets attached to a service and the variables each one
-adds at deploy. An attachment is an access key limited to one bucket of a
-managed store; see
-[Buckets attached to services](/docs/concepts/object-storage/#buckets-attached-to-services). Needs `view`
-on the environment.
+Reads a running container on a node into a new `container` service and
+records an instance on that node, deployed and running
+(`POST /api/v1/services/adopt`). The container is not recreated or
+restarted. Until the first deploy, `action` and `logs` act on the adopted
+container; the first deploy replaces it with the normal
+`forge-app-<environment>-<service>` container. Needs `deploy` on the
+environment, and `server.manage` and `container.inspect_env` (MFA) on the
+node. Linux nodes with Docker only. See
+[Adopt a container as a service](/docs/guides/adopt-container/).
 
 **Synopsis**
 
 ```text
-forge services storage list [OPTIONS] <SERVICE>
+forge services adopt [OPTIONS] --environment <ENVIRONMENT> --node <NODE> <CONTAINER>
 ```
 
 **Arguments and flags**
 
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
-| `<service>` | service id or name | — | yes | The service | `web` |
-| `--environment <ENVIRONMENT>` | environment id or name | — | no | Look the name up in this environment only | `--environment shop-prod` |
+| `<container>` | string | — | yes | The container name on the node. Names starting with `forge-app-` are refused | `legacy-api` |
+| `--environment <ENVIRONMENT>` | environment id or name | — | yes | The environment the service is created in | `--environment shop-prod` |
+| `--node <NODE>` | node id, host name or display name | — | yes | The node the container runs on | `--node lab-b` |
+| `--name <NAME>` | string | the container name | no | The service name | `--name api` |
 
 **Examples**
 
 ```sh
-# The attached buckets
-forge services storage list web
+# Adopt a container under its own name
+forge services adopt --environment shop-prod --node lab-b legacy-api
 
-# The names of the variables the service gets
-forge -o json services storage list web | jq -r '.result.attachments[].env[]'
+# Adopt it under another service name and print the result as JSON
+forge -o json services adopt --environment shop-prod --node lab-b --name api legacy-api
 ```
 
 **Output**
 
-Shape from the server's schema; not captured on a live system.
+With `-o json`, `result` is `{service, instance}`: the new service, in the
+shape of [`forge services show`](#forge-services-show), and its instance on
+the node.
 
-```text
-ACCESS KEY            STORE  BUCKET   ACCESS     PREFIX  ENDPOINT
-AKIAIOSFODNN7EXAMPLE  media  uploads  readwrite  S3      http://192.0.2.12:9000
-```
+Exit codes: `0` adopted; `2` an invalid or ambiguous name, a `forge-app-…`
+container (already a service) or a host-network container; `3` not signed
+in; `4` no `deploy`, `server.manage` or `container.inspect_env`; `5` an
+MFA-verified session is needed; `6` no such environment or node; `7` the
+node cannot read the container (offline, or no such container), a service
+of that name exists, the container is already adopted, or the node's agent
+is too old (`agent_update_required`).
 
-`STORE` is the store's name, or its id when the store no longer exists.
-
-```json
-{
-  "result": {
-    "attachments": [
-      {
-        "access_key": "AKIAIOSFODNN7EXAMPLE",
-        "store_id": "<store-id>",
-        "bucket": "uploads",
-        "access": "readwrite",
-        "prefix": "S3",
-        "vault_item_id": "<vault-item-id>",
-        "env": {
-          "endpoint": "S3_ENDPOINT",
-          "region": "S3_REGION",
-          "bucket": "S3_BUCKET",
-          "access_key": "S3_ACCESS_KEY_ID",
-          "secret_key": "S3_SECRET_ACCESS_KEY"
-        },
-        "store_name": "media",
-        "endpoint": "http://192.0.2.12:9000"
-      }
-    ],
-    "can_change": true
-  },
-  "schema": "forge.cli/v1"
-}
-```
-
-| Field | Description |
-| --- | --- |
-| `access_key` | The access key id issued for this attachment. Pass it to [`forge services storage detach`](#forge-services-storage-detach) |
-| `access` | `read` or `readwrite` |
-| `prefix` | The prefix of the injected variables |
-| `vault_item_id` | The vault item that holds the key's secret |
-| `env` | The names of the variables, not their values. The secret is never in the answer |
-| `store_name`, `endpoint` | The store's name and S3 endpoint; `null` when the store no longer exists |
-| `can_change` | Whether you hold `deploy` on the environment. Attaching a bucket of a store that does not belong to the environment also needs `storage.manage` |
-
-Exit codes: `0` success; `2` an ambiguous name; `3` not signed in; `4` no
-`view`; `6` no such service; `7` the service belongs to a Compose
-stack.
-
-**See also**: [`forge services storage attach`](#forge-services-storage-attach),
-[Attach a bucket to a service](/docs/guides/attach-bucket-to-service/).
-
-### forge services storage attach
-
-Attaches a bucket of a managed store to a service. Forge issues an
-access key limited to that bucket and stores its secret in the vault; the
-secret is never printed. At its next deploy the service gets five
-variables: `<PREFIX>_ENDPOINT`, `<PREFIX>_REGION`, `<PREFIX>_BUCKET`,
-`<PREFIX>_ACCESS_KEY_ID` and `<PREFIX>_SECRET_ACCESS_KEY`. The command does
-not ask first: it only adds access. Audited as `service.storage.attach`.
-
-Needs `deploy` on the environment. It also needs `storage.manage` on the
-store, with an MFA-verified session, unless the store belongs to the
-service's environment (see
-[`forge storage owner`](/docs/reference/cli/storage/#forge-storage-owner)) and
-the bucket is not attached to a service of another environment.
-
-**Synopsis**
-
-```text
-forge services storage attach [OPTIONS] --store <STORE> --bucket <BUCKET> <SERVICE>
-```
-
-**Arguments and flags**
-
-| Name | Type | Default | Required | Description | Example |
-| --- | --- | --- | --- | --- | --- |
-| `<service>` | service id or name | — | yes | The service | `web` |
-| `--store <STORE>` | store id, name or slug | — | yes | A managed store. Connected (external) stores issue no keys | `--store media` |
-| `--bucket <BUCKET>` | string | — | yes | The bucket to attach: 3 to 63 lower-case letters, digits, dots and hyphens. It must exist unless you pass `--create-bucket` | `--bucket uploads` |
-| `--create-bucket` | flag | off | no | Create the bucket when it does not exist yet | `--create-bucket` |
-| `--access <ACCESS>` | enum: `read`, `readwrite` | `readwrite` | no | What the service may do in the bucket | `--access read` |
-| `--prefix <PREFIX>` | string | `S3` | no | Prefix of the injected variables: an upper-case letter, then upper-case letters, digits and underscores, at most 24 characters, not ending in `_`. Use a second prefix for a second bucket | `--prefix MEDIA` |
-| `--environment <ENVIRONMENT>` | environment id or name | — | no | Look the service's name up in this environment only | `--environment shop-prod` |
-
-**Examples**
-
-```sh
-# Attach a bucket, creating it when it is missing
-forge services storage attach web --store media --bucket uploads --create-bucket
-
-# A second bucket, read-only, under its own prefix
-forge services storage attach web --store media --bucket reports --access read --prefix REPORTS
-
-# Give the service the variables
-forge services deploy web --wait --yes
-```
-
-**Output**
-
-The table output prints one line on stderr, then the service's
-attachments:
-
-```text
-Bucket uploads of media is attached to web (readwrite). Deploy web to give it the S3_* variables.
-ACCESS KEY            STORE  BUCKET   ACCESS     PREFIX  ENDPOINT
-AKIAIOSFODNN7EXAMPLE  media  uploads  readwrite  S3      http://192.0.2.12:9000
-```
-
-With `-o json`, `result` has the shape shown under
-[`forge services storage list`](#forge-services-storage-list) and the stderr line is
-not printed. Shape from the server's schema; not captured on a live system.
-
-Exit codes: `0` attached; `2` an invalid bucket name or prefix, an `--access`
-other than `read` or `readwrite`, or an ambiguous name; `3` not signed in;
-`4` no `deploy` on the environment, or no `storage.manage` on the store; `5`
-an MFA-verified session is needed; `6` no such service, store or
-bucket; `7` the prefix is already used by another attachment, the
-service already defines one of the five variables, the bucket is
-attached to a service of another environment and you lack `storage.manage`
-(`bucket_attached_elsewhere`), the store is a connected store, or the
-service belongs to a Compose stack; `9` Forge cannot reach the store.
-
-**See also**: [`forge services storage list`](#forge-services-storage-list),
-[`forge storage key-create`](/docs/reference/cli/storage/#forge-storage-key-create),
-[Attach a bucket to a service](/docs/guides/attach-bucket-to-service/).
-
-### forge services storage detach
-
-Detaches a bucket from a service. The access key is revoked at once,
-so a running instance loses access to the bucket straight away; the
-variables disappear with the next deploy. The bucket and its objects stay.
-Asks first unless you pass `--yes`. Needs `deploy` on the environment, whoever
-owns the store. Audited as `service.storage.detach`.
-
-**Synopsis**
-
-```text
-forge services storage detach [OPTIONS] <SERVICE> <ACCESS_KEY>
-```
-
-**Arguments and flags**
-
-| Name | Type | Default | Required | Description | Example |
-| --- | --- | --- | --- | --- | --- |
-| `<service>` | service id or name | — | yes | The service | `web` |
-| `<access-key>` | string | — | yes | The attachment's access key, from [`forge services storage list`](#forge-services-storage-list) | `AKIAIOSFODNN7EXAMPLE` |
-| `--environment <ENVIRONMENT>` | environment id or name | — | no | Look the service's name up in this environment only | `--environment shop-prod` |
-| `--yes` | flag | off | no | Skip the confirmation prompt. Required with `--non-interactive` or when stdin is not a terminal | `--yes` |
-
-:::caution
-The key stops working when the command returns, before the next deploy.
-Deploy a version of the service that no longer needs the bucket first.
-:::
-
-**Examples**
-
-```sh
-# Detach a bucket (asks for confirmation)
-forge services storage detach web AKIAIOSFODNN7EXAMPLE
-
-# Detach every bucket of a service in a script
-forge -o json services storage list web | jq -r '.result.attachments[].access_key' \
-  | while read -r key; do forge services storage detach web "$key" --yes; done
-```
-
-**Output**
-
-The attachments that remain, in the shape shown under
-[`forge services storage list`](#forge-services-storage-list). The table output of an
-service with no attachment left prints only the header.
-
-Exit codes: `0` detached; `1` you did not answer `yes`; `2` an ambiguous
-name, or no `--yes` where no prompt is possible; `3` not signed in; `4` no
-`deploy`; `6` no such service, or no bucket is attached to it with that
-key; `7` the service belongs to a Compose stack; `9` Forge cannot reach
-the store to revoke the key.
-
-**See also**: [`forge services storage list`](#forge-services-storage-list),
-[`forge storage keys`](/docs/reference/cli/storage/#forge-storage-keys).
+**See also**: [`forge services deploy`](#forge-services-deploy),
+[`forge services export`](#forge-services-export).
 
 ### forge services logs
 

@@ -7,7 +7,7 @@ sidebar:
 
 Orbyn Forge is a Rust orchestration layer that gives one secure workspace to
 access, deploy and operate services across Windows and Linux. It drives
-proven engines, such as Docker, Nginx, PowerDNS, RustFS and database
+proven engines, such as Docker, Nginx, PowerDNS and database
 servers, instead of reimplementing them.
 
 **It is not** a container runtime, a Kubernetes distribution, a DNS server, an
@@ -40,10 +40,8 @@ RDP implementation or a database engine.
   services with environment variables; Docker containers and compose
   stacks. See [App Store](/docs/guides/app-store/) and
   [Deploy a compose stack](/docs/guides/compose-stacks/).
-- **Files and storage.** A file explorer, temporary SFTP access, managed
-  RustFS object stores and external S3 storage. See
-  [Browse files on a node](/docs/guides/browse-files/) and
-  [Install an object store](/docs/guides/install-object-store/).
+- **Files.** A file explorer and temporary SFTP access. See
+  [Browse files on a node](/docs/guides/browse-files/).
 - **Network.** Nginx edge sites, cluster ingress, PowerDNS records and port
   tunnels to services over the API port. See [Sites and DNS](/docs/guides/sites-and-dns/)
   and [Port tunnels](/docs/concepts/port-tunnels/).

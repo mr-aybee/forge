@@ -2582,24 +2582,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "forge-s3"
-version = "0.0.1"
-dependencies = [
- "async-trait",
- "bytes",
- "forge-core",
- "hex",
- "quick-xml",
- "reqwest",
- "ring",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "url",
-]
-
-[[package]]
 name = "forge-sdk"
 version = "0.0.1"
 dependencies = [
@@ -2653,7 +2635,6 @@ dependencies = [
  "forge-plugin-host",
  "forge-proto",
  "forge-rules",
- "forge-s3",
  "forge-sdk",
  "forge-secrets",
  "forge-ssh",
@@ -4926,16 +4907,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "quick-xml"
-version = "0.41.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
-dependencies = [
- "memchr",
- "serde",
 ]
 
 [[package]]

@@ -13,6 +13,7 @@ import {
 import type { Server } from "../api/types";
 import { errorText, useToast } from "../app/toast";
 import { useStacks } from "../api/stacks";
+import { AdoptContainerDialog, isForgeServiceContainer } from "./AdoptContainer";
 import { StoredContainerLogs } from "./containers/StoredContainerLogs";
 import { StackTable } from "./stacks/StackList";
 import { RowMenu, type RowAction, useRowMenu, Button, Confirm, Empty, ErrorNote, IconButton, Modal, Mono, Panel, Skeleton, Status, Table, Td, bytes } from "./ui";
@@ -32,6 +33,7 @@ export function NodeContainers({ node }: { node: Server }) {
   const stacks = useStacks({ server: node.id }, online);
   const [q, setQ] = useState("");
   const [removing, setRemoving] = useState<ContainerSummary>();
+  const [adopting, setAdopting] = useState<ContainerSummary>();
   const rm = useRowMenu();
   const navigate = useNavigate();
   const openContainer = (c: ContainerSummary, tab?: "logs" | "shell" | "environment") =>
@@ -193,6 +195,7 @@ export function NodeContainers({ node }: { node: Server }) {
                     ? { label: "Stop", icon: Square, tone: "bad", disabled: act.isPending, hint: wait, onSelect: () => run("stop", c) }
                     : { label: "Start", icon: Play, tone: "ok", disabled: act.isPending, hint: wait, onSelect: () => run("start", c) },
                   { label: "Restart", icon: RotateCw, tone: "warn", disabled: act.isPending, hint: wait, onSelect: () => run("restart", c) },
+                  { label: "Adopt as service", icon: Boxes, hidden: isForgeServiceContainer(c.name), onSelect: () => setAdopting(c) },
                   { label: "Remove", icon: Trash2, danger: true, disabled: act.isPending, hint: wait, onSelect: () => setRemoving(c) },
                 ];
                 return (
@@ -237,6 +240,7 @@ export function NodeContainers({ node }: { node: Server }) {
       )}
 
       {rm.menu}
+      {adopting && <AdoptContainerDialog serverId={node.id} container={adopting.name} onClose={() => setAdopting(undefined)} />}
       <Confirm
         open={!!removing}
         onOpenChange={(o) => !o && setRemoving(undefined)}

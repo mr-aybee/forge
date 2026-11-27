@@ -189,9 +189,6 @@ pub enum Cmd {
     /// TLS certificates.
     #[command(subcommand)]
     Certificates(admincmd::CertificatesCmd),
-    /// Object storage (S3-compatible stores, buckets, access keys).
-    #[command(subcommand)]
-    Storage(admincmd::StorageCmd),
     /// The password vault.
     #[command(subcommand)]
     Vault(admincmd::VaultCmd),
@@ -414,7 +411,6 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Environments(c) => admincmd::environments(g, c).await,
         Cmd::Sites(c) => admincmd::sites(g, c).await,
         Cmd::Certificates(c) => admincmd::certificates(g, c).await,
-        Cmd::Storage(c) => admincmd::storage(g, c).await,
         Cmd::Vault(c) => admincmd::vault(g, c).await,
         Cmd::System(c) => admincmd::system(g, c).await,
         Cmd::Packages(c) => admincmd::packages(g, c).await,

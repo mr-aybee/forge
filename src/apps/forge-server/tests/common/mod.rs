@@ -50,7 +50,6 @@ pub fn test_config(dir: &std::path::Path) -> ServerConfig {
         agent_hostnames: vec!["localhost".into(), "127.0.0.1".into()],
         jobs: forge_server::config::JobSettings { lease_secs: 5, concurrency: 4, poll_ms: 50 },
         // The object-storage tests run an S3 stand-in on 127.0.0.1.
-        storage_allow_loopback: true,
         // Never write this machine's hosts file from tests (D-084); the names
         // tests turn it on with agents that refuse the command.
         names: forge_server::config::NameSettings { enabled: false, ..Default::default() },

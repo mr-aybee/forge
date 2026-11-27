@@ -151,6 +151,80 @@ async fn the_baseline_and_later_migrations_apply_on_a_fresh_database() {
     // 149 from the baseline, + 5 tables and 4 indexes from 0002 (container
     // platform: swarm, registries, webhooks), + 1 table and 1 index from 0003
     // (webhook replay markers; its primary key index is internal), + 2 tables
-    // from 0004 (object store settings and key records, D-170).
-    assert_eq!(objects, 162, "tables and indexes after all migrations");
+    // from 0004 (object store settings and key records, D-170); 0009 drops
+    // the 5 object storage tables and their 5 indexes and adds 1 table
+    // (pending object store adoptions, D-180).
+    assert_eq!(objects, 153, "tables and indexes after all migrations");
+}
+
+/// `object_store_adoptions` columns the test reads.
+type PendingRow = (String, String, Option<String>, String, Option<i64>, String);
+
+/// D-180: migration 0009 keeps each managed Docker object store's container
+/// (one row per member node) for adoption, then drops the object storage
+/// tables. Native and connected stores are not kept.
+#[tokio::test]
+async fn object_store_containers_survive_the_removal_as_pending_adoptions() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("forge.db");
+    let old = Store::open_sqlite_until(&path, 8).await.unwrap();
+    let store_row = |id: &str, slug: &str, mode: &str, runtime: &str, env: Option<&str>| {
+        format!(
+            "INSERT INTO object_stores (id, workspace_id, name, slug, provider, mode, region, path_style, version, runtime,
+                topology, s3_port, console_port, endpoint, credential_id, status, created_by, created_at, updated_at,
+                environment_id)
+             VALUES ('{id}', 'ws-1', '{slug}', '{slug}', 'rustfs', '{mode}', 'us-east-1', 1, '1.0.6', '{runtime}',
+                'standalone', 9000, 9001, 'http://192.0.2.10:9000', 'cred-{id}', 'running', 'user:u1', 5, 5, {})",
+            env.map_or("NULL".to_owned(), |e| format!("'{e}'"))
+        )
+    };
+
+    // Bare rows: no workspace, node or user behind them.
+    sqlx::query("PRAGMA foreign_keys = OFF").execute(old.pool()).await.unwrap();
+
+    for sql in [
+        store_row("s1", "media", "managed", "docker", Some("env-1")),
+        store_row("s2", "native", "managed", "native", None),
+        store_row("s3", "aws", "external", "none", None),
+        "INSERT INTO object_store_members (store_id, server_id, data_paths, endpoint_host, require_mount, status)
+         VALUES ('s1', 'node-1', '[\"/data\"]', '192.0.2.10', 0, 'running'),
+                ('s2', 'node-1', '[\"/srv/os\"]', '192.0.2.10', 0, 'running')"
+            .to_owned(),
+        "INSERT INTO object_store_settings (store_id, settings, updated_at)
+         VALUES ('s1', '{\"container_name\":\"smoke\",\"adopted\":true}', 5)"
+            .to_owned(),
+    ] {
+        sqlx::query(&sql).execute(old.pool()).await.unwrap();
+    }
+
+    old.pool().close().await;
+    let store = Store::open_sqlite(&path).await.unwrap();
+
+    let rows: Vec<PendingRow> = sqlx::query_as(
+        "SELECT id, slug, environment_id, server_id, console_port, credential_id FROM object_store_adoptions",
+    )
+    .fetch_all(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        [(
+            "s1:node-1".to_owned(),
+            "media".to_owned(),
+            Some("env-1".to_owned()),
+            "node-1".to_owned(),
+            Some(9001),
+            "cred-s1".to_owned()
+        )]
+    );
+
+    for gone in ["object_stores", "object_store_members", "object_store_settings", "object_store_keys", "bucket_grants"]
+    {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = $1")
+            .bind(gone)
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert_eq!(n, 0, "{gone}");
+    }
 }

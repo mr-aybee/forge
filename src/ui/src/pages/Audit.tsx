@@ -35,7 +35,7 @@ const nf = new Intl.NumberFormat();
 /** Chip colours per action category (the text before the first `.`). */
 const CATEGORY: { tone: string; prefixes: string[] }[] = [
   { tone: "bg-violet-soft text-violet", prefixes: ["auth", "session", "user", "users", "mfa", "passkey", "identity", "token", "device", "account", "login", "apikey", "oauth"] },
-  { tone: "bg-sky-soft text-sky", prefixes: ["files", "file", "sftp", "object", "objects", "storage", "upload"] },
+  { tone: "bg-sky-soft text-sky", prefixes: ["files", "file", "sftp", "upload"] },
   { tone: "bg-teal-soft text-teal", prefixes: ["stack", "stacks", "container", "containers", "app", "apps", "service", "services", "project", "installation", "image", "deploy", "catalog"] },
   { tone: "bg-indigo-soft text-indigo", prefixes: ["server", "servers", "node", "nodes", "agent", "agents", "cluster", "clusters", "environment", "fabric", "enrollment", "tags", "tag"] },
   { tone: "bg-pink-soft text-pink", prefixes: ["remote", "access", "terminal", "ssh", "vault", "secret", "secrets", "connector", "process", "mcp"] },

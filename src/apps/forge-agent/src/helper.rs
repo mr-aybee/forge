@@ -52,10 +52,6 @@ pub enum HelperRequest {
     Fabric {
         fabric: forge_catalog::fabric::FabricOp,
     },
-    /// Object store instance (may carry its bootstrap credential).
-    Storage {
-        storage: forge_catalog::storage::StoreOp,
-    },
     /// File explorer operation (confined and policy-checked in `crate::files`).
     /// Install a new agent + helper (issue #4); see `self_update`.
     UpdateAgent {
@@ -414,10 +410,6 @@ impl HelperRequest {
                 fabric.validate().map_err(|e| format!("rejected: {e}"))?;
                 Ok(req)
             }
-            Self::Storage { storage } => {
-                storage.validate().map_err(|e| format!("rejected: {e}"))?;
-                Ok(req)
-            }
             Self::Files { files } => {
                 files.validate().map_err(|e| format!("rejected: {e}"))?;
                 Ok(req)
@@ -549,9 +541,6 @@ impl HelperRequest {
                 crate::self_update::validate(&update)?;
                 Self::UpdateAgent { update }
             }
-            C::StorageAction(s) => Self::Storage {
-                storage: serde_json::from_str(&s.op_json).map_err(|_| "invalid object store operation".to_owned())?,
-            },
             C::FileAction(f) => Self::Files {
                 files: serde_json::from_str(&f.op_json).map_err(|e| format!("invalid file operation: {e}"))?,
             },
@@ -714,18 +703,6 @@ pub struct Progress {
 #[cfg(not(unix))]
 pub async fn call(req: &HelperRequest, timeout: std::time::Duration) -> HelperResponse {
     match req {
-        HelperRequest::Storage { storage } => {
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-            let forward = tokio::spawn(async move {
-                while let Some(l) = rx.recv().await {
-                    crate::progress::push(&l);
-                }
-            });
-            let r = tokio::time::timeout(timeout, crate::recipes::run_store(storage, Some(&tx))).await;
-            drop(tx);
-            let _ = forward.await;
-            r.unwrap_or_else(|_| HelperResponse::failed("object store action timed out"))
-        }
         HelperRequest::Package { package, version, action, params } => {
             match forge_catalog::validate(package, version, action, params) {
                 Ok(v) => {

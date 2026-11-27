@@ -8,7 +8,6 @@ import {
   CircleCheck,
   CircleX,
   Clock,
-  Database,
   Globe,
   Loader2,
   Network,
@@ -35,7 +34,6 @@ const CATEGORY: Record<JobCategory, { icon: ComponentType<{ className?: string }
   health: { icon: Activity, cls: "bg-ok-soft text-ok", label: "Facts and health" },
   deploy: { icon: Rocket, cls: "bg-pink-soft text-pink", label: "Deploy" },
   agent: { icon: Terminal, cls: "bg-orange-soft text-orange", label: "Agent" },
-  storage: { icon: Database, cls: "bg-indigo-soft text-indigo", label: "Storage" },
   node: { icon: Server, cls: "bg-accent-soft text-accent", label: "Node" },
   other: { icon: Workflow, cls: "bg-panel-2 text-muted", label: "Job" },
 };

@@ -8,7 +8,6 @@ import { explorerKeys, useExplorerTree } from "../../api/explorer";
 import { useServiceSwarm, useSwarm } from "../../api/swarm";
 import { ReplicaBar } from "../../components/service/ReplicaBar";
 import { fleetKeys, useAllEnvironments, useClusters, useProjects, useServiceAction } from "../../api/hooks";
-import { useObjectStores } from "../../api/storage";
 import type { Environment, Project } from "../../api/types";
 import type { ProjectsSearch } from "../../app/router";
 import { useTerminals } from "../../app/terminals";
@@ -18,7 +17,6 @@ import { FilterBar } from "../../components/filters/FilterBar";
 import { InstanceStateChip } from "../../components/InstanceState";
 import { DeleteProjectConfirm, ProjectModal } from "../../components/ProjectDialogs";
 import { isStackService } from "../../components/stacks/StackBadge";
-import { OwnedStores, ownedBy } from "../../components/storage/StoreOwner";
 import { TagEditor } from "../../components/TagEditor";
 import { ServiceLogDrawer } from "./ServiceLogDrawer";
 import { PinToggle, usePinAction } from "../../components/Pins";
@@ -107,7 +105,6 @@ function useNodeActions(onDialog: (d: ExplorerDialog) => void, onLogs: (serviceI
   const navigate = useNavigate();
   const projects = useProjects().data ?? [];
   const envs = useAllEnvironments().data ?? [];
-  const stores = useObjectStores().data;
   const clusters = useClusters().data ?? [];
   const projectOf = (n: TreeProject) => (n.id ? projects.find((g) => g.id === n.id) : undefined);
   const envOf = (n: TreeEnv) => envs.find((e) => e.id === n.id);
@@ -124,8 +121,6 @@ function useNodeActions(onDialog: (d: ExplorerDialog) => void, onLogs: (serviceI
   };
   const envActions = (n: TreeEnv): RowAction[] => {
     const e = envOf(n);
-    const owned = ownedBy(stores, n.id).length;
-    const keeps = n.services.length ? `Still has ${n.services.length} service${n.services.length === 1 ? "" : "s"}` : `Still owns ${owned} object store${owned === 1 ? "" : "s"}`;
     return [
       { label: "New service here", icon: Plus, disabled: !n.clusterId, hint: "Move it to a cluster first", onSelect: () => void navigate({ to: "/services/new", search: { environment: n.id } }) },
       { label: "Rename…", icon: Pencil, hidden: !e, onSelect: () => e && onDialog({ kind: "rename-env", env: e }) },
@@ -138,7 +133,7 @@ function useNodeActions(onDialog: (d: ExplorerDialog) => void, onLogs: (serviceI
         hint: "No other cluster",
         onSelect: () => e && onDialog({ kind: "move-env", env: e }),
       },
-      { label: "Delete…", icon: Trash2, danger: true, hidden: !e, disabled: n.services.length > 0 || owned > 0, hint: keeps, onSelect: () => e && onDialog({ kind: "delete-env", env: e, serviceCount: n.services.length }) },
+      { label: "Delete…", icon: Trash2, danger: true, hidden: !e, disabled: n.services.length > 0, hint: `Still has ${n.services.length} service${n.services.length === 1 ? "" : "s"}`, onSelect: () => e && onDialog({ kind: "delete-env", env: e, serviceCount: n.services.length }) },
     ];
   };
   const serviceActions = (n: TreeService): RowAction[] => [
@@ -743,9 +738,6 @@ function EnvDetails({ env, onSelect, acts }: { env: TreeEnv; onSelect: (k: strin
       <Field label="Tags">
         <TagEditor kind="environment" id={env.id} />
       </Field>
-      <div className="-mx-4 -mb-3">
-        <OwnedStores environmentId={env.id} />
-      </div>
     </>
   );
 }

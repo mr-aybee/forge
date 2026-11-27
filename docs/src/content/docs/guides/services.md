@@ -132,10 +132,10 @@ requests until you stop it or change its role.
 ## Do it from the command line
 
 The [`forge` CLI](/docs/reference/cli/) covers the whole path with typed
-commands: project, environment, service, placement, deploy, ingress and a
-bucket. The example publishes a container service `web` of the project
-`shop` on two nodes of the cluster `lab`, with `lab-b` as the ingress edge
-and a bucket `uploads` of the store `media`. Replace the names with yours.
+commands: project, environment, service, placement, deploy and ingress.
+The example publishes a container service `web` of the project
+`shop` on two nodes of the cluster `lab`, with `lab-b` as the ingress edge.
+Replace the names with yours.
 
 You need, in addition to the roles under
 [Before you begin](#before-you-begin):
@@ -148,9 +148,6 @@ You need, in addition to the roles under
   ([`forge packages install`](/docs/reference/cli/packages/#forge-packages-install)).
 - `package.manage` on `lab-b` and `lab-c` with an MFA-verified session when
   they have no **Docker Engine** yet: the first deploy installs it.
-- For the bucket: a running managed object store named `media` (see
-  [Install an object store](/docs/guides/install-object-store/)), `storage.manage`
-  on it and `deploy` on the environment.
 
 1. Create the project.
 
@@ -222,26 +219,6 @@ You need, in addition to the roles under
     forge sites apply shop --yes
     ```
 
-11. Give the object store to the environment, so its roles can attach
-    buckets without `storage.manage`.
-
-    ```sh
-    forge storage owner media --environment shop-prod --yes
-    ```
-
-12. Attach a bucket to the service. Forge issues a key limited to the bucket;
-    the secret goes to the vault.
-
-    ```sh
-    forge services storage attach web --store media --bucket uploads --create-bucket
-    ```
-
-13. Deploy again, so the service gets the `S3_*` variables.
-
-    ```sh
-    forge services deploy web --wait --yes
-    ```
-
 Check the result:
 
 ```sh
@@ -251,8 +228,6 @@ forge services list --environment shop-prod
 forge clusters ingress get lab
 # The site, its edge and the upstream addresses behind it
 forge clusters routing lab
-# The attached bucket and the variable prefix
-forge services storage list web
 ```
 
 | Symptom | Cause | Fix |
@@ -263,15 +238,13 @@ forge services storage list web
 | Step 7 or 10 exits with `5` | `proxy.manage` needs an MFA-verified session | Run `forge auth step-up`, then repeat the step |
 | Step 7 exits with `10` (`ingress_failed`) | Nginx is missing on the edge, or `nginx -t` refused the configuration | Read the `ERROR` column; install **Nginx** on the edge, then apply again |
 | Step 9 exits with `2` and "this cluster has no ingress profile yet" | Step 6 was skipped | Save the profile, then create the site |
-| Step 11 exits with `7` (`attached_elsewhere`) | Buckets of the store are attached to services of other environments | Keep the store shared and attach with `storage.manage`, or pass `--force` |
 
 Every command and flag is in the CLI reference:
 [`forge projects`](/docs/reference/cli/projects/),
 [`forge environments`](/docs/reference/cli/tenants-environments/),
 [`forge services`](/docs/reference/cli/services/),
-[`forge clusters ingress`](/docs/reference/cli/clusters/#forge-clusters-ingress-set),
-[`forge sites`](/docs/reference/cli/sites-certificates/) and
-[`forge storage`](/docs/reference/cli/storage/).
+[`forge clusters ingress`](/docs/reference/cli/clusters/#forge-clusters-ingress-set)
+and [`forge sites`](/docs/reference/cli/sites-certificates/).
 
 ## Follow live logs
 
@@ -576,7 +549,7 @@ kind asks first and clears the other kind's fields.
 | **Start command** | Command, working directory, **Listening port**, **Restart policy** (and **Max restart attempts** for **On failure**) |
 | **Limits** | CPU and memory limits (systemd `CPUQuota=`, `MemoryMax=`) |
 | **Environment variables** | **Grid** or **Bulk edit**, **Paste .env**, package variables |
-| **Storage** | Service directory, environment file; buckets are on the **Storage** tab |
+| **Storage** | Service directory, environment file |
 | **Health checks** | The default TCP check, with a link to the **Health** tab |
 | **Advanced** | Unit name, runs-as user |
 

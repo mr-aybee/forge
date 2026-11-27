@@ -620,7 +620,7 @@ pub struct CommandBody {
     pub principal: String,
     #[prost(
         oneof = "command_body::Command",
-        tags = "10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 30, 31, 32, 33, 34, 38, 39, 40, 41, 42"
+        tags = "10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 30, 31, 32, 33, 34, 38, 39, 40, 41, 42"
     )]
     pub command: Option<command_body::Command>,
 }
@@ -650,8 +650,8 @@ pub mod command_body {
         IngressAction(super::IngressAction),
         #[prost(message, tag = "20")]
         FabricAction(super::FabricAction),
-        #[prost(message, tag = "21")]
-        StorageAction(super::StorageAction),
+        // Tag 21 was the object store command (removed with Object Storage,
+        // D-180); never reuse it.
         #[prost(message, tag = "22")]
         FileAction(super::FileAction),
         // Tag 23 (`AccessAction`, WireGuard remote access) was retired with
@@ -700,7 +700,6 @@ pub mod command_body {
                 Command::NetProbe(_) => "probe",
                 Command::IngressAction(_) => "ingress",
                 Command::FabricAction(_) => "fabric",
-                Command::StorageAction(_) => "storage",
                 Command::FileAction(_) => "files",
                 Command::CancelAction(_) => "cancel",
                 Command::AgentUpdate(_) => "update",
@@ -818,15 +817,6 @@ pub struct IngressAction {
 /// Forge network fabric operations (`forge_catalog::fabric::FabricOp`, JSON).
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct FabricAction {
-    #[prost(string, tag = "1")]
-    pub op_json: String,
-}
-
-/// Object store instance operation (`forge_catalog::storage::StoreOp`, JSON).
-/// An install carries the store's bootstrap credential: it lives only in
-/// memory and on the mTLS link, like resolved service secrets.
-#[derive(Clone, PartialEq, prost::Message)]
-pub struct StorageAction {
     #[prost(string, tag = "1")]
     pub op_json: String,
 }
@@ -949,8 +939,8 @@ pub struct ProcessAction {
     pub class: String,
 }
 
-/// Stops a background operation the agent is still running (a recipe, an
-/// object-store install…): the agent drops it and the helper kills the
+/// Stops a background operation the agent is still running (a recipe, a
+/// package install…): the agent drops it and the helper kills the
 /// operation's process group.
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct CancelAction {
@@ -1145,7 +1135,6 @@ mod oneof_tests {
         let cmds = vec![
             command_body::Command::IngressAction(IngressAction { op_json: "{}".into() }),
             command_body::Command::FabricAction(FabricAction { op_json: "{}".into() }),
-            command_body::Command::StorageAction(StorageAction { op_json: "{}".into() }),
             command_body::Command::FileAction(FileAction { op_json: "{}".into() }),
             command_body::Command::CancelAction(CancelAction { operation_id: "op-1".into() }),
             command_body::Command::NetProbe(NetProbe::default()),

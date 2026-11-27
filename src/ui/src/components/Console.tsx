@@ -190,7 +190,7 @@ function storedOutput(j?: Job | null): string | null {
 /** Whether a job has (or will have) console output worth showing. */
 export function jobHasConsole(j?: Job | null): boolean {
   if (!j) return false;
-  if (["node.bootstrap", "package.action", "storage.action", "app.action"].includes(j.kind)) return true;
+  if (["node.bootstrap", "package.action", "app.action"].includes(j.kind)) return true;
   const st = j.state ?? {};
   return st.operation_id !== undefined || st.output !== undefined || Array.isArray(st.log);
 }

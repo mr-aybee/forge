@@ -44,7 +44,6 @@ pub fn page_of(path: &[&str]) -> &'static str {
             "registries" => "registries",
             "webhooks" => "webhooks",
             "deploy" => "deploy",
-            "storage" => "storage",
             "vault" => "vault",
             "system" => "system",
             "packages" => "packages",

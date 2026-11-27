@@ -14,7 +14,6 @@ pub mod node_op;
 pub mod package;
 pub mod stack;
 pub mod stack_rollout;
-pub mod storage;
 pub mod swarm;
 pub mod swarm_rollout;
 pub mod swarm_service;
@@ -26,4 +25,10 @@ pub use diagnostics::DiagnosticsJob;
 pub use node_bootstrap::NodeBootstrapJob;
 pub use package::PackageJob;
 pub use stack::StackJob;
-pub use storage::StorageJob;
+
+/// AAD binding a credential vault item's sealed secret to its id (the vault
+/// API seals with it too).
+#[must_use]
+pub fn vault_aad(id: forge_core::VaultItemId) -> String {
+    format!("vault:{id}")
+}

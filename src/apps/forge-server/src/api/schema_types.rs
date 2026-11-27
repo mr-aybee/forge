@@ -32,27 +32,6 @@ impl AgentMode {
     }
 }
 
-/// What a bucket key or a bucket grant may do (`read`, `readwrite`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
-#[schemars(rename_all = "lowercase")]
-pub enum BucketAccess {
-    Read,
-    #[schemars(rename = "readwrite")]
-    ReadWrite,
-}
-
-impl BucketAccess {
-    #[must_use]
-    pub const fn from_core(a: forge_core::storage::BucketAccess) -> Self {
-        use forge_core::storage::BucketAccess as A;
-
-        match a {
-            A::Read => Self::Read,
-            A::ReadWrite => Self::ReadWrite,
-        }
-    }
-}
-
 /// Archive format (`zip`, `tar_gz`; `tar` is read only).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 #[schemars(rename_all = "snake_case")]
@@ -238,10 +217,8 @@ mod tests {
         assert_eq!(names::<ArchiveFormat>(), wire(&[F::Zip, F::TarGz, F::Tar]));
         assert_eq!(names::<JobStatus>(), wire(&[S::Queued, S::Running, S::Succeeded, S::Failed, S::Cancelled]));
         assert_eq!(names::<RootKind>(), wire(&[K::Node, K::Service, K::Container]));
-        assert_eq!(names::<BucketAccess>(), wire(&forge_core::storage::BucketAccess::ALL));
 
         // Each mirror converts from every real variant (compile-time exhaustive).
-        assert_eq!(BucketAccess::from_core(forge_core::storage::BucketAccess::ReadWrite), BucketAccess::ReadWrite);
         assert_eq!(AgentMode::from_core(M::Ask), AgentMode::Ask);
         assert_eq!(ArchiveFormat::from_core(F::TarGz), ArchiveFormat::TarGz);
         assert_eq!(JobStatus::from_core(S::Failed), JobStatus::Failed);

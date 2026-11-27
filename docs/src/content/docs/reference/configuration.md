@@ -22,7 +22,6 @@ rejected, so typos fail loudly.
 | `cookie_secure` | `true` | `Secure` flag on session cookies. With `false`, cookies still get `Secure` on requests that a [trusted proxy](#security) reports as HTTPS (`X-Forwarded-Proto: https`) |
 | `environment` | `"production"` | Where this control plane runs: `production`, `staging`, `development` or `test`. It does not decide whether MFA is required (see `[security]`). Env: `FORGE_ENVIRONMENT`. Installer: `--environment <name>` |
 | `dev_skip_mfa` | `false` | **Deprecated.** `true` is the same as `[security] require_mfa = false`, in any environment, and logs a deprecation warning at start. `forge-server mfa on\|off` sets it to `false` when it edits the file. Env: `FORGE_DEV_SKIP_MFA=1` (or `true`). Installer: `--dev-skip-mfa` (alias of `--mfa off`) |
-| `storage_allow_loopback` | `false` | Lets object-store endpoints use loopback addresses (`127.0.0.1`, `::1`, `localhost`): for labs, development and tests. Link-local and cloud-metadata addresses (`169.254.0.0/16`, `fe80::/10`, `fd00:ec2::254`) are refused either way, also after DNS resolution. Env: `FORGE_STORAGE_ALLOW_LOOPBACK=1` |
 | `ui_dir` | none | Serve the built UI from this directory |
 | `heartbeat_hold_secs` | `25` | Long-poll hold for idle agents |
 | `offline_after_secs` | `90` | Agents unseen this long are marked offline |
@@ -505,7 +504,7 @@ restart.
 `FORGE_AGENT_LISTEN`, `FORGE_PUBLIC_URL`, `FORGE_COOKIE_SECURE`,
 `FORGE_ADMIN_PASSWORD` (for `init` only), `FORGE_ENVIRONMENT`,
 `FORGE_REQUIRE_MFA`, `FORGE_LOGIN_CHALLENGE`, `FORGE_DEV_SKIP_MFA`
-(deprecated), `FORGE_STORAGE_ALLOW_LOOPBACK`, `FORGE_SFTP_LISTEN`,
+(deprecated), `FORGE_SFTP_LISTEN`,
 `FORGE_MCP_ENABLED`, `FORGE_MCP_MAX_MODE`, `RUST_LOG`.
 
 An environment variable wins over the file. `forge-server mfa status` says so

@@ -41,7 +41,7 @@ runs where, with start, stop, restart, status and uninstall.
 | Messaging | RabbitMQ (with management UI), Mosquitto (MQTT) |
 | Monitoring | Grafana, Loki, Prometheus, node exporter, Zabbix agent 2 |
 | DevOps | Jenkins LTS, GitLab CE |
-| Storage | RustFS (S3-compatible, container). For RustFS managed as an object store with buckets and an Object Explorer, see [Install an object store](/docs/guides/install-object-store/). An existing RustFS package can be [adopted](/docs/guides/adopt-app-store-rustfs/) as an object store; the App Store then stops managing it |
+| Storage | RustFS (S3-compatible, container). To run RustFS as a service with a services file instead, see [Run RustFS as a service](/docs/guides/run-rustfs-service/) |
 | Containers | Docker Engine |
 | DNS | PowerDNS (authoritative, HTTP API) |
 | Tools | Certbot (Let's Encrypt for Ingress, renewals reload Nginx), Keepalived (virtual IP for edges on one LAN) |
@@ -196,6 +196,5 @@ tracked; update them by reinstalling a newer version.
 
 - [Services](/docs/guides/services/) to use runtimes and package
   variables.
-- [Install an object store](/docs/guides/install-object-store/) for managed
-  RustFS.
+- [Run RustFS as a service](/docs/guides/run-rustfs-service/).
 - [Containers](/docs/guides/containers/)

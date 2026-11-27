@@ -71,7 +71,7 @@ session for these Cedar actions:
 | --- | --- |
 | Nodes | `server.command`, `process.manage`, `node.onboard`, `terminal.open` |
 | Software | `package.manage`, `stack.privileged`, `plugin.manage`, `system.update`, `analytics.configure` |
-| Storage and files | `storage.manage`, `file.write`, `file.delete`, `file.admin` |
+| Files | `file.write`, `file.delete`, `file.admin` |
 | Network | `proxy.manage`, `network.connect`, `network.manage`, `certificate.use` |
 | Secrets and data | `secret.read`, `db.admin` |
 

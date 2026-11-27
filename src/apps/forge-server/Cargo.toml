@@ -25,7 +25,6 @@ forge-file-gateway.workspace = true
 forge-authz.workspace = true
 forge-store.workspace = true
 forge-analytics-proto.workspace = true
-forge-s3.workspace = true
 forge-jobs.workspace = true
 forge-audit.workspace = true
 forge-pki.workspace = true

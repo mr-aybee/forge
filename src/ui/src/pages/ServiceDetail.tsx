@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { ChevronRight, Container, History, Database, FileCode, Globe, HeartPulse, LayoutDashboard, Loader2, RefreshCw, Rocket, Settings2, TriangleAlert, Trash2, Waypoints, Webhook } from "lucide-react";
+import { ChevronRight, Container, History, FileCode, Globe, HeartPulse, LayoutDashboard, Loader2, RefreshCw, Rocket, Settings2, TriangleAlert, Trash2, Waypoints, Webhook } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ApiError, get } from "../api/client";
@@ -41,7 +41,6 @@ import { PlacementDialog } from "../components/PlacementDialog";
 import { PinToggle } from "../components/Pins";
 import { Button, Confirm, Drawer, Empty, ErrorNote, RowMenu, Modal, PageCrumb, PageHeader, Panel, Skeleton, Status, Table, Td, UnsavedBar, ago, short } from "../components/ui";
 import { TagEditor } from "../components/TagEditor";
-import { AppStorageTab } from "../components/storage/AppStorageTab";
 import { ServicesFilePanel } from "../components/service-editor/ServicesFilePanel";
 import { ReleasesTab } from "../components/deploy/ReleasesTab";
 import { WebhooksTab } from "../components/deploy/WebhooksTab";
@@ -259,6 +258,11 @@ function ServicePage({ appId }: { appId: string }) {
       <div className="-mt-2 mb-4">
         <TagEditor kind="service" id={a.id} />
       </div>
+      {a.adopted_from && (
+        <p role="status" className="mb-4 min-w-0 rounded border border-line bg-panel-2 px-3 py-2 text-xs text-muted">
+          Adopted from container <span className="font-mono text-[11px] break-all select-all">{a.adopted_from}</span>; the first deploy replaces it with a Forge-managed container.
+        </p>
+      )}
       {a.secrets_changed_at != null && (
         <p role="status" className="mb-4 rounded border border-warn/30 bg-warn-soft px-3 py-2 text-xs text-warn">
           A vault item this service mounts as a file changed {ago(a.secrets_changed_at)}. Its nodes still have the old value: deploy it again.
@@ -277,7 +281,6 @@ function ServicePage({ appId }: { appId: string }) {
             ["overview", "Overview", LayoutDashboard],
             ["configuration", "Configuration", Settings2],
             ["health", "Health Checks", HeartPulse],
-            ["storage", "Storage", Database],
             ["releases", "Releases", History],
             ["webhooks", "Webhooks", Webhook],
             ["yaml", "YAML", FileCode],
@@ -302,8 +305,6 @@ function ServicePage({ appId }: { appId: string }) {
         <ReleasesTab app={a} swarm={swarm} />
       ) : tab === "webhooks" ? (
         <WebhooksTab target={{ kind: "service", id: a.id }} targetName={a.name} />
-      ) : tab === "storage" ? (
-        <AppStorageTab app={a} />
       ) : tab === "overview" ? (
         <div className="space-y-3">
           <ServiceStatusStrip a={a} nodes={nodes} health={health.data?.instances} onLogKeys={() => document.getElementById("log-ingest-keys")?.scrollIntoView({ behavior: "smooth", block: "center" })} />

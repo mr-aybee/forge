@@ -84,7 +84,6 @@ submission (including MFA). A revoked role makes the next step fail with
 | Kind | Steps | Action |
 | --- | --- | --- |
 | `agent.command` | `dispatch`, `await_result` | `server.manage` (read-only) / `server.command` (mutating) |
-| `storage.action` | `dispatch`, `await_result` | `storage.manage` (`server.manage` for `status`) on the member node |
 | `diagnostics.sleep` | `first`, `second`, `third` | `job.create` |
 
 `diagnostics.sleep` exists to demonstrate and test crash recovery: kill the

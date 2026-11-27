@@ -131,7 +131,7 @@ Anyone with root or your account on that machine can read the tokens.
 | [docker](/docs/reference/cli/docker/) | `endpoint show/enable/disable/check`, `catalog`, `api` | A node's Docker Engine API over mutual TLS |
 | [deploy](/docs/reference/cli/deploy/) | `validate`, `plan`, `apply`, `status`, `history`, `releases`, `release`, `slots`, `redeploy`, `rollback`, `pause`, `resume`, `abort`, `approve`, `reject` | Releases and rollouts of services from `forge.deploy.yaml` |
 | [projects](/docs/reference/cli/projects/) | `list`, `show`, `create`, `update`, `delete` | Projects: the products whose environments hold your services |
-| [services](/docs/reference/cli/services/) | `list`, `show`, `health`, `create`, `update`, `place`, `deploy`, `action`, `logs`, `remove`, `delete`, `storage …`, `files …` | Services and their attached buckets |
+| [services](/docs/reference/cli/services/) | `list`, `show`, `health`, `create`, `adopt`, `update`, `place`, `deploy`, `action`, `logs`, `remove`, `delete`, `files …` | Services |
 | [plugins](/docs/reference/cli/plugins/) | `list`, `keygen`, `sign`, `install`, `enable`, `disable`, `pin`, `unpin`, `remove` | Plugins |
 | [approvals](/docs/reference/cli/approvals/) | `list`, `get`, `deny`, `approve` | Requests from AI connectors |
 | [users](/docs/reference/cli/users/) | `list`, `create`, `reset-passkeys` | Accounts |
@@ -143,7 +143,6 @@ Anyone with root or your account on that machine can read the tokens.
 | [tenants and environments](/docs/reference/cli/tenants-environments/) | `tenants list/create`, `environments list/create/move` | Tenancy |
 | [clusters](/docs/reference/cli/clusters/) | `list`, `get`, `create`, `update`, `delete`, `live`, `routing`, `ingress get/set/apply/remove` | Clusters and their ingress profile |
 | [sites and certificates](/docs/reference/cli/sites-certificates/) | `sites …`, `certificates …` | Domains, ingress, TLS |
-| [storage](/docs/reference/cli/storage/) | `list`, `get`, `create`, `connect`, `owner`, `buckets`, `objects`, `object-upload`, `object-download`, `object-delete`, `keys`, `grants`, `my-grants` … | Object storage, objects, access keys and bucket grants |
 | [tunnel](/docs/reference/cli/tunnel/) | `open`, `list`, `close`, `ports`, `grants …` | Port tunnels to services, databases and SSH |
 | [vault](/docs/reference/cli/vault/) | `list`, `add`, `update`, `reveal`, `delete` | The password vault |
 | [system](/docs/reference/cli/system/) | `update`, `check`, `apply` | Server updates |
@@ -564,7 +563,6 @@ still land here; each section moved:
 | <span id="forge-tenants-and-forge-environments"></span>`forge tenants and forge environments` | [tenants-environments](/docs/reference/cli/tenants-environments/) |
 | <span id="forge-clusters"></span>`forge clusters` | [clusters](/docs/reference/cli/clusters/) |
 | <span id="forge-sites-and-forge-certificates"></span>`forge sites and forge certificates` | [sites-certificates](/docs/reference/cli/sites-certificates/) |
-| <span id="forge-storage"></span>`forge storage` | [storage](/docs/reference/cli/storage/) |
 | <span id="forge-tunnel"></span>`forge tunnel` | [tunnel](/docs/reference/cli/tunnel/) |
 | <span id="forge-vault"></span>`forge vault` | [vault](/docs/reference/cli/vault/) |
 | <span id="forge-system"></span>`forge system` | [system](/docs/reference/cli/system/) |

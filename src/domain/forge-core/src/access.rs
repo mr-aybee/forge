@@ -181,13 +181,6 @@ pub enum Action {
     /// limits, and restart the managed analytics engine (D-136).
     #[serde(rename = "analytics.configure")]
     AnalyticsConfigure,
-    /// Install, remove, start or stop object stores and manage their buckets
-    /// and access keys (runs as root on the node: MFA).
-    #[serde(rename = "storage.manage")]
-    StorageManage,
-    /// Browse, upload, download and delete objects in an object store.
-    #[serde(rename = "storage.data")]
-    StorageData,
     /// List, stat, view, download and search files on a node.
     #[serde(rename = "file.read")]
     FileRead,
@@ -240,7 +233,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 56] = [
+    pub const ALL: [Action; 54] = [
         Action::View,
         Action::AuditRead,
         Action::WorkspaceCreate,
@@ -281,8 +274,6 @@ impl Action {
         Action::DbAdmin,
         Action::SystemUpdate,
         Action::AnalyticsConfigure,
-        Action::StorageManage,
-        Action::StorageData,
         Action::FileRead,
         Action::FileWrite,
         Action::FileDelete,
@@ -342,8 +333,6 @@ impl Action {
             Action::DbAdmin => "db.admin",
             Action::SystemUpdate => "system.update",
             Action::AnalyticsConfigure => "analytics.configure",
-            Action::StorageManage => "storage.manage",
-            Action::StorageData => "storage.data",
             Action::FileRead => "file.read",
             Action::FileWrite => "file.write",
             Action::FileDelete => "file.delete",

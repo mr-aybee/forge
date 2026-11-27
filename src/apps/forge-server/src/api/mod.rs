@@ -5,7 +5,6 @@ pub(crate) mod agent_updates;
 mod alerts;
 pub mod analytics_settings;
 mod app_health;
-pub(crate) mod app_storage;
 pub(crate) mod approvals;
 mod audit;
 pub(crate) mod cert_renewal;
@@ -35,7 +34,6 @@ mod meta;
 mod names;
 mod nodes;
 mod notifications;
-mod objstore;
 mod observations;
 pub(crate) mod onboarding;
 pub(crate) mod openapi;
@@ -63,8 +61,6 @@ mod silences;
 mod sites;
 mod stack_apply;
 mod stacks;
-mod storage;
-mod storage_grants;
 mod swarm;
 mod swarm_stacks;
 pub mod system_update;
@@ -298,14 +294,13 @@ pub fn router(state: AppState) -> Router {
         .route("/services/{id}/instances", axum::routing::put(services::place))
         .route("/services/plan", post(service_files::plan))
         .route("/services/apply", post(service_files::apply))
+        .route("/services/adopt", post(services::adopt))
         .route("/services/{id}/scale", post(service_files::scale))
         .route("/services/{id}/export", get(service_files::export_service))
         .route("/environments/{id}/services/export", get(service_files::export_environment))
         .route("/services/health-summary", get(app_health::summary_list))
         .route("/services/{id}/health", get(app_health::get).put(app_health::update))
         .route("/services/{id}/health/validate", post(app_health::validate))
-        .route("/services/{id}/storage", get(app_storage::list).post(app_storage::attach))
-        .route("/services/{id}/storage/{access_key}", axum::routing::delete(app_storage::detach))
         .route("/services/{id}/deploy", post(services::deploy))
         .route("/services/{id}/swarm", get(swarm::service_get).post(swarm::service_action))
         .route("/services/{id}/swarm/logs", get(swarm::service_logs))
@@ -408,9 +403,6 @@ pub fn router(state: AppState) -> Router {
         .route("/plugins/{id}/invoke", post(plugins::invoke))
         // live events
         .route("/events", get(events::subscribe))
-        // object storage (api/storage.rs)
-        .merge(storage::routes())
-        .merge(storage_grants::routes())
         // file explorer (api/files.rs)
         .merge(files::routes())
         .merge(onboarding::routes())

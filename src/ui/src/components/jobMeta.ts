@@ -36,10 +36,9 @@ export interface JobNames {
   node: (id: string) => string | undefined;
   cluster: (id: string) => string | undefined;
   app: (id: string) => string | undefined;
-  store: (id: string) => string | undefined;
 }
 
-/** Name lookups for job labels. Apps and stores come from cache only (no extra requests). */
+/** Name lookups for job labels. Apps come from cache only (no extra requests). */
 export function useJobNames(): JobNames {
   const servers = useServers().data;
   const clusters = useClusters().data;
@@ -59,7 +58,6 @@ export function useJobNames(): JobNames {
     },
     cluster: (id) => (Array.isArray(clusters) ? clusters : []).find((c) => c?.id === id)?.name,
     app: (id) => fromCache("services", id),
-    store: (id) => fromCache("object-stores", id),
   };
 }
 
@@ -203,11 +201,6 @@ export function jobAction(j: Job, names: JobNames): string {
       return `${s(p.action) === "leave" ? "Leave" : "Join"} swarm`;
     case "swarm.service":
       return `${verb(p.action && typeof p.action === "object" ? s((p.action as { kind?: unknown }).kind) : undefined, "Deploy")} Swarm service`;
-    case "storage.action": {
-      const id = s(p.store_id);
-      const name = id ? names.store(id) : undefined;
-      return `${verb(s(p.action), "Run")} object store${name ? ` ${name}` : ""}`;
-    }
     default:
       return j.kind ? cap(j.kind.replace(/\./g, " ")) : "Job";
   }
@@ -221,7 +214,7 @@ export function jobTitle(j: Job, names: JobNames): string {
 }
 
 /** Colour family of a job in lists: what it touches. */
-export type JobCategory = "ingress" | "site" | "package" | "container" | "health" | "deploy" | "agent" | "storage" | "node" | "network" | "other";
+export type JobCategory = "ingress" | "site" | "package" | "container" | "health" | "deploy" | "agent" | "node" | "network" | "other";
 
 export function jobCategory(j: Job): JobCategory {
   const p = rec(j.payload);
@@ -235,8 +228,6 @@ export function jobCategory(j: Job): JobCategory {
       return "agent";
     case "app.action":
       return "deploy";
-    case "storage.action":
-      return "storage";
     case "swarm.stack":
     case "swarm.service":
     case "swarm.member":
@@ -266,8 +257,6 @@ export function jobCategory(j: Job): JobCategory {
     case "fabric":
     case "dns":
       return "network";
-    case "storage":
-      return "storage";
     default:
       return "agent";
   }

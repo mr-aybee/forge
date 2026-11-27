@@ -207,6 +207,9 @@ pub const RETIRED_ACTIONS: &[&str] = &[
     "network.access",
     "network.connect",
     "network.manage",
+    // Object Storage, removed with D-180.
+    "storage.manage",
+    "storage.data",
 ];
 
 /// Parses a stored action list: like [`parse_actions`], but names in

@@ -53,7 +53,7 @@ const services = createRoute({
   }),
   component: lazyRouteComponent(() => import("../pages/Services"), "Services"),
 });
-const APP_TABS = ["overview", "configuration", "health", "storage", "releases", "webhooks", "yaml"] as const;
+const APP_TABS = ["overview", "configuration", "health", "releases", "webhooks", "yaml"] as const;
 export type AppTab = (typeof APP_TABS)[number];
 const service = createRoute({
   getParentRoute: parent,
@@ -292,18 +292,7 @@ const updates = createRoute({
   validateSearch: (s: Record<string, unknown>): UpdatesSearch => ({ show: s.show === "all" ? "all" : undefined, kind: toCsv(csv(s.kind)), node: optStr(s.node), q: optStr(s.q) }),
   component: lazyRouteComponent(() => import("../pages/Updates"), "Updates"),
 });
-const storage = createRoute({
-  getParentRoute: parent,
-  path: "/storage",
-  validateSearch: (s: Record<string, unknown>): { mode?: "managed" | "external"; show?: "all" } => ({
-    mode: s.mode === "managed" || s.mode === "external" ? s.mode : undefined,
-    show: s.show === "all" ? "all" : undefined,
-  }),
-  component: lazyRouteComponent(() => import("../pages/Storage"), "Storage") });
 const ingressEndpoint = createRoute({ getParentRoute: parent, path: "/ingress/endpoints/$siteId", component: lazyRouteComponent(() => import("../pages/IngressEndpoint"), "IngressEndpoint") });
-const storageInstall = createRoute({ getParentRoute: parent, path: "/storage/install", component: lazyRouteComponent(() => import("../pages/StorageInstall"), "StorageInstall") });
-const storageSettings = createRoute({ getParentRoute: parent, path: "/storage/$storeId/settings", component: lazyRouteComponent(() => import("../pages/StorageSettings"), "StorageSettings") });
-const storageDetail = createRoute({ getParentRoute: parent, path: "/storage/$storeId", component: lazyRouteComponent(() => import("../pages/StorageDetail"), "StorageDetail") });
 const jobs = createRoute({ getParentRoute: parent, path: "/jobs", component: lazyRouteComponent(() => import("../pages/Jobs"), "Jobs") });
 /** `/audit` filters; parsed into an `AuditFilter` by `parseAuditSearch`. */
 export interface AuditSearch {
@@ -479,10 +468,6 @@ const routeTree = rootRoute.addChildren([
   packageDetail,
   installed,
   updates,
-  storage,
-  storageInstall,
-  storageSettings,
-  storageDetail,
   jobs,
   audit,
   members,

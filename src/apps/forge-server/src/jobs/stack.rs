@@ -453,6 +453,7 @@ impl StackJob {
                     version: 0,
                     source: String::new(),
                     secrets_changed_at: None,
+                    adopted_from: None,
                 },
             };
 

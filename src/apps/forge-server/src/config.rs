@@ -60,11 +60,10 @@ pub struct ServerConfig {
     pub dev_skip_mfa: bool,
     /// MFA requirement and the login challenge.
     pub security: SecuritySettings,
-    /// Lets object-store endpoints use loopback addresses (labs, development
-    /// and tests). Off by default: the control plane never calls its own
-    /// host for a store. Link-local and cloud-metadata addresses are refused
-    /// either way.
-    pub storage_allow_loopback: bool,
+    /// `storage_allow_loopback` from before D-180 (Object Storage, gone).
+    /// Accepted and ignored, with a warning, so an old `forge.toml` still
+    /// loads.
+    pub storage_allow_loopback: Option<bool>,
     /// Self-update from the Forge release feed.
     pub update: UpdateSettings,
     /// Forge-managed SFTP gateway for temporary file access.
@@ -832,7 +831,7 @@ impl Default for ServerConfig {
             environment: DeploymentMode::Production,
             dev_skip_mfa: false,
             security: SecuritySettings::default(),
-            storage_allow_loopback: false,
+            storage_allow_loopback: None,
         }
     }
 }
@@ -881,10 +880,6 @@ impl ServerConfig {
             cfg.cookie_secure = v != "false" && v != "0";
         }
 
-        if let Ok(v) = std::env::var("FORGE_STORAGE_ALLOW_LOOPBACK") {
-            cfg.storage_allow_loopback = v == "true" || v == "1";
-        }
-
         if let Ok(v) = std::env::var("FORGE_MCP_ENABLED") {
             cfg.mcp.enabled = v == "true" || v == "1";
         }
@@ -931,6 +926,10 @@ impl ServerConfig {
         if cfg.dev_skip_mfa {
             tracing::warn!("dev_skip_mfa is deprecated: use [security] require_mfa = false (`forge-server mfa off`)");
             cfg.security.require_mfa = false;
+        }
+
+        if cfg.storage_allow_loopback.is_some() {
+            tracing::warn!("storage_allow_loopback is ignored: Object Storage was removed (D-180)");
         }
 
         if cfg.remote_access.is_some() {

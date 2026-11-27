@@ -205,13 +205,6 @@ impl Action {
             Action::FileNode => {
                 info("Files", "Whole-node files", "Browse the whole node file system, not only approved roots.", Admin)
             }
-            Action::StorageManage => info(
-                "Object storage",
-                "Manage object storage",
-                "Create and remove stores and buckets; manage grants and keys.",
-                Admin,
-            ),
-            Action::StorageData => info("Object storage", "Bucket data", "Read and write objects in buckets.", Write),
             Action::DbAdmin => {
                 info("Databases", "Administer databases", "Configure databases, users, backups and restores.", Admin)
             }

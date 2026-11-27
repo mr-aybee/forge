@@ -78,7 +78,6 @@ pub async fn capabilities(State(state): State<AppState>) -> Json<Capabilities> {
             c("dns", true),
             c("containers", true),
             c("stacks", true),
-            c("object_storage", true),
             c("mcp", state.config.mcp.enabled),
             // Declared extension points, not implemented yet:
             c("access.rdp", false),

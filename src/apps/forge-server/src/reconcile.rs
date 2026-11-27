@@ -388,7 +388,9 @@ impl ServiceReconciler {
         let now = self.clock.now();
 
         for app in self.services.list_server_services(server).await? {
-            if app.runtime != "container" || swarm_managed(&app) {
+            // An adopted container has no `forge.app` label: it would read
+            // as missing until the first deploy replaces it (D-180).
+            if app.runtime != "container" || swarm_managed(&app) || app.adopted_from.is_some() {
                 continue;
             }
 
@@ -427,7 +429,9 @@ impl ServiceReconciler {
 
         for app in self.services.get_services(&ids).await? {
             // A service removed from its services file is only taken off.
+            // An adopted service is left alone until its first deploy (D-180).
             if swarm_managed(&app)
+                || app.adopted_from.is_some()
                 || app.source == crate::service_files::REMOVING_SOURCE
                 || self.deploys.active_deployment(app.id).await?.is_some()
             {
@@ -994,6 +998,7 @@ mod tests {
             version: 0,
             source: String::new(),
             secrets_changed_at: None,
+            adopted_from: None,
         };
         assert_eq!(policy(&app), NodeFailurePolicy::Move);
 

@@ -39,7 +39,6 @@ fn default_allowed() -> Vec<String> {
         "probe".into(),
         "ingress".into(),
         "fabric".into(),
-        "storage".into(),
         "files".into(),
         "access".into(),
         "cancel".into(),

@@ -804,7 +804,7 @@ async fn follow_container(spec: &AppSpec, cursor: &mut String) -> Result<String,
     let since = cursor.parse::<f64>().unwrap_or(now - 3600.0);
     let first = cursor.is_empty();
 
-    match crate::docker::logs_window(&spec.unit(), since, now).await? {
+    match crate::docker::logs_window(&spec.current_container(), since, now).await? {
         Some(text) => {
             *cursor = format!("{now:.6}");
 
@@ -1069,8 +1069,96 @@ fn file_binds(dir: &str, files: &[forge_catalog::secret_files::MountedFile]) -> 
     files.iter().map(|f| format!("{dir}/{}:{}:ro", f.name, f.target)).collect()
 }
 
+/// Replaces container `name` with a new one built from `spec` and starts it.
+async fn create_and_start(spec: &AppSpec, name: &str, t: Duration) -> Result<(), String> {
+    let (_, _, image_ref) = pull_ref(&spec.image);
+    let _ = docker::api("DELETE", &format!("/containers/{name}?force=1"), None, t).await;
+    let mut bindings = serde_json::Map::new();
+    let mut exposed = serde_json::Map::new();
+
+    for p in &spec.ports {
+        let (body, proto) = p.split_once('/').unwrap_or((p, "tcp"));
+        let parts: Vec<&str> = body.split(':').collect();
+        let (ip, host, ctr) = match parts.as_slice() {
+            [h, c] => ("", *h, *c),
+            [ip, h, c] => (*ip, *h, *c),
+            _ => continue,
+        };
+
+        let key = format!("{ctr}/{proto}");
+        exposed.insert(key.clone(), json!({}));
+        bindings.insert(key, json!([{ "HostIp": ip, "HostPort": host }]));
+    }
+
+    // Host folders: the policy again (Docker socket, system and
+    // Forge paths), made without following links, then the
+    // resolved path checked too (see `stacks::walk_host_path`).
+    for v in &spec.volumes {
+        // Named volumes live in Docker's own storage: no host path.
+        let Some(host) = forge_catalog::apps::volume_host_path(v) else { continue };
+        if let Some(why) = forge_catalog::stacks::protected_host_path(host) {
+            return Err(format!("volume `{v}` is not allowed: {why}"));
+        }
+
+        crate::stacks::walk_host_path(host, true)?;
+        let real = std::fs::canonicalize(host).map_err(|e| format!("{host}: {e}"))?;
+        if let Some(why) = forge_catalog::stacks::protected_host_path(&real.to_string_lossy()) {
+            return Err(format!("volume `{v}` resolves to {}: {why}", real.display()));
+        }
+    }
+
+    let env: Vec<String> = load_env(spec).into_iter().map(|(k, v)| format!("{k}={v}")).collect();
+    let binds = container_files(spec).await?;
+    let mut body = json!({
+        "Image": image_ref,
+        "Env": env,
+        "Labels": {
+            "forge.app": format!("{}/{}", spec.environment, spec.name),
+            "forge.slot": spec.slot,
+            "forge.release": spec.release,
+        },
+        "ExposedPorts": exposed,
+        "HostConfig": {
+            "PortBindings": bindings,
+            "Binds": binds,
+            "RestartPolicy": {
+                "Name": spec.effective_restart().docker_name(),
+                "MaximumRetryCount": spec.restart_max_attempts,
+            },
+        },
+    });
+
+    if !spec.command.trim().is_empty() {
+        body["Cmd"] = json!(["/bin/sh", "-c", spec.command.trim()]);
+    }
+
+    apply_container_options(&mut body, spec);
+    docker::api("POST", &format!("/containers/create?name={name}"), Some(&body), t).await?;
+
+    // The cluster container network as a second network, so the
+    // default bridge (and its published ports) stays as it was.
+    if let Some(net) = &spec.mesh_network {
+        let connect = json!({ "Container": name });
+        docker::api("POST", &format!("/networks/{net}/connect"), Some(&connect), t).await?;
+    }
+
+    // Extra networks the operator named; they must already exist.
+    for net in &spec.networks {
+        let connect = json!({ "Container": name });
+        docker::api("POST", &format!("/networks/{net}/connect"), Some(&connect), t)
+            .await
+            .map_err(|e| format!("network `{net}`: {e}"))?;
+    }
+
+    docker::api("POST", &format!("/containers/{name}/start"), None, t).await?;
+
+    Ok(())
+}
+
 async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, String> {
-    let name = spec.unit();
+    // A deploy makes the service's own container; everything else acts on
+    // the one that runs it now (an adopted container until the first deploy).
+    let name = if action == "deploy" { spec.unit() } else { spec.current_container() };
     let t = Duration::from_secs(90);
 
     match action {
@@ -1078,87 +1166,31 @@ async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, Str
         "prepare" => return Ok(json!({ "state": "prepared" })),
         "deploy" => {
             write(&spec.env_path(), &spec.env_file(), 0o600)?;
-            let (from, tag, image_ref) = pull_ref(&spec.image);
+            let (from, tag, _) = pull_ref(&spec.image);
             pull(&from, &tag).await?;
-            let _ = docker::api("DELETE", &format!("/containers/{name}?force=1"), None, t).await;
-            let mut bindings = serde_json::Map::new();
-            let mut exposed = serde_json::Map::new();
 
-            for p in &spec.ports {
-                let (body, proto) = p.split_once('/').unwrap_or((p, "tcp"));
-                let parts: Vec<&str> = body.split(':').collect();
-                let (ip, host, ctr) = match parts.as_slice() {
-                    [h, c] => ("", *h, *c),
-                    [ip, h, c] => (*ip, *h, *c),
-                    _ => continue,
-                };
+            // An adopted container (D-180) holds the ports and volumes: it
+            // stops first, goes once the new one runs, and starts again if
+            // the new one fails. Absent (a retried deploy): nothing to do.
+            let adopted = Some(spec.adopted_container.as_str()).filter(|c| !c.is_empty() && *c != name);
 
-                let key = format!("{ctr}/{proto}");
-                exposed.insert(key.clone(), json!({}));
-                bindings.insert(key, json!([{ "HostIp": ip, "HostPort": host }]));
+            if let Some(old) = adopted {
+                let _ = docker::api("POST", &format!("/containers/{old}/stop"), None, t).await;
             }
 
-            // Host folders: the policy again (Docker socket, system and
-            // Forge paths), made without following links, then the
-            // resolved path checked too (see `stacks::walk_host_path`).
-            for v in &spec.volumes {
-                // Named volumes live in Docker's own storage: no host path.
-                let Some(host) = forge_catalog::apps::volume_host_path(v) else { continue };
-                if let Some(why) = forge_catalog::stacks::protected_host_path(host) {
-                    return Err(format!("volume `{v}` is not allowed: {why}"));
+            if let Err(e) = create_and_start(spec, &name, t).await {
+                if let Some(old) = adopted {
+                    let _ = docker::api("POST", &format!("/containers/{old}/start"), None, t).await;
                 }
 
-                crate::stacks::walk_host_path(host, true)?;
-                let real = std::fs::canonicalize(host).map_err(|e| format!("{host}: {e}"))?;
-                if let Some(why) = forge_catalog::stacks::protected_host_path(&real.to_string_lossy()) {
-                    return Err(format!("volume `{v}` resolves to {}: {why}", real.display()));
-                }
+                return Err(e);
             }
 
-            let env: Vec<String> = load_env(spec).into_iter().map(|(k, v)| format!("{k}={v}")).collect();
-            let binds = container_files(spec).await?;
-            let mut body = json!({
-                "Image": image_ref,
-                "Env": env,
-                "Labels": {
-                    "forge.app": format!("{}/{}", spec.environment, spec.name),
-                    "forge.slot": spec.slot,
-                    "forge.release": spec.release,
-                },
-                "ExposedPorts": exposed,
-                "HostConfig": {
-                    "PortBindings": bindings,
-                    "Binds": binds,
-                    "RestartPolicy": {
-                        "Name": spec.effective_restart().docker_name(),
-                        "MaximumRetryCount": spec.restart_max_attempts,
-                    },
-                },
-            });
-
-            if !spec.command.trim().is_empty() {
-                body["Cmd"] = json!(["/bin/sh", "-c", spec.command.trim()]);
+            if let Some(old) = adopted
+                && let Err(e) = docker::api("DELETE", &format!("/containers/{old}?force=1"), None, t).await
+            {
+                tracing::warn!(app = %spec.key(), container = old, error = %e, "the adopted container was left in place");
             }
-
-            apply_container_options(&mut body, spec);
-            docker::api("POST", &format!("/containers/create?name={name}"), Some(&body), t).await?;
-
-            // The cluster container network as a second network, so the
-            // default bridge (and its published ports) stays as it was.
-            if let Some(net) = &spec.mesh_network {
-                let connect = json!({ "Container": name });
-                docker::api("POST", &format!("/networks/{net}/connect"), Some(&connect), t).await?;
-            }
-
-            // Extra networks the operator named; they must already exist.
-            for net in &spec.networks {
-                let connect = json!({ "Container": name });
-                docker::api("POST", &format!("/networks/{net}/connect"), Some(&connect), t)
-                    .await
-                    .map_err(|e| format!("network `{net}`: {e}"))?;
-            }
-
-            docker::api("POST", &format!("/containers/{name}/start"), None, t).await?;
         }
         "start" | "stop" | "restart" => {
             docker::api("POST", &format!("/containers/{name}/{action}"), None, t)

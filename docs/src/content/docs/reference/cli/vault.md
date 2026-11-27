@@ -58,7 +58,7 @@ forge vault list [OPTIONS]
 # List vault items
 forge vault list
 
-# List the object store credentials
+# List the credentials of former object stores (tag object-storage)
 forge -o json vault list | jq '.result[] | select(.tags | index("object-storage"))'
 ```
 
@@ -267,8 +267,7 @@ Exit codes:
   step up; sign in with a context and run `forge auth step-up`.
 - `6`: no such item.
 
-**See also**: [`forge storage key-create`](/docs/reference/cli/storage/#forge-storage-key-create),
-[Credential vault](/docs/guides/credential-vault/).
+**See also**: [Credential vault](/docs/guides/credential-vault/).
 
 ### forge vault delete
 
@@ -289,10 +288,8 @@ forge vault delete [OPTIONS] <ITEM>
 | `--yes` | flag | off | no | Skip the confirmation. Required with `--non-interactive` or when stdin is not a terminal | `--yes` |
 
 :::caution
-Deleting an object store's credential leaves Forge unable to reach that
-store. Revoke app keys with
-[`forge storage key-delete`](/docs/reference/cli/storage/#forge-storage-key-delete)
-instead.
+Before you delete an item, check that no service mounts it as a secret
+file.
 :::
 
 **Examples**

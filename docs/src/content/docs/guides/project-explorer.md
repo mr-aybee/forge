@@ -94,7 +94,7 @@ without leaving the page. For the model behind the tree, see
      count), with the buttons **New environment…**, **Edit…** and
      **Delete…**.
    - An **environment** pane shows its id, cluster, protection, health,
-     creation time, services, a tags editor and the object stores it owns,
+     creation time, services and a tags editor,
      with the buttons **New service here**, **Rename…**, **Move to
      project…**, **Move to cluster…** and **Delete…**.
 
@@ -127,7 +127,7 @@ without leaving the page. For the model behind the tree, see
    | Row | Actions |
    | --- | --- |
    | Project | **New environment…**, **Edit…**, **Delete…** (disabled while it has environments) |
-   | Environment | **New service here** (disabled without a cluster), **Rename…**, **Move to project…** (**Attach to project…** when it has none), **Move to cluster…** (disabled when there is no other cluster), **Delete…** (disabled while it has services or owns object stores) |
+   | Environment | **New service here** (disabled without a cluster), **Rename…**, **Move to project…** (**Attach to project…** when it has none), **Move to cluster…** (disabled when there is no other cluster), **Delete…** (disabled while it has services) |
    | Service | **Logs**, **View**, **Edit configuration** |
 
    Each action opens a dialog: **New project**, **Edit "<name>"**, **Delete
@@ -162,7 +162,7 @@ action again, and an action that needs MFA asks for your code.
 | **Health checks could not be loaded** above the tree | The health summary request failed, or you lack `health.view` | Dots fall back to the state nodes last reported. Reload; check your role |
 | **Health checks cover the first 500 services** | More than 500 services are visible | Dots of the rest use the node-reported state; open a service's **Health** tab for its checks |
 | Start, Restart and Stop are disabled | No `deploy` on the environment, a stack service, a node not deployed yet, or a job in progress | Hover the button for the reason |
-| **Delete…** is disabled on an environment | It still has services or owns object stores | Delete or move its services, and change the stores' owner, first |
+| **Delete…** is disabled on an environment | It still has services | Delete or move its services first |
 | **All nodes** shows an error badge for a node | That node's agent is offline or the log read failed | Pick the node alone to see the error, or check the node's page |
 
 ## Next steps

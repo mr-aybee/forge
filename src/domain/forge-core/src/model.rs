@@ -945,6 +945,11 @@ pub struct Service {
     /// when its copies run the current values. Only the store sets it.
     #[serde(default)]
     pub secrets_changed_at: Option<Timestamp>,
+    /// The container this service was adopted from (D-180): the node keeps
+    /// using that name until the first deploy replaces it with the normal
+    /// container. `None` for every other service.
+    #[serde(default)]
+    pub adopted_from: Option<String>,
 }
 
 /// Placement of a service on a node.

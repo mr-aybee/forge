@@ -887,6 +887,7 @@ async fn cluster_profiles_validate_scope_and_feed_ingress_endpoints() {
         version: 0,
         source: String::new(),
         secrets_changed_at: None,
+        adopted_from: None,
     };
     forge_core::ports::ServiceRepository::put_service(store, &app).await.unwrap();
 

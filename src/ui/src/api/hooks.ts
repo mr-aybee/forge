@@ -9,9 +9,8 @@ import type {
   ServiceHealthView,
   ServiceInput,
   ServiceInstance,
-  ServiceStorageAttach,
-  ServiceStorageAttachment,
-  ServiceStorageView,
+  ServiceAdopt,
+  ServiceAdopted,
   HealthPolicy,
   HealthValidation,
   HealthWarning,
@@ -94,7 +93,6 @@ export const fleetKeys = {
   serviceList: (environment: string | undefined, cluster: string | null | undefined) => ["services", environment ?? "all", cluster ?? "any"] as const,
   service: (id: string | undefined) => ["service", id] as const,
   serviceAny: ["service"] as const,
-  storage: (id: string | undefined) => ["service-storage", id] as const,
   health: (id: string | undefined) => ["service-health", id] as const,
 };
 
@@ -926,6 +924,7 @@ function normService(x: Service): Service {
     ...x,
     spec: (x.spec && typeof x.spec === "object" ? x.spec : {}) as ServiceSpec,
     env: Array.isArray(x.env) ? x.env : [],
+    adopted_from: typeof x.adopted_from === "string" && x.adopted_from ? x.adopted_from : null,
     instances: Array.isArray(x.instances) ? x.instances.filter((i) => i && typeof i.server_id === "string").map((i) => ({ ...i, status: typeof i.status === "string" ? i.status : "" })) : [],
   };
 }
@@ -958,6 +957,9 @@ export const useSaveService = () =>
     ({ id, ...b }: ServiceInput & { id?: string }) => (id ? api<Service>("PUT", `/api/v1/services/${enc(id)}`, b) : post<Service>("/api/v1/services", b)),
     serviceKeys,
   );
+/** Adopts a running container as a service; it keeps running until the first deploy. */
+export const useAdoptService = () =>
+  useAction((b: ServiceAdopt) => post<ServiceAdopted>("/api/v1/services/adopt", b), serviceKeys);
 export const useDeleteService = () => useAction((id: string) => api<void>("DELETE", `/api/v1/services/${enc(id)}`), serviceKeys);
 export const usePlaceService = () =>
   useAction(
@@ -988,61 +990,6 @@ export const useServiceAction = () =>
     ({ id, server, action, tail }: { id: string; server: string; action: ServiceAction; tail?: number }) =>
       post<ContainerResult<{ state?: string; logs?: string | null }>>(`/api/v1/services/${enc(id)}/instances/${enc(server)}/actions`, { action, tail }),
     serviceKeys,
-  );
-
-// ------------------------------------------------------------------ attached storage
-
-/** Normalizes the storage view, so a partial response never breaks the tab. */
-function normAppStorage(v: Partial<ServiceStorageView> | null | undefined): ServiceStorageView {
-  const text = (x: unknown) => (typeof x === "string" ? x : "");
-  const list: Partial<ServiceStorageAttachment>[] = Array.isArray(v?.attachments) ? v.attachments : [];
-  return {
-    // Absent on a partial response: let the server decide on attach and detach.
-    can_change: v?.can_change !== false,
-    attachments: list
-      .filter((a) => a && typeof a.access_key === "string" && a.access_key)
-      .map((a) => ({
-        access_key: text(a.access_key),
-        store_id: text(a.store_id),
-        bucket: text(a.bucket),
-        access: a.access === "read" ? "read" : "readwrite",
-        prefix: text(a.prefix),
-        vault_item_id: text(a.vault_item_id),
-        env: {
-          endpoint: text(a.env?.endpoint),
-          region: text(a.env?.region),
-          bucket: text(a.env?.bucket),
-          access_key: text(a.env?.access_key),
-          secret_key: text(a.env?.secret_key),
-        },
-        store_name: text(a.store_name) || null,
-        endpoint: text(a.endpoint) || null,
-      })),
-  };
-}
-
-/** Buckets attached to the service. */
-export const useServiceStorage = (id?: string) =>
-  useQuery({
-    queryKey: fleetKeys.storage(id),
-    queryFn: () => get<ServiceStorageView>(`/api/v1/services/${enc(id ?? "")}/storage`).then(normAppStorage),
-    enabled: !!id,
-    staleTime: 15_000,
-    retry: (n, e) => !(e instanceof ApiError && e.status < 500) && n < 2,
-  });
-
-// An attachment issues a key (store keys, vault) and may create the bucket.
-const appStorageKeys: QueryKey[] = [["service-storage"], ["buckets"], ["object-store-keys"], ["vault-items"]];
-
-/** Attaches a bucket; the variables reach the nodes with the next deploy. */
-export const useAttachServiceStorage = () =>
-  useAction(({ id, ...b }: ServiceStorageAttach & { id: string }) => post<ServiceStorageView>(`/api/v1/services/${enc(id)}/storage`, b).then(normAppStorage), appStorageKeys);
-
-/** Detaches a bucket: the key is revoked at once. */
-export const useDetachServiceStorage = () =>
-  useAction(
-    ({ id, accessKey }: { id: string; accessKey: string }) => api<ServiceStorageView>("DELETE", `/api/v1/services/${enc(id)}/storage/${enc(accessKey)}`).then(normAppStorage),
-    appStorageKeys,
   );
 
 // ------------------------------------------------------------------ health checks

@@ -18,7 +18,6 @@ forge-ssh = { path = "src/adapters/forge-ssh" }
 forge-store = { path = "src/adapters/forge-store" }
 forge-analytics = { path = "src/adapters/forge-analytics" }
 forge-analytics-duckdb = { path = "src/adapters/forge-analytics-duckdb" }
-forge-s3 = { path = "src/adapters/forge-s3" }
 forge-jobs = { path = "src/services/forge-jobs" }
 forge-audit = { path = "src/services/forge-audit" }
 forge-rules = { path = "src/services/forge-rules" }
@@ -54,7 +53,6 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # Cluster DNS server (forge-dns, D-173): plain UDP/TCP only, no TLS/DoH/DNSSEC, no OpenSSL.
 hickory-server = { version = "0.26", default-features = false }
 hickory-proto = { version = "0.26", default-features = false, features = ["std"] }
-quick-xml = { version = "0.41", features = ["serialize"] }
 
 # tls / crypto
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }

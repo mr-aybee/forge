@@ -31,6 +31,10 @@ CommandBody   { operation_id, server_id, issued_at_ms, expires_at_ms, nonce, pri
 root and applies the protected-path policy before it opens anything. See
 [File explorer](/docs/concepts/file-explorer/).
 
+Tag 21 (`StorageAction`, allowlist name `storage`, object-store operations)
+is retired and never reused; an agent that receives it fails the command as
+unknown.
+
 Tag 23 (`AccessAction`, WireGuard remote-access gateways) is retired and
 never reused; an agent that receives it fails the command as unknown.
 
@@ -70,8 +74,8 @@ existed get `stack` added to their allowlist when the node installer runs
 again. See [Compose stacks](/docs/concepts/compose-stacks/).
 
 `CancelAction` (tag 25, allowlist name `cancel`) carries the `operation_id`
-of a background operation the agent is still running, such as a recipe or an
-object-store install. The agent drops the operation, the helper kills its
+of a background operation the agent is still running, such as a recipe
+install. The agent drops the operation, the helper kills its
 process group, and the operation's result is a failure with the error
 `cancelled`. The cancel command
 itself returns `{"cancelled": true}`, or `false` when nothing with that id was

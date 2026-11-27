@@ -41,7 +41,6 @@ pub mod sites;
 pub mod stack_doc;
 pub mod stack_templates;
 pub mod stacks;
-pub mod storage;
 pub mod swarm;
 pub mod swarm_rollout;
 pub mod swarm_service;

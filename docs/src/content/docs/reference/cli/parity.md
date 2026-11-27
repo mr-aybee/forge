@@ -75,11 +75,10 @@ GET /api/v1/audit/actions                                  api       action-type
 329 operations: 257 typed commands, 34 through `forge api call`, 38 excluded, 0 unclassified (server newer than this CLI)
 ```
 
-Services (projects), service definitions, attached buckets, a store's
-owner, single objects and the cluster ingress profile all have typed
-commands: [`forge projects`](/docs/reference/cli/projects/),
-[`forge services`](/docs/reference/cli/services/),
-[`forge storage`](/docs/reference/cli/storage/) and
+Services (projects), service definitions, container adoption and the
+cluster ingress profile all have typed commands:
+[`forge projects`](/docs/reference/cli/projects/),
+[`forge services`](/docs/reference/cli/services/) and
 [`forge clusters ingress`](/docs/reference/cli/clusters/#forge-clusters-ingress-get).
 
 The table cuts long reasons with `…`. The last line, with the totals, goes
