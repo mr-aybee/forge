@@ -1,4 +1,4 @@
-//! `forge.stack.yaml` (`plans/native-mesh.md` 3.2, D-174).
+//! `forge.stack.yaml` (D-174).
 //!
 //! * `POST /api/v1/stacks/plan` — what applying the document would do; no
 //!   side effects besides the `stack.plan` audit entry.

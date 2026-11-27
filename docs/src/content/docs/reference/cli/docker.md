@@ -251,6 +251,11 @@ forge docker images [OPTIONS] <NODE>
 | --- | --- | --- | --- | --- | --- |
 | `<node>` | string | - | yes | Node id, host name or name | - |
 
+```sh
+# Images on a node
+forge docker images <node-name>
+```
+
 ### forge docker volumes
 
 A node's volumes
@@ -266,6 +271,11 @@ forge docker volumes [OPTIONS] <NODE>
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
 | `<node>` | string | - | yes | Node id, host name or name | - |
+
+```sh
+# Volumes on a node
+forge docker volumes <node-name>
+```
 
 ### forge docker networks
 
@@ -283,6 +293,11 @@ forge docker networks [OPTIONS] <NODE>
 | --- | --- | --- | --- | --- | --- |
 | `<node>` | string | - | yes | Node id, host name or name | - |
 
+```sh
+# Networks on a node
+forge docker networks <node-name>
+```
+
 ### forge docker disk-usage
 
 Space used by images, containers, volumes and build cache
@@ -298,6 +313,11 @@ forge docker disk-usage [OPTIONS] <NODE>
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
 | `<node>` | string | - | yes | Node id, host name or name | - |
+
+```sh
+# Disk used by images, containers, volumes and build cache
+forge docker disk-usage <node-name>
+```
 
 ### forge docker events
 
@@ -316,6 +336,11 @@ forge docker events [OPTIONS] <NODE>
 | `<node>` | string | - | yes | Node id, host name or name | - |
 | `--since-secs` | integer | `300` | no | How far back (seconds, at most one day) | - |
 
+```sh
+# Docker events from the last ten minutes
+forge docker events <node-name> --since-secs 600
+```
+
 ### forge docker image inspect
 
 An image's configuration and layers
@@ -333,6 +358,11 @@ forge docker image inspect [OPTIONS] <NODE> <IMAGE>
 | `<node>` | string | - | yes | Node id, host name or name | - |
 | `<image>` | string | - | yes | Image reference or id | - |
 
+```sh
+# Details of one image
+forge docker image inspect <node-name> nginx:1.27
+```
+
 ### forge docker image history
 
 The layers an image was built from
@@ -349,6 +379,11 @@ forge docker image history [OPTIONS] <NODE> <IMAGE>
 | --- | --- | --- | --- | --- | --- |
 | `<node>` | string | - | yes | Node id, host name or name | - |
 | `<image>` | string | - | yes | Image reference or id | - |
+
+```sh
+# The layers of one image
+forge docker image history <node-name> nginx:1.27
+```
 
 ### forge docker image pull
 
@@ -369,6 +404,11 @@ forge docker image pull [OPTIONS] <NODE> <IMAGE>
 | `--wait` | flag | - | no | Wait for the job to finish (exit 10 when it fails) | - |
 | `--timeout` | integer | `900` | no | Seconds `--wait` waits | - |
 
+```sh
+# Pull an image and wait for it
+forge docker image pull <node-name> nginx:1.27 --wait
+```
+
 ### forge docker image push
 
 Push an image to a registry added in Forge with pushes allowed
@@ -387,6 +427,11 @@ forge docker image push [OPTIONS] <NODE> <IMAGE>
 | `<image>` | string | - | yes | Image reference or id | - |
 | `--wait` | flag | - | no | Wait for the job to finish (exit 10 when it fails) | - |
 | `--timeout` | integer | `900` | no | Seconds `--wait` waits | - |
+
+```sh
+# Push an image to its registry
+forge docker image push <node-name> registry.example.com/team/api:1.4 --wait
+```
 
 ### forge docker image tag
 
@@ -407,6 +452,11 @@ forge docker image tag [OPTIONS] <NODE> <IMAGE> <REPO> <TAG>
 | `<repo>` | string | - | yes | Target repository | - |
 | `<tag>` | string | - | yes | Target tag | - |
 
+```sh
+# Tag an image for a private registry
+forge docker image tag <node-name> api:1.4 registry.example.com/team/api 1.4
+```
+
 ### forge docker image remove
 
 Remove an image
@@ -426,6 +476,13 @@ forge docker image remove [OPTIONS] <NODE> <IMAGE>
 | `--force` | flag | - | no | Force the operation | - |
 | `--yes` | flag | - | no | Skip the confirmation prompt | - |
 
+```sh
+# Remove an image
+forge docker image remove <node-name> nginx:1.25 --yes
+# Force the removal
+forge docker image remove <node-name> nginx:1.25 --force --yes
+```
+
 ### forge docker image prune
 
 Remove dangling images (`--all`: every unused image)
@@ -444,6 +501,13 @@ forge docker image prune [OPTIONS] <NODE>
 | `--all` | flag | - | no | Every unused image, not only dangling ones | - |
 | `--yes` | flag | - | no | Skip the confirmation prompt | - |
 
+```sh
+# Remove dangling images
+forge docker image prune <node-name> --yes
+# Remove every image no container uses
+forge docker image prune <node-name> --all --yes
+```
+
 ### forge docker volume inspect
 
 A volume's driver, mount point and labels
@@ -460,6 +524,11 @@ forge docker volume inspect [OPTIONS] <NODE> <NAME>
 | --- | --- | --- | --- | --- | --- |
 | `<node>` | string | - | yes | Node id, host name or name | - |
 | `<name>` | string | - | yes | Name | - |
+
+```sh
+# Details of one volume
+forge docker volume inspect <node-name> app-data
+```
 
 ### forge docker volume create
 
@@ -487,6 +556,15 @@ forge docker volume create [OPTIONS] <NODE> <NAME>
 | `--cifs-password-file` | path | - | no | File with the password; `-` reads standard input | `pw.txt` |
 | `--read-only` | flag | - | no | Mount the share read-only | - |
 
+```sh
+# A local volume with a label
+forge docker volume create <node-name> app-data --label team=web
+# An NFS volume
+forge docker volume create <node-name> shared --nfs-server 192.0.2.20 --nfs-path /exports/shared
+# A CIFS volume, password from standard input
+printf '%s' "$CIFS_PASSWORD" | forge docker volume create <node-name> files --cifs-server 192.0.2.21 --cifs-share files --cifs-user <user> --cifs-password-file -
+```
+
 The share options cannot contain `,`, `=`, spaces or quotes. Docker keeps a
 CIFS password in the volume's options on that node, readable by anyone with
 Docker access there.
@@ -510,6 +588,11 @@ forge docker volume remove [OPTIONS] <NODE> <NAME>
 | `--force` | flag | - | no | Force the operation | - |
 | `--yes` | flag | - | no | Skip the confirmation prompt | - |
 
+```sh
+# Remove a volume
+forge docker volume remove <node-name> app-data --yes
+```
+
 ### forge docker volume prune
 
 Remove unused volumes and their data
@@ -527,6 +610,11 @@ forge docker volume prune [OPTIONS] <NODE>
 | `<node>` | string | - | yes | Node id, host name or name | - |
 | `--yes` | flag | - | no | Skip the confirmation prompt | - |
 
+```sh
+# Remove volumes no container uses
+forge docker volume prune <node-name> --yes
+```
+
 ### forge docker network inspect
 
 A network's configuration and attached containers
@@ -543,6 +631,11 @@ forge docker network inspect [OPTIONS] <NODE> <NETWORK>
 | --- | --- | --- | --- | --- | --- |
 | `<node>` | string | - | yes | Node id, host name or name | - |
 | `<network>` | string | - | yes | Network id or name | - |
+
+```sh
+# Details of one network
+forge docker network inspect <node-name> app-net
+```
 
 ### forge docker network create
 
@@ -567,6 +660,13 @@ forge docker network create [OPTIONS] <NODE> <NAME>
 | `--attachable` | flag | - | no | Standalone containers may join (overlay) | - |
 | `--label` | flag | - | no | <KEY=VALUE> | - |
 
+```sh
+# A bridge network with a fixed subnet
+forge docker network create <node-name> app-net --subnet 10.30.0.0/24 --gateway 10.30.0.1
+# An internal network with no outside access
+forge docker network create <node-name> db-net --internal
+```
+
 ### forge docker network remove
 
 Remove a network
@@ -585,6 +685,11 @@ forge docker network remove [OPTIONS] <NODE> <NETWORK>
 | `<network>` | string | - | yes | Network id or name | - |
 | `--yes` | flag | - | no | Skip the confirmation prompt | - |
 
+```sh
+# Remove a network
+forge docker network remove <node-name> app-net --yes
+```
+
 ### forge docker network connect
 
 Attach a container to a network
@@ -602,6 +707,11 @@ forge docker network connect [OPTIONS] <NODE> <NETWORK> <CONTAINER>
 | `<node>` | string | - | yes | Node id, host name or name | - |
 | `<network>` | string | - | yes | Network id or name | - |
 | `<container>` | string | - | yes | Container id or name | - |
+
+```sh
+# Attach a container to a network
+forge docker network connect <node-name> app-net <container>
+```
 
 ### forge docker network disconnect
 
@@ -622,6 +732,11 @@ forge docker network disconnect [OPTIONS] <NODE> <NETWORK> <CONTAINER>
 | `<container>` | string | - | yes | Container id or name | - |
 | `--force` | flag | - | no | Force the operation | - |
 
+```sh
+# Detach a container from a network
+forge docker network disconnect <node-name> app-net <container>
+```
+
 ### forge docker network prune
 
 Remove unused networks
@@ -638,4 +753,9 @@ forge docker network prune [OPTIONS] <NODE>
 | --- | --- | --- | --- | --- | --- |
 | `<node>` | string | - | yes | Node id, host name or name | - |
 | `--yes` | flag | - | no | Skip the confirmation prompt | - |
+
+```sh
+# Remove networks no container uses
+forge docker network prune <node-name> --yes
+```
 

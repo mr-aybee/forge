@@ -1,5 +1,4 @@
-//! The full record set for `forge-dns` (`names.json`, `plans/native-mesh.md`
-//! 2.3): A, SRV and PTR records with a short TTL. Built by the control plane,
+//! The full record set for `forge-dns` (`names.json`, D-175): A, SRV and PTR records with a short TTL. Built by the control plane,
 //! carried in `HostNames.records_json`, written by the agent and read by
 //! `forge-dns`. Unknown fields are accepted so `forge-dns` can read a newer
 //! file.

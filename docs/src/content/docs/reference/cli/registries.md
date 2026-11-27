@@ -25,6 +25,13 @@ Registries of the workspace (credentials are never shown)
 forge registries list [OPTIONS]
 ```
 
+**Examples**
+
+```sh
+# Registries you can see
+forge registries list
+```
+
 ### forge registries add
 
 Add a registry: `printf %s "$TOKEN" | forge registries add ghcr --kind ghcr --host ghcr.io --username me --secret-stdin`
@@ -45,6 +52,15 @@ forge registries add [OPTIONS] --kind <KIND> --host <HOST> --username <USERNAME>
 | `--username` | string | - | no | User name (required) | - |
 | `--secret-stdin` | flag | - | no | Read the password or token from stdin (never from a flag) | - |
 | `--allow-push` | flag | - | no | Images may be pushed to it | - |
+
+**Examples**
+
+```sh
+# Add GitHub Container Registry; the token is read from stdin
+printf %s "$GHCR_TOKEN" | forge registries add ghcr --kind ghcr --host ghcr.io --username <user> --secret-stdin
+# A self-hosted registry Forge may also push to
+printf %s "$REGISTRY_PASSWORD" | forge registries add internal --kind custom --host registry.example.com --username <user> --secret-stdin --allow-push
+```
 
 ### forge registries update
 
@@ -68,6 +84,13 @@ forge registries update [OPTIONS] --kind <KIND> --host <HOST> --username <USERNA
 | `--secret-stdin` | flag | - | no | Read the password or token from stdin (never from a flag) | - |
 | `--allow-push` | flag | - | no | Images may be pushed to it | - |
 
+**Examples**
+
+```sh
+# Rotate the stored secret; the new token is read from stdin
+printf %s "$GHCR_TOKEN" | forge registries update <registry> ghcr --kind ghcr --host ghcr.io --username <user> --secret-stdin
+```
+
 ### forge registries remove
 
 Remove a registry and its stored credentials
@@ -84,4 +107,11 @@ forge registries remove [OPTIONS] <REGISTRY>
 | --- | --- | --- | --- | --- | --- |
 | `<registry>` | string | - | yes | Registry id or name | - |
 | `--yes` | flag | - | no | Skip the confirmation prompt | - |
+
+**Examples**
+
+```sh
+# Remove a registry without prompting
+forge registries remove <registry> --yes
+```
 

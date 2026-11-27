@@ -1,4 +1,4 @@
-//! `stack.rollout` (`plans/native-mesh.md` 3.3, D-174): rolls one revision
+//! `stack.rollout` (D-174): rolls one revision
 //! of a compose stack out to its nodes, started by `POST /stacks/apply`.
 //!
 //! Payload ([`RolloutPayload`], no secrets): the stack, the revision, the

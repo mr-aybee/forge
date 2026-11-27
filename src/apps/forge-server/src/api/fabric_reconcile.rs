@@ -81,7 +81,7 @@ pub struct NodeState {
     pub missing_keys: Vec<String>,
     #[serde(default)]
     pub relay: bool,
-    /// The node's cluster container network (`plans/native-mesh.md` 1.4):
+    /// The node's cluster container network (D-172):
     /// `ok`, `unsupported` (old or missing Docker; not retried with
     /// back-off), `waiting for a block`, or `None` before the first try and
     /// on Windows nodes.

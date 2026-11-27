@@ -1,5 +1,5 @@
 //! `forge.stack.yaml`: a compose stack, where it runs and how it rolls out
-//! (`plans/native-mesh.md` 3.1, D-174).
+//! (D-174).
 //!
 //! The server and the CLI read the YAML (with the bounds of
 //! `forge_server::deploy::parse_yaml`); this module validates the result as

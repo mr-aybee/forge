@@ -1,5 +1,5 @@
 //! `forge stacks validate / plan / apply -f forge.stack.yaml`
-//! (`plans/native-mesh.md` 3.4, D-174).
+//! (D-174).
 //!
 //! The CLI reads the document, the compose file and the `.env` file it
 //! names (paths relative to the document) and sends their text; the server

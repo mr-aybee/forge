@@ -794,7 +794,7 @@ PORTS_TEXT="$API_PORT/tcp (console), $AGENT_PORT/tcp (agents), $WORKER_PORT/tcp 
 
 # ------------------------------------------------------------------ cluster DNS
 # forge-dns answers the cluster names from $DATA_DIR/names.json for the nodes
-# (plans/native-mesh.md 2.4). Installed always; enabled only when forge.toml
+# (D-173). Installed always; enabled only when forge.toml
 # sets [dns] listen (default empty = disabled). The env file is ours on the
 # server and is rewritten on every run from that setting.
 DNS_STATE="installed, disabled ([dns] listen is empty)"

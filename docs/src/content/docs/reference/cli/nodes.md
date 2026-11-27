@@ -945,6 +945,15 @@ full. Needs `view` on the platform. It takes no arguments.
 forge nodes analytics
 ```
 
+**Examples**
+
+```sh
+# Analytics database status
+forge nodes analytics
+# Rows dropped because the buffer was full
+forge -o json nodes analytics | jq '.result.dropped_rows'
+```
+
 **Output**
 
 ```json

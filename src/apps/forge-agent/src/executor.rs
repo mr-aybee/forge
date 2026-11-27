@@ -165,7 +165,7 @@ impl CommandExecutor for LocalExecutor {
                 "self_update": caps.self_update,
                 // Understands the cluster container network: stack parts
                 // with `mesh_network`, `NetworkEnsure`/`NetworkRemove`
-                // (plans/native-mesh.md). Older agents omit it.
+                // (D-172). Older agents omit it.
                 "mesh_network": cfg!(unix),
                 // Restart policy, capabilities, ulimits, tmpfs, DNS, sysctls,
                 // devices, init and extra networks on app specs

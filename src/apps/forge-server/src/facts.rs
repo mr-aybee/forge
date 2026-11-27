@@ -130,7 +130,7 @@ fn keep(v: &Value) -> Value {
         // and whether its helper answered at all (after an update).
         "self_update",
         "helper_ok",
-        // Cluster container network (plans/native-mesh.md): the capability,
+        // Cluster container network (D-172): the capability,
         // the Docker version its retry follows, and forge-dns's state.
         "mesh_network",
         // Typed container options on app specs (service orchestration step 1).

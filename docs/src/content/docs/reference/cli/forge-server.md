@@ -374,15 +374,38 @@ $ forge-server --config /etc/forge/forge.toml public-address get
 http://192.0.2.10:3880 (not pinned: the address an administrator last signed in on)
 ```
 
+**Examples**
+
+```sh
+# Show the address links use and where it comes from
+sudo runuser -u forge -- /opt/forge/forge-server --config /etc/forge/forge.toml public-address get
+```
+
 ### forge-server public-address set
 
 Sets the public address to `<URL>` after checking it. Exits with `1` when the
 URL is refused.
 
+**Examples**
+
+```sh
+# Set the public address, then restart to apply it
+sudo runuser -u forge -- /opt/forge/forge-server --config /etc/forge/forge.toml public-address set https://forge.example.com
+sudo systemctl restart forge-server
+```
+
 ### forge-server public-address clear
 
 Removes the setting; links use `public_url`, or the last administrator address when
 `public_url` is not set. Takes no arguments.
+
+**Examples**
+
+```sh
+# Go back to public_url from forge.toml, then restart
+sudo runuser -u forge -- /opt/forge/forge-server --config /etc/forge/forge.toml public-address clear
+sudo systemctl restart forge-server
+```
 
 ## forge-server allowed-hosts
 
@@ -437,14 +460,37 @@ exits with `1` and changes nothing.
 
 Prints the allowed host patterns. Takes no arguments.
 
+**Examples**
+
+```sh
+# Show the allowed host patterns
+sudo runuser -u forge -- /opt/forge/forge-server --config /etc/forge/forge.toml allowed-hosts get
+```
+
 ### forge-server allowed-hosts set
 
 Replaces the list with `<HOSTS>`, one or more patterns. Duplicates are
 dropped. Exits with `1` when a pattern is refused.
 
+**Examples**
+
+```sh
+# Allow a name, a wildcard domain and an IP, then restart
+sudo runuser -u forge -- /opt/forge/forge-server --config /etc/forge/forge.toml allowed-hosts set forge.example.com '*.example.com' 192.0.2.10 localhost
+sudo systemctl restart forge-server
+```
+
 ### forge-server allowed-hosts clear
 
 Removes the setting, so any host is allowed (`*`). Takes no arguments.
+
+**Examples**
+
+```sh
+# Allow any host again, then restart
+sudo runuser -u forge -- /opt/forge/forge-server --config /etc/forge/forge.toml allowed-hosts clear
+sudo systemctl restart forge-server
+```
 
 ## forge-server agent-key
 
@@ -485,6 +531,13 @@ Prints the `current` key (the one the listeners serve) and the `next` key
 | `acknowledgements` | Due, waiting until every online agent that pins keys has the next key (`acknowledged` of `online`) |
 | `ready` | Every condition holds; the next tick (within a minute) switches |
 
+**Examples**
+
+```sh
+# Show the current and next key and the rotation status
+sudo runuser -u forge -- /opt/forge/forge-server --config /etc/forge/forge.toml agent-key show
+```
+
 ```text
 $ forge-server --config /etc/forge/forge.toml agent-key show
 current  sha256:<current-fingerprint>
@@ -510,6 +563,13 @@ analytics sha256:<analytics-fingerprint>  created <epoch-ms>
 analytics-next sha256:<analytics-next-fingerprint>  created <epoch-ms>
 
 <server-id>  pins current, next  since <epoch-ms>
+```
+
+**Examples**
+
+```sh
+# Show every kept key and the keys each agent pins
+sudo runuser -u forge -- /opt/forge/forge-server --config /etc/forge/forge.toml agent-key list
 ```
 
 ### forge-server agent-key rotate
@@ -555,6 +615,17 @@ state carries an older sequence than the one agents last applied, and they
 refuse older announcements. Every change sets the sequence to at least the
 current time in milliseconds, so the next announcement moves past it again.
 
+**Examples**
+
+```sh
+# Ask for a rotation once every online agent has the next key
+sudo runuser -u forge -- /opt/forge/forge-server --config /etc/forge/forge.toml agent-key rotate
+# Switch at once and revoke the old keys after a key leak
+sudo runuser -u forge -- /opt/forge/forge-server --config /etc/forge/forge.toml agent-key rotate --now --revoke
+# Make brand-new keys after a key store or database compromise
+sudo runuser -u forge -- /opt/forge/forge-server --config /etc/forge/forge.toml agent-key rotate --now --revoke --fresh
+```
+
 ## forge-server check-migrations
 
 Checks that this binary knows every migration the database has applied. It
@@ -594,6 +665,14 @@ it checks the SHA-256. It refuses a file whose hash differs. Restart
 | `--binary` | path | none | Yes | The downloaded engine binary | `--binary /tmp/clickhouse` |
 | `--sha256` | hex | none | Yes | Its expected SHA-256 | `--sha256 3f1c…` |
 
+**Examples**
+
+```sh
+# Install the engine, checking its hash, then restart
+sudo runuser -u forge -- /opt/forge/forge-server --config /etc/forge/forge.toml analytics install --binary /tmp/clickhouse --sha256 <sha256>
+sudo systemctl restart forge-server
+```
+
 **Sample output**
 
 ```text
@@ -627,6 +706,17 @@ database and `4` when it cannot.
 | `--allow-shared` | flag | off | No | Accept a database that also holds tables that are not Forge's | `--allow-shared` |
 | `--json` | flag | off | No | Print the report as one JSON object | `--json` |
 
+**Examples**
+
+```sh
+# Check that Forge can use the operational database
+sudo runuser -u forge -- /opt/forge/forge-server --config /etc/forge/forge.toml db check
+# Create the PostgreSQL database when it is missing
+sudo runuser -u forge -- /opt/forge/forge-server --config /etc/forge/forge.toml db check --create
+# Print the report as JSON for a script
+sudo runuser -u forge -- /opt/forge/forge-server --config /etc/forge/forge.toml db check --json
+```
+
 **Sample output**
 
 ```text
@@ -645,6 +735,13 @@ $ forge-server --config /etc/forge/forge.toml db check --json
 
 Prints the operational database and the analytics settings, with any password
 replaced by `***`. It takes no options.
+
+**Examples**
+
+```sh
+# Show the operational database and analytics settings
+sudo runuser -u forge -- /opt/forge/forge-server --config /etc/forge/forge.toml db show
+```
 
 **Sample output**
 
@@ -710,6 +807,13 @@ private (FORGE_RELEASE_KEY, keep secret): <private-key>
 public  (update::RELEASE_PUBLIC_KEY):     <public-key>
 ```
 
+**Examples**
+
+```sh
+# Make a new release signing key pair
+forge-server release keygen
+```
+
 ### forge-server release sign
 
 Prints the base64 signature of `<FILE>` with the key in `FORGE_RELEASE_KEY`.
@@ -738,6 +842,13 @@ Usage: forge-server release pubkey [OPTIONS]
 
 Without the key, `sign` and `pubkey` fail with exit code `1`:
 `Error: set FORGE_RELEASE_KEY`.
+
+**Examples**
+
+```sh
+# Print the public key of the signing key CI uses
+FORGE_RELEASE_KEY="$RELEASE_KEY" forge-server release pubkey
+```
 
 ## See also
 

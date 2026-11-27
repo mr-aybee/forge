@@ -78,7 +78,7 @@ pub struct ServerConfig {
     /// Fleet-wide local names in every node's hosts file (D-084).
     pub names: NameSettings,
     /// The server host's forge-dns, the second tier behind each node's
-    /// (`plans/native-mesh.md` 2.6). Off while `listen` is empty.
+    /// (D-175). Off while `listen` is empty.
     pub dns: DnsSettings,
     /// Alert rules and alarms (D-087).
     pub alerts: AlertSettings,

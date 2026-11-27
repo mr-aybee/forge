@@ -1,4 +1,4 @@
-//! `forge-dns`: the cluster DNS server (`plans/native-mesh.md` 2.4, D-173).
+//! `forge-dns`: the cluster DNS server (D-173).
 //!
 //! - Answers A, SRV and PTR for the zones in `names.json` from memory; AAAA
 //!   for a known name is NOERROR without records; an unknown name in a zone

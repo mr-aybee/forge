@@ -125,7 +125,7 @@ pub struct NodePlan {
     /// Policy findings for this node's part.
     pub findings: Vec<cat::Finding>,
     /// Docker name of the cluster container network the node's services
-    /// join, when the node can take it (`plans/native-mesh.md` 1.6).
+    /// join, when the node can take it (D-172).
     pub mesh_network: Option<String>,
     /// Resolvers for those services: the node's forge-dns (its mesh
     /// address), then the server host's.
@@ -298,7 +298,7 @@ pub async fn mesh_capable(facts: &dyn FactsRepository, server: ServerId) -> bool
 }
 
 /// Preview notes for the cluster container network (exact texts in
-/// `plans/native-mesh.md` 1.5 and 1.6).
+/// D-172).
 pub const NOTE_NO_FABRIC: &str = "services are reachable from other nodes only through published ports; create the cluster network to reach them by name";
 
 fn note_not_in_sync(node: &str) -> String {

@@ -557,7 +557,7 @@ impl SwarmStacks {
     }
 
     /// Removes the cluster container network from every Linux member before
-    /// the cluster becomes a Swarm (`plans/native-mesh.md` 1.3). The checks
+    /// the cluster becomes a Swarm (D-172). The checks
     /// above leave nothing Forge manages on it, so a node that still has
     /// containers attached holds something outside Forge: the conversion is
     /// refused naming it. The fabric stays (Swarm's data path uses it). An

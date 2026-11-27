@@ -77,6 +77,17 @@ forge alerts alarms [--active] [--rule <RULE>] [--node <NODE>] [--limit <LIMIT>]
 | `--page <N>` | integer, from 1 | `1` | no | Page to print. The footer under the table says which page comes next | `--page 2` |
 | `--all` | flag | off | no | Every row on one page (same as `--limit 0`). Cannot be combined with `--page` | `--all` |
 
+**Examples**
+
+```sh
+# Alarms that are firing now
+forge alerts alarms --active
+# Alarms on one node
+forge alerts alarms --node <node-name>
+# Every alarm of one rule on one page
+forge alerts alarms --rule <rule-id> --all
+```
+
 **Output**
 
 ```text
@@ -111,6 +122,15 @@ forge alerts alarm <ID>
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
 | `<id>` | alarm id | — | yes | The alarm | `<alarm-id>` |
+
+**Examples**
+
+```sh
+# One alarm with its timeline
+forge alerts alarm <alarm-id>
+# The same alarm as JSON
+forge alerts alarm <alarm-id> -o json
+```
 
 **Output**
 
@@ -164,6 +184,15 @@ forge alerts ack <ID> [--note <NOTE>]
 | `<id>` | alarm id | — | yes | The alarm | `<alarm-id>` |
 | `--note <NOTE>` | string | empty | no | A note for the timeline, at most 2000 characters | `--note "Rebooting the node"` |
 
+**Examples**
+
+```sh
+# Acknowledge an alarm
+forge alerts ack <alarm-id>
+# Acknowledge it with a note for the timeline
+forge alerts ack <alarm-id> --note "Rebooting <node-name>"
+```
+
 **Output**
 
 The alarm after the change, with `acknowledged_by` and `acknowledged_at`
@@ -185,6 +214,13 @@ forge alerts unack <ID>
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
 | `<id>` | alarm id | — | yes | The alarm | `<alarm-id>` |
+
+**Examples**
+
+```sh
+# Remove an alarm's acknowledgement
+forge alerts unack <alarm-id>
+```
 
 **Output**
 
@@ -208,6 +244,13 @@ forge alerts note <ID> <TEXT>
 | --- | --- | --- | --- | --- | --- |
 | `<id>` | alarm id | — | yes | The alarm | `<alarm-id>` |
 | `<text>` | string | — | yes | The note, 1 to 2000 characters | `"Disk replaced"` |
+
+**Examples**
+
+```sh
+# Add a note to an alarm's timeline
+forge alerts note <alarm-id> "Disk replaced"
+```
 
 **Output**
 
@@ -233,6 +276,15 @@ forge alerts rules
 | `--limit <N>` | integer | `50` | no | Rows per page. `0` prints every row | `--limit 100` |
 | `--page <N>` | integer, from 1 | `1` | no | Page to print. The footer under the table says which page comes next | `--page 2` |
 | `--all` | flag | off | no | Every row on one page (same as `--limit 0`). Cannot be combined with `--page` | `--all` |
+
+**Examples**
+
+```sh
+# Every alert rule
+forge alerts rules
+# The rules of one workspace, on one page
+forge alerts rules --workspace <workspace-id> --all
+```
 
 **Output**
 
@@ -260,6 +312,15 @@ forge alerts rule <ID>
 | --- | --- | --- | --- | --- | --- |
 | `<id>` | rule id | — | yes | The rule | `<rule-id>` |
 
+**Examples**
+
+```sh
+# One rule
+forge alerts rule <rule-id>
+# Save a rule as JSON to edit it
+forge alerts rule <rule-id> -o json > rule.json
+```
+
 **Output**
 
 The rule as JSON, in the shape of the [REST rule body](/docs/reference/rest-api/#alerts)
@@ -284,6 +345,15 @@ forge alerts subjects [--workspace <WORKSPACE>]
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
 | `--workspace <WORKSPACE>` | workspace id | the server's workspace | no | Whose health checks to list (`seen`) | `--workspace <workspace-id>` |
+
+**Examples**
+
+```sh
+# Subjects a rule can watch
+forge alerts subjects
+# Subjects of another workspace
+forge alerts subjects --workspace <workspace-id>
+```
 
 **Output**
 
@@ -326,6 +396,15 @@ forge alerts templates [--place <PLACE>] [--workspace <WORKSPACE>]
 | --- | --- | --- | --- | --- | --- |
 | `--place <PLACE>` | `node`, `service`, `database`, `certificate` or `any` | all | no | Only the templates for this place | `--place database` |
 | `--workspace <WORKSPACE>` | workspace id | the server's workspace | no | The workspace whose `alert.view` is checked | `--workspace <workspace-id>` |
+
+**Examples**
+
+```sh
+# Every rule template
+forge alerts templates
+# Templates for databases
+forge alerts templates --place database
+```
 
 **Output**
 
@@ -445,6 +524,15 @@ forge alerts update-rule <ID> <FILE>
 | `<id>` | rule id | — | yes | The rule | `<rule-id>` |
 | `<file>` | `@path`, `@-` or a path | — | yes | The new rule, same fields as create | `@node-offline.json` |
 
+**Examples**
+
+```sh
+# Replace a rule from a file
+forge alerts update-rule <rule-id> @rule.json
+# Replace it from standard input
+cat rule.json | forge alerts update-rule <rule-id> @-
+```
+
 **Output**
 
 The rule after the change, in the same shape as create.
@@ -467,6 +555,15 @@ forge alerts delete-rule <ID> [--yes]
 | --- | --- | --- | --- | --- | --- |
 | `<id>` | rule id | — | yes | The rule | `<rule-id>` |
 | `--yes` | flag | off | no | Do not ask for confirmation | `--yes` |
+
+**Examples**
+
+```sh
+# Delete a rule after you confirm
+forge alerts delete-rule <rule-id>
+# Delete it without asking (scripts)
+forge alerts delete-rule <rule-id> --yes
+```
 
 **Output**
 
@@ -511,6 +608,15 @@ forge alerts channels list [--workspace <WORKSPACE>] [--limit <N>] [--page <N>] 
 | `--page <N>` | integer, from 1 | `1` | no | Page to print. The footer under the table says which page comes next | `--page 2` |
 | `--all` | flag | off | no | Every row on one page (same as `--limit 0`). Cannot be combined with `--page` | `--all` |
 
+**Examples**
+
+```sh
+# Every notification channel
+forge alerts channels list
+# Every channel on one page
+forge alerts channels list --all
+```
+
 **Output**
 
 ```text
@@ -541,6 +647,15 @@ forge alerts channels show <CHANNEL>
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
 | `<channel>` | channel id or name | — | yes | The channel. A name must match exactly one channel (case does not matter) | `"Ops webhook"` |
+
+**Examples**
+
+```sh
+# One channel, by name
+forge alerts channels show "Ops webhook"
+# One channel, by id
+forge alerts channels show <channel-id>
+```
 
 **Output**
 
@@ -775,6 +890,15 @@ forge alerts channels delete <CHANNEL> [--yes]
 | `<channel>` | channel id or name | — | yes | The channel | `Chat` |
 | `--yes` | flag | off | no | Do not ask for confirmation (required with `--non-interactive`) | `--yes` |
 
+**Examples**
+
+```sh
+# Delete a channel after you confirm
+forge alerts channels delete "Ops webhook"
+# Delete it without asking (scripts)
+forge alerts channels delete "Ops webhook" --yes
+```
+
 **Output**
 
 ```text
@@ -806,6 +930,13 @@ forge alerts channels test <CHANNEL>
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
 | `<channel>` | channel id or name | — | yes | The channel. A channel that is turned off is refused (exit `7`) | `"Ops webhook"` |
+
+**Examples**
+
+```sh
+# Send a test notification to a channel
+forge alerts channels test "Ops webhook"
+```
 
 **Output**
 
@@ -894,6 +1025,15 @@ forge alerts policies list [--workspace <WORKSPACE>] [--limit <N>] [--page <N>] 
 | `--page <N>` | integer, from 1 | `1` | no | Page to print. The footer under the table says which page comes next | `--page 2` |
 | `--all` | flag | off | no | Every row on one page (same as `--limit 0`). Cannot be combined with `--page` | `--all` |
 
+**Examples**
+
+```sh
+# Every notification policy
+forge alerts policies list
+# Every policy on one page
+forge alerts policies list --all
+```
+
 **Output**
 
 ```text
@@ -924,6 +1064,15 @@ forge alerts policies show <POLICY>
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
 | `<policy>` | policy id or name | — | yes | The policy. A name must match exactly one policy (case does not matter) | `"Critical to ops"` |
+
+**Examples**
+
+```sh
+# One policy, by name
+forge alerts policies show "Critical to ops"
+# One policy, by id
+forge alerts policies show <policy-id>
+```
 
 **Output**
 
@@ -1122,6 +1271,15 @@ forge alerts policies delete <POLICY> [--yes]
 | `<policy>` | policy id or name | — | yes | The policy | `"Critical to ops"` |
 | `--yes` | flag | off | no | Do not ask for confirmation (required with `--non-interactive`) | `--yes` |
 
+**Examples**
+
+```sh
+# Delete a policy after you confirm
+forge alerts policies delete "Critical to ops"
+# Delete it without asking (scripts)
+forge alerts policies delete "Critical to ops" --yes
+```
+
 **Output**
 
 ```text
@@ -1165,6 +1323,17 @@ forge alerts deliveries list [--alarm <ALARM>] [--channel <CHANNEL>] [--status <
 The server returns at most the 500 newest deliveries that match. Narrow the
 list with `--alarm`, `--channel` or `--status` to reach older ones.
 
+**Examples**
+
+```sh
+# Recent deliveries
+forge alerts deliveries list
+# Deliveries that failed
+forge alerts deliveries list --status failed
+# Deliveries of one alarm to one channel
+forge alerts deliveries list --alarm <alarm-id> --channel "Ops webhook"
+```
+
 **Output**
 
 ```text
@@ -1207,6 +1376,13 @@ forge alerts deliveries show <ID>
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
 | `<id>` | delivery id | — | yes | The delivery | `<delivery-id>` |
+
+**Examples**
+
+```sh
+# One delivery with its attempts
+forge alerts deliveries show <delivery-id>
+```
 
 **Output**
 
@@ -1272,6 +1448,15 @@ forge alerts silences list [--state <STATE>] [--workspace <WORKSPACE>]
 
 The server returns at most 500 silences per request.
 
+**Examples**
+
+```sh
+# Every silence
+forge alerts silences list
+# Silences in effect now
+forge alerts silences list --state active
+```
+
 **Output**
 
 <!-- TODO: replace with output captured from a running server -->
@@ -1306,6 +1491,13 @@ forge alerts silences show <ID>
 | Name | Type | Default | Required | Description | Example |
 | --- | --- | --- | --- | --- | --- |
 | `<id>` | silence id | — | yes | The silence | `<silence-id>` |
+
+**Examples**
+
+```sh
+# One silence
+forge alerts silences show <silence-id>
+```
 
 **Output**
 
@@ -1396,6 +1588,15 @@ forge alerts silences extend <ID> (--by <DURATION> | --until <TIME>)
 | `--by <DURATION>` | duration | — | one of the two | Time to add to the current end | `--by 1h` |
 | `--until <TIME>` | time | — | one of the two | The new end, later than the current one | `--until 2026-12-02T04:00:00Z` |
 
+**Examples**
+
+```sh
+# Add an hour to a silence
+forge alerts silences extend <silence-id> --by 1h
+# Move its end to a fixed time
+forge alerts silences extend <silence-id> --until 2026-12-02T04:00:00Z
+```
+
 **Output:** the changed silence, as for
 [`forge alerts silences show`](#forge-alerts-silences-show).
 
@@ -1419,6 +1620,15 @@ forge alerts silences end <ID> [--yes]
 | --- | --- | --- | --- | --- | --- |
 | `<id>` | silence id | — | yes | The silence | `<silence-id>` |
 | `--yes` | flag | off | no | Do not ask for confirmation (required with `--non-interactive`) | `--yes` |
+
+**Examples**
+
+```sh
+# End a silence after you confirm
+forge alerts silences end <silence-id>
+# End it without asking (scripts)
+forge alerts silences end <silence-id> --yes
+```
 
 **Output:** the ended silence, as for
 [`forge alerts silences show`](#forge-alerts-silences-show), with

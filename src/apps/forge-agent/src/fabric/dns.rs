@@ -1,4 +1,4 @@
-//! forge-dns on a fabric node (`plans/native-mesh.md` 2.4, 2.5, 2.7): the
+//! forge-dns on a fabric node (D-173): the
 //! unit's environment file, the service itself and interface-scoped
 //! resolving for the cluster zone through systemd-resolved. Best effort:
 //! a node without the binary or systemd keeps its hosts-file names.
