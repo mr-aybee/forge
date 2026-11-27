@@ -51,6 +51,7 @@ fn app_row(r: &AnyRow) -> DomainResult<Service> {
         version: int(r, "version")?,
         source: text(r, "source")?,
         secrets_changed_at: opt_ts(r, "secrets_changed_at")?,
+        adopted_from: opt_text(r, "adopted_from")?,
     })
 }
 
@@ -74,8 +75,9 @@ fn instance_row(r: &AnyRow) -> DomainResult<ServiceInstance> {
 impl ServiceRepository for Store {
     async fn put_service(&self, a: &Service) -> DomainResult<()> {
         sqlx::query(
-            "INSERT INTO services (id, workspace_id, environment_id, name, runtime, spec, env, created_by, created_at, updated_at, source)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            "INSERT INTO services (id, workspace_id, environment_id, name, runtime, spec, env, created_by, created_at, updated_at, source,
+                                   adopted_from)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
              ON CONFLICT (id) DO UPDATE SET runtime = $5, spec = $6, env = $7, updated_at = $10, source = $11,
                  version = services.version + 1",
         )
@@ -90,9 +92,20 @@ impl ServiceRepository for Store {
         .bind(a.created_at.0)
         .bind(a.updated_at.0)
         .bind(&a.source)
+        .bind(a.adopted_from.as_deref())
         .execute(self.pool())
         .await
         .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn clear_adopted(&self, id: ServiceId) -> DomainResult<()> {
+        sqlx::query("UPDATE services SET adopted_from = NULL WHERE id = $1")
+            .bind(id.to_string())
+            .execute(self.pool())
+            .await
+            .map_err(db_err)?;
+
         Ok(())
     }
 
@@ -424,5 +437,41 @@ impl HealthAuthorityRepository for Store {
                 })
             })
             .transpose()
+    }
+}
+
+#[async_trait]
+impl forge_core::ports::PendingStoreAdoptionRepository for Store {
+    async fn list_pending_store_adoptions(&self) -> DomainResult<Vec<forge_core::ports::PendingStoreAdoption>> {
+        let rows = sqlx::query("SELECT * FROM object_store_adoptions ORDER BY created_at, id")
+            .fetch_all(self.pool())
+            .await
+            .map_err(db_err)?;
+
+        rows.iter()
+            .map(|r| {
+                Ok(forge_core::ports::PendingStoreAdoption {
+                    id: text(r, "id")?,
+                    workspace_id: parsed(r, "workspace_id")?,
+                    environment_id: opt_parsed(r, "environment_id")?,
+                    server_id: parsed(r, "server_id")?,
+                    slug: text(r, "slug")?,
+                    settings: opt_text(r, "settings")?,
+                    console_port: opt_int(r, "console_port")?.and_then(|p| u16::try_from(p).ok()),
+                    credential_id: parsed(r, "credential_id")?,
+                    created_by: parsed(r, "created_by")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn delete_pending_store_adoption(&self, id: &str) -> DomainResult<()> {
+        sqlx::query("DELETE FROM object_store_adoptions WHERE id = $1")
+            .bind(id)
+            .execute(self.pool())
+            .await
+            .map_err(db_err)?;
+
+        Ok(())
     }
 }

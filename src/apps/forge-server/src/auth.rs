@@ -62,8 +62,7 @@ impl Caller {
 
     /// Whether this request is an approved connector request being replayed
     /// with the approver's session (D-073): the approver's roles apply, and
-    /// the audit names the connector. What was handed to the approver in
-    /// person, such as a bucket grant, does not.
+    /// the audit names the connector.
     #[must_use]
     pub fn approved_replay(&self) -> bool {
         self.via.is_some()
@@ -101,7 +100,7 @@ impl Caller {
 
     /// [`Caller::authorize`], with `denied` as the details of the audit
     /// event when the request is refused: what the resource alone does not
-    /// say (for example the store and the environment that owns it).
+    /// say (for example the container a request is about).
     pub async fn authorize_with(&self, action: Action, resource: EntityRef, denied: Value) -> ApiResult<()> {
         let req = AccessRequest::new(self.principal(), action, resource.clone(), self.ctx());
         match self.state.authz.authorize(&req).await {

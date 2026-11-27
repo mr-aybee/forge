@@ -27,7 +27,7 @@ the collapsed sidebar, and the <kbd>Ctrl</kbd>+<kbd>K</kbd> command palette.
    | --- | --- |
    | (none) | **Overview** |
    | **Workloads** | **Projects** (the project explorer; see [Browse projects in the explorer](/docs/guides/project-explorer/)) |
-   | **Infrastructure** | **Clusters**, **Nodes**, **Network** (**DNS**, **Ingress**, **Terminal**), **Object Storage** |
+   | **Infrastructure** | **Clusters**, **Nodes**, **Network** (**DNS**, **Ingress**, **Terminal**) |
    | **Operations** | **Alerts**, **Logs**, **Jobs**, **Audit log** |
    | **Packages** | **App Store**, **Installed**, **Updates** |
    | **Admin** | **Approvals**, **Access** (**SFTP access**, **Tunnels**), **Access Control** (**Access**, **Members**), **Credential vault**, **Forge updates**, **Plugins**, **Profile**, **Settings** |
@@ -121,8 +121,8 @@ role covers. **Overview**, **Approvals** and **Profile** are always there.
 | `customer` (an environment) | Fleet pages |
 
 Fleet pages are **Clusters**, **Nodes**, **Projects**,
-**Services**, **Stacks**, **Installed**, **DNS**, **Ingress**, **Object
-Storage** and **Jobs**. **Audit log** needs `audit.read` on the platform, so
+**Services**, **Stacks**, **Installed**, **DNS**, **Ingress** and
+**Jobs**. **Audit log** needs `audit.read` on the platform, so
 an `auditor` bound at platform scope sees it. If you open the address of a
 page you can't use, the console shows **You don't have access to this page**.
 

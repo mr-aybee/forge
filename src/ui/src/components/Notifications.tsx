@@ -21,7 +21,6 @@ const KIND: Record<string, string> = {
   "stack.deploy": "Stack deploy",
   "package.action": "Package action",
   "app.action": "Service action",
-  "storage.action": "Object store action",
   "node.bootstrap": "Node onboarding",
 };
 

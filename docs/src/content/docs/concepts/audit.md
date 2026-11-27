@@ -42,21 +42,8 @@ passwords, codes, challenges or key material.
 | `user.create` / `role.grant` | the administrator | the new user, or the binding's scope | `denied` with `reason` when the session is not MFA-verified |
 | `auth.mfa.reset` | `system:forge` | `platform:root` | `user` (id), `passkeys_removed`, `api_keys_revoked`, `via: "forge-server reset-mfa"` |
 
-Object storage records `storage.install`, `storage.connect`,
-`storage.disconnect`, `storage.adopt`, `storage.start`, `storage.stop`,
-`storage.restart`, `storage.uninstall`, `storage.bucket.create`,
-`storage.bucket.delete`, `storage.object.upload`, `storage.object.download`,
-`storage.object.delete`, `storage.key.create`, `storage.key.rotate` and
-`storage.key.revoke`. Downloads are audited because they read data.
-
-| Action | Details |
-| --- | --- |
-| `storage.adopt` | `store_id`, `name`, `installation_id` (the App Store record), `s3_port`, `job_id` |
-| `storage.key.create` | `store_id`, `access_key`, `name`, `bucket`, `access` |
-| `storage.key.rotate` | `store_id`, `old_access_key`, `access_key` (the new one), `bucket` |
-| `storage.key.revoke` | `store_id`, `access_key` |
-
-Key events record access keys, never secrets.
+Adopting a running container as a service records `service.adopt` with the
+node, the container name and the new service.
 
 The file explorer records one event per call: `file.list` (with the entry
 count), `file.stat`, `file.read` (path, offset and length), `file.hash`,

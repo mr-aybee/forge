@@ -32,7 +32,7 @@ use serde::Serialize;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct ConsoleCapabilities {
     /// `view` anywhere: clusters, nodes, services, environments,
-    /// services, stacks, DNS, ingress, installed packages, object storage, jobs.
+    /// services, stacks, DNS, ingress, installed packages, jobs.
     pub fleet_view: bool,
     /// `terminal.open` anywhere: the Terminal page.
     pub terminal: bool,

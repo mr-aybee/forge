@@ -7,7 +7,6 @@ import {
   Boxes,
   ClipboardCheck,
   Container,
-  Database,
   FolderLock,
   KeyRound,
   Logs,
@@ -108,7 +107,6 @@ export const NAV_SECTIONS: NavSection[] = [
           { to: "/terminal", label: "Terminal", icon: SquareTerminal, cap: "terminal" },
         ],
       },
-      { to: "/storage", label: "Object Storage", icon: Database, cap: "fleet_view" },
     ],
   },
   {

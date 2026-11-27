@@ -12,7 +12,6 @@ forbid (
     Forge::Action::"network.tunnel.any",
     Forge::Action::"node.onboard",
     Forge::Action::"package.manage",
-    Forge::Action::"storage.manage",
     Forge::Action::"proxy.manage",
     Forge::Action::"terminal.open",
     Forge::Action::"health.command",

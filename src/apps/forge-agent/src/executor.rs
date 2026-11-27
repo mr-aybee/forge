@@ -174,6 +174,10 @@ impl CommandExecutor for LocalExecutor {
                 // Writes secret and config files of app specs (`files`,
                 // D-179) and mounts them. Older agents omit it.
                 "service_files": cfg!(unix),
+                // Understands `adopted_container` on app specs (D-180):
+                // acts on an adopted container until the first deploy
+                // replaces it. Older agents omit it.
+                "adopted_containers": cfg!(unix),
                 // Pushes native service container states for the service
                 // reconciler (D-177).
                 "app_states": cfg!(unix),
@@ -308,12 +312,6 @@ fn result(cmd: &Command, r: HelperResponse) -> Result<Value, String> {
             });
             if r.ok { Ok(body) } else { Err(json!({ "error": r.error, "output": r.output }).to_string()) }
         }
-        // `credential` only for `adopt`; the job seals it and never keeps it
-        // in its state.
-        Command::StorageAction(_) if r.ok => {
-            Ok(json!({ "report": r.data, "output": r.output, "credential": r.details }))
-        }
-        Command::StorageAction(_) => Err(json!({ "error": r.error, "output": r.output }).to_string()),
         _ if r.ok => Ok(r.data.unwrap_or(Value::Null)),
         _ => Err(r.error.unwrap_or_else(|| format!("{} failed", cmd.name()))),
     }

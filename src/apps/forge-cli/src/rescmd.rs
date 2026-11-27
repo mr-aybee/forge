@@ -702,9 +702,24 @@ pub enum ServicesCmd {
         #[arg(long)]
         yes: bool,
     },
-    /// Buckets attached to a service: list, attach, detach.
-    #[command(subcommand)]
-    Storage(AppStorageCmd),
+    /// Adopt a running container as a service, without restarting it: Forge
+    /// reads its image, environment, ports, mounts and restart policy. The
+    /// first deploy replaces it with the service's own container.
+    ///
+    /// Example: `forge services adopt --environment prod --node <node-name> rustfs`
+    Adopt {
+        /// The container's name or id on the node.
+        container: String,
+        /// The environment the service goes into (id or name).
+        #[arg(long)]
+        environment: String,
+        /// The node that runs the container (id, hostname or display name).
+        #[arg(long)]
+        node: String,
+        /// The service name (default: from the container name).
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// Show an instance's recent log lines; --follow keeps streaming
     /// (Ctrl+C stops).
     Logs {
@@ -746,60 +761,6 @@ pub enum ServicesCmd {
         environment: Option<String>,
         #[command(subcommand)]
         op: AppFilesCmd,
-    },
-}
-
-/// Object storage attached to a service (D-106). An attachment issues an
-/// access key limited to one bucket; the service gets the S3 settings as
-/// variables with its next deploy.
-#[derive(Subcommand, Debug)]
-pub enum AppStorageCmd {
-    /// The buckets attached to a service and the variables each one adds.
-    List {
-        #[arg(id = "service", value_name = "SERVICE")]
-        app: String,
-        /// Look the name up in this environment only (id or name).
-        #[arg(long)]
-        environment: Option<String>,
-    },
-    /// Attach a bucket of a managed store: issues a key for that bucket and
-    /// injects the S3 settings at the next deploy.
-    Attach {
-        #[arg(id = "service", value_name = "SERVICE")]
-        app: String,
-        /// The object store (id, name or slug).
-        #[arg(long)]
-        store: String,
-        /// The bucket to attach.
-        #[arg(long)]
-        bucket: String,
-        /// Create the bucket when it does not exist yet.
-        #[arg(long)]
-        create_bucket: bool,
-        /// What the service may do in the bucket.
-        #[arg(long, default_value = "readwrite", value_parser = ["read", "readwrite"])]
-        access: String,
-        /// Prefix of the injected variables (`<PREFIX>_ENDPOINT`, `_REGION`,
-        /// `_BUCKET`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`).
-        #[arg(long, default_value = "S3")]
-        prefix: String,
-        /// Look the name up in this environment only (id or name).
-        #[arg(long)]
-        environment: Option<String>,
-    },
-    /// Detach a bucket: revokes its access key and removes the variables at
-    /// the next deploy.
-    Detach {
-        #[arg(id = "service", value_name = "SERVICE")]
-        app: String,
-        /// The attachment's access key (from `forge services storage list`).
-        access_key: String,
-        /// Look the name up in this environment only (id or name).
-        #[arg(long)]
-        environment: Option<String>,
-        /// Do not ask first (required with --non-interactive).
-        #[arg(long)]
-        yes: bool,
     },
 }
 
@@ -980,7 +941,22 @@ pub async fn services(g: &Global, cmd: ServicesCmd) -> Result<()> {
             confirm(g, yes, &format!("{what} the definition of service {app} ({})? Deploy to apply it.", t.server))?;
             show(g, &api.call(reqwest::Method::PUT, &path, Some(&body)).await?, None)
         }
-        ServicesCmd::Storage(op) => app_storage(g, &mut api, &t.server, op).await,
+        ServicesCmd::Adopt { container, environment, node, name } => {
+            let environment_id = resolve_environment(&mut api, &environment).await?;
+            let server = resolve_node(&mut api, &node).await?["id"].as_str().unwrap_or_default().to_owned();
+            let body =
+                json!({ "environment_id": environment_id, "server_id": server, "container": container, "name": name });
+            let v = api.post("/api/v1/services/adopt", &body).await?;
+
+            if !g.output.is_machine() {
+                eprintln!(
+                    "{container} on {node} is now the service {}. It keeps running as it is; the first deploy replaces it.",
+                    v["service"]["name"].as_str().unwrap_or_default()
+                );
+            }
+
+            show(g, &v, None)
+        }
         ServicesCmd::Place { app, node, standby, environment, yes } => {
             let default = if standby { Role::Standby } else { Role::Active };
             let wanted: Vec<(String, Role)> =
@@ -1204,82 +1180,6 @@ fn secrets_for(flags: &AppFlags, file: Option<&str>) -> Result<Vec<(String, Stri
 
         Ok(std::io::read_to_string(std::io::stdin())?)
     })
-}
-
-const ATTACHMENT_COLS: &[Col] = &[
-    ("ACCESS KEY", "/access_key"),
-    ("STORE", "/store"),
-    ("BUCKET", "/bucket"),
-    ("ACCESS", "/access"),
-    ("PREFIX", "/prefix"),
-    ("ENDPOINT", "/endpoint"),
-];
-
-/// The attachments of a storage answer as table rows (`store`: the store's
-/// name, or its id when the store is gone).
-fn attachment_rows(v: &Value) -> Value {
-    let rows: Vec<Value> = v["attachments"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|a| {
-            let mut r = a.clone();
-            r["store"] = if a["store_name"].is_string() { a["store_name"].clone() } else { a["store_id"].clone() };
-            r
-        })
-        .collect();
-    Value::Array(rows)
-}
-
-/// The body of `POST /services/{id}/storage`.
-fn attach_body(store_id: &str, bucket: &str, create_bucket: bool, access: &str, prefix: &str) -> Value {
-    json!({ "store_id": store_id, "bucket": bucket, "create_bucket": create_bucket, "access": access, "prefix": prefix })
-}
-
-fn show_attachments(g: &Global, v: &Value) -> Result<()> {
-    if g.output.is_machine() {
-        return show(g, v, None);
-    }
-
-    show(g, &attachment_rows(v), Some(ATTACHMENT_COLS))
-}
-
-/// `forge services storage`: the buckets attached to a service.
-async fn app_storage(g: &Global, api: &mut Api, server: &str, op: AppStorageCmd) -> Result<()> {
-    match op {
-        AppStorageCmd::List { app, environment } => {
-            let a = resolve_app(api, &app, environment.as_deref()).await?;
-            let v = api.get(&format!("/api/v1/services/{}/storage", service_id(&a))).await?;
-            show_attachments(g, &v)
-        }
-        AppStorageCmd::Attach { app, store, bucket, create_bucket, access, prefix, environment } => {
-            let a = resolve_app(api, &app, environment.as_deref()).await?;
-            let sid = crate::admincmd::store_id(api, &store).await?;
-            let body = attach_body(&sid, &bucket, create_bucket, &access, &prefix);
-            let v = api.post(&format!("/api/v1/services/{}/storage", service_id(&a)), &body).await?;
-
-            if !g.output.is_machine() {
-                eprintln!(
-                    "Bucket {bucket} of {store} is attached to {app} ({access}). Deploy {app} to give it the {prefix}_* variables."
-                );
-            }
-
-            show_attachments(g, &v)
-        }
-        AppStorageCmd::Detach { app, access_key, environment, yes } => {
-            let a = resolve_app(api, &app, environment.as_deref()).await?;
-            confirm(
-                g,
-                yes,
-                &format!(
-                    "Detach the bucket of key {access_key} from {app} ({server})? The key is revoked at once; the variables go with the next deploy."
-                ),
-            )?;
-            let path = format!("/api/v1/services/{}/storage/{}", service_id(&a), enc(&access_key));
-            let v = api.call(reqwest::Method::DELETE, &path, None).await?;
-            show_attachments(g, &v)
-        }
-    }
 }
 
 /// Environment id → name, for display (best effort).
@@ -1697,67 +1597,16 @@ mod tests {
     }
 
     #[test]
-    fn storage_commands_parse_and_build_the_attach_request() {
-        let ServicesCmd::Storage(AppStorageCmd::Attach { app, store, bucket, create_bucket, access, prefix, .. }) =
-            parse(&[
-                "forge",
-                "services",
-                "storage",
-                "attach",
-                "web",
-                "--store",
-                "media",
-                "--bucket",
-                "uploads",
-                "--create-bucket",
-                "--access",
-                "read",
-                "--prefix",
-                "MEDIA",
-            ])
+    fn adopt_takes_a_container_an_environment_and_a_node() {
+        let ServicesCmd::Adopt { container, environment, node, name } =
+            parse(&["forge", "services", "adopt", "--environment", "prod", "--node", "lab-c", "rustfs"])
         else {
-            panic!("attach")
+            panic!("adopt")
         };
 
-        assert_eq!(app, "web");
-        assert_eq!(
-            attach_body(&store, &bucket, create_bucket, &access, &prefix),
-            json!({ "store_id": "media", "bucket": "uploads", "create_bucket": true, "access": "read", "prefix": "MEDIA" })
-        );
-
-        // Defaults: read-write, the S3 prefix, an existing bucket.
-        let ServicesCmd::Storage(AppStorageCmd::Attach { create_bucket, access, prefix, .. }) =
-            parse(&["forge", "services", "storage", "attach", "web", "--store", "media", "--bucket", "uploads"])
-        else {
-            panic!("attach defaults")
-        };
-
-        assert_eq!((create_bucket, access.as_str(), prefix.as_str()), (false, "readwrite", "S3"));
-        assert!(matches!(
-            parse(&["forge", "services", "storage", "detach", "web", "AKIAEXAMPLE", "--yes"]),
-            ServicesCmd::Storage(AppStorageCmd::Detach { yes: true, .. })
-        ));
-        use clap::Parser as _;
-        assert!(
-            crate::Cli::try_parse_from([
-                "forge", "services", "storage", "attach", "web", "--store", "m", "--bucket", "b", "--access", "admin"
-            ])
-            .is_err()
-        );
+        assert_eq!((container.as_str(), environment.as_str(), node.as_str(), name), ("rustfs", "prod", "lab-c", None));
     }
 
-    #[test]
-    fn attachments_show_the_store_name_or_its_id() {
-        let v = json!({ "attachments": [
-            { "access_key": "AK1", "store_id": "s1", "store_name": "media", "bucket": "uploads", "access": "readwrite", "prefix": "S3" },
-            { "access_key": "AK2", "store_id": "s2", "store_name": null, "bucket": "old", "access": "read", "prefix": "OLD" },
-        ], "can_change": true });
-        let rows = attachment_rows(&v);
-        assert_eq!((&rows[0]["store"], &rows[1]["store"]), (&json!("media"), &json!("s2")));
-    }
-
-    /// Issue #64: RUNNING counts what the node last reported, never the
-    /// lifecycle status, and an instance without a reported state is not running.
     #[test]
     fn running_counts_the_state_the_node_reported() {
         let instances = [

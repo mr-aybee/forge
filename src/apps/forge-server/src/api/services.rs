@@ -205,6 +205,7 @@ pub async fn create(
         version: 0,
         source: String::new(),
         secrets_changed_at: None,
+        adopted_from: None,
     };
     let items = crate::service_spec::new_vault_items(None, &input.secret_files);
     super::vault::authorize_item_names(&state, &caller, ns.workspace_id, &items, "service.create").await?;
@@ -682,4 +683,77 @@ pub async fn action(
             _ => tokio::time::sleep(Duration::from_millis(200)).await,
         }
     }
+}
+
+/// `POST /api/v1/services/adopt`: a running container as a service (D-180).
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct AdoptBody {
+    #[schemars(with = "String")]
+    pub environment_id: EnvironmentId,
+    #[schemars(with = "String")]
+    pub server_id: ServerId,
+    /// The container's name or id on that node.
+    pub container: String,
+    /// The service name; derived from the container name when absent.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// The adopted service and its instance.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct Adopted {
+    #[schemars(with = "Value")]
+    pub service: Service,
+    #[schemars(with = "Value")]
+    pub instance: ServiceInstance,
+}
+
+/// Reads the container through the node's agent (environment values too,
+/// hence `container.inspect_env`) and records the service without
+/// recreating the container. Needs `deploy` on the environment and
+/// `server.manage` on the node.
+pub async fn adopt(
+    State(state): State<AppState>,
+    caller: Caller,
+    Json(body): Json<AdoptBody>,
+) -> ApiResult<(StatusCode, Json<Adopted>)> {
+    use crate::service_adopt::{AUDIT_ADOPT, AdoptError, AdoptRequest};
+
+    let node = EntityRef::new(EntityKind::Server, body.server_id);
+    let audit_body = json!({ "container": body.container, "server_id": body.server_id, "name": body.name });
+
+    for (action, resource) in [
+        (Action::Deploy, ns_ref(body.environment_id)),
+        (Action::ServerManage, node.clone()),
+        (Action::ContainerInspectEnv, node.clone()),
+    ] {
+        caller.authorize_with(action, resource, audit_body.clone()).await?;
+    }
+
+    let req = AdoptRequest {
+        environment_id: body.environment_id,
+        server_id: body.server_id,
+        container: body.container.clone(),
+        name: body.name.clone(),
+        principal: caller.principal(),
+        console: None,
+    };
+    let (service, instance) = state.service_adopt.adopt(&req).await.map_err(|e| match e {
+        AdoptError::Invalid(m) => ApiError::bad_request(m),
+        AdoptError::Conflict(m) => ApiError::conflict(m),
+        AdoptError::AgentTooOld => {
+            ApiError::new(StatusCode::CONFLICT, crate::service_adopt::AGENT_UPDATE_REQUIRED, e.to_string())
+        }
+        AdoptError::Domain(d) => d.into(),
+    })?;
+    caller
+        .audit(
+            AUDIT_ADOPT,
+            &ns_ref(service.environment_id),
+            Some(service.workspace_id),
+            json!({ "service": service.name, "container": service.adopted_from, "server_id": instance.server_id }),
+        )
+        .await;
+
+    Ok((StatusCode::CREATED, Json(Adopted { service, instance })))
 }

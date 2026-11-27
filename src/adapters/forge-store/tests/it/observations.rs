@@ -200,6 +200,7 @@ async fn seeded() -> (Store, tempfile::TempDir, ServerId, ServiceId) {
         version: 0,
         source: String::new(),
         secrets_changed_at: None,
+        adopted_from: None,
     };
     s.put_service(&app).await.unwrap();
     s.put_instance(&ServiceInstance {

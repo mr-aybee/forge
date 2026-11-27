@@ -196,7 +196,7 @@ impl ChannelSecrets for VaultSecrets {
         match self.vault.get_vault_item(item).await? {
             // An item of another workspace is as good as missing.
             Some(i) if i.workspace_id == workspace => {
-                self.envelope.open(&i.sealed, &crate::jobs::storage::vault_aad(item)).map_err(DomainError::internal)
+                self.envelope.open(&i.sealed, &crate::jobs::vault_aad(item)).map_err(DomainError::internal)
             }
             _ => Err(DomainError::NotFound("vault item".into())),
         }

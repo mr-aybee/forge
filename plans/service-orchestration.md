@@ -228,6 +228,11 @@ Small PR, can ship with step 4.
 
 ## Step 6: remove the Object Storage subsystem
 
+Status: done (D-180), before step 4. The `objstore-rustfs` recipes are
+removed and the guide **Run RustFS as a service** shows a services file;
+step 4 adds RustFS back as a package with a container template. Stores
+without an environment are adopted into the workspace's oldest environment.
+
 One PR, after steps 4 and 5 so existing stores have somewhere to go.
 
 - Generic "adopt a running container as a Service": read the container's

@@ -50,7 +50,7 @@ those environments.
 | Tenant | `tenant:<id>` | The tenant |
 | Cluster | `cluster:<id>` | The cluster, its servers, and jobs that target them |
 | Project | `project:<id>` | The project and every environment in it, with what those environments cover |
-| Environment | `environment:<id>` | The environment, its servers, services and jobs that target them, and the object stores it owns (`view` and `storage.data` only) |
+| Environment | `environment:<id>` | The environment, its servers, services and jobs that target them |
 
 Access profile assignments take `workspace`, `cluster`, `project`,
 `environment`, `server` and `service:<id>`. An assignment at
@@ -96,8 +96,6 @@ out at every assignable scope.
 | `container.manage` | ✓ | ✓ | ✓ | | | | |
 | `container.exec` | ✓ | ✓ | ✓ | | | | |
 | `container.inspect_env` † | ✓ | ✓ | ✓ | | | | |
-| `storage.manage` † | ✓ | ✓ | ✓ | | | | |
-| `storage.data` | ✓ | ✓ | ✓ | ✓ | | | |
 | `file.read` | ✓ | ✓ | ✓ | | | | |
 | `file.write` † | ✓ | ✓ | ✓ | | | | |
 | `file.delete` † | ✓ | ✓ | ✓ | | | | |
@@ -155,16 +153,6 @@ covers reading its events and histogram in the **Logs** console;
 Creating and revoking keys is audited as `service.log_key.create` and
 `service.log_key.revoke`. Sending events needs no role: the ingest key is
 the only credential. See [Service logs](/docs/guides/application-logs/).
-
-`storage.manage` applies to a server or a workspace. `storage.data` applies
-to a server, a workspace or an environment. An object store is not a Cedar
-entity: the API checks a managed store on its first member node and a
-connected store on the workspace. For a store that belongs to an environment,
-the API also accepts `view` and `storage.data` held on that environment, and
-`deploy` on it to attach a bucket to one of its services. `storage.manage`
-is never checked on an environment, so an environment role cannot install, stop or
-uninstall a store or issue standalone keys. See
-[Ownership](/docs/concepts/object-storage/#ownership).
 
 `certificate.use` applies to a workspace or a server. Applying an endpoint
 with an uploaded certificate checks it on the workspace; the `agent.command`

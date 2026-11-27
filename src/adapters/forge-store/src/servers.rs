@@ -189,7 +189,6 @@ impl ServerRepository for Store {
             "DELETE FROM node_ssh WHERE server_id = $1".into(),
             "DELETE FROM installations WHERE server_id = $1".into(),
             "DELETE FROM service_instances WHERE server_id = $1".into(),
-            "DELETE FROM object_store_members WHERE server_id = $1".into(),
             "DELETE FROM file_uploads WHERE server_id = $1".into(),
             "DELETE FROM file_grants WHERE server_id = $1".into(),
             "DELETE FROM file_roots WHERE server_id = $1".into(),

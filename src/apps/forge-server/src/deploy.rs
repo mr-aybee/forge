@@ -276,6 +276,7 @@ impl DeployService {
             version: 0,
             source: String::new(),
             secrets_changed_at: None,
+            adopted_from: None,
         });
         let artifact = doc.spec.artifact.resolve(doc.spec.runtime).map_err(|e| DomainError::Invalid(e.to_string()))?;
         let policy = doc.policy().map_err(|e| DomainError::Invalid(e.to_string()))?;
@@ -558,6 +559,14 @@ impl DeployService {
         let app = &prepared.app;
         if self.deploys.active_deployment(app.id).await?.is_some() {
             return Err(DomainError::Conflict("the service already has a deployment running".into()));
+        }
+
+        // A rollout runs side-by-side slots; the adopted container would
+        // stay behind them (D-180).
+        if app.adopted_from.is_some() {
+            return Err(DomainError::Conflict(
+                "this service still runs in the container it was adopted from; deploy it in place once first".into(),
+            ));
         }
 
         let now = self.clock.now();

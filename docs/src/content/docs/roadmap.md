@@ -17,8 +17,8 @@ description: What is planned next.
 - **Windows workload accounts:** run what Forge installs on a Windows node
   under an account you choose instead of SYSTEM: a per-service virtual
   account by default, Local Service, Network Service or a user from the
-  credential vault, as a node default with a per-app override. Object stores
-  first, then package services such as PostgreSQL, then native apps on
+  credential vault, as a node default with a per-app override. Package services such as PostgreSQL
+  first, then native apps on
   Windows (D-081).
 - **Monitoring:** stored, long-term node metrics and service metrics
   with dashboards. Live CPU, memory, disk and network charts per node exist

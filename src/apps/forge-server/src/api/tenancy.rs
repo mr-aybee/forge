@@ -230,7 +230,7 @@ pub async fn rename_environment(
 }
 
 /// `DELETE /environments/{id}`: remove an empty environment (409 while
-/// services or stacks are still in it, or it owns an object store).
+/// services or stacks are still in it).
 pub async fn delete_environment(
     State(state): State<AppState>,
     caller: Caller,

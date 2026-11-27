@@ -10,7 +10,6 @@
 mod alerts;
 mod approvals;
 mod audit;
-mod bucket_grants;
 mod certificates;
 mod cluster_profiles;
 mod clusters;
@@ -25,8 +24,6 @@ mod installations;
 mod jobs;
 mod log_keys;
 mod notifications;
-mod object_store_iam;
-mod object_stores;
 mod observations;
 mod passkeys;
 mod permissions;
@@ -148,6 +145,25 @@ impl Store {
     pub async fn open_sqlite(path: &std::path::Path) -> Result<Self, DomainError> {
         let url = format!("sqlite:{}?mode=rwc", path.display().to_string().replace('\\', "/"));
         Self::connect(&url).await
+    }
+
+    /// Tests of upgrade paths only: opens a SQLite database file and applies
+    /// the migrations up to and including `version`, so rows can be seeded
+    /// at an older schema before [`Self::open_sqlite`] applies the rest.
+    #[doc(hidden)]
+    pub async fn open_sqlite_until(path: &std::path::Path, version: i64) -> Result<Self, DomainError> {
+        DRIVERS.call_once(install_default_drivers);
+        let url = format!("sqlite:{}?mode=rwc", path.display().to_string().replace('\\', "/"));
+        let pool = AnyPoolOptions::new().max_connections(1).connect(&url).await.map_err(DomainError::internal)?;
+        let older = sqlx::migrate::Migrator {
+            migrations: MIGRATOR.migrations.iter().filter(|m| m.version <= version).cloned().collect::<Vec<_>>().into(),
+            ignore_missing: MIGRATOR.ignore_missing,
+            locking: MIGRATOR.locking,
+            no_tx: MIGRATOR.no_tx,
+        };
+        older.run(&pool).await.map_err(DomainError::internal)?;
+
+        Ok(Self { pool, observation_writes: std::sync::Arc::default() })
     }
 
     async fn migrate(&self) -> Result<(), DomainError> {

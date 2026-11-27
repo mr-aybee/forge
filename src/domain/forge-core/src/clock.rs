@@ -9,8 +9,7 @@ use serde::{Deserialize, Serialize};
 /// A real timestamp, so every expiry comparison keeps working; small enough
 /// for every `BIGINT` column, for JavaScript numbers and for saturating
 /// deadline arithmetic. Used by SFTP grants, tunnels and tunnel grants, each
-/// behind its own `allow_never_expiry` setting, and by bucket grants, which
-/// have no end unless one is given (D-108).
+/// behind its own `allow_never_expiry` setting.
 pub const NEVER_EXPIRES: Timestamp = Timestamp(253_402_300_799_999);
 
 /// Milliseconds since the Unix epoch (UTC). Stored as `BIGINT` everywhere.

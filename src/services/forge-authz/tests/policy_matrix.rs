@@ -246,58 +246,6 @@ fn cluster_scope_applies_through_second_parent() {
 }
 
 #[test]
-fn object_storage_roles_and_mfa() {
-    let engine = PolicyEngine::new().unwrap();
-    let srv = server_in("a", "e1");
-    let (op, dev, auditor) = (UserId::new(), UserId::new(), UserId::new());
-    bind(&engine, op, Role::Operator, workspace("a"));
-    bind(&engine, dev, Role::Developer, workspace("a"));
-    bind(&engine, auditor, Role::Auditor, workspace("a"));
-
-    // Managing a store runs as root on the node: MFA required.
-    assert!(!allowed(&engine, op, Action::StorageManage, &srv, false));
-    assert!(allowed(&engine, op, Action::StorageManage, &srv, true));
-    assert!(!allowed(&engine, dev, Action::StorageManage, &srv, true));
-
-    // Object data: operators and developers, no MFA.
-    assert!(allowed(&engine, op, Action::StorageData, &srv, false));
-    assert!(allowed(&engine, dev, Action::StorageData, &srv, false));
-    assert!(!allowed(&engine, auditor, Action::StorageData, &srv, true));
-}
-
-/// D-107: `storage.data` on an environment is how a store owned by that
-/// environment is reached. It follows the role groups (no new grant), stays
-/// inside the environment, and `storage.manage` is never evaluated there.
-#[test]
-fn storage_data_on_a_environment_stays_in_that_environment() {
-    let engine = PolicyEngine::new().unwrap();
-    let ns = |name: &str| ResourceRef::new(EntityRef::new(EntityKind::Environment, name), vec![workspace("a")]);
-    let (dev, op, auditor, customer, dba) = (UserId::new(), UserId::new(), UserId::new(), UserId::new(), UserId::new());
-    bind(&engine, dev, Role::Developer, EntityRef::new(EntityKind::Environment, "prod"));
-    bind(&engine, op, Role::Operator, EntityRef::new(EntityKind::Environment, "prod"));
-    bind(&engine, auditor, Role::Auditor, EntityRef::new(EntityKind::Environment, "prod"));
-    bind(&engine, customer, Role::Customer, EntityRef::new(EntityKind::Environment, "prod"));
-    bind(&engine, dba, Role::Dba, EntityRef::new(EntityKind::Environment, "prod"));
-
-    for user in [dev, op] {
-        assert!(allowed(&engine, user, Action::StorageData, &ns("prod"), false));
-        assert!(!allowed(&engine, user, Action::StorageData, &ns("dev"), true), "another environment");
-
-        // An environment role says nothing about the workspace's shared stores.
-        let ws = ResourceRef::new(workspace("a"), vec![]);
-        assert!(!allowed(&engine, user, Action::StorageData, &ws, true));
-
-        // Managing a store is never decided on an environment.
-        assert!(!allowed(&engine, user, Action::StorageManage, &ns("prod"), true));
-    }
-
-    for user in [auditor, customer, dba] {
-        assert!(allowed(&engine, user, Action::View, &ns("prod"), false));
-        assert!(!allowed(&engine, user, Action::StorageData, &ns("prod"), true), "read-only roles see, not browse");
-    }
-}
-
-#[test]
 fn node_onboarding_requires_mfa() {
     let engine = PolicyEngine::new().unwrap();
     let user = UserId::new();

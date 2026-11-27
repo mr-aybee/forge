@@ -88,7 +88,7 @@ export function ServiceEditor({ value, onChange, mode, basics, basicsState, fact
       case "files":
         return { node: <FilesSection value={value} set={set} /> };
       case "storage":
-        return { node: <StorageSection home={facts.home} envFile={facts.envFile} serviceId={serviceId} /> };
+        return { node: <StorageSection home={facts.home} envFile={facts.envFile} /> };
       case "volumes":
         return { node: <VolumesSection value={value} set={set} home={facts.home} /> };
       case "health":

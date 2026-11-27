@@ -2793,6 +2793,8 @@ restart each node may get its policy once more.
 
 ## D-106 Buckets attached to applications: a tagged vault item, injected at deploy
 
+*Withdrawn by D-180: Object Storage was removed; a running container is adopted as a service instead.*
+
 **Context.** Object stores, buckets and access keys existed on their own.
 Giving an application a bucket meant issuing a key, revealing its secret and
 pasting endpoint, bucket and both key halves into the application's
@@ -2846,6 +2848,8 @@ bucket of a store to a service of the owning environment needs `deploy`
 only. Access for people per bucket is still open.*
 
 ## D-107 An object store can belong to an environment
+
+*Withdrawn by D-180: Object Storage was removed; a running container is adopted as a service instead.*
 
 **Context.** Every object store was a platform resource: a managed store was
 authorized on its member node, a connected store on the workspace. A team
@@ -2938,6 +2942,8 @@ open: access for people per bucket.
 *Followed by D-108: bucket grants give one person access to one bucket.*
 
 ## D-108 Bucket grants: one person, one bucket, through Forge
+
+*Withdrawn by D-180: Object Storage was removed; a running container is adopted as a service instead.*
 
 **Context.** Access to an object store was all or nothing. A role on the
 store's node or workspace, or on the owning environment (D-107), reaches
@@ -5882,6 +5888,8 @@ through the allowlisted custom file.
 
 ## D-170 Object stores: Docker settings, discovery and adoption of any RustFS container, keys kept in RustFS IAM
 
+*Withdrawn by D-180: Object Storage was removed; a running container is adopted as a service instead.*
+
 **Context.** Docker stores ran with fixed container settings, so operators
 could not set limits, a restart policy, named volumes or engine variables, and
 could not change release, ports or region after install. Only the App Store
@@ -6077,3 +6085,16 @@ hand.
 
 **Trade-offs.** Values are limited to 4096 bytes (the vault's limit) and must be text. References are by name, so renaming an item breaks them until the service is changed (the service is marked). A deploy on one node clears the mark for the whole service. Anyone who may deploy a service can redeploy the files an administrator attached.
 
+## D-180 Object Storage removed; any running container can be adopted as a service
+
+**Decision.** Forge no longer installs, connects or manages object stores, buckets, access keys or bucket grants (`plans/service-orchestration.md` step 6). D-106, D-107, D-108 and D-170 are withdrawn. In their place, any running container can be adopted as a `container` Service.
+
+- **Adoption.** `POST /api/v1/services/adopt {environment_id, server_id, container, name?}`, `forge services adopt --environment <env> --node <node> <container>` and **Adopt as service** on the Containers page. The server sends one signed `inspect` with environment values (`forge_server::service_adopt`) and maps it onto the ordinary service input: image, environment (names containing KEY, SECRET, PASSWORD, PASSWD, TOKEN or CREDENTIAL are sealed as secret variables; `PATH` is skipped), published ports, bind mounts and named volumes (`/var/lib/docker/volumes/<name>/_data`), restart policy, user, extra networks and non-Docker labels. Host-network containers and `forge-app-*` containers are refused. Migration 0009 adds `services.adopted_from` (the container name) and the instance is recorded `deployed` without any command that changes the container.
+- **Authorization.** `deploy` on the environment, `server.manage` and `container.inspect_env` (MFA, because environment values are read) on the node; denials and the adoption are audited (`service.adopt`).
+- **Until the first deploy.** `AppSpec.adopted_container` carries the name to the node: start, stop, restart, status, logs and remove act on that container. A deploy stops it, creates and starts `forge-app-<env>-<svc>`, then removes it; if the new container fails, the old one is started again. A retried deploy finds it gone and continues. A successful deploy clears `adopted_from`. Only agents that report the fact `adopted_containers: true` get the field (older ones refuse unknown fields); adopting through an older agent is refused with 409 `agent_update_required`. The reconciler leaves an adopted service alone (its container has no `forge.app` label and would read as missing), and a side-by-side rollout is refused until it has been deployed in place once.
+- **Upgrade path.** Migration 0009 copies every managed Docker object store's container (one row per member node, with the store's environment, slug, settings, console port and credential id) into `object_store_adoptions`, then drops `bucket_grants`, `object_store_keys`, `object_store_settings`, `object_store_members` and `object_stores`. A server task (`forge_server::store_upgrade`, every 60 s until nothing is pending) adopts each container through the same path once its node is online, as the store's creator, audited as `system:upgrade`: in the store's environment or the workspace's oldest; named after the slug (`-2`, `-3`… on a clash); `console` link from the store's console port. The store's root credential stays an ordinary vault item and gains a link to the service. A container that cannot be represented is left running and the skip is audited (`service.adopt.skipped`). Native and connected stores are not adopted: native ones keep running unmanaged; connected-store records are dropped. Their vault items stay.
+- **Wire.** The agent's object store command (proto tag 21) and helper op are removed; the tag is never reused. `storage.manage` and `storage.data` join `RETIRED_ACTIONS` so stored profiles still load. `storage_allow_loopback` in `forge.toml` is accepted and ignored with a warning. The `objstore-rustfs` recipes are removed; the RustFS guide shows it as a services file, and step 4 adds it back as an App Store package with a container template.
+
+**Why.** Object Storage was a second orchestrator for one product. Adoption keeps existing stores running and manageable as ordinary services, and works for any container.
+
+**Trade-offs.** Buckets, access keys, grants and bucket attachment are no longer managed in Forge (RustFS's own IAM still holds the keys). The data-path ownership marker and `require_mount` go; deleting a Service never deletes volumes or host paths instead. Command, entrypoint, capabilities, devices and health checks of an adopted container are not read: an operator adds them before the first deploy if the image needs them. A host-network store stays unmanaged.

@@ -350,7 +350,7 @@ export function DeleteEnvironmentConfirm({ env, serviceCount, onClose, onDeleted
             onClose();
             onDeleted?.();
           },
-          onError: (e) => setErr(conflict(e) ? "It still has services or stacks, or owns an object store. Remove the services and stacks, and change the environment of its object stores first." : errorText(e)),
+          onError: (e) => setErr(conflict(e) ? "It still has services or stacks. Remove them first." : errorText(e)),
         })
       }
       body={

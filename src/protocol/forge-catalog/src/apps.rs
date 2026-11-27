@@ -180,6 +180,13 @@ pub struct AppSpec {
     /// `service_files` fact, because older ones refuse unknown fields.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<crate::secret_files::MountedFile>,
+    /// Container: the running container this service was adopted from
+    /// (D-180). Until the first deploy, start, stop, restart, status and
+    /// logs act on it; a deploy creates the normal container and then
+    /// removes it. Sent only to agents that report the `adopted_containers`
+    /// fact, because older ones refuse unknown fields.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub adopted_container: String,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if passes a reference
@@ -234,6 +241,7 @@ impl std::fmt::Debug for AppSpec {
             init,
             networks,
             files,
+            adopted_container,
         } = self;
         let env: Vec<String> = env.iter().map(|(k, _)| format!("{k}=***")).collect();
 
@@ -282,8 +290,18 @@ impl std::fmt::Debug for AppSpec {
             .field("networks", networks)
             // `MountedFile`'s own Debug hides the values.
             .field("files", files)
+            .field("adopted_container", adopted_container)
             .finish()
     }
+}
+
+/// A Docker container name: `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`.
+#[must_use]
+pub fn valid_container_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && s.as_bytes()[0].is_ascii_alphanumeric()
+        && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
 }
 
 /// An App Store runtime a service needs.
@@ -504,6 +522,12 @@ impl AppSpec {
 
         if !matches!(self.slot.as_str(), "" | "a" | "b") {
             return Err("slot must be a or b".into());
+        }
+
+        if !self.adopted_container.is_empty()
+            && (self.runtime != Runtime::Container || !valid_container_name(&self.adopted_container))
+        {
+            return Err("adopted_container must be a container name of a container service".into());
         }
 
         if let Some(net) = &self.mesh_network {
@@ -749,6 +773,13 @@ impl AppSpec {
     #[must_use]
     pub fn secrets_dir(&self) -> String {
         crate::secret_files::host_dir(&self.environment, &self.name, &self.slot_suffix())
+    }
+
+    /// The container that runs this service now: the adopted one until the
+    /// first deploy (D-180), otherwise [`Self::unit`].
+    #[must_use]
+    pub fn current_container(&self) -> String {
+        if self.adopted_container.is_empty() { self.unit() } else { self.adopted_container.clone() }
     }
 
     /// systemd unit (without suffix) or container name; slots add `--a`/`--b`.
@@ -1029,6 +1060,7 @@ mod tests {
             init: false,
             networks: vec![],
             files: vec![],
+            adopted_container: String::new(),
             log_max_mb: 0,
         }
     }

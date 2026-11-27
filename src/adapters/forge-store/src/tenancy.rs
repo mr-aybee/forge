@@ -238,21 +238,6 @@ impl TenancyRepository for Store {
             .await
             .map_err(db_err)?;
 
-        // A store must never point at an environment that is gone (D-107). The
-        // check runs inside this transaction, after its first write, so on
-        // SQLite no owner can be assigned between the check and the delete.
-        let owned = sqlx::query("SELECT COUNT(*) AS n FROM object_stores WHERE environment_id = $1")
-            .bind(id.to_string())
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(db_err)?;
-        let owned = int(&owned, "n")?;
-        if owned > 0 {
-            return Err(DomainError::Conflict(format!(
-                "this environment owns {owned} object store(s); assign them to another environment or clear their owner first"
-            )));
-        }
-
         let r = sqlx::query("DELETE FROM environments WHERE id = $1")
             .bind(id.to_string())
             .execute(&mut *tx)

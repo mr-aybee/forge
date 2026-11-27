@@ -39,7 +39,7 @@ use crate::state::AppState;
 const MAX_PASSWORD: usize = 4096;
 
 fn aad(id: VaultItemId) -> String {
-    format!("vault:{id}")
+    crate::jobs::vault_aad(id)
 }
 
 /// The vault is for platform administrators only.

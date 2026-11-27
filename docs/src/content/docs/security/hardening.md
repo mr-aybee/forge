@@ -316,12 +316,3 @@ process.
   sign-in, the role or grant and the expiry; a failed check ends every
   connection within 30 seconds. A server restart records open tunnels as
   closed. See [Port tunnels](/docs/concepts/port-tunnels/).
-
-## Object storage
-
-- **Object names cannot climb out.** Forge refuses object names and keys with
-  `.` or `..` segments, and checks that the request path was not rewritten,
-  so a name cannot reach the storage server's admin API.
-- **Downloads are sandboxed.** Object downloads carry
-  `Content-Security-Policy: sandbox; default-src 'none'`, so a file that a
-  browser renders cannot run scripts. See [Object storage](/docs/concepts/object-storage/).

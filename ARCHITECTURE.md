@@ -25,7 +25,6 @@ Library crates:
 | `forge-core` | Domain types, typed ids, access vocabulary, **ports** (traits) |
 | `forge-authz` | Cedar schema, role templates, guardrails, `CedarAuthorizer` |
 | `forge-store` | `sqlx` repositories + migrations (SQLite default, PostgreSQL feature) |
-| `forge-s3` | S3 client adapter (SigV4 via `ring`, streamed bodies) for object store buckets and objects |
 | `forge-jobs` | Durable job engine: leases, fencing tokens, idempotency, step state, retry with backoff |
 | `forge-audit` | Append-only, hash-chained, signed audit log + verifier |
 | `forge-health` | Observations: validation, freshness on the server clock, change detection and the ordered transition feed (D-085) |
@@ -185,12 +184,7 @@ phases add adapters (PostgreSQL, OpenBao, KMS) without touching services.
    service placed there. See D-142.
 8. **Agent ↔ helper.** The privileged helper accepts only a fixed enum of
    operations and validates every argument.
-9. **Control plane → object stores.** For bucket and object operations the
-   control plane calls the store's S3 endpoint directly: a managed RustFS
-   member on the private network or a connected cloud service. The key is
-   unsealed from the vault per request; transfers stream through the
-   control plane with a concurrency cap.
-10. **Control plane → dockerd (opt-in, per node).** When a node's Docker
+9. **Control plane → dockerd (opt-in, per node).** When a node's Docker
    Engine API endpoint is enabled, dockerd also listens on TCP (default
    `2376`) with `--tlsverify`, and the control plane dials it directly. Each
    node has its own Docker CA (key sealed with the master key); dockerd's
@@ -249,7 +243,7 @@ single baseline): `workspaces`, `tenants`, `clusters`, `projects`,
 `environments`, `environment_scopes` (internal: per-cluster uniqueness scope
 for environment names), `services`, `users`, `role_bindings`, `sessions`,
 `oauth_codes`, `servers`, `enrollment_tokens`, `revoked_certificates`, `jobs`,
-`job_steps`, `audit_log`, `plugins`, and the feature tables (files, storage,
+`job_steps`, `audit_log`, `plugins`, and the feature tables (files,
 tunnels and tunnel grants, passkeys, MCP connectors (`oauth_clients`,
 `agent_connections`) and others). Every later schema change is a new
 migration file after the baseline.
@@ -331,19 +325,18 @@ at the first incomplete step. Steps must be idempotent.
 SHA-256(canonical JSON)`, signed with the control plane's Ed25519 audit key. A
 `UNIQUE(seq)` constraint keeps the chain linear. `verify` recomputes the chain.
 
-**Object storage.** Installing a managed store seals a generated root key in
-the vault and submits a `storage.action` job holding only ids. The job
-unseals the key into a signed `StorageAction` command; the root helper
-validates the closed `StoreOp` and runs the provider script (checksum-verified
-release or pinned image, per-instance service, missing-mount check) and
-reports state, release and capacity. A distributed (HA) store runs one such
-job per member with the identical drive layout; the store status aggregates
-the members. Connected stores skip the node: Forge
-checks the key with a ListBuckets (or one bucket listing) and keeps it in the
-vault. Bucket and object requests are authorized at the API on the store's node
-or workspace, else on the owning environment (D-107), else by a live bucket
-grant for that one bucket (D-108: table `bucket_grants`, use case
-`BucketGrants`), which is read on every request and never issues an S3 key.
+**Container adoption.** `POST /services/adopt` sends one signed container
+`inspect` with environment values and maps the answer onto the ordinary
+service input (`service_adopt`): image, sealed secret variables, ports,
+mounts, restart policy. The service records `adopted_from`; its instance is
+`deployed` without any change on the node. Until the first deploy,
+`AppSpec.adopted_container` makes the node act on that container; the deploy
+stops it, starts `forge-app-<env>-<svc>` and removes it (or starts it again if
+the new one fails), and the server clears `adopted_from`. Only agents with the
+`adopted_containers` fact get the field. The reconciler skips adopted
+services. On upgrade, migration 0009 keeps each managed object store's
+container in `object_store_adoptions` and the `store_upgrade` task adopts it
+this way once its node is online (D-180).
 
 **File explorer.** API handlers pass every request to `FileService`
 (`forge-files`), which resolves the root id to a `RootSpec` (whole node,

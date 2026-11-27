@@ -623,6 +623,7 @@ fn new_service(env: &Environment, name: &str, by: &Principal, now: forge_core::T
         version: 0,
         source: String::new(),
         secrets_changed_at: None,
+        adopted_from: None,
     }
 }
 

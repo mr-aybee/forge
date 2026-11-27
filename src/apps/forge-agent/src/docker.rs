@@ -390,6 +390,7 @@ fn inspect_view(v: &Value) -> Value {
         "mesh_ip": mesh_ip(v.pointer("/NetworkSettings/Networks")),
         "env_keys": env_keys,
         "labels": v.pointer("/Config/Labels"),
+        "user": v.pointer("/Config/User"),
         "created": v["Created"],
     })
 }

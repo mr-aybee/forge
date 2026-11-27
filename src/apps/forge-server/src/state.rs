@@ -139,12 +139,10 @@ pub struct Services {
     /// Ingress endpoint checks: static roots and basic-auth users (D-169).
     pub endpoints: Arc<crate::endpoints::EndpointService>,
     /// RustFS containers on nodes, settings after install, IAM (D-170).
-    pub objstore_discovery: Arc<crate::objstore::discovery::Discovery>,
-    pub objstore_settings: Arc<crate::objstore::settings::StoreSettingsService>,
-    pub objstore_iam: Arc<crate::objstore::iam::StoreIamService>,
-    pub objstore_adopt: Arc<crate::objstore::adopt::AdoptService>,
-    /// Bucket grants: one person's access to one bucket of a store (D-108).
-    pub bucket_grants: crate::bucket_grants::BucketGrants,
+    /// Adopting a running container as a service (D-180).
+    pub service_adopt: Arc<crate::service_adopt::AdoptService>,
+    /// Adopts the containers of removed object stores (D-180).
+    pub store_upgrade: Arc<crate::store_upgrade::StoreUpgrade>,
     /// Vault-backed header values for health checks, handed to nodes (D-111).
     pub health_secrets: crate::health_secrets::HealthSecrets,
     /// Alarm notifications: channels, policies and delivery (D-110), and
@@ -397,7 +395,6 @@ impl Services {
             installations: Arc::new(store.clone()),
             files: Arc::new(store.clone()),
             vault: Arc::new(store.clone()),
-            stores: Arc::new(store.clone()),
             audit: audit.clone(),
             envelope: envelope.clone(),
             clock: clock.clone(),
@@ -417,23 +414,24 @@ impl Services {
             rpc: node_rpc.clone(),
             servers: Arc::new(store.clone()),
         });
-        let objstore_discovery = Arc::new(crate::objstore::discovery::Discovery {
+        let service_adopt = Arc::new(crate::service_adopt::AdoptService {
             rpc: node_rpc.clone(),
-            stores: Arc::new(store.clone()),
-            settings: Arc::new(store.clone()),
-        });
-        let objstore_settings = Arc::new(crate::objstore::settings::StoreSettingsService {
-            stores: Arc::new(store.clone()),
-            settings: Arc::new(store.clone()),
+            services: Arc::new(store.clone()),
+            servers: Arc::new(store.clone()),
+            tenancy: Arc::new(store.clone()),
+            facts: Arc::new(store.clone()),
+            envelope: envelope.clone(),
             clock: clock.clone(),
         });
-        let objstore_adopt = Arc::new(crate::objstore::adopt::AdoptService {
-            stores: Arc::new(store.clone()),
-            settings: Arc::new(store.clone()),
-            clock: clock.clone(),
+        let store_upgrade = Arc::new(crate::store_upgrade::StoreUpgrade {
+            pending: Arc::new(store.clone()),
+            adopt: service_adopt.clone(),
+            services: Arc::new(store.clone()),
+            servers: Arc::new(store.clone()),
+            tenancy: Arc::new(store.clone()),
+            vault: Arc::new(store.clone()),
+            audit: audit.clone(),
         });
-        let objstore_iam =
-            Arc::new(crate::objstore::iam::StoreIamService { keys: Arc::new(store.clone()), clock: clock.clone() });
         let webhooks = Arc::new(crate::webhooks::WebhookService {
             repo: Arc::new(store.clone()),
             jobs: Arc::new(store.clone()),
@@ -576,18 +574,6 @@ impl Services {
             installations: Arc::new(store.clone()),
             clock: clock.clone(),
         }));
-        registry.register(Arc::new(crate::jobs::StorageJob {
-            hub: hub.clone(),
-            signer: signer.clone(),
-            servers: Arc::new(store.clone()),
-            stores: Arc::new(store.clone()),
-            settings: Arc::new(store.clone()),
-            vault: Arc::new(store.clone()),
-            installations: Arc::new(store.clone()),
-            audit: audit.clone(),
-            envelope: envelope.clone(),
-            clock: clock.clone(),
-        }));
         let ssh: Arc<dyn forge_core::remote::RemoteConnector> = Arc::new(forge_ssh::SshConnector::default());
         registry.register(Arc::new(NodeBootstrapJob {
             connector: ssh.clone(),
@@ -702,13 +688,6 @@ impl Services {
             files
         });
 
-        let bucket_grants = crate::bucket_grants::BucketGrants::new(
-            Arc::new(store.clone()),
-            Arc::new(store.clone()),
-            Arc::new(store.clone()),
-            clock.clone(),
-        );
-
         let health_secrets = crate::health_secrets::HealthSecrets::new(crate::health_secrets::Ports {
             apps: Arc::new(store.clone()),
             authority: Arc::new(store.clone()),
@@ -822,17 +801,14 @@ impl Services {
             swarm_stacks,
             docker_resources,
             endpoints,
-            objstore_discovery,
-            objstore_settings,
-            objstore_iam,
-            objstore_adopt,
+            store_upgrade,
+            service_adopt,
             registries,
             webhooks,
             access_lists,
             limiter: crate::net_access::Limiter::default(),
             downloads: Arc::new(tokio::sync::Semaphore::new(16)),
             enroll_attempts: crate::rate_limit::Windows::default(),
-            bucket_grants,
             health_secrets,
             notifier,
             sftp_host_key,

@@ -82,25 +82,6 @@
     "PUT /api/v1/environments/{id}/cluster": "forge environments move",
     "GET /api/v1/oauth/clients": "forge connectors clients",
     "POST /api/v1/oauth/clients/{id}/revoke": "forge connectors revoke-client",
-    "GET /api/v1/object-stores": "forge storage list",
-    "POST /api/v1/object-stores": "forge storage create",
-    "POST /api/v1/object-stores/adopt": "forge storage adopt",
-    "POST /api/v1/object-stores/connect": "forge storage connect",
-    "GET /api/v1/object-stores/{id}": "forge storage get",
-    "POST /api/v1/object-stores/{id}/actions": "forge storage action",
-    "GET /api/v1/object-stores/{id}/buckets": "forge storage buckets",
-    "POST /api/v1/object-stores/{id}/buckets": "forge storage bucket-create",
-    "DELETE /api/v1/object-stores/{id}/buckets/{bucket}": "forge storage bucket-delete",
-    "GET /api/v1/object-stores/{id}/buckets/{bucket}/objects": "forge storage objects",
-    "GET /api/v1/object-stores/{id}/keys": "forge storage keys",
-    "POST /api/v1/object-stores/{id}/keys": "forge storage key-create",
-    "DELETE /api/v1/object-stores/{id}/keys/{access_key}": "forge storage key-delete",
-    "POST /api/v1/object-stores/{id}/keys/{access_key}/rotate": "forge storage key-rotate",
-    "POST /api/v1/object-stores/{id}/test": "forge storage test",
-    "GET /api/v1/object-stores/grants/mine": "forge storage my-grants",
-    "GET /api/v1/object-stores/{id}/grants": "forge storage grants",
-    "POST /api/v1/object-stores/{id}/grants": "forge storage grant-create",
-    "DELETE /api/v1/object-stores/{id}/grants/{grant_id}": "forge storage grant-revoke",
     "GET /api/v1/package-releases": "forge packages releases",
     "GET /api/v1/package-updates": "forge packages updates",
     "POST /api/v1/package-updates/check": "forge packages check",
@@ -279,6 +260,7 @@
     "PUT /api/v1/services/{id}/instances": "forge services place",
     "POST /api/v1/services/plan": "forge services plan",
     "POST /api/v1/services/apply": "forge services apply",
+    "POST /api/v1/services/adopt": "forge services adopt",
     "POST /api/v1/services/{id}/scale": "forge services scale",
     "GET /api/v1/services/{id}/export": "forge services export",
     "GET /api/v1/environments/{id}/services/export": "forge services export --environment",
@@ -289,13 +271,6 @@
     "GET /api/v1/projects/{id}": "forge projects show",
     "PUT /api/v1/projects/{id}": "forge projects update",
     "DELETE /api/v1/projects/{id}": "forge projects delete",
-    "GET /api/v1/services/{id}/storage": "forge services storage list",
-    "POST /api/v1/services/{id}/storage": "forge services storage attach",
-    "DELETE /api/v1/services/{id}/storage/{access_key}": "forge services storage detach",
-    "PUT /api/v1/object-stores/{id}/owner": "forge storage owner",
-    "GET /api/v1/object-stores/{id}/buckets/{bucket}/object": "forge storage object-download",
-    "PUT /api/v1/object-stores/{id}/buckets/{bucket}/object": "forge storage object-upload",
-    "DELETE /api/v1/object-stores/{id}/buckets/{bucket}/object": "forge storage object-delete",
     "GET /api/v1/clusters/{id}/profile": "forge clusters ingress get",
     "PUT /api/v1/clusters/{id}/profile": "forge clusters ingress set",
     "POST /api/v1/clusters/{id}/profile/apply": "forge clusters ingress apply",
@@ -366,14 +341,6 @@
     "GET /api/v1/clusters/{id}/swarm/task-stats": "forge swarm stats"
   },
   "api": {
-    "GET /api/v1/object-stores/discover": "Object Storage → Found on nodes; `forge api call` for scripts",
-    "GET /api/v1/object-stores/rustfs-env": "the install wizard's variable list; `forge api call` for scripts",
-    "GET /api/v1/object-stores/{id}/settings": "Object Storage → store → Settings; `forge api call` for scripts",
-    "PUT /api/v1/object-stores/{id}/settings": "Object Storage → store → Settings; `forge api call` for scripts",
-    "GET /api/v1/object-stores/{id}/iam": "Object Storage → store → Access keys; `forge api call` for scripts",
-    "POST /api/v1/object-stores/{id}/iam/keys": "Object Storage → store → Access keys (Create key); `forge api call` for scripts",
-    "PUT /api/v1/object-stores/{id}/iam/keys/{access_key}": "Object Storage → store → Access keys (Edit grants); `forge api call` for scripts",
-    "POST /api/v1/object-stores/{id}/iam/reconcile": "Object Storage → store → Access keys (Reconcile); `forge api call` for scripts",
     "POST /api/v1/sites/{id}/cache/clear": "the endpoint editor (Performance → Clear cache); `forge api call` for scripts",
     "GET /api/v1/sites/{id}/logs": "the endpoint editor (Logs); `forge api call` for scripts",
     "PUT /api/v1/server/allowed-hosts": "Settings → Server, or `forge-server allowed-hosts set` on the host; `forge api call` for scripts",
@@ -492,21 +459,9 @@
       "user_id": "the <user> argument",
       "scope": "the <scope> argument"
     },
-    "GET /api/v1/object-stores/{id}/buckets/{bucket}/object": {
-      "key": "the <key> argument"
-    },
-    "PUT /api/v1/object-stores/{id}/buckets/{bucket}/object": {
-      "key": "the <key> argument"
-    },
-    "DELETE /api/v1/object-stores/{id}/buckets/{bucket}/object": {
-      "key": "the <key> argument"
-    },
     "GET /api/v1/services": {
       "environment_id": "--environment",
       "cluster_id": "--cluster"
-    },
-    "GET /api/v1/object-stores": {
-      "environment_id": "the console's per-environment list (D-107); `forge -o json storage list` prints every store with its `environment_id`"
     },
     "GET /api/v1/service-ports": {
       "kind": "set from --app, --stack or --db",

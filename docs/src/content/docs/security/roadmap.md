@@ -49,7 +49,6 @@ fix. It stays on this page so you can judge it for your own machines.
 | [setuid bit kept when a file is overwritten](#setuid-bit-kept-when-a-file-is-overwritten) | File explorer | Fixed |
 | [Enrolment token visible in the process list](#enrolment-token-visible-in-the-process-list) | Agents | Fixed |
 | [SFTP sessions are not limited](#sftp-sessions-are-not-limited) | SFTP | Fixed |
-| [Object names could reach the storage admin API](#object-names-could-reach-the-storage-admin-api) | Object storage | Fixed |
 | [An update re-allowed commands the operator removed](#an-update-re-allowed-commands-the-operator-removed) | Agents | Fixed |
 | [Login challenge against brute force](#login-challenge-against-brute-force) | Identity | Fixed |
 | [MFA as the operator's choice](#mfa-as-the-operators-choice) | Identity | Fixed |
@@ -421,20 +420,6 @@ and never puts it on a command line.
 **What we will do:** Limit sessions per user and in total.
 
 **Status:** Fixed. A login reserves its session slot as it succeeds, and each extra channel takes another slot.
-## Object names could reach the storage admin API
-
-**What could happen:** An object name containing `../` was resolved as part of
-the URL. The request then reached the storage server's admin API, signed with
-the root credentials Forge uses.
-
-**Why it matters:** A user with access to one bucket could call admin
-functions on the whole storage server.
-
-**What we will do:** Done. Forge refuses names with `.` or `..` segments and
-sandboxes downloads. See [What Forge already enforces](/docs/security/hardening/#object-storage).
-
-**Status:** Fixed.
-
 ## Login challenge against brute force
 
 **What could happen:** An attacker spreads password guesses over many

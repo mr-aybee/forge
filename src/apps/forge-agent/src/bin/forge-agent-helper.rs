@@ -214,7 +214,6 @@ async fn handle(
                 (r, _) => data(r),
             }
         }
-        HelperRequest::Storage { storage } => store_request(&storage, progress.as_ref()).await,
         HelperRequest::Files { files } => data(forge_agent::files::run_async(files).await),
         HelperRequest::UpdateAgent { update } => {
             let dir = agent_dir();
@@ -311,13 +310,6 @@ async fn package_request(
         Ok(v) => forge_agent::recipes::run(&v, progress).await,
         Err(e) => HelperResponse::failed(e),
     }
-}
-
-async fn store_request(
-    op: &forge_catalog::storage::StoreOp,
-    progress: Option<&tokio::sync::mpsc::UnboundedSender<String>>,
-) -> HelperResponse {
-    forge_agent::recipes::run_store(op, progress).await
 }
 
 #[cfg(not(unix))]

@@ -52,7 +52,7 @@ const S: Record<SectionId, SectionMeta> = {
   security: { id: "security", label: "Security", icon: Shield, hint: "Root filesystem, Linux capabilities, devices and kernel parameters." },
   resources: { id: "resources", label: "Limits", icon: Cpu, hint: "Limits per node. Empty means no limit." },
   env: { id: "env", label: "Environment variables", icon: Variable, hint: "Written to the service's environment file (0600). Secrets are sealed and never shown again." },
-  storage: { id: "storage", label: "Storage", icon: HardDrive, hint: "Where the service keeps code and data on the node, and attached buckets." },
+  storage: { id: "storage", label: "Storage", icon: HardDrive, hint: "Where the service keeps code and data on the node." },
   volumes: { id: "volumes", label: "Storage", icon: HardDrive, hint: "Bind mounts and in-memory tmpfs mounts." },
   health: { id: "health", label: "Health checks", icon: Activity, hint: "How Forge and Docker decide that the service is healthy." },
   advanced: { id: "advanced", label: "Advanced", icon: Settings2, hint: "Rarely needed options." },

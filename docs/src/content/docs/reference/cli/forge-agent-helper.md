@@ -835,7 +835,6 @@ request and no shell. Every argument is validated before anything runs.
 | `dns` | `dns` | One PowerDNS operation |
 | `ingress` | `ingress` | One ingress operation |
 | `fabric` | `fabric` | One cluster-network operation |
-| `storage` | `storage` | One object-store operation |
 | `files` | `files` | One file explorer operation, confined to approved roots. On an app root it runs through [`file-worker`](#forge-agent-helper-file-worker) as the app's account |
 | `access` | `access` | One remote-access gateway operation |
 | `stack` | `stack` | One compose-stack operation |

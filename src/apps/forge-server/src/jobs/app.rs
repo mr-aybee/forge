@@ -91,6 +91,13 @@ pub fn build_spec(app: &Service, envelope: Option<&Envelope>) -> Result<AppSpec,
     v["name"] = json!(app.name);
     v["runtime"] = json!(app.runtime);
     v["env"] = Value::Array(env);
+
+    // An adopted service runs in its adopted container until the first
+    // deploy replaces it (D-180).
+    if let Some(c) = app.adopted_from.as_deref().filter(|c| !c.is_empty()) {
+        v["adopted_container"] = json!(c);
+    }
+
     let spec: AppSpec = serde_json::from_value(v).map_err(|e| format!("invalid service: {e}"))?;
     spec.validate()?;
 
@@ -176,9 +183,8 @@ pub struct AppJob {
     pub installations: Arc<dyn forge_core::ports::InstallationRepository>,
     /// Approved file roots per node (bind mounts may use them).
     pub files: Arc<dyn FileRepository>,
-    /// Buckets attached to the service: their keys and stores (D-106).
+    /// Credential vault items mounted as secret and config files (D-179).
     pub vault: Arc<dyn forge_core::ports::VaultRepository>,
-    pub stores: Arc<dyn forge_core::storage::ObjectStoreRepository>,
     /// Records the account a native app runs as after a deploy (D-081).
     pub audit: Arc<dyn forge_core::ports::AuditRecorder>,
     pub envelope: Envelope,
@@ -232,6 +238,25 @@ pub fn agent_takes_files(facts: Option<&Value>) -> Result<(), StepError> {
             .into(),
     ))
 }
+
+/// Whether the node's agent acts on an adopted container (D-180): only
+/// agents that report `adopted_containers: true`; older ones refuse the field.
+pub fn agent_takes_adopted(facts: Option<&Value>) -> Result<(), StepError> {
+    let Some(facts) = facts else {
+        return Err(retry(
+            "the node has not reported its facts yet, so Forge cannot tell whether its agent supports adopted containers; try again once the node is online",
+        ));
+    };
+
+    if facts.get(ADOPTED_FACT).and_then(Value::as_bool) == Some(true) {
+        return Ok(());
+    }
+
+    Err(StepError::Fatal("this node's agent is too old for adopted containers; update the agent first".into()))
+}
+
+/// Fact an agent reports when it understands adopted containers (D-180).
+pub const ADOPTED_FACT: &str = "adopted_containers";
 
 /// Whether a service wants the cluster container network: containers only,
 /// unless its spec sets `"mesh": false`.
@@ -379,19 +404,12 @@ impl AppJob {
     }
 
     /// The spec `app` runs with on a node, before any slot is applied:
-    /// secrets unsealed, setting references expanded and attached buckets'
-    /// variables added.
+    /// secrets unsealed, setting references expanded and secret files read.
     pub async fn resolved_spec(&self, app: &Service) -> Result<AppSpec, StepError> {
         let mut spec = build_spec(app, Some(&self.envelope)).map_err(StepError::Fatal)?;
         let settings = self.settings.all_settings().await.map_err(retry)?;
         expand_settings(&mut spec, &settings).map_err(StepError::Fatal)?;
 
-        // Attached buckets add their endpoint and key (D-106); a variable the
-        // service defines itself wins.
-        let attached = crate::app_storage::deploy_env(self.vault.as_ref(), self.stores.as_ref(), &self.envelope, app)
-            .await
-            .map_err(|e| StepError::Fatal(e.to_string()))?;
-        crate::app_storage::merge_env(&mut spec.env, attached);
         spec.files = self.secret_files(app).await?;
         spec.validate().map_err(StepError::Fatal)?;
 
@@ -420,7 +438,7 @@ impl AppJob {
             })?;
             let plain = self
                 .envelope
-                .open(&item.sealed, &crate::jobs::storage::vault_aad(item.id))
+                .open(&item.sealed, &crate::jobs::vault_aad(item.id))
                 .map_err(|_| StepError::Fatal(format!("cannot unseal the credential vault item `{}`", r.item)))?;
             let value = String::from_utf8(plain)
                 .map_err(|_| StepError::Fatal(format!("the credential vault item `{}` is not text", r.item)))?;
@@ -452,13 +470,18 @@ impl AppJob {
     /// fields, so the command would fail there with a less useful message.
     pub async fn ensure_agent_takes(&self, spec: &AppSpec, server: ServerId) -> Result<(), StepError> {
         let options = spec.options().needs_new_agent();
+        let adopted = !spec.adopted_container.is_empty();
 
-        if !options && spec.files.is_empty() {
+        if !options && !adopted && spec.files.is_empty() {
             return Ok(());
         }
 
         let facts = self.facts.facts_of(server).await.map_err(retry)?;
         let facts = facts.as_ref().map(|(f, _)| f);
+
+        if adopted {
+            agent_takes_adopted(facts)?;
+        }
 
         if options {
             agent_takes_options(facts)?;
@@ -687,6 +710,9 @@ impl AppJob {
         // started; a rotation after that keeps the service marked (D-179).
         if p.action == "deploy" {
             self.apps.clear_secrets_changed(p.service_id, ctx.job.created_at).await.map_err(retry)?;
+
+            // The node replaced the adopted container (D-180).
+            self.apps.clear_adopted(p.service_id).await.map_err(retry)?;
         }
 
         let state = out.get("state").and_then(Value::as_str).map(str::to_owned);

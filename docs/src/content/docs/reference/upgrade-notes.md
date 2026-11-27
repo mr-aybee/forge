@@ -310,6 +310,33 @@ an **Operator**, an API key or a connector it returns `403`. To keep deploys
 open to them, move the data into the app's folder or approve its folder as a
 file root on the node. See [Services](/docs/guides/services/#configuration-sections).
 
+## Object Storage removed
+
+Applies to every install that used **Object Storage**. Forge no longer
+installs, connects or manages object stores, buckets, access keys or bucket
+grants. The **Object Storage** console pages, the `forge storage` and
+`forge services storage` commands, the `/object-stores` and
+`/services/{id}/storage` endpoints, the Cedar actions `storage.manage` and
+`storage.data`, the `storage.*` audit actions, the agent's object-store
+command and the `object_storage` capability are gone. The
+`storage_allow_loopback` setting is accepted and ignored with a warning, so
+an older `forge.toml` still loads. A new migration drops the object store
+tables.
+
+| Store | After the update |
+| --- | --- |
+| Managed Docker store | Each member's container is adopted as a container service once its node is online, through [container adoption](/docs/guides/adopt-container/). It goes into the store's environment, or the workspace's oldest environment when the store had none; a workspace without any environment keeps the store pending until one exists, and the server logs a warning. The service is named after the store's slug (`<slug>-2`, `-3`… on a clash or for further members of a distributed store), with its `console` link set to the store's console port (`http`, path `/`). The container is not restarted |
+| Native (systemd) store | Not adopted. It keeps running untouched on its node, no longer managed by Forge |
+| Connected external S3 store | Not adopted. Its record is dropped |
+
+- Root credentials stay in the credential vault as ordinary items, tagged
+  `object-storage`. For adopted stores the item is linked to the service.
+- Buckets, access keys and grants stay in RustFS; RustFS's own IAM still
+  holds the keys. Manage them in the RustFS console.
+- Deleting a service never deletes volumes or host paths.
+- Distributed RustFS is no longer set up by Forge. Run it as one service per
+  node with the peer list in the environment.
+
 ## WireGuard remote access removed
 
 Applies to every install that used **Network ▸ Remote access**. Access

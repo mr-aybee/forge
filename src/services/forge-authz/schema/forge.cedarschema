@@ -158,20 +158,6 @@ namespace Forge {
   action "job.create" in ["role:platform_admin", "role:workspace_admin", "role:operator", "role:developer", "role:dba"]
     appliesTo { principal: [User], resource: [Platform, Workspace, Environment, Server, Job, Cluster, Service], context: RequestContext };
 
-  // Object stores on a node: install, lifecycle, buckets and access keys
-  // (runs as root on the node: MFA guardrail).
-  // Managed stores are checked on their member nodes; connected (external)
-  // stores, which have no node, on their workspace.
-  action "storage.manage" in ["role:platform_admin", "role:workspace_admin", "role:operator"]
-    appliesTo { principal: [User], resource: [Server, Workspace], context: RequestContext };
-
-  // Browse, upload, download and delete objects in an object store. On a
-  // environment: the stores that environment owns (D-107). A managed store is
-  // also reached, as before, through a role on its member node, and a
-  // connected store through a role on the workspace.
-  action "storage.data" in ["role:platform_admin", "role:workspace_admin", "role:operator", "role:developer"]
-    appliesTo { principal: [User], resource: [Server, Workspace, Environment], context: RequestContext };
-
   // File explorer on a node. Reads need no MFA; writes, deletes and
   // administration (approving roots) need MFA (guardrail). Protected paths
   // stay closed to all. Which directories a user reaches depends on the

@@ -540,6 +540,12 @@ pub trait ServiceRepository: Send + Sync + std::fmt::Debug {
         let _ = (ids, at);
         Err(crate::error::DomainError::Internal("secret file marks are not supported by this store".into()))
     }
+    /// Forgets the adopted container of a service (D-180) once its first
+    /// deploy replaced it. Idempotent.
+    async fn clear_adopted(&self, id: ServiceId) -> DomainResult<()> {
+        let _ = id;
+        Err(crate::error::DomainError::Internal("adopted services are not supported by this store".into()))
+    }
     /// Clears that mark when it is no later than `deploy_started` (a deploy
     /// that began before the change does not carry the new value).
     async fn clear_secrets_changed(&self, id: ServiceId, deploy_started: Timestamp) -> DomainResult<()> {
@@ -638,4 +644,27 @@ pub trait SecretRepository: Send + Sync + std::fmt::Debug {
     async fn delete_secret(&self, id: SecretId) -> DomainResult<()>;
     /// Deletes expired secrets; returns how many were purged.
     async fn purge_expired(&self, now: Timestamp) -> DomainResult<u64>;
+}
+
+/// A managed Docker object store's container waiting to be adopted as a
+/// service after the Object Storage removal (D-180).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingStoreAdoption {
+    pub id: String,
+    pub workspace_id: crate::WorkspaceId,
+    pub environment_id: Option<crate::EnvironmentId>,
+    pub server_id: ServerId,
+    pub slug: String,
+    /// The store's container settings JSON, if it had any.
+    pub settings: Option<String>,
+    pub console_port: Option<u16>,
+    pub credential_id: crate::VaultItemId,
+    pub created_by: crate::Principal,
+}
+
+/// The object store containers the upgrade still has to adopt (D-180).
+#[async_trait]
+pub trait PendingStoreAdoptionRepository: Send + Sync + std::fmt::Debug {
+    async fn list_pending_store_adoptions(&self) -> DomainResult<Vec<PendingStoreAdoption>>;
+    async fn delete_pending_store_adoption(&self, id: &str) -> DomainResult<()>;
 }

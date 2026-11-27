@@ -380,8 +380,6 @@ impl Agent {
             // File operations range from a listing to a 1 GiB copy or a 50 s
             // search: never let them hold up heartbeats or other commands.
             forge_proto::Command::FileAction(_) => true,
-            // Object store installs wait for downloads and quorum.
-            forge_proto::Command::StorageAction(_) => true,
             // Compose deploys pull images and wait for health checks.
             forge_proto::Command::StackAction(_) => true,
             // Restarting dockerd can take a minute.
