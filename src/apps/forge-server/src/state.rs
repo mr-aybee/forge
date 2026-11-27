@@ -69,6 +69,8 @@ pub struct Services {
     pub jobs: Arc<JobEngine>,
     /// Keeps services in their desired state (D-177).
     pub reconciler: Arc<crate::reconcile::ServiceReconciler>,
+    /// Plans and applies Compose-format services files (D-178).
+    pub service_files: Arc<crate::service_files::ServiceFiles>,
     pub plugins: Arc<PluginHost>,
     pub ca: Arc<CertificateAuthority>,
     /// The control-plane key agents pin and its rotation (D-167).
@@ -90,7 +92,7 @@ pub struct Services {
     /// What an agent update would do on each node.
     pub agent_updates: Arc<crate::agent_update_overview::AgentUpdateOverview>,
     /// Live node metrics and connectivity results (in memory).
-    pub telemetry: crate::metrics::Telemetry,
+    pub telemetry: Arc<crate::metrics::Telemetry>,
     /// Reads from the analytics database, through the analytics worker
     /// (D-127, D-141).
     pub analytics: Arc<dyn forge_core::analytics::AnalyticsReader>,
@@ -635,6 +637,20 @@ impl Services {
             jobs: jobs.clone(),
         }));
         let _ = stack_rollout_engine.set(jobs.clone());
+        let telemetry = Arc::new(crate::metrics::Telemetry::default());
+        let service_files = Arc::new(crate::service_files::ServiceFiles {
+            services: Arc::new(store.clone()),
+            servers: Arc::new(store.clone()),
+            tenancy: Arc::new(store.clone()),
+            tags: Arc::new(store.clone()),
+            facts: Arc::new(store.clone()),
+            files: Arc::new(store.clone()),
+            telemetry: telemetry.clone(),
+            swarm: swarm.clone(),
+            envelope: envelope.clone(),
+            clock: clock.clone(),
+            jobs: jobs.clone(),
+        });
 
         let mut trust = TrustStore::new();
 
@@ -773,6 +789,7 @@ impl Services {
             exec_streams: crate::container_exec::ExecStreams::default(),
             jobs,
             reconciler,
+            service_files,
             plugins,
             ca,
             agent_keys,
@@ -788,7 +805,7 @@ impl Services {
             ssh_ca,
             agent_updates,
             dist,
-            telemetry: crate::metrics::Telemetry::default(),
+            telemetry,
             analytics: analytics_client.clone(),
             telemetry_sink: analytics_client.clone(),
             analytics_enabled,

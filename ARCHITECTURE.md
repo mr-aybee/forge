@@ -586,6 +586,17 @@ step as that person; the reconciler's decisions are audited as
 `system:reconciler`. Services with an active deployment are skipped. See
 D-177.
 
+**Services files.** `POST /services/plan|apply` take a Compose / Swarm
+format file. `forge_catalog::compose_native` reads it strictly (unknown keys
+refused with their path) into typed specs and an `Orchestration` (replicas,
+global mode, constraints, spread, reservations, update settings,
+`depends_on`); `ServiceFiles` (`src/apps/forge-server/src/service_files.rs`,
+ports only) diffs it with the environment's services, places each with
+`forge_catalog::placement::select` (the placer `forge.deploy.yaml` uses too)
+and, after the handler authorized the plan, writes the services and submits
+`app.action` jobs as the caller. `services.source` records the file, so an
+apply removes only that file's services. See D-178.
+
 **Plugins.** Upload manifest + component + publisher signature → verify →
 admin approves requested permissions → install → enable. Invocation spawns the
 runner with budgets; budget exhaustion stops it and quarantines the plugin.

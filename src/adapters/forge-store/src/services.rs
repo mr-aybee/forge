@@ -49,6 +49,7 @@ fn app_row(r: &AnyRow) -> DomainResult<Service> {
         created_at: ts(r, "created_at")?,
         updated_at: ts(r, "updated_at")?,
         version: int(r, "version")?,
+        source: text(r, "source")?,
     })
 }
 
@@ -72,9 +73,9 @@ fn instance_row(r: &AnyRow) -> DomainResult<ServiceInstance> {
 impl ServiceRepository for Store {
     async fn put_service(&self, a: &Service) -> DomainResult<()> {
         sqlx::query(
-            "INSERT INTO services (id, workspace_id, environment_id, name, runtime, spec, env, created_by, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-             ON CONFLICT (id) DO UPDATE SET runtime = $5, spec = $6, env = $7, updated_at = $10,
+            "INSERT INTO services (id, workspace_id, environment_id, name, runtime, spec, env, created_by, created_at, updated_at, source)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             ON CONFLICT (id) DO UPDATE SET runtime = $5, spec = $6, env = $7, updated_at = $10, source = $11,
                  version = services.version + 1",
         )
         .bind(a.id.to_string())
@@ -87,6 +88,7 @@ impl ServiceRepository for Store {
         .bind(a.created_by.to_string())
         .bind(a.created_at.0)
         .bind(a.updated_at.0)
+        .bind(&a.source)
         .execute(self.pool())
         .await
         .map_err(db_err)?;
@@ -95,7 +97,7 @@ impl ServiceRepository for Store {
 
     async fn update_service_if(&self, a: &Service, expected: i64) -> DomainResult<bool> {
         let done = sqlx::query(
-            "UPDATE services SET runtime = $2, spec = $3, env = $4, updated_at = $5, version = version + 1
+            "UPDATE services SET runtime = $2, spec = $3, env = $4, updated_at = $5, source = $7, version = version + 1
              WHERE id = $1 AND version = $6",
         )
         .bind(a.id.to_string())
@@ -104,6 +106,7 @@ impl ServiceRepository for Store {
         .bind(env_to_db(&a.env))
         .bind(a.updated_at.0)
         .bind(expected)
+        .bind(&a.source)
         .execute(self.pool())
         .await
         .map_err(db_err)?;

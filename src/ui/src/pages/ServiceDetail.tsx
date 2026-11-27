@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { ChevronRight, Container, History, Database, Globe, HeartPulse, LayoutDashboard, Loader2, RefreshCw, Rocket, Settings2, TriangleAlert, Trash2, Waypoints, Webhook } from "lucide-react";
+import { ChevronRight, Container, History, Database, FileCode, Globe, HeartPulse, LayoutDashboard, Loader2, RefreshCw, Rocket, Settings2, TriangleAlert, Trash2, Waypoints, Webhook } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ApiError, get } from "../api/client";
@@ -13,6 +13,7 @@ import {
   type ServiceAction,
   useServiceHealth,
   useService,
+  useServiceExport,
   useDeleteService,
   useDeployService,
   usePlaceService,
@@ -40,6 +41,7 @@ import { PinToggle } from "../components/Pins";
 import { Button, Confirm, Drawer, Empty, ErrorNote, RowMenu, Modal, PageCrumb, PageHeader, Panel, Skeleton, Status, Table, Td, UnsavedBar, ago, short } from "../components/ui";
 import { TagEditor } from "../components/TagEditor";
 import { AppStorageTab } from "../components/storage/AppStorageTab";
+import { ServicesFilePanel } from "../components/service-editor/ServicesFilePanel";
 import { ReleasesTab } from "../components/deploy/ReleasesTab";
 import { WebhooksTab } from "../components/deploy/WebhooksTab";
 import { LogIngestKeys, OpenLogStream } from "../components/logs/LogIngestKeys";
@@ -271,6 +273,7 @@ function ServicePage({ appId }: { appId: string }) {
             ["storage", "Storage", Database],
             ["releases", "Releases", History],
             ["webhooks", "Webhooks", Webhook],
+            ["yaml", "YAML", FileCode],
           ] as const
         ).map(([id, label, Icon]) => (
           <button key={id} onClick={() => setTab(id)} className={`press -mb-px inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-[13px] whitespace-nowrap focus-visible:outline-2 focus-visible:outline-accent ${tab === id ? "border-accent text-accent" : "border-transparent text-muted hover:text-fg"}`}>
@@ -286,7 +289,9 @@ function ServicePage({ appId }: { appId: string }) {
         </div>
       )}
       <div key={tab} className="view-enter" hidden={tab === "health"}>
-      {tab === "health" ? null : tab === "releases" ? (
+      {tab === "health" ? null : tab === "yaml" ? (
+        <ServiceYamlTab id={a.id} environmentId={a.environment_id} />
+      ) : tab === "releases" ? (
         <ReleasesTab app={a} swarm={swarm} />
       ) : tab === "webhooks" ? (
         <WebhooksTab target={{ kind: "service", id: a.id }} targetName={a.name} />
@@ -665,4 +670,13 @@ function ConfigurationTab({
       />
     </div>
   );
+}
+
+/** The YAML tab: the service as a services file (export), planned and applied in place. */
+function ServiceYamlTab({ id, environmentId }: { id: string; environmentId: string }) {
+  const q = useServiceExport(id);
+  if (q.isLoading) return <Skeleton rows={6} />;
+  if (q.error) return <ErrorNote error={q.error} />;
+  const yaml = q.data?.yaml ?? "";
+  return <ServicesFilePanel key={yaml} environmentId={environmentId} initial={yaml} onApplied={() => void q.refetch()} />;
 }

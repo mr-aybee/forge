@@ -451,6 +451,7 @@ impl StackJob {
                     created_at: now,
                     updated_at: now,
                     version: 0,
+                    source: String::new(),
                 },
             };
 

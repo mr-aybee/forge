@@ -10,12 +10,13 @@
 //! policies on the nodes) goes through [`RolloutEffects`], implemented next
 //! to the API that owns those flows and wired in `state.rs`.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use forge_catalog::deploy::{self as cat, DeploymentDoc, Plan, PlanInput, PlanNode, RolloutPolicy, Slot};
 use forge_catalog::ingress::Target;
+use forge_catalog::placement::{Candidate, Count, PlaceError, Rules, select};
 use forge_core::deploy::{
     Deployment, DeploymentKind, DeploymentRepository, DeploymentState, Release, ReleaseRepository, SlotRecord,
 };
@@ -273,6 +274,7 @@ impl DeployService {
             created_at: now,
             updated_at: now,
             version: 0,
+            source: String::new(),
         });
         let artifact = doc.spec.artifact.resolve(doc.spec.runtime).map_err(|e| DomainError::Invalid(e.to_string()))?;
         let policy = doc.policy().map_err(|e| DomainError::Invalid(e.to_string()))?;
@@ -503,7 +505,8 @@ impl DeployService {
     /// workspace, filtered by tags, cut to `replicas` (nodes the service
     /// already runs on first, then online ones, then by name). Drained
     /// nodes are skipped (D-177); with `replicas`, offline nodes are too
-    /// when enough online ones match.
+    /// when enough online ones match. The placer is
+    /// [`forge_catalog::placement::select`], shared with services files.
     async fn place(
         &self,
         ws: WorkspaceId,
@@ -517,63 +520,29 @@ impl DeployService {
             .into_iter()
             .filter(|s| s.status != AgentStatus::Revoked)
             .collect();
-        let mut picked = Vec::new();
+        let tags = self.tags.tags_of_kind(TagKind::Server).await?;
+        let candidates: Vec<Candidate> = servers.iter().map(|s| candidate(s, &tags, current, None)).collect();
+        let count = p.replicas.map_or(Count::All, Count::Replicas);
+        let rules = Rules {
+            nodes: &p.nodes,
+            tags: &p.node_selector,
+            count,
+            spread: None,
+            reserve_cpu_millis: 0,
+            reserve_memory_mb: 0,
+        };
 
-        if p.nodes.is_empty() {
-            picked.extend(servers.iter());
-        } else {
-            for want in &p.nodes {
-                let w = want.to_lowercase();
-                let s = servers
-                    .iter()
-                    .find(|s| {
-                        s.id.to_string() == w
-                            || s.hostname.to_lowercase() == w
-                            || s.display_name.as_deref().is_some_and(|d| d.to_lowercase() == w)
-                    })
-                    .ok_or_else(|| DomainError::Invalid(format!("spec.placement.nodes: no node `{want}`")))?;
-
-                if !picked.iter().any(|x: &&forge_core::model::Server| x.id == s.id) {
-                    picked.push(s);
-                }
+        let picked = select(&candidates, &rules).map_err(|e| match e {
+            PlaceError::UnknownNode(n) => DomainError::Invalid(format!("spec.placement.nodes: no node `{n}`")),
+            PlaceError::NoneMatch => {
+                DomainError::Invalid("no node matches spec.placement (drained nodes are skipped)".into())
             }
-        }
+        })?;
 
-        if !p.node_selector.is_empty() {
-            let tags = self.tags.tags_of_kind(TagKind::Server).await?;
-            let wanted: Vec<String> = p.node_selector.iter().map(|(k, v)| format!("{k}:{v}").to_lowercase()).collect();
-            picked.retain(|s| {
-                let have: HashSet<String> =
-                    tags.get(&s.id.to_string()).into_iter().flatten().map(|t| t.to_lowercase()).collect();
-                wanted.iter().all(|w| have.contains(w))
-            });
-        }
-
-        picked.retain(|s| !s.drained);
-        picked.sort_by_key(|s| {
-            (
-                !current.contains(&s.id),
-                s.status != AgentStatus::Online,
-                s.display_name.clone().unwrap_or_default(),
-                s.hostname.clone(),
-            )
-        });
-
-        if let Some(n) = p.replicas {
-            let online = picked.iter().filter(|s| s.status == AgentStatus::Online).count();
-
-            if online >= n as usize {
-                picked.retain(|s| s.status == AgentStatus::Online);
-            }
-
-            picked.truncate(n as usize);
-        }
-
-        if picked.is_empty() {
-            return Err(DomainError::Invalid("no node matches spec.placement (drained nodes are skipped)".into()));
-        }
-
-        Ok(picked.into_iter().map(|s| s.id).collect())
+        picked
+            .iter()
+            .map(|id| id.parse().map_err(|_| DomainError::internal("placement returned an unknown id")))
+            .collect()
     }
 
     /// Writes the release (and a new service and its placements) and starts
@@ -692,6 +661,30 @@ impl DeployService {
                 Err(e)
             }
         }
+    }
+}
+
+/// `server` as the placer sees it: its tags (`key:value`, lowercase),
+/// state, whether the service runs there, and its capacity when known.
+#[must_use]
+pub fn candidate(
+    server: &forge_core::model::Server,
+    tags: &std::collections::HashMap<String, Vec<String>>,
+    current: &[ServerId],
+    capacity: Option<(Option<u64>, Option<u64>)>,
+) -> Candidate {
+    let (cpu_millis, memory_mb) = capacity.unwrap_or((None, None));
+
+    Candidate {
+        id: server.id.to_string(),
+        hostname: server.hostname.clone(),
+        display_name: server.display_name.clone(),
+        tags: tags.get(&server.id.to_string()).into_iter().flatten().map(|t| t.to_lowercase()).collect(),
+        online: server.status == AgentStatus::Online,
+        drained: server.drained,
+        current: current.contains(&server.id),
+        cpu_millis,
+        memory_mb,
     }
 }
 

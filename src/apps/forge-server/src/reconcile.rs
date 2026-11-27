@@ -426,7 +426,11 @@ impl ServiceReconciler {
         let ids: Vec<ServiceId> = by_service.keys().copied().collect();
 
         for app in self.services.get_services(&ids).await? {
-            if swarm_managed(&app) || self.deploys.active_deployment(app.id).await?.is_some() {
+            // A service removed from its services file is only taken off.
+            if swarm_managed(&app)
+                || app.source == crate::service_files::REMOVING_SOURCE
+                || self.deploys.active_deployment(app.id).await?.is_some()
+            {
                 continue;
             }
 
@@ -438,6 +442,12 @@ impl ServiceReconciler {
                     tracing::warn!(service = %app.id, server = %i.server_id, error = %e, "reconciling an instance failed");
                 }
             }
+        }
+
+        // Services removed from their file whose instances are gone (D-178).
+        for app in crate::service_files::finish_removals(self.services.as_ref()).await? {
+            let details = json!({ "service": app.name, "reason": "removed from its services file" });
+            self.record(&app, crate::service_files::AUDIT_REMOVED, AuditOutcome::Success, details).await;
         }
 
         Ok(())
@@ -982,6 +992,7 @@ mod tests {
             created_at: Timestamp(0),
             updated_at: Timestamp(0),
             version: 0,
+            source: String::new(),
         };
         assert_eq!(policy(&app), NodeFailurePolicy::Move);
 

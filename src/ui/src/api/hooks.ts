@@ -3,6 +3,8 @@ import { useMutation, useQueries, useQuery, useQueryClient, type QueryKey } from
 
 import { ApiError, api, get, post } from "./client";
 import type {
+  ServicesApplied,
+  ServicesPlan,
   ClusterMode,
   ServiceHealthView,
   ServiceInput,
@@ -963,6 +965,21 @@ export const usePlaceService = () =>
       api<ServiceInstance[]>("PUT", `/api/v1/services/${enc(id)}/instances`, placements),
     serviceKeys,
   );
+/** Services files (D-178): plan writes nothing; apply runs it. */
+export interface ServicesFileBody {
+  environment_id: string;
+  file: string;
+  prune: boolean;
+}
+export const usePlanServicesFile = () => useAction((b: ServicesFileBody) => post<ServicesPlan>("/api/v1/services/plan", b), []);
+export const useApplyServicesFile = () => useAction((b: ServicesFileBody) => post<ServicesApplied>("/api/v1/services/apply", b), serviceKeys);
+/** A service as a services file (Compose format). */
+export const useServiceExport = (id?: string) =>
+  useQuery({
+    queryKey: [...fleetKeys.service(id), "export"],
+    queryFn: () => get<{ yaml: string }>(`/api/v1/services/${enc(id ?? "")}/export`),
+    enabled: !!id,
+  });
 export const useDeployService = () => useAction((id: string) => post<Job[]>(`/api/v1/services/${enc(id)}/deploy`), serviceKeys);
 /** One action on one placement. `run` no longer exists. */
 export type ServiceAction = "prepare" | "deploy" | "start" | "stop" | "restart" | "status" | "logs" | "follow" | "remove";

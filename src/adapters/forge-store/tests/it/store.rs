@@ -781,6 +781,7 @@ async fn removing_the_last_swarm_member_clears_the_swarm() {
             cert_serial: None,
             cert_not_after: None,
             created_at: Timestamp(1),
+            drained: false,
         };
         store.create_server(&server).await.unwrap();
         let member = SwarmMember {
