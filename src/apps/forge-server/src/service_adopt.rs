@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use forge_catalog::Runtime;
 use forge_catalog::container_opts::{ContainerOptions, RestartPolicy};
 use forge_core::model::{AgentStatus, Environment, InstanceDesired, Service, ServiceInstance};
 use forge_core::ports::{ServerRepository, ServiceRepository, TenancyRepository};
@@ -397,7 +398,7 @@ impl AdoptService {
             server_id: server,
             role: "active".into(),
             status: "deployed".into(),
-            state: Some(if running { "active".into() } else { status.to_owned() }),
+            state: Some(Runtime::Container.instance_state(status)),
             last_job_id: None,
             last_error: None,
             updated_at: now,

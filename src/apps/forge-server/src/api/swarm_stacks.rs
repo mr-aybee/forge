@@ -166,7 +166,7 @@ pub async fn put_object(
     let value = match (req.value, req.vault_item_id) {
         (Some(v), None) => v.into_bytes(),
         (None, Some(item)) => {
-            super::vault::authorize_item_use(&state, &caller, c.workspace_id, item, AUDIT_OBJECT_PUT).await?;
+            super::vault::authorize_item_attach(&state, &caller, c.workspace_id, item, AUDIT_OBJECT_PUT).await?;
             super::vault::open_item(&state, c.workspace_id, item).await?
         }
         _ => return Err(ApiError::bad_request("give either `value` or `vault_item_id`")),

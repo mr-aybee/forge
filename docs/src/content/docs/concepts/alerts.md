@@ -111,7 +111,7 @@ that never fires.
 | `node.load.per_cpu` | number (ratio) | nodes | Heartbeat: one-minute load average divided by the CPU count. Unknown on Windows and on agents that do not report a CPU count |
 | `node.uptime.seconds` | number, seconds | nodes | Heartbeat: time since the node booted. A drop means it rebooted |
 | `node.cert.expires_in_days` | number, days | nodes | Control plane: days until the agent's client certificate expires. The agent renews it before then; a low value means renewal is failing |
-| `app.instance.state` | `active`, `inactive`, `failed` | services | Control plane: the state each node last reported for its instance of the service. One series per node |
+| `app.instance.state` | `active`, `inactive`, `failed` (native services), `running`, `exited` (containers) | services | Control plane: the state each node last reported for its instance of the service. One series per node |
 | `app.deploy.status` | `pending`, `deploying`, `deployed`, `failed`, `drifted`, `stranded` | services | Control plane: the deployment status of each instance. One series per node |
 | `package.state` | `running`, `stopped`, `not-installed` | databases and packages | Control plane: the service state the package recipe last reported, per installation |
 | `package.status` | `pending`, `installing`, `installed`, `updating`, `starting`, `stopping`, `restarting`, `removing`, `checking`, `failed` | databases and packages | Control plane: the lifecycle status of each installation. `failed` after a failed install, upgrade or other package job |

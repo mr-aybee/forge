@@ -188,7 +188,7 @@ async fn deploying_a_container_installs_docker_on_a_node_that_has_none() {
         (1, "docker", "installed")
     );
     let i = instance(&h, &app).await;
-    assert_eq!((i.status.as_str(), i.state.as_deref()), ("deployed", Some("active")));
+    assert_eq!((i.status.as_str(), i.state.as_deref()), ("deployed", Some("running")));
     let (_, audit) = admin.get("/api/v1/audit?action=service.deploy").await;
     assert!(audit.to_string().contains("\"runtime_installs\":1"), "{audit}");
     let (_, audit) = admin.get("/api/v1/audit?action=package.install").await;
@@ -210,7 +210,7 @@ async fn deploying_a_container_installs_docker_on_a_node_that_has_none() {
     assert_eq!(done["status"], "succeeded", "{done}");
     let (_, list) = admin.get("/api/v1/services").await;
     let listed = list.as_array().unwrap().iter().find(|a| a["id"] == json!(app)).unwrap();
-    assert_eq!(listed["instances"][0]["state"], "active", "{listed}");
+    assert_eq!(listed["instances"][0]["state"], "running", "{listed}");
     assert_eq!(listed["instances"][0]["status"], "deployed", "{listed}");
 }
 

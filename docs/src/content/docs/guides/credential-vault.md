@@ -20,6 +20,10 @@ its password and rotate it. The vault has two tabs under
   recorded in the audit log.
 - Revealing a password is the `secret.read` action. It needs an MFA-verified
   session and a browser session: API keys cannot reveal passwords.
+- Attaching a credential to a service as a secret or config file, or to a
+  Swarm secret, also needs `secret.read`. It works from a browser session or
+  an elevated API key, because the value goes only to the node. A plain API
+  key is refused.
 - Adding, changing and deleting credentials is the `secret.manage` action on
   the platform. It also needs an MFA-verified session, so a leaked API key or
   a session without MFA cannot overwrite or delete stored passwords. Listing

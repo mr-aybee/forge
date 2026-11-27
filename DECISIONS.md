@@ -6072,6 +6072,8 @@ hand.
 
 ## D-179 Service orchestration in native mode, step 3a: secrets and configs as files from the credential vault
 
+*Amended by D-181: attaching a vault item also accepts an elevated API key.*
+
 **Decision.** Native services mount credential vault items as read-only files.
 
 - **References, not values.** A service stores `secret_files` in its spec: `{kind: secret|config, item, target, mode?, uid?, gid?}` (`forge_catalog::secret_files`). `item` is a vault item *name* in the service's workspace. Services files accept top-level `secrets:`/`configs:` only with `external: true` (`name` = the vault item, default the key), as the Swarm path does (D-171); `file:`, `environment:` and `content:` are refused because the server never reads files. Service-level short and long syntax (`source`, `target`, `mode`, `uid`, `gid`) map onto the same refs; `export` writes them back. The REST `AppInput`, `forge services create|update --secret/--config` and the console's **Secrets & configs** section set them by name.
@@ -6098,3 +6100,13 @@ hand.
 **Why.** Object Storage was a second orchestrator for one product. Adoption keeps existing stores running and manageable as ordinary services, and works for any container.
 
 **Trade-offs.** Buckets, access keys, grants and bucket attachment are no longer managed in Forge (RustFS's own IAM still holds the keys). The data-path ownership marker and `require_mount` go; deleting a Service never deletes volumes or host paths instead. Command, entrypoint, capabilities, devices and health checks of an adopted container are not read: an operator adds them before the first deploy if the image needs them. A host-network store stays unmanaged.
+
+## D-181 Attaching vault items with an elevated API key (amends D-179 and D-171)
+
+**Decision.** Attaching a credential vault item to a workload accepts an elevated API key (D-097). This covers service secret and config files (`secret_files` on `POST /services`, `PUT /services/{id}` and `POST /services/apply`) and Swarm secrets and configs made from a vault item (`POST /clusters/{id}/swarm/objects` with `vault_item_id`). The rules are platform administrator plus `secret.read` (MFA), checked against the user behind the key, which an elevated key satisfies as MFA-verified. `forge_server::api::vault::authorize_item_attach` holds the check; `authorize_item_names` and the Swarm object path call it. A plain API key still gets `403`, audited as a denial, with a message naming both ways out: an elevated API key, or a signed-in session (`forge auth login`).
+
+- **Unchanged.** `POST /vault/items/{id}/reveal` refuses every API key, elevated or not. Health-check headers (D-085) and notification channel signing keys keep `authorize_item_use` (no API keys), because their values reach a third party on every probe or delivery rather than one node.
+
+**Why.** `forge services apply` from CI and lab scripts failed whenever a file mounted a vault item, though the same user could do it in the browser. Attaching never returns the value to the caller: the server unseals it only inside the deploy job and sends it in the signed command. An elevated key already carries the MFA weight for every other guarded action.
+
+**Trade-offs.** A leaked elevated key of a platform administrator can attach any vault item to a service it may deploy and so get the value onto a node it controls. That is no wider than what the same key can already do with `container.exec` or node commands. Operators who do not want this turn off `[security] allow_elevated_tokens`, which makes every elevated key a plain one.

@@ -232,7 +232,9 @@ record:
 Shape from the server's schema; not captured on a live system. `role` is
 `active` or `standby`. `status` is Forge's deploy state (`pending`,
 `deploying`, `deployed`, `failed`, …); `state` is the last state the node
-reported (`active`, `inactive`, `failed`, …).
+reported, in the runtime's own words: Docker's for a container (`running`,
+`exited`, …), systemd's for a native service (`active`, `inactive`,
+`failed`, …).
 
 Exit codes: `0` success; `2` ambiguous name; `3` not signed in; `4` no
 `view`; `6` no such service.
@@ -537,7 +539,7 @@ missing one exits with `2` and names the flag.
 | `--tmpfs <PATH[:SIZE_MB]>` | container path with an optional size; repeatable | none | no | A tmpfs mount. Without a size, Docker's default applies | `--tmpfs /tmp:64` |
 | `--init <BOOL>` | `true` or `false` | none | no | Run Docker's init as PID 1, which reaps zombie processes and forwards signals; `--init` alone means `true` | `--init` |
 | `--network <NAME>` | Docker network name; repeatable | none | no | An existing Docker network on the node to connect the container to as well | `--network backend` |
-| `--secret <ITEM[:TARGET]>` | vault item name with an optional path; repeatable | none | no | Mount credential vault item ITEM as a secret file at TARGET (default `/run/secrets/<ITEM>`; a relative TARGET goes under `/run/secrets`). Only the name is sent. Given at all, `--secret` and `--config` together replace the whole list. Referencing a new item needs a platform administrator with MFA | `--secret "DB password:db_password"` |
+| `--secret <ITEM[:TARGET]>` | vault item name with an optional path; repeatable | none | no | Mount credential vault item ITEM as a secret file at TARGET (default `/run/secrets/<ITEM>`; a relative TARGET goes under `/run/secrets`). Only the name is sent. Given at all, `--secret` and `--config` together replace the whole list. Referencing a new item needs a platform administrator with MFA: a signed-in session (`forge auth login`) or an elevated API key; a plain API key gets `403` | `--secret "DB password:db_password"` |
 | `--config <ITEM[:TARGET]>` | vault item name with an optional absolute path; repeatable | none | no | Mount credential vault item ITEM as a config file (mode `0444`) at TARGET (default `/<ITEM>`). The last `:` separates the target | `--config "api-config:/etc/api/app.conf"` |
 | `--console-port <PORT>` | integer, 0 to 65535 | none | no | The port of the service's web console, for **Open console** on the service page (a container: the published host port). `0` removes the link | `--console-port 9001` |
 | `--console-path <PATH>` | path starting with `/` | `/` | no | The path of the console page. Without `--console-port`, the service must already have a console link | `--console-path /admin` |
@@ -1204,7 +1206,9 @@ The plan, then the jobs it started (`JOB`, `KIND`, `STATUS`). When nothing
 changes it prints `Nothing to do.`
 
 Exit codes: `0` success; `1` refused, or you did not answer `yes`; `4` no
-`deploy`, `server.manage` or `stack.privileged`; `5` privileged settings
+`deploy`, `server.manage` or `stack.privileged`, or the file mounts vault
+items (`secrets:` / `configs:`) and you used a plain API key instead of a
+signed-in session or an elevated API key; `5` privileged settings
 need an MFA-verified session; `7` a service changed since the plan or is
 managed by another file; `8` `--wait` timed out; `10` a job failed.
 

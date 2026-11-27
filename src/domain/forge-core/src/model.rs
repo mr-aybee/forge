@@ -961,7 +961,8 @@ pub struct ServiceInstance {
     pub role: String,
     /// `pending`, `deploying`, `deployed`, `failed`, …
     pub status: String,
-    /// Last state reported by the node: `active`, `inactive`, `failed`, …
+    /// Last state reported by the node, in the runtime's own words: systemd's
+    /// (`active`, `inactive`, `failed`, …) or Docker's (`running`, `exited`, …).
     pub state: Option<String>,
     pub last_job_id: Option<JobId>,
     pub last_error: Option<String>,

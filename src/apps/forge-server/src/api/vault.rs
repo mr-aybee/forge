@@ -189,7 +189,8 @@ async fn load(state: &AppState, ws: WorkspaceId, id: VaultItemId) -> ApiResult<V
 }
 
 /// The password of item `id`, for another feature that already checked
-/// [`authorize_item_use`] (e.g. a Swarm secret made from it, D-171).
+/// [`authorize_item_use`] or [`authorize_item_attach`] (e.g. a Swarm secret
+/// made from it, D-171).
 pub(super) async fn open_item(state: &AppState, ws: WorkspaceId, id: VaultItemId) -> ApiResult<Vec<u8>> {
     let item = load(state, ws, id).await?;
     Ok(state.envelope.open(&item.sealed, &aad(id)).map_err(DomainError::internal)?)
@@ -356,9 +357,41 @@ pub(super) async fn authorize_item_use(
     Ok(())
 }
 
+/// The refusal a plain API key gets when it tries to attach a vault item.
+const PLAIN_KEY_ATTACH: &str =
+    "vault items can be attached only with an elevated API key or a signed-in session (`forge auth login`)";
+
+/// Checks that `caller` may attach vault item `id` of workspace `ws` to a
+/// workload, where the value goes to a node and never back to the caller
+/// (service files, D-179; Swarm secrets, D-171). Like [`authorize_item_use`],
+/// but an elevated API key (D-097) is accepted when the user behind it is a
+/// platform administrator with `secret.read` (D-181). A plain API key is
+/// refused. Denials are audited as `what`.
+pub(super) async fn authorize_item_attach(
+    state: &AppState,
+    caller: &Caller,
+    ws: WorkspaceId,
+    id: VaultItemId,
+    what: &str,
+) -> ApiResult<()> {
+    require_platform_admin(state, caller, ws, what).await?;
+    let target = EntityRef::new(EntityKind::Workspace, ws);
+
+    if caller.via_api_key() && !caller.elevated_token() {
+        caller.audit_denied(what, &target, Some(ws), PLAIN_KEY_ATTACH).await;
+
+        return Err(ApiError::forbidden(PLAIN_KEY_ATTACH));
+    }
+
+    caller.authorize(Action::SecretRead, target).await?;
+    load(state, ws, id).await?;
+
+    Ok(())
+}
+
 /// Checks that `caller` may mount the vault items named `names` as service
 /// files (D-179): each must exist in workspace `ws`, and using it needs the
-/// same rules as [`authorize_item_use`]. Denials are audited as `what`.
+/// same rules as [`authorize_item_attach`]. Denials are audited as `what`.
 pub(super) async fn authorize_item_names(
     state: &AppState,
     caller: &Caller,
@@ -377,7 +410,7 @@ pub(super) async fn authorize_item_names(
             return Err(bad(format!("no credential vault item is named `{name}`")));
         };
 
-        authorize_item_use(state, caller, ws, item.id, what).await?;
+        authorize_item_attach(state, caller, ws, item.id, what).await?;
     }
 
     Ok(())

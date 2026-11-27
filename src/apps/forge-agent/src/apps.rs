@@ -1234,7 +1234,7 @@ async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, Str
     let digest = if action == "deploy" { image_digest(&spec.image).await } else { None };
 
     Ok(json!({
-        "state": if state == "running" { "active".to_owned() } else { state },
+        "state": state,
         "logs": logs,
         "image_digest": digest,
     }))

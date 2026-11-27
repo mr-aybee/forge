@@ -64,7 +64,7 @@ async fn subjects_and_templates_are_listed_and_subjects_validated() {
     let find = |name: &str| list.iter().find(|x| x["subject"] == name).cloned().unwrap();
     assert_eq!(find("package.state")["scopes"], json!(["installations"]));
     assert_eq!(find("node.disk.max_used_percent")["unit"], "percent");
-    assert_eq!(find("app.instance.state")["states"], json!(["active", "inactive", "failed"]));
+    assert_eq!(find("app.instance.state")["states"], json!(["active", "inactive", "failed", "running", "exited"]));
     assert_eq!(find("health.readiness.{check}")["pattern"], true);
     assert!(subjects["seen_health"].is_array());
 

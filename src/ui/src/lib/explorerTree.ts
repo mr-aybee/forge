@@ -5,7 +5,7 @@
  * keyboard navigation. No React, no I/O.
  */
 import type { Project, Service, ServiceInstance, Environment, Server } from "../api/types";
-import { liveState, type LiveState } from "../components/InstanceState";
+import { RUNNING_STATES, liveState, type LiveState } from "../components/InstanceState";
 
 /** Running state of a service or placement, kept apart from rollout state. */
 export type RunHealth = "ok" | "warn" | "bad" | "stopped" | "unknown";
@@ -77,7 +77,7 @@ export function placementHealth(i: ServiceInstance, check?: CheckStatus, live: L
   if (check === "degraded") return "warn";
   if (check === "unhealthy") return "bad";
   if (i.state === "failed") return "bad";
-  if (i.state === "active") return "ok";
+  if (i.state && RUNNING_STATES.has(i.state)) return "ok";
   return "unknown";
 }
 

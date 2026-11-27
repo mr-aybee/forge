@@ -37,6 +37,33 @@ pub enum Runtime {
     Container,
 }
 
+impl Runtime {
+    /// Parses the runtime name a service row stores (`systemd`, `container`).
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "systemd" => Some(Self::Systemd),
+            "container" => Some(Self::Container),
+            _ => None,
+        }
+    }
+
+    /// A service instance's reported state in this runtime's own words:
+    /// Docker's (`running`, `exited`, ...) for a container, systemd's
+    /// (`active`, `inactive`, ...) for a native service. Older agents report a
+    /// running container as `active`; every writer of an instance state goes
+    /// through this so one service never shows both words.
+    pub fn instance_state(self, reported: &str) -> String {
+        let word = match (self, reported) {
+            (Self::Container, "active") => "running",
+            (Self::Container, "inactive") => "exited",
+            (Self::Systemd, "running") => "active",
+            _ => reported,
+        };
+
+        word.to_owned()
+    }
+}
+
 /// Everything the node needs to run one service.
 ///
 /// `Debug` prints environment keys but never their values: they include
@@ -982,6 +1009,20 @@ impl AppSpec {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn instance_states_use_the_runtimes_own_words() {
+        assert_eq!(Runtime::Container.instance_state("active"), "running");
+        assert_eq!(Runtime::Container.instance_state("inactive"), "exited");
+        assert_eq!(Runtime::Container.instance_state("running"), "running");
+        assert_eq!(Runtime::Container.instance_state("exited"), "exited");
+        assert_eq!(Runtime::Container.instance_state("not-deployed"), "not-deployed");
+        assert_eq!(Runtime::Systemd.instance_state("running"), "active");
+        assert_eq!(Runtime::Systemd.instance_state("active"), "active");
+        assert_eq!(Runtime::Systemd.instance_state("failed"), "failed");
+        assert_eq!(Runtime::parse("container"), Some(Runtime::Container));
+        assert_eq!(Runtime::parse("vm"), None);
+    }
 
     #[test]
     fn the_older_restart_flag_still_decides_without_a_policy() {

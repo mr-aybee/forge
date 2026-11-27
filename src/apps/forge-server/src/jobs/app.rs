@@ -659,6 +659,20 @@ impl AppJob {
         .await
     }
 
+    /// The state the node reported in `out`, in the service runtime's own
+    /// words (Docker's for a container, systemd's for a native service).
+    async fn reported_state(&self, service: ServiceId, out: &Value) -> Result<Option<String>, StepError> {
+        let Some(reported) = out.get("state").and_then(Value::as_str) else { return Ok(None) };
+        let app = self.apps.get_service(service).await.map_err(retry)?;
+
+        let state = match app.as_ref().and_then(|a| Runtime::parse(&a.runtime)) {
+            Some(runtime) => runtime.instance_state(reported),
+            None => reported.to_owned(),
+        };
+
+        Ok(Some(state))
+    }
+
     async fn await_result(&self, ctx: &mut StepContext) -> Result<(), StepError> {
         let p = payload(ctx)?;
 
@@ -715,7 +729,7 @@ impl AppJob {
             self.apps.clear_adopted(p.service_id).await.map_err(retry)?;
         }
 
-        let state = out.get("state").and_then(Value::as_str).map(str::to_owned);
+        let state = self.reported_state(p.service_id, &out).await?;
         let release = ctx.state_value("release").and_then(Value::as_str).map(str::to_owned);
 
         self.update(&p, ctx, |i| {

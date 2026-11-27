@@ -159,9 +159,9 @@ const DEFS: &[Def] = &[
     },
     state(
         SERVICE_INSTANCE_STATE,
-        &["active", "inactive", "failed"],
+        &["active", "inactive", "failed", "running", "exited"],
         ScopeKind::Services,
-        "A service instance's state as its node last reported it, per node.",
+        "A service instance's state as its node last reported it, per node: systemd's words for a native service, Docker's for a container.",
     ),
     state(
         APP_DEPLOY_STATUS,
