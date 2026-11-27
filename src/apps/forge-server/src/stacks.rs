@@ -270,6 +270,9 @@ pub struct NodeCaps {
     pub mesh: bool,
     /// The agent reports `forge_dns: running`.
     pub forge_dns_running: bool,
+    /// The agent takes the typed container options on app specs
+    /// (`plans/service-orchestration.md` step 1).
+    pub container_options: bool,
 }
 
 /// A node's cluster-network capabilities from its facts. Missing or
@@ -279,6 +282,7 @@ pub async fn node_caps(facts: &dyn FactsRepository, server: ServerId) -> NodeCap
         Ok(Some((f, _))) => NodeCaps {
             mesh: f.get("mesh_network").and_then(Value::as_bool) == Some(true),
             forge_dns_running: f.get("forge_dns").and_then(Value::as_str) == Some("running"),
+            container_options: f.get("container_options").and_then(Value::as_bool) == Some(true),
         },
         Ok(None) => NodeCaps::default(),
         Err(e) => {
@@ -882,8 +886,8 @@ mod tests {
 
     #[test]
     fn mesh_dns_needs_a_running_forge_dns() {
-        let up = NodeCaps { mesh: true, forge_dns_running: true };
-        let down = NodeCaps { mesh: true, forge_dns_running: false };
+        let up = NodeCaps { mesh: true, forge_dns_running: true, ..NodeCaps::default() };
+        let down = NodeCaps { mesh: true, forge_dns_running: false, ..NodeCaps::default() };
         let second = [std::net::Ipv4Addr::new(192, 0, 2, 10)];
 
         let d = mesh_dns(Some("forge-x"), up, "10.64.0.3", &second).unwrap();

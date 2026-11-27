@@ -1,7 +1,7 @@
 import yaml from "js-yaml";
 
-import type { ServiceInput } from "../../api/types";
-import { SEALED, looksSecret } from "./sections";
+import type { RestartPolicy, ServiceInput } from "../../api/types";
+import { SEALED, looksSecret, policyOf } from "./sections";
 
 const secs = (s: unknown) => {
   if (typeof s === "number") return s;
@@ -25,7 +25,17 @@ export function toComposeYaml(v: ServiceInput): string {
   if (v.entrypoint) doc.entrypoint = v.entrypoint;
   if (v.user) doc.user = v.user;
   if (v.hostname) doc.hostname = v.hostname;
-  doc.restart = v.restart ? "unless-stopped" : "no";
+  const policy = policyOf(v);
+  doc.restart = policy === "on-failure" && v.restart_max_attempts ? `on-failure:${v.restart_max_attempts}` : policy;
+  if (v.init) doc.init = true;
+  if (v.networks.length) doc.networks = v.networks;
+  if (v.dns.length) doc.dns = v.dns;
+  if (v.cap_add.length) doc.cap_add = v.cap_add;
+  if (v.cap_drop.length) doc.cap_drop = v.cap_drop;
+  if (v.devices.length) doc.devices = v.devices.map((d) => [d.host, d.container || (d.permissions ? d.host : ""), d.permissions ?? ""].filter(Boolean).join(":"));
+  if (v.tmpfs.length) doc.tmpfs = v.tmpfs.map((t) => (t.size_mb ? `${t.target}:size=${t.size_mb}m` : t.target));
+  if (v.sysctls.length) doc.sysctls = Object.fromEntries(v.sysctls);
+  if (v.ulimits.length) doc.ulimits = Object.fromEntries(v.ulimits.map((u) => [u.name, { soft: u.soft, hard: u.hard }]));
   if (v.ports.length) doc.ports = v.ports;
   if (v.volumes.length) doc.volumes = v.volumes;
   if (v.env.length) doc.environment = Object.fromEntries(v.env.map((e) => [e.key, e.secret && e.value === null ? SEALED : (e.value ?? "")]));
@@ -47,7 +57,7 @@ export function toComposeYaml(v: ServiceInput): string {
   return yaml.dump(doc, { lineWidth: 120, noRefs: true });
 }
 
-const KNOWN = ["image", "command", "entrypoint", "user", "hostname", "restart", "ports", "volumes", "environment", "extra_hosts", "labels", "read_only", "stop_grace_period", "healthcheck", "deploy", "logging"];
+const KNOWN = ["image", "command", "entrypoint", "user", "hostname", "restart", "ports", "volumes", "environment", "extra_hosts", "labels", "read_only", "stop_grace_period", "healthcheck", "deploy", "logging", "init", "networks", "dns", "cap_add", "cap_drop", "devices", "tmpfs", "sysctls", "ulimits"];
 const rec = (x: unknown): Record<string, unknown> => (x && typeof x === "object" && !Array.isArray(x) ? (x as Record<string, unknown>) : {});
 const str = (x: unknown) => (Array.isArray(x) ? x.join(" ") : x == null ? "" : String(x));
 const list = (x: unknown) => (Array.isArray(x) ? x.map(String) : x == null ? [] : [String(x)]);
@@ -69,15 +79,43 @@ export function fromComposeYaml(text: string, base: ServiceInput): ServiceInput 
   const test = hc ? (Array.isArray(hc.test) ? hc.test.map(String).filter((t) => t !== "CMD-SHELL" && t !== "CMD").join(" ") : str(hc.test)) : "";
   const limits = rec(rec(rec(d.deploy).resources).limits);
   const maxSize = rec(rec(d.logging).options)["max-size"];
+  const restart = d.restart == null ? "unless-stopped" : String(d.restart);
+  const rm = /^(no|always|unless-stopped|on-failure)(?::(\d+))?$/.exec(restart);
+  if (!rm) throw new Error("restart: use no, always, unless-stopped or on-failure[:N].");
+  const policy = rm[1] as RestartPolicy;
+  const nets = Array.isArray(d.networks) ? d.networks.map(String) : Object.keys(rec(d.networks));
+  const ulimits = Object.entries(rec(d.ulimits)).map(([name, u]) => {
+    if (typeof u === "number") return { name, soft: u, hard: u };
+    const r = rec(u);
+    return { name, soft: Number(r.soft ?? 0), hard: Number(r.hard ?? 0) };
+  });
   return {
     ...base,
+    restart_policy: policy,
+    restart_max_attempts: policy === "on-failure" ? Number(rm[2] ?? 0) : 0,
+    init: !!d.init,
+    networks: nets,
+    dns: list(d.dns),
+    cap_add: list(d.cap_add),
+    cap_drop: list(d.cap_drop),
+    devices: list(d.devices).map((x) => {
+      const [host = "", container = "", permissions = ""] = x.split(":");
+      return { host, container, permissions };
+    }),
+    tmpfs: list(d.tmpfs).map((x) => {
+      const [target = "", opts = ""] = x.split(/:(.*)/s);
+      const size = /size=([^,]+)/.exec(opts)?.[1];
+      return { target, size_mb: size ? mib(size) : 0 };
+    }),
+    sysctls: pairs(d.sysctls),
+    ulimits,
     runtime: "container",
     image: str(d.image),
     command: str(d.command),
     entrypoint: str(d.entrypoint),
     user: str(d.user),
     hostname: str(d.hostname),
-    restart: d.restart ? d.restart !== "no" : true,
+    restart: policy !== "no",
     ports: list(d.ports),
     volumes: list(d.volumes),
     env,

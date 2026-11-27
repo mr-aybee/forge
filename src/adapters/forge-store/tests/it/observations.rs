@@ -196,6 +196,7 @@ async fn seeded() -> (Store, tempfile::TempDir, ServerId, ServiceId) {
         created_by: Principal::User(UserId::new()),
         created_at: Timestamp(1),
         updated_at: Timestamp(1),
+        version: 0,
     };
     s.put_service(&app).await.unwrap();
     s.put_instance(&ServiceInstance {

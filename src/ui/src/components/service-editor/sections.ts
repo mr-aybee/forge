@@ -3,10 +3,10 @@
  * each kind shows (in rail order), per-section status for the rail markers,
  * and the conversions between a service and its editable input. No React.
  */
-import { Activity, Boxes, Cpu, HardDrive, Network, Package, ServerCog, Settings2, SquareTerminal, Variable, Container, IdCard, Layers, type LucideIcon } from "lucide-react";
+import { Activity, Boxes, Cpu, HardDrive, Network, Package, ServerCog, Settings2, SquareTerminal, Variable, Container, IdCard, Layers, Shield, Play, type LucideIcon } from "lucide-react";
 
 import { defaultSwarmSettings, normSwarmSettings } from "../../api/swarm";
-import type { EditableRuntime, Service, ServiceInput, ServiceRuntime } from "../../api/types";
+import type { EditableRuntime, RestartPolicy, Service, ServiceInput, ServiceRuntime } from "../../api/types";
 
 /** The kinds a user picks between, shown as two large cards. */
 export const KINDS: { id: EditableRuntime; label: string; icon: LucideIcon; description: string; needs: string }[] = [
@@ -32,7 +32,7 @@ export const RUNTIMES: { id: ServiceRuntime; label: string; icon: LucideIcon; he
   { id: "compose-service", label: "Compose service", icon: Container, help: "Registered by a compose stack; managed on its stack." },
 ];
 
-export type SectionId = "basics" | "runtime" | "start" | "resources" | "env" | "storage" | "health" | "advanced" | "image" | "ports" | "command" | "volumes" | "swarm";
+export type SectionId = "basics" | "runtime" | "start" | "resources" | "env" | "storage" | "health" | "advanced" | "image" | "network" | "run" | "volumes" | "security" | "swarm";
 
 export interface SectionMeta {
   id: SectionId;
@@ -46,13 +46,14 @@ const S: Record<SectionId, SectionMeta> = {
   basics: { id: "basics", label: "Basics", icon: IdCard, hint: "Name, where it lives and the nodes it runs on." },
   runtime: { id: "runtime", label: "Runtime", icon: Package, hint: "Language runtimes installed on each node before the service is deployed." },
   start: { id: "start", label: "Start command", icon: SquareTerminal, hint: "How systemd starts the process, and the port it listens on." },
-  image: { id: "image", label: "Image", icon: Boxes, hint: "The container image to run." },
-  ports: { id: "ports", label: "Ports", icon: Network, hint: "Ports published on the node: host:container or ip:host:container[/udp]." },
-  command: { id: "command", label: "Command and entrypoint", icon: SquareTerminal, hint: "Overrides of the image's CMD and ENTRYPOINT, restart and stop behaviour." },
-  resources: { id: "resources", label: "Resources", icon: Cpu, hint: "Limits per node. Empty means no limit." },
+  image: { id: "image", label: "Image", icon: Boxes, hint: "The container image to run, and overrides of its CMD and ENTRYPOINT." },
+  run: { id: "run", label: "Runtime", icon: Play, hint: "Restart policy, user, host name, init and stop behaviour." },
+  network: { id: "network", label: "Network", icon: Network, hint: "Published ports, cluster network, extra networks, hosts and DNS." },
+  security: { id: "security", label: "Security", icon: Shield, hint: "Root filesystem, Linux capabilities, devices and kernel parameters." },
+  resources: { id: "resources", label: "Limits", icon: Cpu, hint: "Limits per node. Empty means no limit." },
   env: { id: "env", label: "Environment variables", icon: Variable, hint: "Written to the service's environment file (0600). Secrets are sealed and never shown again." },
   storage: { id: "storage", label: "Storage", icon: HardDrive, hint: "Where the service keeps code and data on the node, and attached buckets." },
-  volumes: { id: "volumes", label: "Volumes", icon: HardDrive, hint: "Bind mounts: /host/path:/container/path[:ro]." },
+  volumes: { id: "volumes", label: "Storage", icon: HardDrive, hint: "Bind mounts and in-memory tmpfs mounts." },
   health: { id: "health", label: "Health checks", icon: Activity, hint: "How Forge and Docker decide that the service is healthy." },
   advanced: { id: "advanced", label: "Advanced", icon: Settings2, hint: "Rarely needed options." },
   swarm: { id: "swarm", label: "Swarm", icon: Layers, hint: "Replicas, where tasks may run, and how updates and restarts roll out." },
@@ -60,7 +61,7 @@ const S: Record<SectionId, SectionMeta> = {
 
 export const SECTIONS: Record<EditableRuntime, SectionMeta[]> = {
   systemd: [S.basics, S.runtime, S.start, S.resources, S.env, S.storage, S.health, S.advanced],
-  container: [S.basics, S.image, S.ports, S.command, S.resources, S.env, S.volumes, S.health, { ...S.advanced, hint: "User, host name, labels, log rotation, and the whole container as compose YAML." }],
+  container: [S.basics, S.image, S.run, S.network, S.volumes, S.resources, S.security, S.env, S.health, { ...S.advanced, hint: "Labels, log rotation, and the whole container as compose YAML." }],
 };
 
 /** The sections of an input: a container in a Swarm cluster (`swarm` set) also gets the Swarm section. */
@@ -94,6 +95,34 @@ export const VOL_RE = /^\/[^:\s]*:\/[^:\s]*(:(ro|rw))?$/;
 export const HOST_RE = /^[A-Za-z0-9.-]+:(\d{1,3}\.){3}\d{1,3}$/;
 /** Server rule for service names. */
 export const NAME_RE = /^[a-z][a-z0-9-]{0,39}$/;
+/** Mirrors forge_catalog::container_opts (the server is authoritative). */
+export const CAP_RE = /^(CAP_)?[A-Z_]{1,32}$/;
+export const SYSCTL_RE = /^(?=.{1,128}$)[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+$/;
+export const NETWORK_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+export const PERMS_RE = /^[rwm]{0,3}$/;
+export const ULIMITS = ["core", "cpu", "data", "fsize", "locks", "memlock", "msgqueue", "nice", "nofile", "nproc", "rss", "rtprio", "rttime", "sigpending", "stack"] as const;
+export const RESTART_POLICIES: { id: RestartPolicy; label: string }[] = [
+  { id: "unless-stopped", label: "Unless stopped" },
+  { id: "always", label: "Always" },
+  { id: "on-failure", label: "On failure" },
+  { id: "no", label: "Never" },
+];
+/** An absolute container path without `..`, `:`, `,` or spaces. */
+export const pathOk = (p: string) => p.startsWith("/") && p.length <= 512 && !p.split("/").includes("..") && !/[: ,\n\r\0]/.test(p);
+export const ipOk = (s: string) => {
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+  if (v4) return v4.slice(1).every((o) => Number(o) <= 255);
+  return s.includes(":") && /^[0-9A-Fa-f:.]{2,45}$/.test(s);
+};
+export const ulimitOk = (u: { soft: number; hard: number }) => Number.isInteger(u.soft) && Number.isInteger(u.hard) && u.soft >= -1 && u.hard >= -1 && (u.hard === -1 || (u.soft !== -1 && u.soft <= u.hard));
+/** The effective restart policy of an input (legacy boolean when unset). */
+export const policyOf = (v: Pick<ServiceInput, "restart" | "restart_policy">): RestartPolicy => v.restart_policy ?? (v.restart ? "unless-stopped" : "no");
+/** Settings that need stack.privileged (admin with MFA) to deploy. */
+export const privilegedOf = (v: ServiceInput): string[] => [
+  ...v.cap_add.filter(Boolean).map((c) => `cap_add:${c.replace(/^CAP_/, "")}`),
+  ...v.devices.filter((d) => d.host).map((d) => `device:${d.host}`),
+  ...v.sysctls.filter(([k]) => k).map(([k]) => `sysctl:${k}`),
+];
 
 export type SectionStatus = "complete" | "needs" | "error";
 
@@ -126,14 +155,32 @@ export function sectionIssues(id: SectionId, v: ServiceInput, b: BasicsState): {
       if (!v.image.trim()) needs.push("Enter an image.");
       else if (/\s/.test(v.image)) errors.push("Image: no spaces.");
       break;
-    case "ports":
+    case "network":
       if (v.ports.some((p) => p && !PORT_RE.test(p))) errors.push("Ports: use host:container or ip:host:container[/udp].");
+      if (v.extra_hosts.some((h) => h && !HOST_RE.test(h))) errors.push("Extra hosts: use name:ipv4.");
+      if (v.dns.some((d) => d && !ipOk(d))) errors.push("DNS servers: IP addresses only.");
+      if (v.dns.filter(Boolean).length > 8) errors.push("DNS servers: at most 8.");
+      if (v.networks.some((n) => n && (!NETWORK_RE.test(n) || n === "host"))) errors.push("Networks: existing Docker network names (letters, digits, _ . -; not host).");
+      if (v.networks.filter(Boolean).length > 10) errors.push("Networks: at most 10.");
       break;
-    case "command":
+    case "run":
       if (v.stop_timeout_secs < 0 || v.stop_timeout_secs > 3600) errors.push("Stop timeout: 0 to 3600 seconds.");
       break;
-    case "resources":
+    case "resources": {
       if (v.cpu_millis < 0 || v.memory_mb < 0) errors.push("Limits cannot be negative.");
+      const names = v.ulimits.map((u) => u.name);
+      if (names.some((n, i) => names.indexOf(n) !== i)) errors.push("Ulimits: each name once.");
+      if (v.ulimits.some((u) => !ulimitOk(u))) errors.push("Ulimits: soft must not exceed hard (-1 = unlimited).");
+      break;
+    }
+    case "security":
+      if ([...v.cap_add, ...v.cap_drop].some((c) => c && !CAP_RE.test(c))) errors.push("Capabilities: upper-case names such as NET_ADMIN, or ALL.");
+      if (v.cap_add.length + v.cap_drop.length > 64) errors.push("Capabilities: at most 64.");
+      if (v.devices.some((d) => (d.host || d.container) && (!d.host.startsWith("/dev/") || !pathOk(d.host) || (!!d.container && !pathOk(d.container)) || !PERMS_RE.test(d.permissions ?? ""))))
+        errors.push("Devices: a /dev/ host path, an absolute container path, permissions from rwm.");
+      if (v.devices.length > 20) errors.push("Devices: at most 20.");
+      if (v.sysctls.some(([k, val]) => (k || val) && (!SYSCTL_RE.test(k) || !val || val.length > 256))) errors.push("Sysctls: dotted keys such as net.core.somaxconn, each with a value.");
+      if (v.sysctls.length > 50) errors.push("Sysctls: at most 50.");
       break;
     case "env":
       if (v.env.some((e) => e.key && !KEY_RE.test(e.key))) errors.push("Names: letters, digits and underscores; not starting with a digit.");
@@ -142,12 +189,13 @@ export function sectionIssues(id: SectionId, v: ServiceInput, b: BasicsState): {
       break;
     case "volumes":
       if (v.volumes.some((p) => p && !VOL_RE.test(p))) errors.push("Volumes: use /host/path:/container/path[:ro].");
+      if (v.tmpfs.some((t) => t.target && (!pathOk(t.target) || t.size_mb < 0 || t.size_mb > 1048576))) errors.push("tmpfs: an absolute container path and a size up to 1 TiB.");
+      if (v.tmpfs.length > 20) errors.push("tmpfs: at most 20 mounts.");
       break;
     case "health":
       if (v.runtime === "container" && v.healthcheck && !v.healthcheck.command.trim()) needs.push("Enter the health check command, or turn it off.");
       break;
     case "advanced":
-      if (v.runtime === "container" && v.extra_hosts.some((h) => h && !HOST_RE.test(h))) errors.push("Extra hosts: use name:ipv4.");
       if (v.log_max_mb < 0) errors.push("Log rotation cannot be negative.");
       break;
     case "swarm": {
@@ -166,6 +214,8 @@ export function sectionIssues(id: SectionId, v: ServiceInput, b: BasicsState): {
     case "storage":
       break;
   }
+  if ((id === "run" || id === "start") && v.restart_policy === "on-failure" && (!Number.isInteger(v.restart_max_attempts) || v.restart_max_attempts < 0 || v.restart_max_attempts > 1000))
+    errors.push("Restart attempts: 0 (unlimited) to 1000.");
   return { status: errors.length ? "error" : needs.length ? "needs" : "complete", messages: [...errors, ...needs] };
 }
 
@@ -199,9 +249,22 @@ export const emptyInput = (runtime: EditableRuntime = "container"): ServiceInput
   stop_timeout_secs: 0,
   read_only: false,
   log_max_mb: 0,
+  restart_max_attempts: 0,
+  cap_add: [],
+  cap_drop: [],
+  ulimits: [],
+  tmpfs: [],
+  dns: [],
+  sysctls: [],
+  devices: [],
+  init: false,
+  networks: [],
 });
 
 const arr = <T,>(v: T[] | undefined | null): T[] => (Array.isArray(v) ? v : []);
+const isStr = (x: unknown): x is string => typeof x === "string";
+const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : 0);
+const isPolicy = (x: unknown): x is RestartPolicy => x === "no" || x === "always" || x === "unless-stopped" || x === "on-failure";
 
 /** The editable input of a service; every field defaulted so a partial spec cannot break the editor. */
 export function toInput(a: Service): ServiceInput {
@@ -229,6 +292,18 @@ export function toInput(a: Service): ServiceInput {
     stop_timeout_secs: s.stop_timeout_secs ?? 0,
     read_only: s.read_only ?? false,
     log_max_mb: s.log_max_mb ?? 0,
+    ...(isPolicy(s.restart_policy) ? { restart_policy: s.restart_policy } : {}),
+    restart_max_attempts: num(s.restart_max_attempts),
+    cap_add: arr(s.cap_add).filter(isStr),
+    cap_drop: arr(s.cap_drop).filter(isStr),
+    ulimits: arr(s.ulimits).filter((u) => u && typeof u.name === "string").map((u) => ({ name: u.name, soft: num(u.soft), hard: num(u.hard) })),
+    tmpfs: arr(s.tmpfs).filter((t) => t && typeof t.target === "string").map((t) => ({ target: t.target, size_mb: num(t.size_mb) })),
+    dns: arr(s.dns).filter(isStr),
+    sysctls: arr(s.sysctls).filter((p): p is [string, string] => Array.isArray(p)).map(([k, v]) => [String(k ?? ""), String(v ?? "")] as [string, string]),
+    devices: arr(s.devices).filter((d) => d && typeof d.host === "string").map((d) => ({ host: d.host, container: d.container ?? "", permissions: d.permissions ?? "" })),
+    init: s.init === true,
+    networks: arr(s.networks).filter(isStr),
+    ...(typeof a.version === "number" ? { version: a.version } : {}),
     ...(a.runtime === "container" && s.mesh === false ? { mesh: false as const } : {}),
     ...(s.swarm ? { swarm: normSwarmSettings(s.swarm) } : {}),
   };
@@ -236,7 +311,7 @@ export function toInput(a: Service): ServiceInput {
 
 /** What changing the kind clears, for the confirmation. */
 export const CLEARED_ON_SWITCH: Record<EditableRuntime, string> = {
-  systemd: "the image, ports, volumes, entrypoint, user, host name, labels, extra hosts, Docker health check, stop timeout, read-only flag and log size",
+  systemd: "the image, ports, volumes, entrypoint, user, host name, labels, extra hosts, Docker health check, stop timeout, read-only flag, log size, and the network, storage and security options",
   container: "the runtimes, working directory and listening port",
 };
 
@@ -245,7 +320,7 @@ export function switchKind(v: ServiceInput, kind: EditableRuntime): ServiceInput
   const empty = emptyInput(kind);
   if (kind === "systemd") {
     const { mesh: _mesh, ...rest } = v;
-    return { ...rest, runtime: kind, image: "", ports: [], volumes: [], entrypoint: "", user: "", hostname: "", labels: [], extra_hosts: [], healthcheck: null, stop_timeout_secs: 0, read_only: false, log_max_mb: 0 };
+    return { ...rest, runtime: kind, image: "", ports: [], volumes: [], entrypoint: "", user: "", hostname: "", labels: [], extra_hosts: [], healthcheck: null, stop_timeout_secs: 0, read_only: false, log_max_mb: 0, cap_add: [], cap_drop: [], ulimits: [], tmpfs: [], dns: [], sysctls: [], devices: [], init: false, networks: [] };
   }
   return { ...v, runtime: kind, dependencies: empty.dependencies, working_dir: "", listen_port: null };
 }
@@ -257,6 +332,15 @@ export function cleanInput(v: ServiceInput): ServiceInput {
     ports: v.ports.filter(Boolean),
     volumes: v.volumes.filter(Boolean),
     extra_hosts: v.extra_hosts.filter(Boolean),
+    cap_add: v.cap_add.filter(Boolean),
+    cap_drop: v.cap_drop.filter(Boolean),
+    dns: v.dns.filter(Boolean),
+    networks: v.networks.filter(Boolean),
+    tmpfs: v.tmpfs.filter((t) => t.target),
+    sysctls: v.sysctls.filter(([k]) => k),
+    devices: v.devices.filter((d) => d.host).map((d) => ({ host: d.host, ...(d.container ? { container: d.container } : {}), ...(d.permissions ? { permissions: d.permissions } : {}) })),
+    // Older servers read only the boolean; keep it in step with the policy.
+    ...(v.restart_policy ? { restart: v.restart_policy !== "no", restart_max_attempts: v.restart_policy === "on-failure" ? v.restart_max_attempts : 0 } : { restart_max_attempts: 0 }),
     env: v.env.filter((e) => e.key),
     ...(v.swarm ? { swarm: { ...v.swarm, constraints: v.swarm.constraints.filter(Boolean), spread: v.swarm.spread.filter(Boolean) } } : {}),
   };

@@ -137,15 +137,15 @@ pub fn privileged_mounts(spec: &AppSpec, roots: &[String]) -> Vec<String> {
     let allowed: Vec<String> =
         std::iter::once(own).chain(roots.iter().cloned()).filter_map(|r| normalize_abs(&r)).collect();
 
-    spec.volumes
-        .iter()
-        .filter(|v| {
-            // A named volume is Docker's storage, never a host folder.
-            let Some(host) = forge_catalog::apps::volume_host_path(v) else { return false };
-            normalize_abs(host).is_none_or(|h| !allowed.iter().any(|r| within(&h, r)))
-        })
-        .cloned()
-        .collect()
+    let mounts = spec.volumes.iter().filter(|v| {
+        // A named volume is Docker's storage, never a host folder.
+        let Some(host) = forge_catalog::apps::volume_host_path(v) else { return false };
+        normalize_abs(host).is_none_or(|h| !allowed.iter().any(|r| within(&h, r)))
+    });
+
+    // Added capabilities, devices and sysctls need the same approval, as
+    // on the stack path (`stacks::check`).
+    mounts.cloned().chain(spec.options().privileged()).collect()
 }
 
 #[derive(Debug)]
@@ -171,6 +171,27 @@ pub struct AppJob {
     /// node's cluster container network (`plans/native-mesh.md` 1.7).
     pub fabrics: Arc<dyn forge_core::ports::FabricRepository>,
     pub facts: Arc<dyn forge_core::tags::FactsRepository>,
+}
+
+/// Whether a node with `facts` can take a spec with step-1 container
+/// options. No facts yet (a node that just enrolled or updated) is
+/// retryable: the job's attempt limit (2 for `app.action`, 3 on the deploy
+/// path) turns it into a failure with this message if the node never
+/// reports. Facts without the `container_options` flag mean an older agent.
+pub fn agent_takes_options(facts: Option<&Value>) -> Result<(), StepError> {
+    let Some(facts) = facts else {
+        return Err(retry(
+            "the node has not reported its facts yet, so Forge cannot tell whether its agent supports this service's container options; deploy again once the node is online",
+        ));
+    };
+
+    if facts.get("container_options").and_then(Value::as_bool) == Some(true) {
+        return Ok(());
+    }
+
+    Err(StepError::Fatal(
+        "this node's agent is too old for the restart policy, capabilities, ulimits, tmpfs, DNS, sysctls, devices, init or networks this service uses; update the agent first".into(),
+    ))
 }
 
 /// Whether a service wants the cluster container network: containers only,
@@ -354,6 +375,19 @@ impl AppJob {
         Ok(())
     }
 
+    /// Refuses a spec with step-1 container options for an agent that does
+    /// not report the `container_options` fact: older agents refuse unknown
+    /// fields, so the command would fail there with a less useful message.
+    pub async fn ensure_agent_takes(&self, spec: &AppSpec, server: ServerId) -> Result<(), StepError> {
+        if !spec.options().needs_new_agent() {
+            return Ok(());
+        }
+
+        let facts = self.facts.facts_of(server).await.map_err(retry)?;
+
+        agent_takes_options(facts.as_ref().map(|(f, _)| f))
+    }
+
     /// Puts `spec` into the copy that serves on `server` (#73): a service
     /// rolled out side by side runs in slot `a` or `b` with its own ports;
     /// one deployed only in place keeps its single instance.
@@ -407,6 +441,7 @@ impl AppJob {
             return Err(StepError::Fatal("server is revoked".into()));
         }
 
+        self.ensure_agent_takes(spec, server).await?;
         let spec_json = serde_json::to_string(spec).map_err(|e| StepError::Fatal(e.to_string()))?;
         let command =
             Command::AppAction(AppAction { action: action.to_owned(), spec_json, tail: 0, cursor: String::new() });
@@ -463,12 +498,13 @@ impl AppJob {
 
         self.serving_slot(&mut spec, app.id, p.server_id).await?;
         self.attach_mesh(&app, &mut spec, p.server_id).await?;
+        self.ensure_agent_takes(&spec, p.server_id).await?;
 
         if p.action == "deploy" {
             let roots = crate::stacks::bind_roots(self.files.as_ref(), p.server_id).await;
             if let Some(v) = privileged_mounts(&spec, &roots).into_iter().find(|v| !p.privileged_mounts.contains(v)) {
                 return Err(StepError::Fatal(format!(
-                    "volume `{v}` is outside the app folder and the approved file roots; it needs stack.privileged                      (an administrator with MFA): deploy again as one"
+                    "`{v}` (a volume outside the app folder and the approved file roots, a capability, a device or a sysctl) needs stack.privileged                      (an administrator with MFA): deploy again as one"
                 )));
             }
         }
@@ -632,6 +668,14 @@ impl JobHandler for AppJob {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_facts_are_retried_and_old_agents_refused() {
+        assert!(matches!(agent_takes_options(None), Err(StepError::Retryable(_))), "no facts yet");
+        assert!(matches!(agent_takes_options(Some(&json!({ "agent_version": "1.0" }))), Err(StepError::Fatal(_))));
+        assert!(matches!(agent_takes_options(Some(&json!({ "container_options": false }))), Err(StepError::Fatal(_))));
+        assert!(agent_takes_options(Some(&json!({ "container_options": true }))).is_ok());
+    }
 
     #[test]
     fn expands_setting_references() {

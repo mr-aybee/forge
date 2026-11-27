@@ -2,9 +2,8 @@ import { Code2, LayoutGrid } from "lucide-react";
 import { useState } from "react";
 
 import type { ServiceInput } from "../../api/types";
-import { Input, Mono } from "../ui";
-import { FormField, Grid, ListEditor, NumberInput } from "./parts";
-import { HOST_RE } from "./sections";
+import { Mono } from "../ui";
+import { FormField, Grid, NumberInput } from "./parts";
 import { fromComposeYaml, toComposeYaml } from "./yaml";
 import { CodeField } from "../CodeField";
 
@@ -51,30 +50,17 @@ export function AdvancedSection({ value, set, onReplace, yaml, facts }: { value:
           <Mono>{facts.user}</Mono> <span className="text-xs text-muted">· its own system user, never root</span>
         </dd>
         <dt className="text-muted">Not available</dt>
-        <dd className="text-xs text-muted">Entrypoint, user, host name, labels, extra hosts, stop timeout and log size apply to containers only.</dd>
+        <dd className="text-xs text-muted">Image, network, storage, ulimits, security, labels and log size apply to containers only. Restart policy and limits are in Start command and Limits.</dd>
       </dl>
     );
   }
   if (yaml) return <YamlEditor value={value} onChange={onReplace} />;
   return (
     <Grid>
-      <FormField label="Run as user" hint="name, uid or uid:gid. Default: the image's user.">
-        {(id) => <Input id={id} className="font-mono" value={value.user} onChange={(e) => set({ user: e.target.value.trim() })} placeholder="1000:1000" spellCheck={false} />}
-      </FormField>
-      <FormField label="Host name" hint="Inside the container. Default: the container id.">
-        {(id) => <Input id={id} className="font-mono" value={value.hostname} onChange={(e) => set({ hostname: e.target.value.trim() })} placeholder="api" spellCheck={false} />}
-      </FormField>
       <FormField label="Log rotation (MiB)" error={value.log_max_mb < 0 ? "Cannot be negative." : undefined} hint="Rotate the container log at this size (3 files kept). Empty: Docker's default.">
         {(id, invalid) => <NumberInput id={id} className="w-36" min={0} value={value.log_max_mb} invalid={invalid} placeholder="default" onChange={(n) => set({ log_max_mb: Math.round(n) })} />}
       </FormField>
       <LabelsField value={value.labels} onChange={(labels) => set({ labels })} />
-      <div className="min-w-0 space-y-1 md:col-span-2">
-        <p className="text-xs font-medium text-muted">Extra hosts</p>
-        <ListEditor label="Extra host" values={value.extra_hosts} onChange={(extra_hosts) => set({ extra_hosts })} placeholder="db.internal:10.64.1.5" validate={(v) => HOST_RE.test(v)} addLabel="Add host" />
-        <p className="text-xs text-faint">
-          <Mono>name:ipv4</Mono> entries added to <Mono>/etc/hosts</Mono>.
-        </p>
-      </div>
     </Grid>
   );
 }

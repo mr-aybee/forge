@@ -60,6 +60,7 @@ mod process_actions;
 mod resume;
 mod scale;
 mod server_settings;
+mod service_spec;
 mod sftp;
 mod silences;
 mod stack_apply;

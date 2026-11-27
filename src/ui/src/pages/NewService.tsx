@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { useAllEnvironments, useClusters, useDeployService, usePlaceService, useProjects, useSaveService, useServers } from "../api/hooks";
 import type { ServiceInput } from "../api/types";
+import { ApiError } from "../api/client";
 import { errorText, useToast } from "../app/toast";
 import { NewEnvironmentModal } from "../components/EnvironmentDialogs";
 import { ProjectModal } from "../components/ProjectDialogs";
@@ -35,6 +36,8 @@ export function NewService() {
   }));
   const [dialog, setDialog] = useState<"project" | "env" | null>(null);
   const [pending, setPending] = useState<"create" | "deploy" | null>(null);
+  /** The server's validation message of the last create, shown above the editor. */
+  const [invalid, setInvalid] = useState("");
 
   const cluster = clusters.find((c) => c.id === search.cluster);
   const projects = projectsQ.data ?? [];
@@ -62,8 +65,11 @@ export function NewService() {
   const submit = async (andDeploy: boolean) => {
     if (!env || issues.length) return;
     setPending(andDeploy ? "deploy" : "create");
+    setInvalid("");
+    let created = false;
     try {
       const svc = await save.mutateAsync({ ...cleanInput(input), environment_id: env.id, name: basics.name });
+      created = true;
       if (basics.nodes.length && !swarm) await place.mutateAsync({ id: svc.id, placements: basics.nodes.map((server_id) => ({ server_id, role: "active" })) });
       if (andDeploy) {
         const jobs = await deploy.mutateAsync(svc.id);
@@ -71,7 +77,8 @@ export function NewService() {
       } else toast(`Created ${svc.name}`);
       void navigate({ to: "/services/$serviceId", params: { serviceId: svc.id } });
     } catch (e) {
-      toast(errorText(e), "error");
+      if (!created && e instanceof ApiError && e.status === 400) setInvalid(e.message);
+      else toast(errorText(e), "error");
     } finally {
       setPending(null);
     }
@@ -112,6 +119,12 @@ export function NewService() {
             </Empty>
           </div>
         ) : (
+          <>
+          {invalid && (
+            <p role="alert" className="mb-3 rounded-md border border-bad bg-bad-soft px-3 py-2 text-[13px] break-words text-bad">
+              <b className="font-semibold">Not created:</b> {invalid}
+            </p>
+          )}
           <ServiceEditor
             mode="create"
             value={input}
@@ -134,6 +147,7 @@ export function NewService() {
               />
             }
           />
+          </>
         )}
       </div>
 

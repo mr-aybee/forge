@@ -450,6 +450,7 @@ impl StackJob {
                     created_by: ctx.job.principal.clone(),
                     created_at: now,
                     updated_at: now,
+                    version: 0,
                 },
             };
 

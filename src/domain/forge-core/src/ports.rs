@@ -509,6 +509,9 @@ pub trait ApiKeyRepository: Send + Sync + std::fmt::Debug {
 pub trait ServiceRepository: Send + Sync + std::fmt::Debug {
     /// Inserts or replaces by id.
     async fn put_service(&self, app: &Service) -> DomainResult<()>;
+    /// Saves an existing service only when its stored version is still
+    /// `expected`, bumping it. `false` when someone saved in between.
+    async fn update_service_if(&self, app: &Service, expected: i64) -> DomainResult<bool>;
     async fn get_service(&self, id: ServiceId) -> DomainResult<Option<Service>>;
     /// The services with these ids, in no particular order; unknown ids
     /// are skipped. One query per 200 ids instead of one per service.

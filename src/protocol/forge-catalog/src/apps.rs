@@ -18,6 +18,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::container_opts::{Device, RestartPolicy, Tmpfs, Ulimit};
+
 /// The variable that tells an app where to send its logs (D-142).
 pub const LOG_URL_ENV: &str = "FORGE_LOG_URL";
 /// `FORGE_LOG_URL` for apps on the host: the agent's loopback listener.
@@ -139,6 +141,45 @@ pub struct AppSpec {
     /// fields.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh_network: Option<String>,
+    /// Restart policy (`plans/service-orchestration.md` step 1). `None`
+    /// keeps the older `restart` flag: `true` is `unless-stopped`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_policy: Option<RestartPolicy>,
+    /// `on-failure` only: give up after this many restarts (`0` = no limit).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub restart_max_attempts: u32,
+    /// Container: kernel capabilities to add (needs `stack.privileged`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cap_add: Vec<String>,
+    /// Container: kernel capabilities to drop (`ALL` for every one).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cap_drop: Vec<String>,
+    /// Container: resource limits.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ulimits: Vec<Ulimit>,
+    /// Container: tmpfs mounts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tmpfs: Vec<Tmpfs>,
+    /// Container: DNS servers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dns: Vec<std::net::IpAddr>,
+    /// Container: kernel parameters (needs `stack.privileged`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sysctls: Vec<(String, String)>,
+    /// Container: host devices (needs `stack.privileged`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<Device>,
+    /// Container: run Docker's init as PID 1 (reaps zombies, forwards signals).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub init: bool,
+    /// Container: existing Docker networks to connect to as well.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub networks: Vec<String>,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if passes a reference
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 impl std::fmt::Debug for AppSpec {
@@ -176,6 +217,17 @@ impl std::fmt::Debug for AppSpec {
             artifact,
             swarm,
             mesh_network,
+            restart_policy,
+            restart_max_attempts,
+            cap_add,
+            cap_drop,
+            ulimits,
+            tmpfs,
+            dns,
+            sysctls,
+            devices,
+            init,
+            networks,
         } = self;
         let env: Vec<String> = env.iter().map(|(k, _)| format!("{k}=***")).collect();
 
@@ -211,6 +263,17 @@ impl std::fmt::Debug for AppSpec {
             .field("artifact", &artifact.as_ref().map(crate::deploy::ArtifactRef::kind))
             .field("swarm", swarm)
             .field("mesh_network", mesh_network)
+            .field("restart_policy", restart_policy)
+            .field("restart_max_attempts", restart_max_attempts)
+            .field("cap_add", cap_add)
+            .field("cap_drop", cap_drop)
+            .field("ulimits", ulimits)
+            .field("tmpfs", tmpfs)
+            .field("dns", dns)
+            .field("sysctls", sysctls)
+            .field("devices", devices)
+            .field("init", init)
+            .field("networks", networks)
             .finish()
     }
 }
@@ -401,6 +464,30 @@ fn short_hash(s: &str) -> String {
 }
 
 impl AppSpec {
+    /// The container runtime options, borrowed.
+    #[must_use]
+    pub fn options(&self) -> crate::container_opts::Options<'_> {
+        crate::container_opts::Options {
+            restart_policy: self.restart_policy,
+            restart_max_attempts: self.restart_max_attempts,
+            cap_add: &self.cap_add,
+            cap_drop: &self.cap_drop,
+            ulimits: &self.ulimits,
+            tmpfs: &self.tmpfs,
+            dns: &self.dns,
+            sysctls: &self.sysctls,
+            devices: &self.devices,
+            init: self.init,
+            networks: &self.networks,
+        }
+    }
+
+    /// The restart policy in effect: `restart_policy`, or the older flag.
+    #[must_use]
+    pub fn effective_restart(&self) -> RestartPolicy {
+        self.restart_policy.unwrap_or(if self.restart { RestartPolicy::UnlessStopped } else { RestartPolicy::No })
+    }
+
     /// Validates everything the helper will write or run.
     pub fn validate(&self) -> Result<(), String> {
         if let Some(e) = self.health.as_ref().and_then(|h| h.validate().into_iter().next()) {
@@ -493,6 +580,16 @@ impl AppSpec {
             || self.stop_timeout_secs > 0
             || self.read_only
             || self.log_max_mb > 0;
+
+        let opts = self.options();
+        opts.validate()?;
+
+        if opts.container_only() && self.runtime != Runtime::Container {
+            return Err(
+                "capabilities, ulimits, tmpfs, DNS, sysctls, devices, init and networks apply to containers only"
+                    .into(),
+            );
+        }
 
         if container_only && self.runtime != Runtime::Container {
             return Err("entrypoint, user, host name, labels, hosts, health check, stop timeout, read-only and log size apply to containers only".into());
@@ -804,10 +901,24 @@ impl AppSpec {
             limits.push_str(&format!("MemoryMax={}M\n", self.memory_mb));
         }
 
-        let restart = if self.restart { "Restart=always\nRestartSec=3\n" } else { "" };
+        let restart = match self.effective_restart() {
+            RestartPolicy::No => String::new(),
+            RestartPolicy::Always | RestartPolicy::UnlessStopped => "Restart=always\nRestartSec=3\n".to_owned(),
+            RestartPolicy::OnFailure => "Restart=on-failure\nRestartSec=3\n".to_owned(),
+        };
+
+        // systemd counts every start in a window, the first one included,
+        // so n restarts need a burst of n + 1; one day stands in for "ever".
+        // The agent resets the count before each deploy and operator start.
+        let start_limit = match (self.effective_restart(), self.restart_max_attempts) {
+            (RestartPolicy::OnFailure, n) if n > 0 => {
+                format!("StartLimitIntervalSec=86400\nStartLimitBurst={}\n", n.saturating_add(1))
+            }
+            _ => String::new(),
+        };
 
         format!(
-            "# Managed by Orbyn Forge\n[Unit]\nDescription=Orbyn Forge app {ns}/{name}\nAfter=network-online.target\nWants=network-online.target\n\n\
+            "# Managed by Orbyn Forge\n[Unit]\nDescription=Orbyn Forge app {ns}/{name}\nAfter=network-online.target\nWants=network-online.target\n{start_limit}\n\
              [Service]\nUser={user}\nGroup={user}\nWorkingDirectory={wd}\nEnvironment={LOG_URL_ENV}={LOG_URL_HOST}\n{env_files}EnvironmentFile={env}\nExecStart={launcher}\n{restart}{limits}\
              NoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=full\nSyslogIdentifier={unit}\n\n[Install]\nWantedBy=multi-user.target\n",
             ns = self.environment,
@@ -824,6 +935,40 @@ impl AppSpec {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_older_restart_flag_still_decides_without_a_policy() {
+        let mut s = svc();
+        assert_eq!(s.effective_restart(), RestartPolicy::UnlessStopped);
+        s.restart = false;
+        assert_eq!(s.effective_restart(), RestartPolicy::No);
+        s.restart_policy = Some(RestartPolicy::OnFailure);
+        s.restart_max_attempts = 4;
+        assert!(s.validate().is_ok());
+
+        let unit = s.service_unit("staging-api");
+        assert!(unit.contains("Restart=on-failure"), "{unit}");
+        assert!(unit.contains("StartLimitBurst=5"), "{unit}");
+    }
+
+    #[test]
+    fn a_spec_without_options_serializes_as_before() {
+        // Older agents refuse unknown fields: nothing new may appear.
+        let v = serde_json::to_value(svc()).unwrap();
+
+        for k in ["restart_policy", "restart_max_attempts", "cap_add", "ulimits", "tmpfs", "dns", "init", "networks"] {
+            assert!(v.get(k).is_none(), "{k} leaked into an old-style spec");
+        }
+
+        assert!(!svc().options().needs_new_agent());
+    }
+
+    #[test]
+    fn container_options_are_refused_on_native_services() {
+        let mut s = svc();
+        s.init = true;
+        assert!(s.validate().unwrap_err().contains("containers only"));
+    }
 
     fn svc() -> AppSpec {
         AppSpec {
@@ -856,6 +1001,17 @@ mod tests {
             artifact: None,
             swarm: None,
             mesh_network: None,
+            restart_policy: None,
+            restart_max_attempts: 0,
+            cap_add: vec![],
+            cap_drop: vec![],
+            ulimits: vec![],
+            tmpfs: vec![],
+            dns: vec![],
+            sysctls: vec![],
+            devices: vec![],
+            init: false,
+            networks: vec![],
             log_max_mb: 0,
         }
     }

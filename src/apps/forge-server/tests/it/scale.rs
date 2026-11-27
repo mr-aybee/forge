@@ -154,6 +154,7 @@ async fn api_stays_fast_with_1000_nodes_and_15000_apps() {
             created_by: Principal::User(UserId::new()),
             created_at: now,
             updated_at: now,
+            version: 0,
         };
         s.put_service(&app).await.unwrap();
 

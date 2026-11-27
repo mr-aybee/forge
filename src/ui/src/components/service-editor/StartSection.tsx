@@ -1,6 +1,6 @@
 import type { ServiceInput } from "../../api/types";
 import { Input, Mono } from "../ui";
-import { Check, FormField, Grid, NumberInput } from "./parts";
+import { FormField, Grid, NumberInput, RestartFields } from "./parts";
 
 /** Systemd: start command, working directory, restart and listening port. */
 export function StartSection({ value, set, home }: { value: ServiceInput; set: (p: Partial<ServiceInput>) => void; home: string }) {
@@ -46,9 +46,7 @@ export function StartSection({ value, set, home }: { value: ServiceInput; set: (
           />
         )}
       </FormField>
-      <div className="md:col-span-2">
-        <Check checked={value.restart} onChange={(restart) => set({ restart })} label="Restart automatically when it exits" hint="systemd Restart=always with a short back-off." />
-      </div>
+      <RestartFields value={value} set={set} systemd />
     </Grid>
   );
 }

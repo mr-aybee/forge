@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { ChevronRight, Container, History, Database, Globe, HeartPulse, LayoutDashboard, Loader2, Rocket, Settings2, Trash2, Waypoints, Webhook } from "lucide-react";
+import { ChevronRight, Container, History, Database, Globe, HeartPulse, LayoutDashboard, Loader2, RefreshCw, Rocket, Settings2, TriangleAlert, Trash2, Waypoints, Webhook } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ApiError, get } from "../api/client";
@@ -107,6 +107,8 @@ function ServicePage({ appId }: { appId: string }) {
   // `undefined` until the first edit: the form shows the saved service, so there is nothing to sync.
   const [draft, setDraft] = useState<ServiceInput>();
   const [saving, setSaving] = useState<"save" | "deploy" | null>(null);
+  /** Why the last save failed, shown above the editor: a 409 conflict or a server validation message. */
+  const [saveProblem, setSaveProblem] = useState<{ kind: "conflict" | "invalid"; message: string } | null>(null);
   const [logs, setLogs] = useState<{ host: string; text: string }>();
   const [job, setJob] = useState<string>();
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -347,15 +349,27 @@ function ServicePage({ appId }: { appId: string }) {
           form={form}
           dirty={dirty}
           onChange={setDraft}
-          onDiscard={() => setDraft(undefined)}
+          onDiscard={() => {
+            setDraft(undefined);
+            setSaveProblem(null);
+          }}
+          problem={saveProblem}
+          onReload={async () => {
+            await app.refetch();
+            setDraft(undefined);
+            setSaveProblem(null);
+          }}
           saving={saving}
           swarm={swarm}
           basics={<EditBasics service={a} environment={ns} project={projects.find((g) => g.id === ns?.project_id)} cluster={clusters.find((c) => c.id === ns?.cluster_id)} nodeNameOf={hostOf} />}
           facts={facts}
           onSave={async (andDeploy) => {
             setSaving(andDeploy ? "deploy" : "save");
+            setSaveProblem(null);
+            let saved = false;
             try {
               await save.mutateAsync({ id: a.id, ...cleanInput(form) });
+              saved = true;
               setDraft(undefined);
               if (andDeploy && swarm) {
                 await swarmAct.mutateAsync({ kind: "deploy" });
@@ -365,7 +379,10 @@ function ServicePage({ appId }: { appId: string }) {
                 toast(`Saved; deploying to ${jobs.length} node${jobs.length === 1 ? "" : "s"}`);
               } else toast("Saved. Deploy applies it to the nodes.");
             } catch (e) {
-              toast(errorText(e), "error");
+              // Conflicts and validation errors stay next to the form with the user's input kept.
+              if (!saved && e instanceof ApiError && e.status === 409) setSaveProblem({ kind: "conflict", message: e.message });
+              else if (!saved && e instanceof ApiError && e.status === 400) setSaveProblem({ kind: "invalid", message: e.message });
+              else toast(errorText(e), "error");
             } finally {
               setSaving(null);
             }
@@ -575,6 +592,8 @@ function ConfigurationTab({
   basics,
   facts,
   swarm,
+  problem,
+  onReload,
 }: {
   a: Service;
   form: ServiceInput;
@@ -586,13 +605,48 @@ function ConfigurationTab({
   basics: React.ReactNode;
   facts: ReturnType<typeof serviceFacts>;
   swarm: boolean;
+  problem: { kind: "conflict" | "invalid"; message: string } | null;
+  onReload: () => Promise<void>;
 }) {
+  const [reloading, setReloading] = useState(false);
   const basicsState = { mode: "edit" as const, environment: a.environment_id, name: a.name };
   const issues = allIssues(form, basicsState);
   const denied = a.can_deploy === false;
   const deployWhy = issues[0] ?? (denied ? "Needs the deploy permission on this environment" : !swarm && a.instances.length === 0 ? "Choose nodes on the Overview tab first" : undefined);
   return (
     <div>
+      {problem && (
+        <div role="alert" className={`mb-3 flex min-w-0 flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-[13px] ${problem.kind === "conflict" ? "border-warn bg-warn-soft text-warn" : "border-bad bg-bad-soft text-bad"}`}>
+          <TriangleAlert className="size-4 shrink-0" aria-hidden />
+          <span className="min-w-0 flex-1">
+            {problem.kind === "conflict" ? (
+              <>
+                <b className="font-semibold">Someone else changed this service since you opened it.</b> Your edits are kept below and were not saved. Reload to see the latest version (this discards your edits), or copy what you need first.
+              </>
+            ) : (
+              <>
+                <b className="font-semibold">Not saved:</b> <span className="break-words">{problem.message}</span>
+              </>
+            )}
+          </span>
+          {problem.kind === "conflict" && (
+            <Button
+              type="button"
+              disabled={reloading}
+              onClick={async () => {
+                setReloading(true);
+                try {
+                  await onReload();
+                } finally {
+                  setReloading(false);
+                }
+              }}
+            >
+              {reloading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} Reload
+            </Button>
+          )}
+        </div>
+      )}
       <ServiceEditor mode="edit" swarm={swarm} environmentId={a.environment_id} value={form} onChange={onChange} basics={basics} basicsState={basicsState} facts={facts} serviceId={a.id} />
       <UnsavedBar
         dirty={dirty}

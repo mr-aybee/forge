@@ -133,6 +133,8 @@ fn keep(v: &Value) -> Value {
         // Cluster container network (plans/native-mesh.md): the capability,
         // the Docker version its retry follows, and forge-dns's state.
         "mesh_network",
+        // Typed container options on app specs (service orchestration step 1).
+        "container_options",
         "docker_version",
         "forge_dns",
     ] {

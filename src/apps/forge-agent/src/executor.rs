@@ -167,6 +167,10 @@ impl CommandExecutor for LocalExecutor {
                 // with `mesh_network`, `NetworkEnsure`/`NetworkRemove`
                 // (plans/native-mesh.md). Older agents omit it.
                 "mesh_network": cfg!(unix),
+                // Restart policy, capabilities, ulimits, tmpfs, DNS, sysctls,
+                // devices, init and extra networks on app specs
+                // (plans/service-orchestration.md step 1).
+                "container_options": true,
                 "docker_version": caps.docker_version,
                 // forge-dns on fabric nodes: running, stopped or missing.
                 "forge_dns": forge_dns_status().await,
