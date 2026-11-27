@@ -235,6 +235,12 @@ Envelope encryption: each secret gets its own AES-256-GCM data key, wrapped by
 a key-encryption key from a `KeyProvider` (a local key file today; TPM, KMS and
 OpenBao later). Additional data binds each ciphertext to its record.
 
+Secret and config files of services reference credential vault items by
+name. The server unseals a value only inside the deploy job and sends it only
+in the signed command to the node; it never reaches an API response, the
+browser, an audit record or a log. On the node the files live in a
+root-owned folder per service under `/var/lib/forge-agent/secrets/`.
+
 ## Port tunnels
 
 A port tunnel is the only remote path into a node besides the browser

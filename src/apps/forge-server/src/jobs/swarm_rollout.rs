@@ -278,6 +278,13 @@ impl DeployJob {
         let (r, cluster) = (ro.run, ro.cluster);
         let mut spec = self.runner.resolved_spec(&release_app(&r.app, f.release)).await?;
 
+        // Swarm services mount Swarm secrets and configs instead (D-171).
+        if !spec.files.is_empty() {
+            return Err(Stop::Failed(
+                "a Swarm service cannot mount vault files; use swarm.secrets and swarm.configs".into(),
+            ));
+        }
+
         // A release without a recorded artifact keeps the spec's image, as
         // node rollouts do (`copy_spec`); a recorded one must parse.
         if !f.release.artifact.is_null() {

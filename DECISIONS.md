@@ -6061,3 +6061,19 @@ hand.
 **Why.** Swarm parity in native mode with a format people already have, while Forge keeps authorization, audit and placement.
 
 **Trade-offs.** An apply is not one transaction; re-applying finishes it. Rollout settings are stored and exported but a native apply deploys changed services on all their nodes at once, and does not install Docker Engine or runtimes (use `forge services deploy` for a first deploy on a bare node). Reservations are compared with total node capacity, not with what other services reserve.
+
+## D-179 Service orchestration in native mode, step 3a: secrets and configs as files from the credential vault
+
+**Decision.** Native services mount credential vault items as read-only files.
+
+- **References, not values.** A service stores `secret_files` in its spec: `{kind: secret|config, item, target, mode?, uid?, gid?}` (`forge_catalog::secret_files`). `item` is a vault item *name* in the service's workspace. Services files accept top-level `secrets:`/`configs:` only with `external: true` (`name` = the vault item, default the key), as the Swarm path does (D-171); `file:`, `environment:` and `content:` are refused because the server never reads files. Service-level short and long syntax (`source`, `target`, `mode`, `uid`, `gid`) map onto the same refs; `export` writes them back. The REST `AppInput`, `forge services create|update --secret/--config` and the console's **Secrets & configs** section set them by name.
+- **Configs come from the vault too.** Native mode has no config store, so a config is a vault item as well; it differs only in its default target (`/<name>`) and mode (`0444`). This deviates from the plan's "a vault item or a stored config"; a separate config store can be added behind the same `kind`.
+- **Authorization.** Referencing an item not already referenced by the service needs the vault's use rules, the same `authorize_item_use` the Swarm object path uses: platform administrator, no API key, `secret.read` (MFA). Denials are audited under the request's audit action; saves record the item names as `vault_items`. Later deploys need only `deploy`.
+- **Delivery.** The `app.action` deploy step (and node rollouts) unseal the items into `AppSpec.files: [{name, target, mode, uid, gid, value}]`; other actions clear it. Values exist only in memory and in the signed command; `Debug` redacts them. Only agents reporting the fact `service_files: true` get the field; others fail the step fatally with "update the agent first" (as `container_options` in step 1). Swarm services refuse vault files.
+- **Agent.** The helper writes each file under `/var/lib/forge-agent/secrets/<env>/<svc>[--<slot>]/` (root-owned; no other account can write there), via an `O_EXCL|O_NOFOLLOW` temporary file, chown/chmod, rename; stale files are removed; the folder goes on `remove`/`retire` and when a deploy has no files. Containers bind-mount each file read-only at its target; native services get the folder in `FORGE_SECRETS_DIR` (folder `root:<account group>` `0750`, files owned by the account unless a uid is set).
+- **Rotation.** Migration 0008 adds `services.secrets_changed_at`. Rotating or renaming a vault item marks every service referencing its (old) name; a successful deploy whose job started at or after the mark clears it. Console and `forge services show` show it.
+
+**Why.** Compose files use `secrets:` heavily; the vault already seals values with an AAD bound to the item, so reusing it keeps one secret store and one permission model.
+
+**Trade-offs.** Values are limited to 4096 bytes (the vault's limit) and must be text. References are by name, so renaming an item breaks them until the service is changed (the service is marked). A deploy on one node clears the mark for the whole service. Anyone who may deploy a service can redeploy the files an administrator attached.
+

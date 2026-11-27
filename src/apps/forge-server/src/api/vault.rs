@@ -269,6 +269,7 @@ pub async fn update(
     let (name, tags, links) = clean(&req, &targets)?;
     let now = state.clock.now();
     let rotated = req.password.as_deref().is_some_and(|p| !p.is_empty());
+    let old_name = item.name.clone();
 
     if let Some(p) = req.password.as_deref().filter(|p| !p.is_empty()) {
         item.sealed = seal(&state, id, p)?;
@@ -283,12 +284,21 @@ pub async fn update(
     item.links = links;
     item.updated_at = now;
     state.store.put_vault_item(&item).await?;
+
+    // Services that mount it as a file run the old value (or, after a
+    // rename, no longer find it) until their next deploy (D-179).
+    let mut redeploy = Vec::new();
+
+    if rotated || old_name != item.name {
+        redeploy = crate::service_spec::mark_vault_item_changed(&state.store, ws, &old_name, now).await?;
+    }
+
     caller
         .audit(
             "vault.update",
             &EntityRef::new(EntityKind::Workspace, ws),
             Some(ws),
-            json!({ "item": id, "name": item.name, "rotated": rotated }),
+            json!({ "item": id, "name": item.name, "rotated": rotated, "services_to_redeploy": redeploy }),
         )
         .await;
 
@@ -342,6 +352,33 @@ pub(super) async fn authorize_item_use(
 
     caller.authorize(Action::SecretRead, target).await?;
     load(state, ws, id).await?;
+
+    Ok(())
+}
+
+/// Checks that `caller` may mount the vault items named `names` as service
+/// files (D-179): each must exist in workspace `ws`, and using it needs the
+/// same rules as [`authorize_item_use`]. Denials are audited as `what`.
+pub(super) async fn authorize_item_names(
+    state: &AppState,
+    caller: &Caller,
+    ws: WorkspaceId,
+    names: &[String],
+    what: &str,
+) -> ApiResult<()> {
+    if names.is_empty() {
+        return Ok(());
+    }
+
+    let items = state.store.list_vault_items(ws).await?;
+
+    for name in names {
+        let Some(item) = items.iter().find(|i| i.name == *name) else {
+            return Err(bad(format!("no credential vault item is named `{name}`")));
+        };
+
+        authorize_item_use(state, caller, ws, item.id, what).await?;
+    }
 
     Ok(())
 }

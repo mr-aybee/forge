@@ -25,7 +25,7 @@ fields and are ignored.
 | `version` | any | — | `version: "3.9"` | Ignored |
 | `volumes` | mapping | — | `volumes: {data: null}` | Named volumes; each entry empty or `external: true`. Docker creates them on the node |
 | `networks` | mapping | — | `networks: {back: {external: true, name: corp-back}}` | Existing Docker networks; each needs `external: true`, `name` optional |
-| `secrets`, `configs` | — | — | — | Refused: secrets and configs as files arrive in a later release |
+| `secrets`, `configs` | mapping | — | `secrets: {db_password: {external: true, name: "DB password"}}` | Credential vault items. Each entry needs `external: true`; `name` is the vault item's name (default: the key). `file`, `environment` and `content` are refused: the server never reads files. See [Secrets and configs](#secrets-and-configs) |
 
 ## Service keys
 
@@ -59,7 +59,49 @@ fields and are ignored.
 | `depends_on` | list or mapping | — | `depends_on: [db]` | Services of the same file applied first. Conditions are accepted and only order the apply |
 | `deploy` | mapping | — | see below | Placement, limits and rollout |
 | `x-forge` | mapping | — | see below | Forge extensions |
-| `build`, `privileged`, `network_mode`, `container_name`, `links`, `pid`, `ipc`, `secrets`, `configs` | — | — | — | Refused with the reason |
+| `secrets` | list | — | `secrets: [db_password]` | Vault items declared at the top level, mounted as files. Short form: the key. Long form: `source`, `target`, `mode`, `uid`, `gid` |
+| `configs` | list | — | `configs: [{source: app_conf, target: /etc/app/app.conf}]` | As `secrets`, with a different default target and mode |
+| `build`, `privileged`, `network_mode`, `container_name`, `links`, `pid`, `ipc` | — | — | — | Refused with the reason |
+
+## Secrets and configs
+
+A secret or config is a credential vault item mounted as a read-only file.
+The file and the service store only the item's name; the server unseals the
+value inside the deploy job and sends it only in the signed command to the
+node. Referencing an item needs the vault's use permission (a platform
+administrator with MFA, `secret.read`, not an API key).
+
+| Long-form key | Type | Default | Example | Meaning |
+| --- | --- | --- | --- | --- |
+| `source` | string | — (required) | `source: db_password` | A key under the top-level `secrets` or `configs` |
+| `target` | path | secret: `/run/secrets/<source>`; config: `/<source>` | `target: /etc/app/app.conf` | Path in the container. A relative secret target goes under `/run/secrets`. Its last part is the file name; two files of one service may not share it. Not under `/proc`, `/sys` or `/dev` |
+| `mode` | octal | secret `0400`, config `0444` | `mode: 0440` | Permission bits, at most `0777`. Write `0440` or `"0440"` |
+| `uid`, `gid` | number or string | `0` | `uid: "1000"` | Owner inside the container. A container that runs as another user needs this or a readable `mode` |
+
+A native (`x-forge.runtime: systemd`) service gets the same files in a
+root-owned folder its account can read, named in `FORGE_SECRETS_DIR`.
+Values are at most 4096 bytes (the vault's limit). `forge services export`
+writes the references back, never a value.
+
+```yaml
+services:
+  api:
+    image: registry.example/api:2
+    secrets:
+      - db_password
+      - source: tls_key
+        target: key.pem
+        mode: 0440
+        uid: "1000"
+    configs:
+      - source: app_conf
+        target: /etc/api/app.conf
+secrets:
+  db_password: { external: true }
+  tls_key: { external: true, name: "API TLS key" }
+configs:
+  app_conf: { external: true, name: api-config }
+```
 
 ## `deploy`
 

@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use forge_catalog::secret_files::MountedFile;
 use forge_catalog::stacks::{normalize_abs, within};
 use forge_catalog::{AppSpec, Runtime};
 use forge_core::files::FileRepository;
@@ -68,11 +69,22 @@ pub fn build_spec(app: &Service, envelope: Option<&Envelope>) -> Result<AppSpec,
     // network per node (`AppJob::attach_mesh`), so it never reaches a node.
     // `on_node_failure` is the reconciler's (D-177); it never reaches a
     // node either, nor does the orchestration of a services file (D-178).
+    // The secret and config file references are resolved into values by
+    // the deploy step (`AppJob::resolved_spec`), never here (D-179).
+    let mut refs = Vec::new();
+
     if let Some(m) = v.as_object_mut() {
         m.remove("mesh");
         m.remove("on_node_failure");
         m.remove(forge_catalog::compose_native::SPEC_KEY);
+
+        if let Some(r) = m.remove(forge_catalog::secret_files::SPEC_KEY).filter(|r| !r.is_null()) {
+            refs = serde_json::from_value::<Vec<forge_catalog::secret_files::FileRef>>(r)
+                .map_err(|e| format!("invalid secret files: {e}"))?;
+        }
     }
+
+    forge_catalog::secret_files::validate_refs(&refs)?;
 
     v["name"] = json!(app.name);
     v["runtime"] = json!(app.runtime);
@@ -195,6 +207,27 @@ pub fn agent_takes_options(facts: Option<&Value>) -> Result<(), StepError> {
 
     Err(StepError::Fatal(
         "this node's agent is too old for the restart policy, capabilities, ulimits, tmpfs, DNS, sysctls, devices, init or networks this service uses; update the agent first".into(),
+    ))
+}
+
+/// Whether a node with `facts` can take a spec with secret and config
+/// files (D-179): only agents that report `service_files: true` write them;
+/// older ones refuse the field, so the step fails here with a clear
+/// message instead. No facts yet is retryable, as for container options.
+pub fn agent_takes_files(facts: Option<&Value>) -> Result<(), StepError> {
+    let Some(facts) = facts else {
+        return Err(retry(
+            "the node has not reported its facts yet, so Forge cannot tell whether its agent supports secret and config files; deploy again once the node is online",
+        ));
+    };
+
+    if facts.get("service_files").and_then(Value::as_bool) == Some(true) {
+        return Ok(());
+    }
+
+    Err(StepError::Fatal(
+        "this node's agent is too old for the secret and config files this service mounts; update the agent first"
+            .into(),
     ))
 }
 
@@ -357,9 +390,42 @@ impl AppJob {
             .await
             .map_err(|e| StepError::Fatal(e.to_string()))?;
         crate::app_storage::merge_env(&mut spec.env, attached);
+        spec.files = self.secret_files(app).await?;
         spec.validate().map_err(StepError::Fatal)?;
 
         Ok(spec)
+    }
+
+    /// The service's secret and config files with their values, unsealed
+    /// from the credential vault here, in the step (D-179). The values go
+    /// only into the signed command; errors name the item, never a value.
+    async fn secret_files(&self, app: &Service) -> Result<Vec<MountedFile>, StepError> {
+        let refs = crate::service_spec::stored_refs(Some(&app.spec));
+
+        if refs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let items = self.vault.list_vault_items(app.workspace_id).await.map_err(retry)?;
+        let mut files = Vec::with_capacity(refs.len());
+
+        for r in &refs {
+            let item = items.iter().find(|i| i.name == r.item).ok_or_else(|| {
+                StepError::Fatal(format!(
+                    "the credential vault item `{}` (mounted at {}) does not exist; create it or change the service",
+                    r.item, r.target
+                ))
+            })?;
+            let plain = self
+                .envelope
+                .open(&item.sealed, &crate::jobs::storage::vault_aad(item.id))
+                .map_err(|_| StepError::Fatal(format!("cannot unseal the credential vault item `{}`", r.item)))?;
+            let value = String::from_utf8(plain)
+                .map_err(|_| StepError::Fatal(format!("the credential vault item `{}` is not text", r.item)))?;
+            files.push(MountedFile::new(r, value));
+        }
+
+        Ok(files)
     }
 
     /// Connects a container to `server`'s cluster container network when the
@@ -383,13 +449,24 @@ impl AppJob {
     /// not report the `container_options` fact: older agents refuse unknown
     /// fields, so the command would fail there with a less useful message.
     pub async fn ensure_agent_takes(&self, spec: &AppSpec, server: ServerId) -> Result<(), StepError> {
-        if !spec.options().needs_new_agent() {
+        let options = spec.options().needs_new_agent();
+
+        if !options && spec.files.is_empty() {
             return Ok(());
         }
 
         let facts = self.facts.facts_of(server).await.map_err(retry)?;
+        let facts = facts.as_ref().map(|(f, _)| f);
 
-        agent_takes_options(facts.as_ref().map(|(f, _)| f))
+        if options {
+            agent_takes_options(facts)?;
+        }
+
+        if spec.files.is_empty() {
+            return Ok(());
+        }
+
+        agent_takes_files(facts)
     }
 
     /// Puts `spec` into the copy that serves on `server` (#73): a service
@@ -445,8 +522,15 @@ impl AppJob {
             return Err(StepError::Fatal("server is revoked".into()));
         }
 
-        self.ensure_agent_takes(spec, server).await?;
-        let spec_json = serde_json::to_string(spec).map_err(|e| StepError::Fatal(e.to_string()))?;
+        // Only a deploy writes the files; other actions never carry values.
+        let mut spec = spec.clone();
+
+        if action != "deploy" {
+            spec.files.clear();
+        }
+
+        self.ensure_agent_takes(&spec, server).await?;
+        let spec_json = serde_json::to_string(&spec).map_err(|e| StepError::Fatal(e.to_string()))?;
         let command =
             Command::AppAction(AppAction { action: action.to_owned(), spec_json, tail: 0, cursor: String::new() });
         let (body, signed) = self.signer.issue(&server.to_string(), principal, command, self.clock.now(), COMMAND_TTL);
@@ -498,6 +582,9 @@ impl AppJob {
 
         if p.action == "deploy" {
             self.wait_for_runtimes(&spec, p.server_id).await?;
+        } else {
+            // Only a deploy writes the files; other actions never carry values.
+            spec.files.clear();
         }
 
         self.serving_slot(&mut spec, app.id, p.server_id).await?;
@@ -592,6 +679,12 @@ impl AppJob {
             }
 
             self.sync_app_root(ctx, &p, true).await?;
+        }
+
+        // The node now has the vault values as they were when the job
+        // started; a rotation after that keeps the service marked (D-179).
+        if p.action == "deploy" {
+            self.apps.clear_secrets_changed(p.service_id, ctx.job.created_at).await.map_err(retry)?;
         }
 
         let state = out.get("state").and_then(Value::as_str).map(str::to_owned);

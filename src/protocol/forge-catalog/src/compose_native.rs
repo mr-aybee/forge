@@ -27,14 +27,15 @@ use crate::apps::{HealthCheck, Runtime};
 use crate::container_opts::{ContainerOptions, Device, RestartPolicy, Tmpfs, Ulimit};
 use crate::deploy::DocError;
 use crate::placement::{Count, Rules};
+use crate::secret_files::{FileKind, FileRef};
 use crate::swarm_service::{FailureAction, ServiceMode, UpdateOrder, UpdatePolicy};
 
 /// Most services one file may hold.
 pub const MAX_SERVICES: usize = 100;
 /// The key of [`Orchestration`] in a stored service spec.
 pub const SPEC_KEY: &str = "orchestration";
-/// Why `secrets` and `configs` are refused (step 3a).
-pub const LATER_RELEASE: &str = "secrets and configs as files arrive in a later release";
+/// Why a top-level secret or config with `file:` (or inline content) is refused.
+pub const FILE_REFUSED: &str = "the server never reads files: store the value as a credential vault item and declare it `external: true` (with `name: <vault item>` when the names differ)";
 
 type Res<T> = Result<T, DocError>;
 
@@ -113,6 +114,9 @@ pub struct NativeSpec {
     pub restart: bool,
     #[serde(flatten)]
     pub options: ContainerOptions,
+    /// Secret and config files: references to vault items, never values (D-179).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secret_files: Vec<FileRef>,
 }
 
 impl Default for NativeSpec {
@@ -136,6 +140,7 @@ impl Default for NativeSpec {
             read_only: false,
             restart: true,
             options: ContainerOptions::default(),
+            secret_files: Vec::new(),
         }
     }
 }
@@ -226,7 +231,7 @@ impl Orchestration {
 
 // ---- reading ---------------------------------------------------------------------------
 
-const TOP_KEYS: &[&str] = &["services", "name", "version", "volumes", "networks"];
+const TOP_KEYS: &[&str] = &["services", "name", "version", "volumes", "networks", "secrets", "configs"];
 
 const SERVICE_KEYS: &[&str] = &[
     "image",
@@ -255,6 +260,8 @@ const SERVICE_KEYS: &[&str] = &[
     "restart",
     "deploy",
     "depends_on",
+    "secrets",
+    "configs",
     "x-forge",
 ];
 
@@ -265,7 +272,6 @@ fn refused_service_key(key: &str, v: &Value) -> Option<&'static str> {
         "privileged" => "privileged containers are not allowed; add the capabilities it needs with cap_add",
         "network_mode" if v.as_str() == Some("host") => "host networking is not allowed; publish ports instead",
         "network_mode" => "not supported: services join the cluster container network",
-        "secrets" | "configs" => LATER_RELEASE,
         "env_file" => {
             "the server never reads files: `forge services apply` inlines env_file; elsewhere list the variables under environment"
         }
@@ -281,10 +287,6 @@ pub fn parse(tree: &Value) -> Res<ServicesFile> {
     let top = tree.as_object().ok_or_else(|| err("", "a services file is a mapping with `services:`"))?;
 
     for (k, _) in top {
-        if k == "secrets" || k == "configs" {
-            return Err(err(k, LATER_RELEASE));
-        }
-
         if !TOP_KEYS.contains(&k.as_str()) && !k.starts_with("x-") {
             return Err(err(k, "unknown key; see the services file reference"));
         }
@@ -304,7 +306,11 @@ pub fn parse(tree: &Value) -> Res<ServicesFile> {
     };
 
     check_volumes(top.get("volumes"))?;
-    let networks = top_networks(top.get("networks"))?;
+    let declared = Declared {
+        networks: top_networks(top.get("networks"))?,
+        secrets: top_objects(top.get("secrets"), FileKind::Secret)?,
+        configs: top_objects(top.get("configs"), FileKind::Config)?,
+    };
     let services = top
         .get("services")
         .and_then(Value::as_object)
@@ -321,7 +327,7 @@ pub fn parse(tree: &Value) -> Res<ServicesFile> {
     let mut parsed = Vec::with_capacity(services.len());
 
     for (n, v) in services {
-        parsed.push(service(n, v, &networks)?);
+        parsed.push(service(n, v, &declared)?);
     }
 
     let services = dependency_order(parsed)?;
@@ -397,7 +403,133 @@ fn top_networks(v: Option<&Value>) -> Res<BTreeMap<String, String>> {
     Ok(out)
 }
 
-fn service(name: &str, v: &Value, networks: &BTreeMap<String, String>) -> Res<FileService> {
+/// What the top level declares: compose name → Docker network, and
+/// compose name → credential vault item for secrets and configs.
+struct Declared {
+    networks: BTreeMap<String, String>,
+    secrets: BTreeMap<String, String>,
+    configs: BTreeMap<String, String>,
+}
+
+impl Declared {
+    fn objects(&self, kind: FileKind) -> &BTreeMap<String, String> {
+        match kind {
+            FileKind::Secret => &self.secrets,
+            FileKind::Config => &self.configs,
+        }
+    }
+}
+
+/// Top-level `secrets:` or `configs:`: each `external: true`, naming a
+/// credential vault item (its own key unless `name` says otherwise), as on
+/// the Swarm path (D-171). `file:`, `environment:` and `content:` are
+/// refused: the server never reads files and values never sit in a file.
+fn top_objects(v: Option<&Value>, kind: FileKind) -> Res<BTreeMap<String, String>> {
+    let section = kind.section();
+    let mut out = BTreeMap::new();
+    let Some(v) = v.filter(|v| !v.is_null()) else { return Ok(out) };
+    let m = v.as_object().ok_or_else(|| err(section, "a mapping of names"))?;
+
+    for (key, def) in m {
+        let path = format!("{section}.{key}");
+
+        if !object_key_ok(key) {
+            return Err(err(&path, "names use letters, digits, `.`, `_` and `-`"));
+        }
+
+        let d = def.as_object().ok_or_else(|| err(&path, "set external: true and name the vault item"))?;
+        let mut item = key.clone();
+        let mut external = false;
+
+        for (k, x) in d {
+            match k.as_str() {
+                "external" => external = boolean(x, &format!("{path}.external"))?,
+                "name" => item = string(x, &format!("{path}.name"))?,
+                "file" | "environment" | "content" => return Err(err(&format!("{path}.{k}"), FILE_REFUSED)),
+                _ => return Err(err(&format!("{path}.{k}"), "not supported: only `external` and `name`")),
+            }
+        }
+
+        if !external {
+            return Err(err(&format!("{path}.external"), "must be true: the value lives in the credential vault"));
+        }
+
+        out.insert(key.clone(), item);
+    }
+
+    Ok(out)
+}
+
+fn object_key_ok(key: &str) -> bool {
+    !key.is_empty() && key.len() <= 64 && key.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+}
+
+/// A service's `secrets:` or `configs:` list: short (`- name`) or long
+/// syntax (`source`, `target`, `mode`, `uid`, `gid`).
+fn service_objects(v: &Value, path: &str, kind: FileKind, declared: &Declared) -> Res<Vec<FileRef>> {
+    let mut out = Vec::new();
+
+    for (i, e) in list(v, path)?.iter().enumerate() {
+        let at = format!("{path}[{i}]");
+        let mut target = None;
+        let mut mode = None;
+        let mut uid = None;
+        let mut gid = None;
+
+        let source = match e {
+            Value::String(s) => s.clone(),
+            Value::Object(m) => {
+                let mut source = None;
+
+                for (k, x) in m {
+                    let p = format!("{at}.{k}");
+
+                    match k.as_str() {
+                        "source" => source = Some(string(x, &p)?),
+                        "target" => target = Some(string(x, &p)?),
+                        "mode" => mode = Some(file_mode(x, &p)?),
+                        "uid" => uid = Some(uint(x, &p)?),
+                        "gid" => gid = Some(uint(x, &p)?),
+                        _ => return Err(err(&p, "unknown key; use source, target, mode, uid or gid")),
+                    }
+                }
+
+                source.ok_or_else(|| err(&format!("{at}.source"), "required"))?
+            }
+            _ => return Err(err(&at, "a name or a mapping with `source`")),
+        };
+
+        let item = declared.objects(kind).get(&source).ok_or_else(|| {
+            err(&at, format!("`{source}` is not declared under the top-level {} (external: true)", kind.section()))
+        })?;
+
+        let r = FileRef {
+            kind,
+            item: item.clone(),
+            target: FileRef::target_for(kind, &source, target.as_deref()),
+            mode,
+            uid,
+            gid,
+        };
+        r.validate().map_err(|m| err(&at, m))?;
+        out.push(r);
+    }
+
+    Ok(out)
+}
+
+/// A file mode: octal text (`"0440"`, which is how a leading zero reads)
+/// or a number (YAML `0o440`).
+fn file_mode(v: &Value, path: &str) -> Res<u32> {
+    let n = match v {
+        Value::String(s) => u32::from_str_radix(s.trim().trim_start_matches("0o"), 8).ok(),
+        _ => v.as_u64().and_then(|n| u32::try_from(n).ok()),
+    };
+
+    n.filter(|n| *n <= 0o777).ok_or_else(|| err(path, "octal permission bits, for example `0440`"))
+}
+
+fn service(name: &str, v: &Value, declared: &Declared) -> Res<FileService> {
     let base = format!("services.{name}");
 
     if !crate::apps::valid_slug(name, 40) {
@@ -478,7 +610,9 @@ fn service(name: &str, v: &Value, networks: &BTreeMap<String, String>) -> Res<Fi
             "init" => spec.options.init = boolean(x, &path)?,
             "read_only" => spec.read_only = boolean(x, &path)?,
             "stop_grace_period" => spec.stop_timeout_secs = duration_secs(x, &path)?,
-            "networks" => spec.options.networks = service_networks(x, &path, networks)?,
+            "networks" => spec.options.networks = service_networks(x, &path, &declared.networks)?,
+            "secrets" => spec.secret_files.extend(service_objects(x, &path, FileKind::Secret, declared)?),
+            "configs" => spec.secret_files.extend(service_objects(x, &path, FileKind::Config, declared)?),
             "restart" => (spec.options.restart_policy, spec.options.restart_max_attempts) = restart(x, &path)?,
             "depends_on" => orch.depends_on = depends_on(x, &path)?,
             // environment, deploy and x-forge are read below; other `x-`
@@ -495,6 +629,8 @@ fn service(name: &str, v: &Value, networks: &BTreeMap<String, String>) -> Res<Fi
     if let Some(d) = m.get("deploy") {
         deploy(d, &p("deploy"), &mut spec, &mut orch, m.contains_key("restart"))?;
     }
+
+    crate::secret_files::validate_refs(&spec.secret_files).map_err(|m| err(&base, m))?;
 
     match runtime {
         Runtime::Container if spec.image.trim().is_empty() => return Err(err(&p("image"), "required")),
@@ -1414,13 +1550,32 @@ pub fn export(name: Option<&str>, services: &[FileService]) -> String {
         top.insert("name".into(), json!(n));
     }
 
+    let keys = object_keys(services);
     let mut list = Map::new();
 
     for s in services {
-        list.insert(s.name.clone(), service_value(s));
+        list.insert(s.name.clone(), service_value(s, &keys));
     }
 
     top.insert("services".into(), Value::Object(list));
+
+    // Secrets and configs name their vault items.
+    for kind in [FileKind::Secret, FileKind::Config] {
+        let m: Map<String, Value> = keys
+            .iter()
+            .filter(|((k, _), _)| *k == kind)
+            .map(|((_, item), key)| {
+                let def =
+                    if key == item { json!({ "external": true }) } else { json!({ "external": true, "name": item }) };
+
+                (key.clone(), def)
+            })
+            .collect();
+
+        if !m.is_empty() {
+            top.insert(kind.section().into(), Value::Object(m));
+        }
+    }
 
     // Networks the services connect to are declared as external.
     let networks: BTreeSet<&String> = services.iter().flat_map(|s| &s.spec.options.networks).collect();
@@ -1431,6 +1586,75 @@ pub fn export(name: Option<&str>, services: &[FileService]) -> String {
     }
 
     crate::stacks::to_yaml(&Value::Object(top))
+}
+
+/// The compose key of every referenced vault item: the item name when it
+/// is a valid key, otherwise a cleaned form made unique.
+fn object_keys(services: &[FileService]) -> BTreeMap<(FileKind, String), String> {
+    let mut out: BTreeMap<(FileKind, String), String> = BTreeMap::new();
+
+    for r in services.iter().flat_map(|s| &s.spec.secret_files) {
+        if out.contains_key(&(r.kind, r.item.clone())) {
+            continue;
+        }
+
+        let base = if object_key_ok(&r.item) {
+            r.item.clone()
+        } else {
+            let cleaned: String =
+                r.item.chars().map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '_' }).collect();
+            cleaned.chars().take(56).collect()
+        };
+
+        let taken = |k: &str| out.iter().any(|((kind, _), v)| *kind == r.kind && v == k);
+        let mut key = base.clone();
+        let mut n = 2;
+
+        while taken(&key) {
+            key = format!("{base}-{n}");
+            n += 1;
+        }
+
+        out.insert((r.kind, r.item.clone()), key);
+    }
+
+    out
+}
+
+/// A service's `secrets:` or `configs:` entries in long syntax, leaving
+/// out what equals the default.
+fn objects_value(s: &FileService, kind: FileKind, keys: &BTreeMap<(FileKind, String), String>) -> Value {
+    let list: Vec<Value> = s
+        .spec
+        .secret_files
+        .iter()
+        .filter(|r| r.kind == kind)
+        .map(|r| {
+            let key = keys.get(&(kind, r.item.clone())).cloned().unwrap_or_else(|| r.item.clone());
+            let mut m = Map::new();
+            m.insert("source".into(), json!(key));
+
+            if r.target != FileRef::target_for(kind, &key, None) {
+                m.insert("target".into(), json!(r.target));
+            }
+
+            if let Some(mode) = r.mode {
+                m.insert("mode".into(), json!(format!("0{mode:o}")));
+            }
+
+            if let Some(uid) = r.uid {
+                m.insert("uid".into(), json!(uid.to_string()));
+            }
+
+            if let Some(gid) = r.gid {
+                m.insert("gid".into(), json!(gid.to_string()));
+            }
+
+            Value::Object(m)
+        })
+        .collect();
+
+    Value::Array(list)
 }
 
 fn put(m: &mut Map<String, Value>, k: &str, v: Value) {
@@ -1459,7 +1683,7 @@ fn millis_cpus(n: u32) -> String {
     if frac == 0 { whole.to_string() } else { format!("{whole}.{}", format!("{frac:03}").trim_end_matches('0')) }
 }
 
-fn service_value(s: &FileService) -> Value {
+fn service_value(s: &FileService, keys: &BTreeMap<(FileKind, String), String>) -> Value {
     let spec = &s.spec;
     let o = &spec.options;
     let mut m = Map::new();
@@ -1548,6 +1772,8 @@ fn service_value(s: &FileService) -> Value {
         m.insert("restart".into(), json!(r));
     }
 
+    put(&mut m, "secrets", objects_value(s, FileKind::Secret, keys));
+    put(&mut m, "configs", objects_value(s, FileKind::Config, keys));
     put(&mut m, "deploy", deploy_value(s));
     put(&mut m, "depends_on", json!(s.orchestration.depends_on));
 

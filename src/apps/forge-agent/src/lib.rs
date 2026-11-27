@@ -51,6 +51,8 @@ pub mod processes;
 pub mod processes_windows;
 pub mod progress;
 pub mod recipes;
+#[cfg(unix)]
+pub mod secret_files;
 pub mod self_update;
 pub mod service;
 pub mod sites;

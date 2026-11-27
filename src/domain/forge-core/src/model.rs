@@ -940,6 +940,11 @@ pub struct Service {
     /// later apply of that file removes the services it no longer lists.
     #[serde(default)]
     pub source: String,
+    /// When a credential vault item the service mounts as a file was
+    /// rotated after its last deploy (D-179): it needs a redeploy. `None`
+    /// when its copies run the current values. Only the store sets it.
+    #[serde(default)]
+    pub secrets_changed_at: Option<Timestamp>,
 }
 
 /// Placement of a service on a node.

@@ -285,6 +285,25 @@ When no command is pending, the hub holds the heartbeat for
 tells the agent to reconnect immediately; results of executed commands are
 sent on the next heartbeat straight away.
 
+## Secret and config files
+
+An `app` command's `spec_json` (an `AppSpec`) may carry `files`: one entry
+per secret or config file, `{name, target, mode, uid, gid, value}` (D-179).
+The server fills it only for the `deploy` action, inside the job step that
+unseals the credential vault items, and only for agents whose facts report
+`"service_files": true`; for any other agent the step fails with "update the
+agent first". `value` exists only inside the signed command: `AppSpec` and
+`MountedFile` print it as `***` in debug output, and neither side logs it.
+
+The helper writes each file under
+`/var/lib/forge-agent/secrets/<environment>/<service>[--<slot>]/` (parents
+`0711`, the folder root-owned `0700`, or `root:<account group>` `0750` for a
+native service), to a fresh temporary file opened without following links,
+sets owner and mode, renames it into place and removes files no longer
+listed. A container gets each file bind-mounted read-only at `target`; a
+native service gets the folder in `FORGE_SECRETS_DIR`. `remove` and `retire`
+delete the folder.
+
 ## Compatibility
 
 Fields are only ever added with new tags. New command variants are ignored

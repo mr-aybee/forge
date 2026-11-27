@@ -100,6 +100,10 @@ pub struct ServicesPlan {
     /// The caller needs `stack.privileged` on the environment.
     #[serde(skip)]
     pub needs_privileged: bool,
+    /// Credential vault items the plan newly mounts as files: the caller
+    /// needs the vault's use permission for each (D-179).
+    #[serde(skip)]
+    pub vault_items: Vec<String>,
     #[serde(skip)]
     pub environment_id: EnvironmentId,
     #[serde(skip)]
@@ -408,6 +412,8 @@ impl ServiceFiles {
             () => ChangeKind::Unchanged,
         };
 
+        let refs = crate::service_spec::stored_refs(Some(&app.spec));
+        plan.vault_items.extend(crate::service_spec::new_vault_items(existing.map(|e| &e.spec), &refs));
         plan.needs_privileged |= !privileged.is_empty();
         plan.added_nodes.extend(added.iter().copied());
         plan.changes.push(ServiceChange {
@@ -554,6 +560,7 @@ fn empty_plan(scene: &Scene, source: &str) -> ServicesPlan {
         changes: Vec::new(),
         added_nodes: Vec::new(),
         needs_privileged: false,
+        vault_items: Vec::new(),
         environment_id: scene.env.id,
         workspace_id: scene.env.workspace_id,
         work: Vec::new(),
@@ -615,6 +622,7 @@ fn new_service(env: &Environment, name: &str, by: &Principal, now: forge_core::T
         updated_at: now,
         version: 0,
         source: String::new(),
+        secrets_changed_at: None,
     }
 }
 
@@ -635,7 +643,8 @@ fn pending_instance(service: ServiceId, server: ServerId, now: forge_core::Times
 }
 
 /// The service's editable fields from a file entry. Secret variables the
-/// service already has stay (a file cannot carry secrets yet); everything
+/// service already has stay (a file never carries secret values, only
+/// vault item names for secret files); everything
 /// a file does not set (runtimes, package env files, log size) keeps the
 /// stored value.
 fn input_from(fs: &FileService, existing: Option<&Service>) -> AppInput {
@@ -686,6 +695,7 @@ fn input_from(fs: &FileService, existing: Option<&Service>) -> AppInput {
         on_node_failure: fs.on_node_failure,
         options: s.options.clone(),
         orchestration: Some(fs.orchestration.clone()),
+        secret_files: s.secret_files.clone(),
         version: None,
     }
 }

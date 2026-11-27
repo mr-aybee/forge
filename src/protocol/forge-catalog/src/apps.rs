@@ -175,6 +175,11 @@ pub struct AppSpec {
     /// Container: existing Docker networks to connect to as well.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub networks: Vec<String>,
+    /// Secret and config files with their values (D-179). Filled only in
+    /// the deploy step and sent only to agents that report the
+    /// `service_files` fact, because older ones refuse unknown fields.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<crate::secret_files::MountedFile>,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if passes a reference
@@ -228,6 +233,7 @@ impl std::fmt::Debug for AppSpec {
             devices,
             init,
             networks,
+            files,
         } = self;
         let env: Vec<String> = env.iter().map(|(k, _)| format!("{k}=***")).collect();
 
@@ -274,6 +280,8 @@ impl std::fmt::Debug for AppSpec {
             .field("devices", devices)
             .field("init", init)
             .field("networks", networks)
+            // `MountedFile`'s own Debug hides the values.
+            .field("files", files)
             .finish()
     }
 }
@@ -532,6 +540,8 @@ impl AppSpec {
             return Err("too many environment variables".into());
         }
 
+        crate::secret_files::validate_files(&self.files)?;
+
         for (k, v) in &self.env {
             if !valid_env_key(k) {
                 return Err(format!("invalid environment variable name `{k}`"));
@@ -733,6 +743,12 @@ impl AppSpec {
     #[must_use]
     pub fn slot_suffix(&self) -> String {
         if self.slot.is_empty() { String::new() } else { format!("--{}", self.slot) }
+    }
+
+    /// The root-only folder of this copy's secret and config files (D-179).
+    #[must_use]
+    pub fn secrets_dir(&self) -> String {
+        crate::secret_files::host_dir(&self.environment, &self.name, &self.slot_suffix())
     }
 
     /// systemd unit (without suffix) or container name; slots add `--a`/`--b`.
@@ -1012,6 +1028,7 @@ mod tests {
             devices: vec![],
             init: false,
             networks: vec![],
+            files: vec![],
             log_max_mb: 0,
         }
     }

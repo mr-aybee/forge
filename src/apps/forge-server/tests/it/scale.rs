@@ -157,6 +157,7 @@ async fn api_stays_fast_with_1000_nodes_and_15000_apps() {
             updated_at: now,
             version: 0,
             source: String::new(),
+            secrets_changed_at: None,
         };
         s.put_service(&app).await.unwrap();
 

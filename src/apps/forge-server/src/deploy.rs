@@ -275,6 +275,7 @@ impl DeployService {
             updated_at: now,
             version: 0,
             source: String::new(),
+            secrets_changed_at: None,
         });
         let artifact = doc.spec.artifact.resolve(doc.spec.runtime).map_err(|e| DomainError::Invalid(e.to_string()))?;
         let policy = doc.policy().map_err(|e| DomainError::Invalid(e.to_string()))?;

@@ -330,6 +330,43 @@ for containers, which get `--add-host forge-node:host-gateway`. A
 `FORGE_LOG_URL` you set yourself wins. See
 [Send and search service logs](/docs/guides/application-logs/).
 
+## Mount secrets and config files
+
+A service can mount credential vault items as read-only files. Only the
+item's name is stored with the service; the value stays sealed in the vault
+until a deploy writes it on the node.
+
+1. Create the vault item (**Vault** → **New item**); its password field is the value (up to 4096 bytes).
+2. Open the service, go to **Secrets & configs** and choose **Add file**.
+3. Pick **Secret** or **Config**, choose the vault item by name, and set the target path and, if needed, the mode and owner uid.
+4. Save and **Deploy**.
+
+On the node the agent writes each file under
+`/var/lib/forge-agent/secrets/<environment>/<service>/` (a folder only root
+can write), atomically, and removes files the service no longer lists.
+
+| Runtime | Where the service sees the files |
+| --- | --- |
+| Container | Each file bind-mounted read-only at its target. Secrets default to `/run/secrets/<name>` with mode `0400`, configs to mode `0444`, owner root unless you set a uid |
+| Systemd | In the folder named by the `FORGE_SECRETS_DIR` variable, owned by the service's account; each file is named after its target's last part |
+
+From the command line:
+
+```sh
+forge services update api --environment shop-prod \
+  --secret "DB password:db_password" --config "api-config:/etc/api/app.conf"
+```
+
+:::note
+Referencing a vault item needs a platform administrator signed in with MFA
+(`secret.read`); API keys cannot. Anyone who may deploy the service can
+deploy it again afterwards. Rotating or renaming the item marks every service
+that mounts it: the service page and `forge services show` say it needs a
+deploy, until the next successful one. Swarm services use Swarm secrets
+instead. Nodes need an agent of this release or later; older agents fail the
+deploy with "update the agent first".
+:::
+
 ## Layout and isolation
 
 | Path | Contents |

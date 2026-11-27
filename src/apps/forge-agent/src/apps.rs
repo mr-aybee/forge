@@ -491,6 +491,7 @@ pub(crate) fn supervised_pid_of(copy: &str) -> Option<u32> {
 
 async fn write_native(spec: &AppSpec) -> Result<String, String> {
     let user = ensure_user(spec).await?;
+    let spec = &native_files(spec, &user).await?;
     write_app_env(spec, &user).await?;
     write_launcher(spec, 0)?;
     write(&spec_path(spec), &serde_json::to_string(spec).map_err(|e| e.to_string())?, 0o600)?;
@@ -501,6 +502,33 @@ async fn write_native(spec: &AppSpec) -> Result<String, String> {
     }
 
     Ok(user)
+}
+
+/// Writes a native service's secret and config files (D-179), or removes
+/// its folder when it has none, and returns the spec to store and run:
+/// without the values, with [`DIR_ENV`](forge_catalog::secret_files::DIR_ENV)
+/// pointing at the folder.
+async fn native_files(spec: &AppSpec, user: &str) -> Result<AppSpec, String> {
+    let dir = crate::secret_files::dir_of(spec);
+    let mut out = spec.clone();
+    out.files.clear();
+
+    if spec.files.is_empty() {
+        crate::secret_files::remove(&dir)?;
+
+        return Ok(out);
+    }
+
+    let a = account(user).await.ok_or_else(|| format!("account {user} not found"))?;
+    let files = spec.files.clone();
+    let reader = crate::secret_files::Reader::Native { uid: a.uid, gid: a.gid };
+    let target = dir.clone();
+    tokio::task::spawn_blocking(move || crate::secret_files::sync(&target, &files, reader))
+        .await
+        .map_err(|e| e.to_string())??;
+    out.env.push((forge_catalog::secret_files::DIR_ENV.to_owned(), dir.to_string_lossy().into_owned()));
+
+    Ok(out)
 }
 
 async fn native_status(spec: &AppSpec) -> String {
@@ -623,6 +651,10 @@ async fn native(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, String
 
             let _ = std::fs::remove_file(spec_path(spec));
 
+            if let Err(e) = crate::secret_files::remove(&crate::secret_files::dir_of(spec)) {
+                tracing::warn!(app = %spec.key(), error = %e, "secret files left in place");
+            }
+
             // The file explorer's trash and revisions go with the app (D-083),
             // only when the store is a real folder of this app's account.
             remove_app_store(spec).await;
@@ -646,6 +678,10 @@ async fn native(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, String
             }
 
             let _ = std::fs::remove_file(spec_path(spec));
+
+            if let Err(e) = crate::secret_files::remove(&crate::secret_files::dir_of(spec)) {
+                tracing::warn!(app = %spec.key(), error = %e, "secret files left in place");
+            }
 
             return Ok(json!({ "state": "retired" }));
         }
@@ -1004,6 +1040,35 @@ fn apply_runtime_options(body: &mut Value, spec: &AppSpec) {
     }
 }
 
+/// Writes a container's secret and config files (D-179), or removes its
+/// folder when it has none, and returns its binds: the volumes plus each
+/// file read-only at its target.
+async fn container_files(spec: &AppSpec) -> Result<Vec<String>, String> {
+    let dir = crate::secret_files::dir_of(spec);
+    let mut binds = spec.volumes.clone();
+    let files = spec.files.clone();
+    let target = dir.clone();
+
+    tokio::task::spawn_blocking(move || {
+        if files.is_empty() {
+            crate::secret_files::remove(&target)
+        } else {
+            crate::secret_files::sync(&target, &files, crate::secret_files::Reader::Container)
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    binds.extend(file_binds(&dir.to_string_lossy(), &spec.files));
+
+    Ok(binds)
+}
+
+/// `host:container:ro` binds for `files` kept in `dir`.
+fn file_binds(dir: &str, files: &[forge_catalog::secret_files::MountedFile]) -> Vec<String> {
+    files.iter().map(|f| format!("{dir}/{}:{}:ro", f.name, f.target)).collect()
+}
+
 async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, String> {
     let name = spec.unit();
     let t = Duration::from_secs(90);
@@ -1051,6 +1116,7 @@ async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, Str
             }
 
             let env: Vec<String> = load_env(spec).into_iter().map(|(k, v)| format!("{k}={v}")).collect();
+            let binds = container_files(spec).await?;
             let mut body = json!({
                 "Image": image_ref,
                 "Env": env,
@@ -1062,7 +1128,7 @@ async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, Str
                 "ExposedPorts": exposed,
                 "HostConfig": {
                     "PortBindings": bindings,
-                    "Binds": spec.volumes,
+                    "Binds": binds,
                     "RestartPolicy": {
                         "Name": spec.effective_restart().docker_name(),
                         "MaximumRetryCount": spec.restart_max_attempts,
@@ -1103,11 +1169,19 @@ async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, Str
             let _ = docker::api("DELETE", &format!("/containers/{name}?force=1"), None, t).await?;
             let _ = std::fs::remove_file(spec.env_path());
 
+            if let Err(e) = crate::secret_files::remove(&crate::secret_files::dir_of(spec)) {
+                tracing::warn!(app = %spec.key(), error = %e, "secret files left in place");
+            }
+
             return Ok(json!({ "state": "removed" }));
         }
         "retire" => {
             let _ = docker::api("DELETE", &format!("/containers/{name}?force=1"), None, t).await?;
             let _ = std::fs::remove_file(spec.env_path());
+
+            if let Err(e) = crate::secret_files::remove(&crate::secret_files::dir_of(spec)) {
+                tracing::warn!(app = %spec.key(), error = %e, "secret files left in place");
+            }
 
             return Ok(json!({ "state": "retired" }));
         }
@@ -1600,6 +1674,21 @@ mod tests {
         let unlimited = spec(json!({ "restart_policy": "on-failure" }));
         assert!(restart_again(&unlimited, Some(1), 10_000));
         assert!(!restart_again(&spec(json!({ "restart_policy": "no" })), Some(1), 0));
+    }
+
+    #[test]
+    fn secret_files_are_bound_read_only_at_their_targets() {
+        let f = forge_catalog::secret_files::MountedFile {
+            name: "app.conf".into(),
+            target: "/etc/app/app.conf".into(),
+            mode: 0o444,
+            uid: 0,
+            gid: 0,
+            value: "x".into(),
+        };
+        let binds = file_binds("/var/lib/forge-agent/secrets/prod/api", &[f]);
+
+        assert_eq!(binds, ["/var/lib/forge-agent/secrets/prod/api/app.conf:/etc/app/app.conf:ro"]);
     }
 
     #[test]

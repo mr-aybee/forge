@@ -78,6 +78,7 @@ pub async fn apply(
     let req = FileRequest { environment: input.environment_id, text: &input.file, prune: input.prune };
     let plan = state.service_files.plan(req, &caller.principal()).await?;
     authorize_plan(&caller, &plan).await?;
+    super::vault::authorize_item_names(&state, &caller, plan.workspace_id, &plan.vault_items, AUDIT_APPLY).await?;
 
     run(&state, &caller, plan, AUDIT_APPLY).await
 }
