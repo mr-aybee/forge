@@ -133,7 +133,29 @@ the service already runs on come before others.
 | `listen_port` | integer | — | `listen_port: 9000` | Native service port for the default health check |
 | `on_node_failure` | `move` or `alert` | by movability | `on_node_failure: alert` | What the reconciler does when the node is lost |
 | `mesh` | boolean | `true` | `mesh: false` | Join the cluster container network |
-| `strategy`, `health`, `console`, `ingress`, `nodes`, `artifact` | — | — | — | Refused: use [`forge.deploy.yaml`](/docs/reference/deployment-yaml/) or the console |
+| `console` | mapping | — | `console: { port: 9001, path: /, scheme: http }` | The service's web console, for **Open console** on the service page. See below |
+| `strategy`, `health`, `ingress`, `nodes`, `artifact` | — | — | — | Refused: use [`forge.deploy.yaml`](/docs/reference/deployment-yaml/) or the console |
+
+### `x-forge.console`
+
+| Key | Type | Default | Example | Meaning |
+| --- | --- | --- | --- | --- |
+| `port` | integer, 1 to 65535 | required | `port: 9001` | The port the console listens on: the node port of a native service, or the published host port of a container |
+| `path` | string starting with `/` | `/` | `path: /admin` | The path of the console page. No spaces or `\` |
+| `scheme` | `http` or `https` | `http` | `scheme: https` | The scheme of the URL |
+
+Any other key is refused. Export writes the link back. Forge only builds the
+URL: it does not proxy the page or sign you in.
+
+```yaml
+services:
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address :9001
+    ports: ["9000:9000", "9001:9001"]
+    x-forge:
+      console: { port: 9001 }
+```
 
 ## Units
 

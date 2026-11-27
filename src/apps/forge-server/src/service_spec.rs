@@ -5,6 +5,7 @@
 use std::collections::HashSet;
 
 use forge_catalog::compose_native::{Orchestration, SPEC_KEY};
+use forge_catalog::console_link::ConsoleLink;
 use forge_catalog::secret_files::FileRef;
 use forge_core::WorkspaceId;
 use forge_core::model::{EnvVar, Service};
@@ -107,6 +108,11 @@ pub struct AppInput {
     #[serde(default)]
     #[schemars(with = "Vec<Value>")]
     pub secret_files: Vec<FileRef>,
+    /// Where the service serves its web console (`{port, path, scheme}`):
+    /// the console page's **Open console** link. Never sent to a node.
+    #[serde(default)]
+    #[schemars(with = "Option<Value>")]
+    pub console: Option<ConsoleLink>,
     /// Update only: the `version` the editor loaded. A different stored
     /// version fails with 409 instead of overwriting someone else's change.
     #[serde(default)]
@@ -115,8 +121,8 @@ pub struct AppInput {
 
 /// The stored form of a service spec (`services.spec`): the runtime fields
 /// of `forge_catalog::AppSpec` without name, runtime and environment
-/// variables, plus Forge's own `health`, `mesh`, `on_node_failure` and
-/// `orchestration`.
+/// variables, plus Forge's own `health`, `mesh`, `on_node_failure`,
+/// `orchestration` and `console`.
 #[derive(Debug, Serialize)]
 struct StoredSpec<'a> {
     environment: &'a str,
@@ -154,6 +160,8 @@ struct StoredSpec<'a> {
     orchestration: Option<Value>,
     #[serde(skip_serializing_if = "<[FileRef]>::is_empty")]
     secret_files: &'a [FileRef],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    console: Option<&'a ConsoleLink>,
 }
 
 const fn yes() -> bool {
@@ -179,6 +187,10 @@ pub fn apply_input(
 
     forge_catalog::secret_files::validate_refs(&input.secret_files)
         .map_err(|m| DomainError::Invalid(format!("secret files: {m}")))?;
+
+    if let Some(c) = &input.console {
+        c.validate().map_err(DomainError::Invalid)?;
+    }
 
     if input.swarm.is_some() && !input.secret_files.is_empty() {
         return Err(DomainError::Invalid(
@@ -259,6 +271,7 @@ pub fn apply_input(
         on_node_failure: input.on_node_failure,
         orchestration,
         secret_files: &input.secret_files,
+        console: input.console.as_ref(),
     };
     app.spec = serde_json::to_value(&stored).map_err(DomainError::internal)?;
     app.updated_at = now;

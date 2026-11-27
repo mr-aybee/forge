@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::apps::{HealthCheck, Runtime};
+use crate::console_link::ConsoleLink;
 use crate::container_opts::{ContainerOptions, Device, RestartPolicy, Tmpfs, Ulimit};
 use crate::deploy::DocError;
 use crate::placement::{Count, Rules};
@@ -65,6 +66,8 @@ pub struct FileService {
     pub on_node_failure: Option<NodeFailurePolicy>,
     /// `x-forge.mesh: false` opts out of the cluster container network.
     pub mesh: Option<bool>,
+    /// `x-forge.console`: where the service serves its web console.
+    pub console: Option<ConsoleLink>,
 }
 
 /// The runtime fields of a service a file sets. Field names are the ones
@@ -554,6 +557,7 @@ fn service(name: &str, v: &Value, declared: &Declared) -> Res<FileService> {
     let mut runtime = Runtime::Container;
     let mut on_node_failure = None;
     let mut mesh = None;
+    let mut console = None;
 
     if let Some(x) = m.get("x-forge") {
         let ext = x_forge(x, &p("x-forge"))?;
@@ -561,6 +565,7 @@ fn service(name: &str, v: &Value, declared: &Declared) -> Res<FileService> {
         spec.listen_port = ext.listen_port;
         on_node_failure = ext.on_node_failure;
         mesh = ext.mesh;
+        console = ext.console;
     }
 
     for (k, x) in m {
@@ -643,7 +648,7 @@ fn service(name: &str, v: &Value, declared: &Declared) -> Res<FileService> {
         _ => {}
     }
 
-    Ok(FileService { name: name.to_owned(), runtime, spec, env, orchestration: orch, on_node_failure, mesh })
+    Ok(FileService { name: name.to_owned(), runtime, spec, env, orchestration: orch, on_node_failure, mesh, console })
 }
 
 /// `x-forge` on a service.
@@ -652,11 +657,13 @@ struct Extensions {
     listen_port: Option<u16>,
     on_node_failure: Option<NodeFailurePolicy>,
     mesh: Option<bool>,
+    console: Option<ConsoleLink>,
 }
 
 fn x_forge(v: &Value, path: &str) -> Res<Extensions> {
     let m = v.as_object().ok_or_else(|| err(path, "a mapping"))?;
-    let mut out = Extensions { runtime: Runtime::Container, listen_port: None, on_node_failure: None, mesh: None };
+    let mut out =
+        Extensions { runtime: Runtime::Container, listen_port: None, on_node_failure: None, mesh: None, console: None };
 
     for (k, x) in m {
         let p = format!("{path}.{k}");
@@ -682,7 +689,8 @@ fn x_forge(v: &Value, path: &str) -> Res<Extensions> {
                 });
             }
             "mesh" => out.mesh = Some(boolean(x, &p)?),
-            "strategy" | "health" | "console" | "ingress" | "nodes" | "artifact" => {
+            "console" => out.console = Some(console_link(x, &p)?),
+            "strategy" | "health" | "ingress" | "nodes" | "artifact" => {
                 return Err(err(
                     &p,
                     "not supported in a services file yet: use forge.deploy.yaml (strategy, health, artifact) or the console",
@@ -693,6 +701,22 @@ fn x_forge(v: &Value, path: &str) -> Res<Extensions> {
     }
 
     Ok(out)
+}
+
+/// `x-forge.console`: `{port, path, scheme}`.
+fn console_link(v: &Value, path: &str) -> Res<ConsoleLink> {
+    let m = v.as_object().ok_or_else(|| err(path, "a mapping with port, path and scheme"))?;
+
+    for k in m.keys() {
+        if !matches!(k.as_str(), "port" | "path" | "scheme") {
+            return Err(err(&format!("{path}.{k}"), "unknown key; port, path or scheme"));
+        }
+    }
+
+    let c: ConsoleLink = serde_json::from_value(v.clone()).map_err(|e| err(path, e.to_string()))?;
+    c.validate().map_err(|e| err(path, e))?;
+
+    Ok(c)
 }
 
 fn deploy(v: &Value, path: &str, spec: &mut NativeSpec, orch: &mut Orchestration, has_restart: bool) -> Res<()> {
@@ -1538,7 +1562,12 @@ pub fn from_stored(name: &str, runtime: &str, spec: &Value, env: Vec<(String, St
     let on_node_failure = spec.get("on_node_failure").and_then(|v| serde_json::from_value(v.clone()).ok());
     let mesh = spec.get("mesh").and_then(Value::as_bool);
 
-    Ok(FileService { name: name.to_owned(), runtime, spec: native, env, orchestration, on_node_failure, mesh })
+    let console = match spec.get(crate::console_link::SPEC_KEY).filter(|v| !v.is_null()) {
+        Some(v) => Some(serde_json::from_value(v.clone()).map_err(|e| format!("stored console link: {e}"))?),
+        None => None,
+    };
+
+    Ok(FileService { name: name.to_owned(), runtime, spec: native, env, orchestration, on_node_failure, mesh, console })
 }
 
 /// Writes services as a services file that [`parse`] reads back.
@@ -1793,6 +1822,10 @@ fn service_value(s: &FileService, keys: &BTreeMap<(FileKind, String), String>) -
 
     if let Some(mesh) = s.mesh {
         ext.insert("mesh".into(), json!(mesh));
+    }
+
+    if let Some(c) = &s.console {
+        ext.insert("console".into(), json!(c));
     }
 
     put(&mut m, "x-forge", Value::Object(ext));

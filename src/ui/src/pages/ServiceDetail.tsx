@@ -25,6 +25,7 @@ import type { ServiceInput, Service, Environment, Server } from "../api/types";
 import type { AppTab } from "../app/router";
 import { errorText, useToast } from "../app/toast";
 import { useTerminals } from "../app/terminals";
+import { ServiceOpen } from "../components/service/ServiceOpen";
 import { EditBasics } from "../components/service-editor/BasicsSection";
 import { ServiceEditor } from "../components/service-editor/ServiceEditor";
 import { RUNTIMES, allIssues, cleanInput, forSwarm, sectionDomId, serviceFacts, toInput } from "../components/service-editor/sections";
@@ -228,6 +229,7 @@ function ServicePage({ appId }: { appId: string }) {
           <>
             <PinToggle kind="service" id={a.id} label={a.name} />
             <OpenLogStream appId={a.id} />
+            <ServiceOpen app={a} nodes={nodes} />
             <Button
               variant="primary"
               disabled={deployBusy || !!deployWhyHeader}

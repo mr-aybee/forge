@@ -50,6 +50,16 @@ pub struct AppView {
     /// The caller may deploy, start, stop and restart it (`deploy` on its
     /// environment). A hint for the console; every action is still authorized.
     pub can_deploy: bool,
+    /// Where **Open console** goes: the service's console link resolved to
+    /// an ingress host name, else to each node's address. Only `GET
+    /// /services/{id}` fills it; empty without a console link.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub console_urls: Vec<crate::service_console::ConsoleUrl>,
+    /// Where **Open shell** goes on each node the caller may open one on
+    /// (a hint; the shell endpoints authorize). Only `GET /services/{id}`
+    /// fills it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub shell_targets: Vec<crate::service_console::ShellTarget>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -108,7 +118,7 @@ pub async fn list(
             .map(|app| {
                 let instances = by_app.remove(&app.id).unwrap_or_default();
                 let can_deploy = deployable.contains(&app.environment_id) || app_deployable.contains(&app.id);
-                AppView { app, instances, can_deploy }
+                AppView { app, instances, can_deploy, console_urls: Vec::new(), shell_targets: Vec::new() }
             })
             .collect(),
     ))
@@ -141,8 +151,10 @@ pub async fn get(State(state): State<AppState>, caller: Caller, Path(id): Path<S
     caller.authorize(Action::View, svc_ref(app.id)).await?;
     let instances = state.store.list_instances(id).await?;
     let can_deploy = caller.can(Action::Deploy, svc_ref(app.id)).await;
+    let console_urls = crate::service_console::console_urls(&state, &app, &instances).await?;
+    let shell_targets = crate::service_console::shell_targets(&state, &caller, &app, &instances).await?;
 
-    Ok(Json(AppView { app, instances, can_deploy }))
+    Ok(Json(AppView { app, instances, can_deploy, console_urls, shell_targets }))
 }
 
 /// A service's editable fields (see [`crate::service_spec::AppInput`]).

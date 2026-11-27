@@ -419,7 +419,10 @@ The page has the tabs **Overview**, **Configuration**, **Health**, **Storage** a
   On wide windows **Nodes** and **Summary** sit side by side; on narrow ones they stack.
 - **Configuration:** the service editor, with the same sections as on create. While you have unsaved changes a bar at the bottom offers **Discard**, **Save** and **Save and deploy**.
 
-**Deploy** is the main action in the page header. The **⋯** menu next to it
+**Deploy** is the main action in the page header. Next to it,
+**Open console** and **Open shell** appear when they apply; see
+[Open a service's console or shell](#open-a-services-console-or-shell).
+The **⋯** menu next to it
 holds **Expose through ingress**, **Open Ingress** and **Delete service**.
 **Delete service** asks for confirmation and is disabled until you remove the
 service from every node (node row **⋯** → **Remove from node**).
@@ -428,6 +431,45 @@ Tags under the title show the app's **service IP** and its internal names
 (`api.payments`, `api.payments.lab.forge.internal`). Click a tag to copy it.
 Node and cluster pages have the same tags for the node's mesh address and
 block, and the cluster's subnet and domain.
+
+### Open a service's console or shell
+
+Many services serve an admin page, such as a database UI or an object
+store console. Give the service a web console link and the page header shows
+**Open console**.
+
+1. Open the service and select **Configuration**.
+2. In **Network** (a container) or **Start command** (a native service), set
+   **Web console port**: the port the admin page listens on. For a container
+   it is the published host port, so publish it under **Published ports**
+   too.
+3. Optional: set **Console path** (default `/`) and **Console scheme**
+   (`http` or `https`, default `http`).
+4. Select **Save**. Leaving **Web console port** empty removes the link.
+
+**Open console** opens `scheme://<address>:<port><path>` in a new tab. The
+address is the host name of an ingress endpoint that routes to the service
+at the console port, with that endpoint's own scheme and port. Without one,
+it is the address of the node the service runs on; with several nodes the
+button opens a menu with one entry per node. Forge does not proxy the page
+or sign you in: your browser must reach that address, and the page asks for
+its own credentials.
+
+**Open shell** opens a terminal in the panel at the bottom of the window:
+
+| Service | What opens | Needs |
+| --- | --- | --- |
+| Container | A shell inside its container on the node (`docker exec`), audited as `container.exec` | `container.exec` on the node |
+| Native | The node's SSH terminal | `terminal.open` on the node |
+
+The button lists only the nodes you may open a shell on, and is hidden when
+there are none. A service in a Docker Swarm cluster has no **Open shell**:
+open its task container from the node's **Containers** tab.
+
+The same link is set with `forge services create|update --console-port`
+(see the [CLI reference](/docs/reference/cli/services/#forge-services-update))
+or with `x-forge.console` in a
+[services file](/docs/reference/services-yaml/#x-forgeconsole).
 
 ### State
 

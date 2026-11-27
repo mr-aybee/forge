@@ -45,10 +45,10 @@ export interface SectionMeta {
 const S: Record<SectionId, SectionMeta> = {
   basics: { id: "basics", label: "Basics", icon: IdCard, hint: "Name, where it lives and the nodes it runs on." },
   runtime: { id: "runtime", label: "Runtime", icon: Package, hint: "Language runtimes installed on each node before the service is deployed." },
-  start: { id: "start", label: "Start command", icon: SquareTerminal, hint: "How systemd starts the process, and the port it listens on." },
+  start: { id: "start", label: "Start command", icon: SquareTerminal, hint: "How systemd starts the process, the port it listens on and its web console link." },
   image: { id: "image", label: "Image", icon: Boxes, hint: "The container image to run, and overrides of its CMD and ENTRYPOINT." },
   run: { id: "run", label: "Runtime", icon: Play, hint: "Restart policy, user, host name, init and stop behaviour." },
-  network: { id: "network", label: "Network", icon: Network, hint: "Published ports, cluster network, extra networks, hosts and DNS." },
+  network: { id: "network", label: "Network", icon: Network, hint: "Published ports, cluster network, extra networks, hosts, DNS and the web console link." },
   security: { id: "security", label: "Security", icon: Shield, hint: "Root filesystem, Linux capabilities, devices and kernel parameters." },
   resources: { id: "resources", label: "Limits", icon: Cpu, hint: "Limits per node. Empty means no limit." },
   env: { id: "env", label: "Environment variables", icon: Variable, hint: "Written to the service's environment file (0600). Secrets are sealed and never shown again." },
@@ -125,6 +125,18 @@ export const privilegedOf = (v: ServiceInput): string[] => [
   ...v.sysctls.filter(([k]) => k).map(([k]) => `sysctl:${k}`),
 ];
 
+/** Mirrors forge_catalog::console_link::ConsoleLink::validate (the server is authoritative). */
+export const consolePathOk = (p: string) => p.startsWith("/") && p.length <= 512 && !/[\s\\]/.test(p);
+/** Problems of the console link, shown on the section that holds it. */
+const consoleIssues = (v: ServiceInput): string[] => {
+  const c = v.console;
+  if (!c) return [];
+  return [
+    ...(!Number.isInteger(c.port) || c.port < 1 || c.port > 65535 ? ["Web console port: 1 to 65535."] : []),
+    ...(!consolePathOk(c.path ?? "/") ? ["Console path: starts with /, no spaces."] : []),
+  ];
+};
+
 /** The file name of a secret file: its target's last part (as on the server). */
 export const fileName = (f: SecretFileRef) => f.target.split("/").pop() ?? "";
 /** Mirrors forge_catalog::secret_files::check_target (the server is authoritative). */
@@ -165,6 +177,7 @@ export function sectionIssues(id: SectionId, v: ServiceInput, b: BasicsState): {
     case "start":
       if (!v.command.trim()) needs.push("Enter the start command.");
       if (v.listen_port != null && (v.listen_port < 1 || v.listen_port > 65535)) errors.push("Listening port: 1 to 65535.");
+      errors.push(...consoleIssues(v));
       break;
     case "image":
       if (!v.image.trim()) needs.push("Enter an image.");
@@ -177,6 +190,7 @@ export function sectionIssues(id: SectionId, v: ServiceInput, b: BasicsState): {
       if (v.dns.filter(Boolean).length > 8) errors.push("DNS servers: at most 8.");
       if (v.networks.some((n) => n && (!NETWORK_RE.test(n) || n === "host"))) errors.push("Networks: existing Docker network names (letters, digits, _ . -; not host).");
       if (v.networks.filter(Boolean).length > 10) errors.push("Networks: at most 10.");
+      errors.push(...consoleIssues(v));
       break;
     case "run":
       if (v.stop_timeout_secs < 0 || v.stop_timeout_secs > 3600) errors.push("Stop timeout: 0 to 3600 seconds.");
@@ -329,6 +343,7 @@ export function toInput(a: Service): ServiceInput {
     init: s.init === true,
     networks: arr(s.networks).filter(isStr),
     secret_files: arr(s.secret_files).filter((f) => f && typeof f.item === "string" && typeof f.target === "string"),
+    ...(s.console && typeof s.console.port === "number" ? { console: { port: s.console.port, path: s.console.path ?? "/", scheme: s.console.scheme === "https" ? "https" : "http" } } : {}),
     ...(typeof a.version === "number" ? { version: a.version } : {}),
     ...(a.runtime === "container" && s.mesh === false ? { mesh: false as const } : {}),
     ...(s.swarm ? { swarm: normSwarmSettings(s.swarm) } : {}),

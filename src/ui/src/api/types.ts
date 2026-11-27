@@ -479,6 +479,32 @@ export interface ServiceSpec {
   networks?: string[];
   /** Secret and config files: credential vault items by name (D-179). */
   secret_files?: SecretFileRef[];
+  /** Where the service serves its web console (the **Open console** link). */
+  console?: ConsoleLink | null;
+}
+
+/** Where a service serves its web console. Forge only builds the URL: no proxy, no sign-in. */
+export interface ConsoleLink {
+  port: number;
+  /** Starts with `/`; default `/`. */
+  path?: string;
+  /** Default `http`. */
+  scheme?: "http" | "https";
+}
+
+/** One URL **Open console** opens, resolved by the server: an ingress host name, else a node's address. */
+export interface ConsoleUrl {
+  /** The node it points at; absent (null) for an ingress endpoint. */
+  server_id?: string | null;
+  hostname: string;
+  url: string;
+}
+
+/** Where **Open shell** goes on a node the caller may open one on. */
+export interface ShellTarget {
+  server_id: string;
+  /** Container service: the container to exec into. Absent: the node terminal (native service). */
+  container?: string | null;
 }
 
 /** A credential vault item mounted as a file. Names only: values never reach the browser. */
@@ -563,6 +589,10 @@ export interface Service {
   can_deploy?: boolean;
   /** A vault item it mounts as a file changed after its last deploy (epoch ms): deploy it again. */
   secrets_changed_at?: number | null;
+  /** `GET /services/{id}` only: the **Open console** URLs; absent without a console link. */
+  console_urls?: ConsoleUrl[];
+  /** `GET /services/{id}` only: where **Open shell** goes, per node the caller may open one on. */
+  shell_targets?: ShellTarget[];
 }
 
 /** Per-node health status of one service (`GET /services/health-summary`). */
@@ -620,6 +650,8 @@ export interface ServiceInput {
   init: boolean;
   networks: string[];
   secret_files: SecretFileRef[];
+  /** Omitted or null: no console link. */
+  console?: ConsoleLink | null;
   /** Update: the version the editor loaded (409 when it changed since). */
   version?: number;
 }

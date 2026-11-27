@@ -25,6 +25,7 @@
 
 pub mod apps;
 pub mod compose_native;
+pub mod console_link;
 pub mod container_opts;
 pub mod deploy;
 pub mod docker_ops;
