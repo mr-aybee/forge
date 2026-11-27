@@ -34,6 +34,7 @@ mod projectcmd;
 mod queryparity;
 mod rescmd;
 mod schemacheck;
+mod servicefilecmd;
 mod silencecmd;
 mod stackdoccmd;
 mod swarmcmd;

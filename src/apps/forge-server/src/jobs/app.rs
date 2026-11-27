@@ -67,10 +67,11 @@ pub fn build_spec(app: &Service, envelope: Option<&Envelope>) -> Result<AppSpec,
     // `mesh` (default on) is the service's choice; the job decides the
     // network per node (`AppJob::attach_mesh`), so it never reaches a node.
     // `on_node_failure` is the reconciler's (D-177); it never reaches a
-    // node either.
+    // node either, nor does the orchestration of a services file (D-178).
     if let Some(m) = v.as_object_mut() {
         m.remove("mesh");
         m.remove("on_node_failure");
+        m.remove(forge_catalog::compose_native::SPEC_KEY);
     }
 
     v["name"] = json!(app.name);

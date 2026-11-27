@@ -24,6 +24,7 @@
 //!   (mode 0600; generated passwords never leave the node).
 
 pub mod apps;
+pub mod compose_native;
 pub mod container_opts;
 pub mod deploy;
 pub mod docker_ops;
@@ -33,6 +34,7 @@ pub mod health;
 pub mod ingress;
 pub mod integration;
 pub mod names;
+pub mod placement;
 pub mod sites;
 pub mod stack_doc;
 pub mod stack_templates;

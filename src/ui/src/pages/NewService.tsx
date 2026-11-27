@@ -11,7 +11,17 @@ import { ProjectModal } from "../components/ProjectDialogs";
 import { CreateBasics, type CreateBasicsValue } from "../components/service-editor/BasicsSection";
 import { ServiceEditor } from "../components/service-editor/ServiceEditor";
 import { allIssues, cleanInput, emptyInput, forSwarm, serviceFacts } from "../components/service-editor/sections";
-import { ActionBar, Button, Empty, ErrorNote, PageCrumb, PageHeader, Skeleton } from "../components/ui";
+import { ServicesFilePanel } from "../components/service-editor/ServicesFilePanel";
+import { ActionBar, Button, Empty, ErrorNote, PageCrumb, PageHeader, Segmented, Skeleton } from "../components/ui";
+
+const STARTER = `name: my-app
+services:
+  web:
+    image: nginx:1.27
+    ports: ["8080:80"]
+    deploy:
+      replicas: 1
+`;
 
 /**
  * New service (`/services/new`): pick the kind, the project and environment,
@@ -35,6 +45,8 @@ export function NewService() {
     input: emptyInput("container"),
   }));
   const [dialog, setDialog] = useState<"project" | "env" | null>(null);
+  /** Form, or a Compose-format services file (D-178). */
+  const [mode, setMode] = useState<"form" | "yaml">("form");
   const [pending, setPending] = useState<"create" | "deploy" | null>(null);
   /** The server's validation message of the last create, shown above the editor. */
   const [invalid, setInvalid] = useState("");
@@ -120,6 +132,16 @@ export function NewService() {
           </div>
         ) : (
           <>
+          <div className="mb-3">
+            <Segmented label="Editor" value={mode} onChange={setMode} options={[{ id: "form", label: "Form" }, { id: "yaml", label: "YAML" }]} />
+          </div>
+          {mode === "yaml" ? (
+            <>
+              {!env && <p className="mb-3 text-[13px] text-muted">Choose the project and environment in the form first; the file is applied there.</p>}
+              <ServicesFilePanel environmentId={env?.id} initial={STARTER} onApplied={() => void navigate({ to: "/services" })} />
+            </>
+          ) : (
+          <>
           {invalid && (
             <p role="alert" className="mb-3 rounded-md border border-bad bg-bad-soft px-3 py-2 text-[13px] break-words text-bad">
               <b className="font-semibold">Not created:</b> {invalid}
@@ -147,6 +169,8 @@ export function NewService() {
               />
             }
           />
+          </>
+          )}
           </>
         )}
       </div>

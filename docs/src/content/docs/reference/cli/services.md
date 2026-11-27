@@ -32,6 +32,10 @@ other [`forge stacks`](/docs/reference/cli/stacks/) commands for them. `list` an
 | `list`, `show`, `action … status`, `logs`, `storage list` | `view` | the service's environment | no |
 | `create`, `update`, `place`, `remove`, `action … start`, `stop`, `restart`, `deploy`, `delete`, `storage attach`, `storage detach` | `deploy` | the service's environment | no |
 | `place` | `server.manage` | each node in `--node` | no |
+| `plan`, `apply`, `scale` | `deploy` | the environment | no |
+| `apply`, `scale` | `server.manage` | each node a service is added to | no |
+| `apply`, `scale` with privileged settings or mounts | `stack.privileged` | the environment | yes |
+| `export` | `view` | the service or environment | no |
 | `files …` | `file.read`, `file.write` (changes) | the app root on each node | changes: yes |
 | `deploy` when a node lacks a runtime the definition lists in `dependencies`, or Docker Engine for a container | `package.manage` | each node that lacks it | yes (step-up) |
 | `deploy` with a container volume outside the app's folder and the node's approved file roots | `stack.privileged` | the service's environment | yes |
@@ -65,6 +69,10 @@ other [`forge stacks`](/docs/reference/cli/stacks/) commands for them. `list` an
 | [`forge services files upload`](#forge-services-files-upload) | Uploads a file to the app root on every node |
 | [`forge services files extract`](#forge-services-files-extract) | Unpacks an archive in the app root on every node |
 | [`forge services files mkdir`](#forge-services-files-mkdir) | Creates a folder in the app root on every node |
+| [`forge services plan`](#forge-services-plan) | Shows what applying a Compose-format services file would change |
+| [`forge services apply`](#forge-services-apply) | Applies a Compose-format services file |
+| [`forge services scale`](#forge-services-scale) | Changes the number of nodes a service runs on |
+| [`forge services export`](#forge-services-export) | Prints services as a Compose-format services file |
 
 ### forge services list
 
@@ -1251,6 +1259,156 @@ forge services files xcweb mkdir -p /site/assets
 Each node's result, as in `forge nodes files mkdir`.
 
 Exit codes: as for [`forge services files ls`](#forge-services-files-ls).
+
+## Services files
+
+These commands read and write a Compose / Swarm format services file. Each
+entry under `services:` becomes one Forge service. The keys are listed in
+the [services file reference](/docs/reference/services-yaml/); the
+walkthrough is [Run services from a Compose file](/docs/guides/services-from-compose/).
+
+### forge services plan
+
+Shows what applying the file would create, change, move and remove.
+Changes nothing. `env_file` entries are read relative to the file and
+inlined into `environment`.
+
+**Synopsis**
+
+```text
+forge services plan [OPTIONS] --environment <ENVIRONMENT>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `--file <FILE>`, `-f` | path | `compose.yaml` | no | The services file; `-` reads stdin | `-f compose.yaml` |
+| `--environment <ENVIRONMENT>` | environment id or name | — | yes | Where the services run | `--environment prod` |
+| `--no-prune` | flag | off | no | Keep services the file applied before and no longer lists | `--no-prune` |
+
+**Examples**
+
+```sh
+# What would change in prod
+forge services plan -f compose.yaml --environment prod
+# The plan as JSON
+forge services plan -f compose.yaml --environment prod -o json
+```
+
+**Output**
+
+```text
+Environment  prod (file `shop`)
+  create     api                      on lab-a, lab-b; adds lab-a, lab-b
+  unchanged  db                       on lab-c
+```
+
+Exit codes: `0` success; `1` the file or plan was refused (the message names
+the key); `4` no `deploy`; `6` no such environment.
+
+### forge services apply
+
+Plans the file, asks, then applies it: services are created or changed,
+placed and deployed (one copy per node), and services this file applied
+before and no longer lists are removed. Services made in the console or by
+another file are never removed.
+
+**Synopsis**
+
+```text
+forge services apply [OPTIONS] --environment <ENVIRONMENT>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `--file <FILE>`, `-f` | path | `compose.yaml` | no | The services file; `-` reads stdin | `-f compose.yaml` |
+| `--environment <ENVIRONMENT>` | environment id or name | — | yes | Where the services run | `--environment prod` |
+| `--no-prune` | flag | off | no | Keep services the file applied before and no longer lists | `--no-prune` |
+| `--wait` | flag | off | no | Wait for the deploy and remove jobs | `--wait` |
+| `--wait-timeout-secs <WAIT_TIMEOUT_SECS>` | integer, seconds | `1800` | no | How long `--wait` waits | `--wait-timeout-secs 600` |
+| `--yes` | flag | off | no | Skip the confirmation prompt | `--yes` |
+
+**Examples**
+
+```sh
+# Apply and wait for every deploy
+forge services apply -f compose.yaml --environment prod --yes --wait
+# Applying an unchanged file does nothing
+forge services apply -f compose.yaml --environment prod --yes
+```
+
+**Output**
+
+The plan, then the jobs it started (`JOB`, `KIND`, `STATUS`). When nothing
+changes it prints `Nothing to do.`
+
+Exit codes: `0` success; `1` refused, or you did not answer `yes`; `4` no
+`deploy`, `server.manage` or `stack.privileged`; `5` privileged settings
+need an MFA-verified session; `7` a service changed since the plan or is
+managed by another file; `8` `--wait` timed out; `10` a job failed.
+
+### forge services scale
+
+Sets the number of nodes a replicated service runs on (one copy per node),
+deploys it on the nodes it gains and removes it from the ones it loses.
+
+**Synopsis**
+
+```text
+forge services scale [OPTIONS] <SERVICE> <REPLICAS>
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<service>` | service id or name | — | yes | The service | `api` |
+| `<replicas>` | integer | — | yes | Nodes, 1 to 1000 | `3` |
+| `--environment <ENVIRONMENT>` | environment id or name | — | no | Look the name up in this environment only | `--environment prod` |
+| `--wait` | flag | off | no | Wait for the jobs | `--wait` |
+| `--wait-timeout-secs <WAIT_TIMEOUT_SECS>` | integer, seconds | `1800` | no | How long `--wait` waits | `--wait-timeout-secs 600` |
+| `--yes` | flag | off | no | Skip the confirmation prompt | `--yes` |
+
+**Examples**
+
+```sh
+forge services scale api 3 --environment prod --yes --wait
+```
+
+Exit codes: `0` success; `1` refused (a global service, or too few eligible
+nodes); `4` no `deploy` or `server.manage`; `6` no such service.
+
+### forge services export
+
+Prints a service, or with `--environment` and no name every container and
+native service of the environment, as a services file. Secret variables
+are never written.
+
+**Synopsis**
+
+```text
+forge services export [OPTIONS] [SERVICE]
+```
+
+**Arguments and flags**
+
+| Name | Type | Default | Required | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| `<service>` | service id or name | — | no | The service | `api` |
+| `--environment <ENVIRONMENT>` | environment id or name | — | no | Look the name up here; alone, export the whole environment | `--environment prod` |
+
+**Examples**
+
+```sh
+forge services export api --environment prod > api.yaml
+forge services export --environment prod > compose.yaml
+```
+
+Exit codes: `0` success; `2` neither a service nor `--environment`; `4` no
+`view`; `6` no such service.
 
 ## Service definition
 

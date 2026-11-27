@@ -935,6 +935,11 @@ pub struct Service {
     /// concurrent change is refused instead of overwritten.
     #[serde(default)]
     pub version: i64,
+    /// The services file this service was applied from (its top-level
+    /// `name`, D-178), or empty for one made in the console or the API. A
+    /// later apply of that file removes the services it no longer lists.
+    #[serde(default)]
+    pub source: String,
 }
 
 /// Placement of a service on a node.

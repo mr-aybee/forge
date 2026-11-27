@@ -522,6 +522,66 @@ pub enum ServicesCmd {
     /// The service on Docker Swarm: status, scale, restart, rollback, logs.
     #[command(subcommand)]
     Swarm(crate::containercmd::ServiceSwarmCmd),
+    /// Show what applying a Compose-format services file would create,
+    /// change, move and remove. Changes nothing.
+    Plan {
+        /// The services file (`-` reads stdin).
+        #[arg(long, short = 'f', value_name = "FILE", default_value = "compose.yaml")]
+        file: String,
+        /// The environment (id or name).
+        #[arg(long)]
+        environment: String,
+        /// Keep services this file applied before and no longer lists.
+        #[arg(long)]
+        no_prune: bool,
+    },
+    /// Apply a Compose-format services file: every entry under `services:`
+    /// becomes a Forge service, placed and deployed on its nodes. Services
+    /// the file applied before and no longer lists are removed.
+    Apply {
+        /// The services file (`-` reads stdin).
+        #[arg(long, short = 'f', value_name = "FILE", default_value = "compose.yaml")]
+        file: String,
+        /// The environment (id or name).
+        #[arg(long)]
+        environment: String,
+        /// Keep services this file applied before and no longer lists.
+        #[arg(long)]
+        no_prune: bool,
+        /// Wait for the deploy and remove jobs (exit 10 if one fails, 8 on timeout).
+        #[arg(long)]
+        wait: bool,
+        #[arg(long, default_value_t = 1800)]
+        wait_timeout_secs: u64,
+        /// Apply without asking.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Change the number of nodes a service runs on (one copy per node)
+    /// and deploy it on the nodes it gains.
+    Scale {
+        #[arg(id = "service", value_name = "SERVICE")]
+        app: String,
+        /// Nodes, 1 to 1000.
+        replicas: u32,
+        #[arg(long)]
+        environment: Option<String>,
+        /// Wait for the jobs (exit 10 if one fails, 8 on timeout).
+        #[arg(long)]
+        wait: bool,
+        #[arg(long, default_value_t = 1800)]
+        wait_timeout_secs: u64,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Print a service (or with --environment and no name, every service
+    /// of the environment) as a Compose-format services file.
+    Export {
+        #[arg(id = "service", value_name = "SERVICE")]
+        app: Option<String>,
+        #[arg(long)]
+        environment: Option<String>,
+    },
     /// Services you can see.
     List {
         /// Only this environment (id or name).
@@ -812,6 +872,22 @@ pub async fn services(g: &Global, cmd: ServicesCmd) -> Result<()> {
 
     match cmd {
         ServicesCmd::Swarm(_) => Ok(()),
+        ServicesCmd::Plan { file, environment, no_prune } => {
+            let a = crate::servicefilecmd::FileArgs { file: &file, environment: &environment, prune: !no_prune };
+            crate::servicefilecmd::plan(g, &mut api, &a).await
+        }
+        ServicesCmd::Apply { file, environment, no_prune, wait, wait_timeout_secs, yes } => {
+            let a = crate::servicefilecmd::FileArgs { file: &file, environment: &environment, prune: !no_prune };
+            let w = crate::servicefilecmd::Wait { yes, wait, timeout_secs: wait_timeout_secs };
+            crate::servicefilecmd::apply(g, &mut api, &a, &w).await
+        }
+        ServicesCmd::Scale { app, replicas, environment, wait, wait_timeout_secs, yes } => {
+            let w = crate::servicefilecmd::Wait { yes, wait, timeout_secs: wait_timeout_secs };
+            crate::servicefilecmd::scale(g, &mut api, &app, environment.as_deref(), replicas, &w).await
+        }
+        ServicesCmd::Export { app, environment } => {
+            crate::servicefilecmd::export(&mut api, app.as_deref(), environment.as_deref()).await
+        }
         ServicesCmd::List { environment, cluster, paging } => {
             let mut q = Vec::new();
 

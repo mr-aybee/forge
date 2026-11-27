@@ -54,6 +54,7 @@ pub(crate) mod schema_types;
 pub mod server_settings;
 mod servers;
 mod service_accounts;
+mod service_files;
 mod service_ports;
 mod services;
 mod session;
@@ -295,6 +296,11 @@ pub fn router(state: AppState) -> Router {
         .route("/services", get(services::list).post(services::create))
         .route("/services/{id}", get(services::get).put(services::update).delete(services::delete))
         .route("/services/{id}/instances", axum::routing::put(services::place))
+        .route("/services/plan", post(service_files::plan))
+        .route("/services/apply", post(service_files::apply))
+        .route("/services/{id}/scale", post(service_files::scale))
+        .route("/services/{id}/export", get(service_files::export_service))
+        .route("/environments/{id}/services/export", get(service_files::export_environment))
         .route("/services/health-summary", get(app_health::summary_list))
         .route("/services/{id}/health", get(app_health::get).put(app_health::update))
         .route("/services/{id}/health/validate", post(app_health::validate))

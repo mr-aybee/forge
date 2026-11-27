@@ -1320,3 +1320,27 @@ export interface IamReconcile {
   updated: number;
   removed: number;
 }
+
+/** One service in a services file plan (D-178). */
+export interface ServicesChange {
+  service: string;
+  action: "create" | "update" | "move" | "remove" | "unchanged";
+  fields: string[];
+  nodes: string[];
+  added_nodes: string[];
+  removed_nodes: string[];
+  privileged: string[];
+  deploys: string[];
+}
+
+/** What applying a services file would do (`POST /services/plan`). */
+export interface ServicesPlan {
+  environment: string;
+  source: string;
+  changes: ServicesChange[];
+}
+
+/** A services file applied: the plan and the jobs it started. */
+export interface ServicesApplied extends ServicesPlan {
+  jobs: Job[];
+}
