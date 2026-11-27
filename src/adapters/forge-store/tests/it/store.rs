@@ -737,6 +737,72 @@ async fn swarm_rows_round_trip_and_go_with_the_cluster() {
     assert!(store.get_member(server.id).await.unwrap().is_none());
 }
 
+/// Removing a node takes its swarm membership; the swarm row goes only with
+/// the last member, so the cluster's swarm can be founded again.
+#[tokio::test]
+async fn removing_the_last_swarm_member_clears_the_swarm() {
+    use forge_core::swarm::{ClusterSwarm, MemberRole, MemberState, SwarmMember, SwarmRepository};
+    let (store, _d) = store().await;
+    let (ws, _) = seed_workspace(&store).await;
+    let cluster = cluster_in(ws.id, "swarm-lab");
+    store.create_cluster(&cluster).await.unwrap();
+    let swarm = ClusterSwarm {
+        cluster_id: cluster.id,
+        swarm_id: "s1".into(),
+        port: 2377,
+        default_addr_pool: Vec::new(),
+        autolock: false,
+        tokens_sealed: None,
+        founder: None,
+        updated_at: Timestamp(1),
+    };
+    store.put_swarm(&swarm).await.unwrap();
+    let mut ids = Vec::new();
+
+    for host in ["lab-a", "lab-b"] {
+        let server = Server {
+            role: forge_core::model::NodeRole::Worker,
+            display_name: None,
+            id: ServerId::new(),
+            workspace_id: ws.id,
+            environment_id: None,
+            cluster_id: Some(cluster.id),
+            hostname: host.into(),
+            os: "linux".into(),
+            arch: "x86_64".into(),
+            agent_version: "0.1.0".into(),
+            status: AgentStatus::Online,
+            last_seen_at: None,
+            cert_serial: None,
+            cert_not_after: None,
+            created_at: Timestamp(1),
+        };
+        store.create_server(&server).await.unwrap();
+        let member = SwarmMember {
+            server_id: server.id,
+            cluster_id: cluster.id,
+            node_id: host.into(),
+            role: MemberRole::Manager,
+            advertise_addr: String::new(),
+            manager_addr: String::new(),
+            state: MemberState::Joined,
+            error: String::new(),
+            updated_at: Timestamp(2),
+        };
+        store.put_member(&member).await.unwrap();
+        ids.push(server.id);
+    }
+
+    // One member left: the swarm stays.
+    store.delete_server(ids[0], Timestamp(3)).await.unwrap();
+    assert!(store.get_swarm(cluster.id).await.unwrap().is_some());
+
+    // The last member gone: so is the swarm.
+    store.delete_server(ids[1], Timestamp(4)).await.unwrap();
+    assert!(store.get_swarm(cluster.id).await.unwrap().is_none());
+    assert!(store.list_members(cluster.id).await.unwrap().is_empty());
+}
+
 /// Registries (D-158): one per host per workspace, the sealed secret kept as
 /// given.
 #[tokio::test]
