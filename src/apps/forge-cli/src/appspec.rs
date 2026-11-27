@@ -84,8 +84,8 @@ pub struct AppFlags {
     /// tmpfs mount `PATH[:SIZE_MB]`; repeat for more.
     #[arg(long = "tmpfs", value_name = "PATH[:SIZE_MB]")]
     pub tmpfs: Vec<String>,
-    /// Run Docker's init as PID 1: true or false.
-    #[arg(long, value_name = "BOOL")]
+    /// Run Docker's init as PID 1; `--init` alone means true, `--init false` turns it off.
+    #[arg(long, value_name = "BOOL", num_args = 0..=1, default_missing_value = "true")]
     pub init: Option<bool>,
     /// Existing Docker network to connect to as well; repeat for more.
     #[arg(long = "network", value_name = "NAME")]
@@ -588,6 +588,20 @@ mod tests {
         assert_eq!(body["tmpfs"], json!([{ "target": "/tmp", "size_mb": 64 }, { "target": "/run", "size_mb": 0 }]));
         assert_eq!((&body["init"], &body["networks"]), (&json!(true), &json!(["backend"])));
         assert!(parse_tmpfs("/tmp:big").is_err());
+    }
+
+    #[test]
+    fn init_alone_means_true() {
+        #[derive(clap::Parser)]
+        struct Wrap {
+            #[command(flatten)]
+            flags: AppFlags,
+        }
+
+        let parse = |args: &[&str]| <Wrap as clap::Parser>::try_parse_from(args).map(|w| w.flags.init);
+        assert_eq!(parse(&["t", "--init"]).ok(), Some(Some(true)));
+        assert_eq!(parse(&["t", "--init", "false"]).ok(), Some(Some(false)));
+        assert_eq!(parse(&["t"]).ok(), Some(None));
     }
 
     #[test]

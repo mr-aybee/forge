@@ -529,7 +529,7 @@ missing one exits with `2` and names the flag.
 | `--cap-drop <CAP>` | capability name or `ALL`; repeatable | none | no | A Linux capability to drop (container only) | `--cap-drop ALL` |
 | `--dns <IP>` | IP address; repeatable | none | no | A DNS server for the container, at most 8 | `--dns 192.0.2.53` |
 | `--tmpfs <PATH[:SIZE_MB]>` | container path with an optional size; repeatable | none | no | A tmpfs mount. Without a size, Docker's default applies | `--tmpfs /tmp:64` |
-| `--init <BOOL>` | `true` or `false` | none | no | Run Docker's init as PID 1, which reaps zombie processes and forwards signals | `--init true` |
+| `--init <BOOL>` | `true` or `false` | none | no | Run Docker's init as PID 1, which reaps zombie processes and forwards signals; `--init` alone means `true` | `--init` |
 | `--network <NAME>` | Docker network name; repeatable | none | no | An existing Docker network on the node to connect the container to as well | `--network backend` |
 
 **Examples**
@@ -695,7 +695,7 @@ forge services update [OPTIONS] <SERVICE>
 | `--cap-drop <CAP>` | capability name or `ALL`; repeatable | keep | no | A Linux capability to drop (container only) | `--cap-drop ALL` |
 | `--dns <IP>` | IP address; repeatable | keep | no | A DNS server for the container, at most 8 | `--dns 192.0.2.53` |
 | `--tmpfs <PATH[:SIZE_MB]>` | container path with an optional size; repeatable | keep | no | A tmpfs mount. Without a size, Docker's default applies | `--tmpfs /tmp:64` |
-| `--init <BOOL>` | `true` or `false` | keep | no | Run Docker's init as PID 1, which reaps zombie processes and forwards signals | `--init true` |
+| `--init <BOOL>` | `true` or `false` | keep | no | Run Docker's init as PID 1, which reaps zombie processes and forwards signals; `--init` alone means `true` | `--init` |
 | `--network <NAME>` | Docker network name; repeatable | keep | no | An existing Docker network on the node to connect the container to as well | `--network backend` |
 | `--environment <ENVIRONMENT>` | environment id or name | — | no | Look the name up in this environment only. It does not move the service | `--environment shop-prod` |
 | `--yes` | flag | off | no | Skip the confirmation prompt | `--yes` |

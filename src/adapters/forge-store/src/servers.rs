@@ -202,6 +202,12 @@ impl ServerRepository for Store {
             "DELETE FROM tunnel_grants WHERE server_id = $1".into(),
             "DELETE FROM docker_endpoints WHERE server_id = $1".into(),
             "DELETE FROM swarm_members WHERE server_id = $1".into(),
+            // A swarm whose last member was this node is gone with it: a kept
+            // record would block founding the cluster's swarm again.
+            "DELETE FROM cluster_swarms WHERE NOT EXISTS
+                 (SELECT 1 FROM swarm_members m WHERE m.cluster_id = cluster_swarms.cluster_id)
+               AND cluster_id IN (SELECT cluster_id FROM servers WHERE id = $1 AND cluster_id IS NOT NULL)"
+                .into(),
             "DELETE FROM deploy_slots WHERE server_id = $1".into(),
             "DELETE FROM deployment_events WHERE server_id = $1".into(),
             "DELETE FROM entity_tags WHERE kind = 'server' AND entity_id = $1".into(),
