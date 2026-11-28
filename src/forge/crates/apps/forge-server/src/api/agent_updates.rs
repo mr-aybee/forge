@@ -26,6 +26,7 @@ use crate::agent_update_policy::{is_ahead, is_outdated};
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
 use crate::jobs::agent_update::{SUBMIT_LOCK, active_jobs, active_update};
+use crate::request_origin::RequestOrigin;
 use crate::state::AppState;
 
 /// The agent version this control plane hands out (`MANIFEST.json` in the
@@ -162,8 +163,10 @@ async fn submit_rollout(
 pub async fn rollout(
     State(state): State<AppState>,
     caller: Caller,
+    origin: RequestOrigin,
     Json(req): Json<RolloutRequest>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
+    learn_download_address(&state, &caller, &origin).await;
     let ids = if req.server_ids.is_empty() { outdated_ids(&state).await? } else { req.server_ids };
     let batches = ids.len().div_ceil(req.batch.max(1));
     let n = ids.len();
@@ -889,6 +892,29 @@ async fn update_key(state: &AppState, id: ServerId) -> ApiResult<String> {
 /// Most attempts of one node's update to one version.
 const MAX_UPDATE_ATTEMPTS: u32 = 1000;
 
+/// Before an update is queued, learns the address the administrator is on
+/// as the one nodes download from (D-167), the way signing in does. Without
+/// it, a console session that started before the address was ever recorded
+/// (kept across a server upgrade, for example) queues updates that fail at
+/// `send` with "Forge does not know an address nodes can download from yet".
+/// The same checks as at sign-in apply ([`super::session::record_admin_address`]:
+/// `system.update` on the platform and a host this machine or its
+/// configuration vouches for). Only for people in the console or the CLI: not
+/// for API keys or approved connector requests. Nothing to do when the
+/// address is pinned or `node_public_url` is set.
+async fn learn_download_address(state: &AppState, caller: &Caller, origin: &RequestOrigin) {
+    if state.config.node_public_url.is_some() || state.public_address.pinned().is_some() {
+        return;
+    }
+
+    if caller.via_api_key() || caller.approved_replay() {
+        return;
+    }
+
+    let forge_core::Principal::User(user) = caller.principal();
+    super::session::record_admin_address(state, user, origin).await;
+}
+
 async fn submit(state: &AppState, caller: &Caller, id: ServerId) -> ApiResult<Job> {
     caller.authorize(Action::ServerCommand, server_ref(id)).await?;
     let node = state.store.get_server(id).await.map_err(|_| ApiError::not_found("node not found"))?;
@@ -929,8 +955,10 @@ async fn submit(state: &AppState, caller: &Caller, id: ServerId) -> ApiResult<Jo
 pub async fn update_one(
     State(state): State<AppState>,
     caller: Caller,
+    origin: RequestOrigin,
     Path(id): Path<ServerId>,
 ) -> ApiResult<(StatusCode, Json<Job>)> {
+    learn_download_address(&state, &caller, &origin).await;
     Ok((StatusCode::ACCEPTED, Json(submit(&state, &caller, id).await?)))
 }
 
@@ -945,8 +973,11 @@ pub struct UpdateMany {
 pub async fn update_many(
     State(state): State<AppState>,
     caller: Caller,
+    origin: RequestOrigin,
     Json(req): Json<UpdateMany>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
+    learn_download_address(&state, &caller, &origin).await;
+
     // Listed nodes are always submitted, so a node's own refusal is recorded;
     // only "every outdated node" leaves out those that cannot take it.
     let ids: Vec<ServerId> = if req.server_ids.is_empty() { outdated_ids(&state).await? } else { req.server_ids };
