@@ -42,6 +42,23 @@ fn write_atomic(path: &Path, text: &str) {
     std::fs::rename(&tmp, path).unwrap();
 }
 
+/// A UDP socket and a TCP listener on the same free port. The UDP port the
+/// OS picks can already be taken for TCP by another process, so retry.
+async fn bind_pair() -> (UdpSocket, TcpListener, SocketAddr) {
+    for _ in 0..50 {
+        let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let addr = udp.local_addr().unwrap();
+
+        match TcpListener::bind(addr).await {
+            Ok(tcp) => return (udp, tcp, addr),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => continue,
+            Err(e) => panic!("bind tcp {addr}: {e}"),
+        }
+    }
+
+    panic!("no port free for both UDP and TCP after 50 tries")
+}
+
 /// A started server: its UDP and TCP address (same port).
 struct Running {
     addr: SocketAddr,
@@ -53,9 +70,7 @@ async fn start(file: &Path, upstreams: Vec<SocketAddr>) -> Running {
     let watcher = Watcher { path: file.to_owned(), ttl: None, current: current.clone(), interval: FAST_POLL };
     tokio::spawn(watcher.run());
 
-    let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-    let addr = udp.local_addr().unwrap();
-    let tcp = TcpListener::bind(addr).await.unwrap();
+    let (udp, tcp, addr) = bind_pair().await;
     let mut server = hickory_server::Server::new(Handler { current: current.clone(), upstreams: upstreams.into() });
     server.register_socket(udp);
     server.register_listener(tcp, Duration::from_secs(5), 32);
