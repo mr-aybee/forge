@@ -34,7 +34,7 @@ tokio-rustls.workspace = true
 rustls-pki-types.workspace = true
 # The machine's trusted roots, for HTTPS health checks that verify the
 # certificate (#12). Apache-2.0/ISC/MIT, already in the tree through reqwest.
-rustls-native-certs = "0.8"
+rustls-native-certs = { workspace = true }
 prost.workspace = true
 serde.workspace = true
 serde_json.workspace = true

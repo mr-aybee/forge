@@ -1,6 +1,7 @@
 //! Argon2id password hashing (PHC string format).
 
-use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use argon2::password_hash::phc::PasswordHash;
+use argon2::password_hash::{PasswordHasher, PasswordVerifier};
 use argon2::{Algorithm, Argon2, Params, Version};
 
 /// Minimum accepted password length.
@@ -14,8 +15,8 @@ fn hasher() -> Argon2<'static> {
 
 /// Hashes a password with a random salt.
 pub fn hash(password: &str) -> Result<String, String> {
-    let salt = SaltString::encode_b64(&forge_secrets::crypto::random_bytes::<16>()).map_err(|e| e.to_string())?;
-    hasher().hash_password(password.as_bytes(), &salt).map(|h| h.to_string()).map_err(|e| e.to_string())
+    let salt = forge_secrets::crypto::random_bytes::<16>();
+    hasher().hash_password_with_salt(password.as_bytes(), &salt).map(|h| h.to_string()).map_err(|e| e.to_string())
 }
 
 /// Verifies a password against a stored PHC hash (constant time).
@@ -72,6 +73,16 @@ mod tests {
         assert!(verify("correct horse battery staple", &h));
         assert!(!verify("wrong", &h));
         assert!(!verify("x", "not-a-hash"));
+    }
+
+    #[test]
+    fn hashes_stored_by_earlier_releases_still_verify() {
+        // Made by argon2 0.5 with the parameters above; stored hashes must
+        // keep working across argon2 upgrades.
+        let stored =
+            "$argon2id$v=19$m=19456,t=2,p=1$DUF0bCzHQ/tztWE9M/v58g$nMwxFtQ/p0hZG+XtSLeXXyVbZufvre4qWmDsIlFJflE";
+        assert!(verify("correct horse battery staple", stored));
+        assert!(!verify("correct horse battery stapler", stored));
     }
 
     #[test]

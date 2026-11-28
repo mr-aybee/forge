@@ -280,7 +280,7 @@ mod tests {
 
     fn self_signed(names: &[&str]) -> (String, String) {
         let c = rcgen::generate_simple_self_signed(names.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>()).unwrap();
-        (c.cert.pem(), c.key_pair.serialize_pem())
+        (c.cert.pem(), c.signing_key.serialize_pem())
     }
 
     #[test]

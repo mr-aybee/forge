@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use forge_core::Timestamp;
 use forge_secrets::crypto::sha256_hex;
-use rcgen::KeyPair;
+use rcgen::{KeyPair, PublicKeyData};
 use x509_parser::prelude::*;
 
 use crate::PkiError;
@@ -43,7 +43,7 @@ impl ControlPlaneKey {
     }
 
     fn assemble(key: KeyPair) -> Self {
-        let fingerprint = sha256_hex(&key.public_key_der());
+        let fingerprint = sha256_hex(&key.subject_public_key_info());
         Self { key, fingerprint }
     }
 

@@ -38,11 +38,11 @@ keyring = "4.2"
 # WebSocket client over Forge's own rustls (ring) stream, the system's root
 # certificates as reqwest uses them, and raw terminal mode on every OS.
 # All MIT/Apache-2.0, no OpenSSL.
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
+tokio-tungstenite = { workspace = true }
 tokio-rustls.workspace = true
 rustls.workspace = true
 rustls-pki-types.workspace = true
-rustls-native-certs = "0.8"
+rustls-native-certs = { workspace = true }
 crossterm = { version = "0.29", default-features = false, features = ["events", "windows"] }
 futures.workspace = true
 # `forge tunnel open --direct` (#35 phase 2): SSH straight to the node with a

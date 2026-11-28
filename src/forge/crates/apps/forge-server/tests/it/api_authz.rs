@@ -1193,14 +1193,14 @@ async fn uploaded_certificates_are_validated_sealed_and_never_returned() {
     let admin = Client::login(&h.base, ADMIN_EMAIL, PASSWORD).await;
     let ws = &h.default_org;
     let pair = rcgen::generate_simple_self_signed(vec!["shop.example.com".to_owned()]).unwrap();
-    let (crt, key) = (pair.cert.pem(), pair.key_pair.serialize_pem());
+    let (crt, key) = (pair.cert.pem(), pair.signing_key.serialize_pem());
     let other = rcgen::generate_simple_self_signed(vec!["x.example.com".to_owned()]).unwrap();
 
     // Key from another certificate: refused.
     let (s, body) = admin
         .post(
             "/api/v1/certificates",
-            json!({"name": "bad", "chain_pem": crt, "key_pem": other.key_pair.serialize_pem()}),
+            json!({"name": "bad", "chain_pem": crt, "key_pem": other.signing_key.serialize_pem()}),
         )
         .await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "{body}");
