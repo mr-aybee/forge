@@ -124,7 +124,7 @@ Forge takes the first of these that is set:
 | --- | --- | --- |
 | Runtime setting `server.public_address` | 1 (pinned) | Console **Settings → Server**, `forge settings public-address set <url>`, `forge-server public-address set <url>`, installer `--public-address <url>` |
 | `public_url` in `forge.toml` | 2 (pinned) | Edit the file and restart |
-| Last administrator address `server.last_admin_address` | 3 | Recorded automatically: the address a user with `system.update` on the platform last signed in on (password or passkey), when that host is an address or the host name of the server, a configured name or a match in an explicit allowed-hosts list (not `*`). Loopback and `localhost` are never recorded (signing in there still works). Audited as `server.last_admin_address.update`. Read-only |
+| Last administrator address `server.last_admin_address` | 3 | Recorded automatically: the address a user with `system.update` on the platform last signed in on (password or passkey), or last started an agent update or rollout from when nothing is pinned, when that host is an address or the host name of the server, a configured name or a match in an explicit allowed-hosts list (not `*`). Loopback and `localhost` are never recorded (signing in there still works). Audited as `server.last_admin_address.update`. Read-only |
 | none | | Alert links are left out until an administrator signs in |
 
 | Rule | Value |
