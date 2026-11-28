@@ -75,6 +75,17 @@ export interface CodeFieldProps {
   maxLines?: number;
   /** Line numbers and folding; on by default from six minimum lines. */
   gutter?: boolean;
+  /** Soft-wrap long lines (default on). */
+  wrap?: boolean;
+  /** Problems shown as squiggles on their line (1-based), with the message on hover. */
+  diagnostics?: Diagnostic[];
+}
+
+/** A problem on one line of a code field. */
+export interface Diagnostic {
+  line: number;
+  message: string;
+  severity?: "error" | "warning";
 }
 
 const LINE = BASE.lineHeight ?? 19;
@@ -85,7 +96,7 @@ const PAD = 8;
  * find (Ctrl+F). It grows with its content and follows `value` when it
  * changes from outside (the form, an import, discard).
  */
-export function CodeField({ value, onChange, lang, id, placeholder, onBlur, invalid = false, readOnly = false, minLines = 3, maxLines = 30, gutter, "aria-label": label }: CodeFieldProps) {
+export function CodeField({ value, onChange, lang, id, placeholder, onBlur, invalid = false, readOnly = false, minLines = 3, maxLines = 30, gutter, wrap = true, diagnostics, "aria-label": label }: CodeFieldProps) {
   const host = useRef<HTMLDivElement>(null);
   const ed = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const cb = useRef({ onChange, onBlur });
@@ -114,7 +125,9 @@ export function CodeField({ value, onChange, lang, id, placeholder, onBlur, inva
       renderLineHighlight: "line",
       scrollbar: { alwaysConsumeMouseWheel: false, verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
       padding: { top: PAD / 2, bottom: PAD / 2 },
-      wordWrap: "on",
+      wordWrap: wrap ? "on" : "off",
+      domReadOnly: readOnly,
+      renderValidationDecorations: "on",
     });
     // Grow with the content between minLines and maxLines.
     const fit = () => {
@@ -140,6 +153,10 @@ export function CodeField({ value, onChange, lang, id, placeholder, onBlur, inva
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [readOnly, numbers, minLines, maxLines, placeholder, id, label]);
 
+  useEffect(() => {
+    ed.current?.updateOptions({ wordWrap: wrap ? "on" : "off" });
+  }, [wrap, readOnly, numbers, minLines, maxLines, placeholder, id, label]);
+
   // Outside changes replace the text; the user's own edits already match it.
   useEffect(() => {
     const e = ed.current;
@@ -149,6 +166,30 @@ export function CodeField({ value, onChange, lang, id, placeholder, onBlur, inva
     const m = ed.current?.getModel();
     if (m) monaco.editor.setModelLanguage(m, monacoLanguage(lang));
   }, [lang, readOnly, numbers, minLines, maxLines, placeholder, id, label]);
+
+  // Diagnostics become markers; they are set again whenever the text or the list changes.
+  const marks = JSON.stringify(diagnostics ?? []);
+  useEffect(() => {
+    const m = ed.current?.getModel();
+    if (!m) return;
+    const last = m.getLineCount();
+    const list = JSON.parse(marks) as Diagnostic[];
+    monaco.editor.setModelMarkers(
+      m,
+      "forge",
+      list.map((d) => {
+        const line = Math.min(Math.max(1, d.line), last);
+        return {
+          startLineNumber: line,
+          startColumn: m.getLineFirstNonWhitespaceColumn(line) || 1,
+          endLineNumber: line,
+          endColumn: m.getLineMaxColumn(line),
+          message: d.message,
+          severity: d.severity === "warning" ? monaco.MarkerSeverity.Warning : monaco.MarkerSeverity.Error,
+        };
+      }),
+    );
+  }, [marks, value, readOnly, numbers, minLines, maxLines, placeholder, id, label]);
 
   return (
     <div
@@ -186,6 +227,43 @@ export function MergeEditor({ current, mine, lang, onChange }: { current: string
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, lang]);
   return <div ref={host} className="h-full min-h-0 overflow-hidden" />;
+}
+
+/**
+ * A read-only before/after view: changed lines highlighted inline, long
+ * unchanged runs folded. Fixed height; it scrolls.
+ */
+export function DiffField({ before, after, lang, height = 420, "aria-label": label }: { before: string; after: string; lang: Language; height?: number; "aria-label"?: string }) {
+  const host = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!host.current) return;
+    followTheme();
+    const language = monacoLanguage(lang);
+    const original = monaco.editor.createModel(before, language);
+    const modified = monaco.editor.createModel(after, language);
+    const d = monaco.editor.createDiffEditor(host.current, {
+      ...BASE,
+      readOnly: true,
+      originalEditable: false,
+      renderSideBySide: false,
+      hideUnchangedRegions: { enabled: true, contextLineCount: 3, minimumLineCount: 6 },
+      minimap: { enabled: false },
+      renderOverviewRuler: false,
+      ariaLabel: label,
+      scrollbar: { alwaysConsumeMouseWheel: false, verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
+    });
+    d.setModel({ original, modified });
+    return () => {
+      d.dispose();
+      original.dispose();
+      modified.dispose();
+    };
+  }, [before, after, lang, label]);
+  return (
+    <div className="overflow-hidden rounded-md border border-line">
+      <div ref={host} style={{ height }} />
+    </div>
+  );
 }
 
 export default CodeEditor;

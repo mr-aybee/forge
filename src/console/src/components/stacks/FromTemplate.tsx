@@ -31,6 +31,7 @@ import {
   Skeleton,
 } from "../ui";
 import { useEnvironmentChoices } from "./CreateStack";
+import { CodeView } from "../CodeField";
 
 /** Template picker: a card grid grouped by category. */
 function TemplateGrid({ onPick }: { onPick: (t: StackTemplate) => void }) {
@@ -302,9 +303,7 @@ function TemplateForm({
                 <CopyButton text={template.compose} />
               </div>
             )}
-            <pre className="max-h-96 overflow-auto px-2.5 py-2 font-mono text-[11px] whitespace-pre select-text">
-              {template.compose || "—"}
-            </pre>
+            <CodeView lang="yaml" aria-label="Template compose file" minLines={6} maxLines={20} value={template.compose || "# No compose file."} />
           </div>
         )}
       </section>
