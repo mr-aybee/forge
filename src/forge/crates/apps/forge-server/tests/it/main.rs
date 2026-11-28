@@ -62,6 +62,7 @@ mod scale;
 mod server_settings;
 mod service_adopt;
 mod service_files;
+mod service_registry_auth;
 mod service_secrets;
 mod service_spec;
 mod sftp;

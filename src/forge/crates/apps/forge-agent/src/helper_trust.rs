@@ -529,7 +529,7 @@ mod tests {
             .to_string()
         };
         let health = |spec_json: String| {
-            Command::AppAction(AppAction { action: "health".into(), spec_json, tail: 0, cursor: String::new() })
+            Command::AppAction(AppAction { action: "health".into(), spec_json, ..Default::default() })
         };
 
         // Signed by Forge for this node: the helper takes the policy.

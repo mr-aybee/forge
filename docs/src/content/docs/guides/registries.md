@@ -7,7 +7,8 @@ sidebar:
 
 This guide shows you how to add a private container registry to Forge. Forge
 then uses its credentials whenever a node pulls or pushes one of its images,
-or a Swarm service is deployed from it.
+a container service is deployed from it, or a Swarm service is deployed
+from it.
 
 ## Before you begin
 
@@ -51,6 +52,9 @@ new one. Pushes are allowed only to registries added here.
 
 - On a node, open **Docker** → **Images** → **Pull image** and pull a private
   image from the registry. The job succeeds.
+- Deploy a container service with a private image, for example
+  `ghcr.io/<org>/<repo>/api:<tag>`, placed on one or more nodes. Each node's
+  deploy job succeeds and the instance shows **State** `running`.
 - Deploy a container service that uses a private image in a Swarm cluster.
   Its tasks start on every node.
 
@@ -59,6 +63,9 @@ new one. Pushes are allowed only to registries added here.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `pull access denied` or `unauthorized` | Wrong user name or token, or the token lacks read rights | Update the registry with a new token |
+| A service deploy fails with "the registry `<host>` refused to pull … without credentials" | No registry in Forge for the image's host, or its host is spelled differently (`ghcr.io` versus `https://ghcr.io/acme`) | Add a registry whose **Host** is exactly the image's host, then deploy again |
+| A service deploy fails with "the registry `<host>` refused the credentials Forge has for it" | The registry's token expired or cannot read this image (for GitHub, `read:packages` and access to the package) | Update the registry with a token that can read the image, then deploy again |
+| A service deploy fails with `unauthorized` although pulling the same image on the node's **Docker** page works | The node's agent is older than the server and pulls without credentials | Update the agent on the node, then deploy again |
 | `push only to a registry added in Forge` | The image's host has no registry in Forge | Add the registry, or tag the image for one that is |
 | ECR pulls fail after a few hours | ECR tokens expire after 12 hours | Update the secret, or use a long-lived credential |
 

@@ -306,16 +306,38 @@ fn cpu_percent(s: &Value) -> f64 {
 /// Calls the Engine API with an optional JSON body; 404 is reported as `Ok(None)`.
 pub async fn api(method: &str, path: &str, body: Option<&Value>, timeout: Duration) -> Result<Option<Value>, String> {
     let (status, bytes) = call_with(method, path, body, timeout).await?;
+
+    api_answer(status, &bytes)
+}
+
+/// [`api`] without a body on the socket at `socket`, with Docker's
+/// `X-Registry-Auth` header when `registry_auth` is set (a pull from a
+/// private registry). The value is a credential: never logged.
+pub(crate) async fn api_with_registry_auth(
+    socket: &std::path::Path,
+    method: &str,
+    path: &str,
+    registry_auth: Option<&str>,
+    timeout: Duration,
+) -> Result<Option<Value>, String> {
+    let (status, bytes) = call_with_registry_auth(socket, method, path, None, registry_auth, timeout).await?;
+
+    api_answer(status, &bytes)
+}
+
+/// What [`api`] makes of Docker's answer: 404 is `Ok(None)`, other errors
+/// (also one that arrives mid-stream) are `Err`.
+fn api_answer(status: u16, bytes: &[u8]) -> Result<Option<Value>, String> {
     if status == 404 {
         return Ok(None);
     }
 
     if !(200..300).contains(&status) && status != 304 {
-        return Err(docker_error(status, &bytes));
+        return Err(docker_error(status, bytes));
     }
 
     // Pulls stream JSON lines; surface an error that arrives mid-stream.
-    let text = String::from_utf8_lossy(&bytes);
+    let text = String::from_utf8_lossy(bytes);
     if let Some(err) = text
         .lines()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
@@ -324,7 +346,7 @@ pub async fn api(method: &str, path: &str, body: Option<&Value>, timeout: Durati
         return Err(format!("Docker: {err}"));
     }
 
-    Ok(Some(serde_json::from_slice(&bytes).unwrap_or(Value::Null)))
+    Ok(Some(serde_json::from_slice(bytes).unwrap_or(Value::Null)))
 }
 
 /// Last `tail` log lines of a container, demultiplexed.

@@ -599,6 +599,16 @@ roots. A deploy that needs `stack.privileged` re-checks it at every job step
 and refuses a mount added to the app after the deploy started. The audit
 event `service.deploy` lists the mounts in `privileged_mounts`.
 
+**Private images.** A container image on a private registry, for example
+`ghcr.io/<org>/<repo>/api:<tag>`, needs that registry in Forge first (see
+[Add a container registry](/docs/guides/registries/)). Each deploy then
+pulls the image with the registry's credentials on every node, including
+nodes that pull a digest pinned by an earlier node. The credentials are
+looked up by the image's host when the deploy runs and go to the node only
+inside the signed command, never into the service, the job or the audit
+log. Anyone with `deploy` on the environment can deploy a private image
+this way.
+
 **Environment.** The grid has a name, a value and a secret flag on each row.
 **Bulk edit** switches to `KEY=value` text. Stored secrets show as
 `<sealed>`; keep that to leave a secret unchanged.
@@ -637,6 +647,7 @@ the form as you type.
 | An instance is `failed` with "stopped 5 times in 30 minutes" | The container keeps exiting, so Forge stopped restarting it | Read its logs, fix the cause, then **Start** or **Deploy** |
 | An instance is `stranded` and did not move | It has local data, `on_node_failure` is `alert`, or no other eligible node exists | Bring the node back, or place the service elsewhere and remove the stranded instance |
 | An exited container is not restarted | The node's agent does not report container states, or the person who last ran it was removed (`service.reconcile.refused` in the audit log) | Update the agent, or deploy once as an active user |
+| A container deploy fails with `unauthorized` or "the registry `<host>` refused …" | The image is on a private registry that Forge has no credentials for, or the credentials cannot read it | Add or update the registry (see [Add a container registry](/docs/guides/registries/#troubleshooting)), then deploy again |
 | A variable value is rejected | Values may not contain line breaks | Put multi-line content in a file and point the variable at it |
 
 ## Next steps

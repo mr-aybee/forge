@@ -13,6 +13,12 @@
 //! such mount that the payload does not list (an edit after submission).
 //! System paths, the Docker socket and Forge's own folders stay refused for
 //! everyone ([`AppSpec::validate`]).
+//!
+//! A container deploy whose image lives in a private registry known to the
+//! workspace carries Docker's `X-Registry-Auth` in the command's own
+//! `registry_auth` field, resolved in the step like the secrets above. It is
+//! never part of the spec (which the node writes to disk), the job payload,
+//! its state or the audit log.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,7 +30,7 @@ use forge_catalog::{AppSpec, Runtime};
 use forge_core::files::FileRepository;
 use forge_core::model::{AgentStatus, AuditEvent, AuditOutcome, Service};
 use forge_core::ports::{ServerRepository, ServiceRepository};
-use forge_core::{Action, Clock, EntityKind, EntityRef, ServerId, ServiceId};
+use forge_core::{Action, Clock, EntityKind, EntityRef, ServerId, ServiceId, WorkspaceId};
 use forge_jobs::{JobHandler, StepContext, StepError};
 use forge_proto::messages::AppAction;
 use forge_proto::{Command, CommandSigner};
@@ -195,6 +201,15 @@ pub struct AppJob {
     /// node's cluster container network (D-172).
     pub fabrics: Arc<dyn forge_core::ports::FabricRepository>,
     pub facts: Arc<dyn forge_core::tags::FactsRepository>,
+    /// Credentials for private images, resolved per step (never stored).
+    pub registries: Arc<crate::registries::RegistryService>,
+}
+
+/// Whether `action` on a node pulls the image of `spec`: only a container
+/// deploy does (start, stop, probe and the rest act on what is there).
+#[must_use]
+pub fn pulls_image(spec: &AppSpec, action: &str) -> bool {
+    spec.runtime == Runtime::Container && action == "deploy" && !spec.image.is_empty()
 }
 
 /// Whether a node with `facts` can take a spec with step-1 container
@@ -532,11 +547,32 @@ impl AppJob {
         forge_catalog::deploy::into_slot(spec, slot, &ports).map_err(StepError::Fatal)
     }
 
-    /// Signs `action` for `spec`, sends it to `server` and waits up to
-    /// `wait` for the node's answer. `Ok` carries the node's output.
+    /// Docker's `X-Registry-Auth` for `action` on `spec`: the registry of
+    /// the image's host in `workspace`, when the action pulls (see
+    /// [`pulls_image`]). Resolved here, in the step, and sent only in the
+    /// signed command; empty for public images and actions that pull nothing.
+    pub async fn registry_auth(
+        &self,
+        workspace: WorkspaceId,
+        spec: &AppSpec,
+        action: &str,
+    ) -> Result<String, StepError> {
+        if !pulls_image(spec, action) {
+            return Ok(String::new());
+        }
+
+        let auth = self.registries.auth_for(workspace, &spec.image).await.map_err(retry)?;
+
+        Ok(auth.map(|a| a.0).unwrap_or_default())
+    }
+
+    /// Signs `action` for `spec` (a service of `workspace`), sends it to
+    /// `server` and waits up to `wait` for the node's answer. `Ok` carries
+    /// the node's output.
     pub async fn send(
         &self,
         principal: &str,
+        workspace: WorkspaceId,
         server: ServerId,
         action: &str,
         spec: &AppSpec,
@@ -555,9 +591,15 @@ impl AppJob {
         }
 
         self.ensure_agent_takes(&spec, server).await?;
+        let registry_auth = self.registry_auth(workspace, &spec, action).await?;
         let spec_json = serde_json::to_string(&spec).map_err(|e| StepError::Fatal(e.to_string()))?;
-        let command =
-            Command::AppAction(AppAction { action: action.to_owned(), spec_json, tail: 0, cursor: String::new() });
+        let command = Command::AppAction(AppAction {
+            action: action.to_owned(),
+            spec_json,
+            tail: 0,
+            cursor: String::new(),
+            registry_auth,
+        });
         let (body, signed) = self.signer.issue(&server.to_string(), principal, command, self.clock.now(), COMMAND_TTL);
         self.hub.enqueue(server, &body.operation_id, signed).map_err(StepError::Retryable)?;
         let result = self
@@ -625,12 +667,14 @@ impl AppJob {
             }
         }
 
+        let registry_auth = self.registry_auth(app.workspace_id, &spec, &p.action).await?;
         let spec_json = serde_json::to_string(&spec).map_err(|e| StepError::Fatal(e.to_string()))?;
         let command = Command::AppAction(AppAction {
             action: p.action.clone(),
             spec_json,
             tail: p.tail,
             cursor: p.cursor.clone(),
+            registry_auth,
         });
         let (body, signed) = self.signer.issue(
             &p.server_id.to_string(),

@@ -157,8 +157,8 @@ async fn handle(
         HelperRequest::App { action, spec, cursor, .. } if action == "follow" => {
             follow_request(&spec, &cursor, progress.as_ref()).await
         }
-        HelperRequest::App { action, spec, tail, .. } => {
-            let r = app_request(&action, &spec, tail).await;
+        HelperRequest::App { action, spec, tail, registry_auth, .. } => {
+            let r = app_request(&action, &spec, tail, registry_auth.as_ref()).await;
 
             // The command checks the helper may run follow what is deployed (D-111).
             if r.ok {
@@ -324,8 +324,13 @@ async fn package_request(
 }
 
 #[cfg(unix)]
-async fn app_request(action: &str, spec: &forge_catalog::AppSpec, tail: u32) -> HelperResponse {
-    match forge_agent::apps::run(action, spec, tail).await {
+async fn app_request(
+    action: &str,
+    spec: &forge_catalog::AppSpec,
+    tail: u32,
+    registry_auth: Option<&forge_catalog::swarm::RegistryAuth>,
+) -> HelperResponse {
+    match forge_agent::apps::run(action, spec, tail, registry_auth).await {
         Ok(data) => {
             HelperResponse { ok: true, state: None, error: None, output: None, details: None, data: Some(data) }
         }
@@ -363,7 +368,12 @@ async fn follow_request(
 }
 
 #[cfg(not(unix))]
-async fn app_request(_: &str, _: &forge_catalog::AppSpec, _: u32) -> HelperResponse {
+async fn app_request(
+    _: &str,
+    _: &forge_catalog::AppSpec,
+    _: u32,
+    _: Option<&forge_catalog::swarm::RegistryAuth>,
+) -> HelperResponse {
     HelperResponse::failed("services are not supported on this OS yet")
 }
 

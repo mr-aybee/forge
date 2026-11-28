@@ -38,6 +38,11 @@ pub enum HelperRequest {
         tail: u32,
         #[serde(default)]
         cursor: String,
+        /// `deploy` of a container: Docker's `X-Registry-Auth` for the
+        /// image's private registry, from the signed command. Never logged
+        /// (`Debug` prints `***`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        registry_auth: Option<forge_catalog::swarm::RegistryAuth>,
     },
     Site {
         action: String,
@@ -474,11 +479,15 @@ impl HelperRequest {
             Self::TerminalAccount { name, .. } if !crate::terminal_accounts::valid_account_name(name) => {
                 Err(format!("rejected: `{name}` is not an allowed terminal account name"))
             }
-            Self::App { action, spec, .. } => {
+            Self::App { action, spec, registry_auth, .. } => {
                 if !forge_catalog::apps::APP_ACTIONS.contains(&action.as_str())
                     && !forge_catalog::apps::ROLLOUT_ACTIONS.contains(&action.as_str())
                 {
                     return Err(format!("rejected: unknown app action `{action}`"));
+                }
+
+                if registry_auth.as_ref().is_some_and(|a| !a.valid()) {
+                    return Err("rejected: invalid registry credential".into());
                 }
 
                 spec.validate().map_err(|e| format!("rejected: {e}"))?;
@@ -518,6 +527,9 @@ impl HelperRequest {
                 spec: Box::new(serde_json::from_str(&a.spec_json).map_err(|e| format!("invalid app spec: {e}"))?),
                 tail: a.tail,
                 cursor: a.cursor.clone(),
+                registry_auth: Some(&a.registry_auth)
+                    .filter(|r| !r.is_empty())
+                    .map(|r| forge_catalog::swarm::RegistryAuth(r.clone())),
             },
             C::SiteAction(s) => Self::Site {
                 action: s.action.clone(),

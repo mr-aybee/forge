@@ -158,6 +158,7 @@ fn send(state: &AppState, server: ServerId, app: &str, spec: &ApplySpec) {
         spec_json,
         tail: 0,
         cursor: String::new(),
+        registry_auth: String::new(),
     });
     let (body, signed) =
         state.signer.issue(&server.to_string(), SYSTEM_PRINCIPAL, command, state.clock.now(), Duration::from_secs(120));
