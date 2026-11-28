@@ -79,7 +79,8 @@ mod tests {
     fn hashes_stored_by_earlier_releases_still_verify() {
         // Made by argon2 0.5 with the parameters above; stored hashes must
         // keep working across argon2 upgrades.
-        let stored = "$argon2id$v=19$m=19456,t=2,p=1$DUF0bCzHQ/tztWE9M/v58g$nMwxFtQ/p0hZG+XtSLeXXyVbZufvre4qWmDsIlFJflE";
+        let stored =
+            "$argon2id$v=19$m=19456,t=2,p=1$DUF0bCzHQ/tztWE9M/v58g$nMwxFtQ/p0hZG+XtSLeXXyVbZufvre4qWmDsIlFJflE";
         assert!(verify("correct horse battery staple", stored));
         assert!(!verify("correct horse battery stapler", stored));
     }

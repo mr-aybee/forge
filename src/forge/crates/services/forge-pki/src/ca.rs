@@ -4,8 +4,8 @@ use std::time::Duration;
 use forge_core::Timestamp;
 use forge_secrets::crypto::{random_bytes, sha256_hex};
 use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, CertificateSigningRequestParams, DistinguishedName, DnType,
-    ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose, SanType, SerialNumber,
+    BasicConstraints, CertificateParams, CertificateSigningRequestParams, DistinguishedName, DnType,
+    ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair, KeyUsagePurpose, SanType, SerialNumber,
 };
 use time::OffsetDateTime;
 
@@ -56,8 +56,8 @@ impl AgentCsr {
 
 /// The internal certificate authority.
 pub struct CertificateAuthority {
-    issuer: Certificate,
-    key: KeyPair,
+    /// The CA's subject, key identifier and signing key.
+    issuer: Issuer<'static, KeyPair>,
     cert_pem: String,
     fingerprint: String,
 }
@@ -102,10 +102,9 @@ impl CertificateAuthority {
         params.not_before = odt(now.minus(Duration::from_secs(300)));
         params.not_after = odt(now.plus(Duration::from_secs(10 * 365 * 24 * 3600)));
         params.serial_number = Some(serial().0);
-        let cert = params.self_signed(&key).map_err(gen_err)?;
-        let cert_pem = cert.pem();
+        let cert_pem = params.self_signed(&key).map_err(gen_err)?.pem();
 
-        Self::assemble(cert, key, cert_pem)
+        Self::assemble(Issuer::new(params, key), cert_pem)
     }
 
     /// Loads `ca.crt`/`ca.key` from `dir`, creating them on first start.
@@ -119,7 +118,7 @@ impl CertificateAuthority {
         let ca = Self::generate("Orbyn Forge Internal CA", now)?;
         std::fs::create_dir_all(dir)?;
         std::fs::write(&cert_path, &ca.cert_pem)?;
-        forge_secrets::write_private(&key_path, ca.key.serialize_pem().as_bytes())?;
+        forge_secrets::write_private(&key_path, ca.key_pem().as_bytes())?;
 
         Ok(ca)
     }
@@ -128,17 +127,16 @@ impl CertificateAuthority {
     pub fn from_pem(cert_pem: &str, key_pem: &str) -> Result<Self, PkiError> {
         let key = KeyPair::from_pem(key_pem).map_err(gen_err)?;
 
-        // Rebuild an issuer object from the stored certificate's parameters;
-        // only its subject and key are used for signing.
-        let params = CertificateParams::from_ca_cert_pem(cert_pem).map_err(gen_err)?;
-        let issuer = params.self_signed(&key).map_err(gen_err)?;
+        // Rebuild the issuer from the stored certificate: its subject, key
+        // identifier and key usages, signed with the stored key.
+        let issuer = Issuer::from_ca_cert_pem(cert_pem, key).map_err(gen_err)?;
 
-        Self::assemble(issuer, key, cert_pem.to_owned())
+        Self::assemble(issuer, cert_pem.to_owned())
     }
 
-    fn assemble(issuer: Certificate, key: KeyPair, cert_pem: String) -> Result<Self, PkiError> {
+    fn assemble(issuer: Issuer<'static, KeyPair>, cert_pem: String) -> Result<Self, PkiError> {
         let der = pem_to_der(&cert_pem)?;
-        Ok(Self { issuer, key, fingerprint: sha256_hex(&der), cert_pem })
+        Ok(Self { issuer, fingerprint: sha256_hex(&der), cert_pem })
     }
 
     /// PEM of the root certificate, distributed to agents.
@@ -180,7 +178,7 @@ impl CertificateAuthority {
         let (sn, serial_hex) = serial();
         csr.params.serial_number = Some(sn);
         csr.params.custom_extensions.clear();
-        let cert = csr.signed_by(&self.issuer, &self.key).map_err(gen_err)?;
+        let cert = csr.signed_by(&self.issuer).map_err(gen_err)?;
 
         Ok(IssuedCertificate { cert_pem: cert.pem(), serial_hex, not_before, not_after })
     }
@@ -225,7 +223,7 @@ impl CertificateAuthority {
         params.not_before = odt(not_before);
         params.not_after = odt(not_after);
         params.serial_number = Some(serial().0);
-        let cert = params.signed_by(key, &self.issuer, &self.key).map_err(gen_err)?;
+        let cert = params.signed_by(key, &self.issuer).map_err(gen_err)?;
 
         Ok(ServerCertificate { cert_pem: cert.pem(), key_pem: key.serialize_pem(), not_before, not_after })
     }
@@ -236,7 +234,7 @@ impl CertificateAuthority {
     /// node's Docker CA is kept sealed in the database, D-125).
     #[must_use]
     pub fn key_pem(&self) -> String {
-        self.key.serialize_pem()
+        self.issuer.key().serialize_pem()
     }
 
     /// Signs a node's Docker daemon CSR (D-125). Only the CSR's public key
@@ -270,7 +268,7 @@ impl CertificateAuthority {
         let (sn, serial_hex) = serial();
         csr.params.serial_number = Some(sn);
         csr.params.custom_extensions.clear();
-        let cert = csr.signed_by(&self.issuer, &self.key).map_err(gen_err)?;
+        let cert = csr.signed_by(&self.issuer).map_err(gen_err)?;
 
         Ok(IssuedCertificate { cert_pem: cert.pem(), serial_hex, not_before, not_after })
     }
@@ -295,7 +293,7 @@ impl CertificateAuthority {
         params.not_before = odt(not_before);
         params.not_after = odt(not_after);
         params.serial_number = Some(serial().0);
-        let cert = params.signed_by(&key, &self.issuer, &self.key).map_err(gen_err)?;
+        let cert = params.signed_by(&key, &self.issuer).map_err(gen_err)?;
 
         Ok(ServerCertificate { cert_pem: cert.pem(), key_pem: key.serialize_pem(), not_before, not_after })
     }
