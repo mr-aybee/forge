@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{TITLE}} · Orbyn Forge</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #eef5f9;
+    --panel: #ffffff;
+    --panel-2: #eef5fa;
+    --line: #d6e4ee;
+    --fg: #172b45;
+    --muted: #5f7590;
+    --faint: #8a9bb2;
+    --accent: #1f6fc4;
+    --ok: #16865f;
+    --ok-soft: #e3f5ee;
+    --bad: #c63d4f;
+    --bad-soft: #fbe8eb;
+    --term: #06121f;
+    --term-fg: #d6e6f2;
+    --term-prompt: #7fd3f0;
+    --shadow: 0 1px 2px rgb(16 32 64 / 0.06), 0 12px 40px rgb(16 32 64 / 0.08);
+    --glow: radial-gradient(ellipse at 70% 0, #bfe3f566, transparent 55%), radial-gradient(ellipse at 0% 100%, #c9eef01f, transparent 50%);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #061220;
+      --panel: #0c1d33;
+      --panel-2: #11263f;
+      --line: #21334b;
+      --fg: #e3ecf8;
+      --muted: #8a9db8;
+      --faint: #6c819f;
+      --accent: #5fb6ef;
+      --ok: #52d6b1;
+      --ok-soft: #39b8981a;
+      --bad: #ef8d98;
+      --bad-soft: #ef8d981a;
+      --term: #040d18;
+      --shadow: 0 3px 10px rgb(0 0 0 / 0.25), 0 24px 80px rgb(2 8 19 / 0.45);
+      --glow: radial-gradient(ellipse at 70% 0, #0f3a5e66, transparent 55%), radial-gradient(ellipse at 0% 100%, #0d4a5a40, transparent 50%);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: grid;
+    place-items: center;
+    padding: 24px 16px;
+    background: var(--glow), var(--bg);
+    color: var(--fg);
+    font: 14px/1.55 "Inter", "Segoe UI", ui-sans-serif, system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { width: 100%; max-width: 420px; }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 14px 2px;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+  .brand svg { width: 28px; height: 28px; flex: none; }
+  .card {
+    padding: 28px 28px 24px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--panel);
+    box-shadow: var(--shadow);
+    animation: rise 220ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  }
+  .status {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    margin-bottom: 18px;
+    border-radius: 999px;
+    color: var(--tone);
+    background: var(--tone-soft);
+  }
+  .status svg { width: 22px; height: 22px; }
+  .ok { --tone: var(--ok); --tone-soft: var(--ok-soft); }
+  .bad { --tone: var(--bad); --tone-soft: var(--bad-soft); }
+  .ok .icon-bad, .bad .icon-ok { display: none; }
+  h1 { margin: 0 0 6px; font-size: 19px; font-weight: 650; letter-spacing: -0.01em; }
+  p { margin: 0; color: var(--muted); }
+  .detail {
+    margin-top: 14px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: var(--panel-2);
+    color: var(--muted);
+    font-size: 12.5px;
+    overflow-wrap: anywhere;
+  }
+  .detail:empty { display: none; }
+  code, .term {
+    font-family: "JetBrains Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
+  }
+  .detail code { color: var(--fg); }
+  .term {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 20px;
+    padding: 11px 14px;
+    border-radius: 8px;
+    background: var(--term);
+    color: var(--term-fg);
+    font-size: 12.5px;
+  }
+  .term .prompt { color: var(--term-prompt); user-select: none; }
+  .term .cursor {
+    width: 7px;
+    height: 15px;
+    margin-left: -4px;
+    background: var(--term-prompt);
+    animation: blink 1.1s steps(1) infinite;
+  }
+  .foot { margin-top: 16px; color: var(--faint); font-size: 12px; text-align: center; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .card, .term .cursor { animation: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <div class="brand">
+    <svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
+      <defs>
+        <linearGradient id="fg-bg" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+          <stop stop-color="#133751"/><stop offset="1" stop-color="#10314B"/>
+        </linearGradient>
+        <filter id="fg-blur" x="7" y="5" width="50" height="54" filterUnits="userSpaceOnUse">
+          <feGaussianBlur stdDeviation="2.8"/>
+        </filter>
+      </defs>
+      <rect width="64" height="64" rx="14" fill="url(#fg-bg)"/>
+      <path d="M50 39.9959V23.9959C49.9993 23.2944 49.8141 22.6055 49.4631 21.9982C49.112 21.3909 48.6075 20.8866 48 20.5359L34 12.5359C33.3919 12.1848 32.7021 12 32 12C31.2979 12 30.6081 12.1848 30 12.5359L16 20.5359C15.3925 20.8866 14.888 21.3909 14.5369 21.9982C14.1859 22.6055 14.0007 23.2944 14 23.9959V39.9959C14.0007 40.6973 14.1859 41.3863 14.5369 41.9936C14.888 42.6009 15.3925 43.1052 16 43.4559L30 51.4559C30.6081 51.807 31.2979 51.9918 32 51.9918C32.7021 51.9918 33.3919 51.807 34 51.4559L48 43.4559C48.6075 43.1052 49.112 42.6009 49.4631 41.9936C49.8141 41.3863 49.9993 40.6973 50 39.9959Z" stroke="#8FDCF0" stroke-opacity="0.29" stroke-width="2.8" stroke-linejoin="round" filter="url(#fg-blur)"/>
+      <path d="M50 39.9959V23.9959C49.9993 23.2944 49.8141 22.6055 49.4631 21.9982C49.112 21.3909 48.6075 20.8866 48 20.5359L34 12.5359C33.3919 12.1848 32.7021 12 32 12C31.2979 12 30.6081 12.1848 30 12.5359L16 20.5359C15.3925 20.8866 14.888 21.3909 14.5369 21.9982C14.1859 22.6055 14.0007 23.2944 14 23.9959V39.9959C14.0007 40.6973 14.1859 41.3863 14.5369 41.9936C14.888 42.6009 15.3925 43.1052 16 43.4559L30 51.4559C30.6081 51.807 31.2979 51.9918 32 51.9918C32.7021 51.9918 33.3919 51.807 34 51.4559L48 43.4559C48.6075 43.1052 49.112 42.6009 49.4631 41.9936C49.8141 41.3863 49.9993 40.6973 50 39.9959Z" stroke="#8FDCF0" stroke-opacity="0.78" stroke-width="2.8" stroke-linejoin="round"/>
+    </svg>
+    Orbyn Forge
+  </div>
+  <section class="card {{TONE}}" role="{{ROLE}}">
+    <div class="status" aria-hidden="true">
+      <svg class="icon-ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+      <svg class="icon-bad" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10M17 7L7 17"/></svg>
+    </div>
+    <h1>{{TITLE}}</h1>
+    <p>{{MESSAGE}}</p>
+    <div class="detail">{{DETAIL}}</div>
+    <div class="term" aria-label="Return to your terminal"><span class="prompt">$</span><span>forge auth login</span><span class="cursor"></span></div>
+  </section>
+  <p class="foot">You can close this tab.</p>
+</main>
+</body>
+</html>
