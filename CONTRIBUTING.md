@@ -22,12 +22,13 @@ pull requests from forks. Nobody pushes to the main repository directly.
    architecture, security and code-quality rules. Reviews apply them.
 5. **Run the checks**:
    ```sh
+   cd src/forge          # the Rust workspace
    cargo fmt --all
    cargo clippy --workspace --all-targets -- -D warnings
    cargo test --workspace
    cargo deny check
    docker run --rm -v "$PWD":/repo zricethezav/gitleaks:v8.21.2 dir /repo --no-banner
-   (cd src/ui && npm ci && npm run build)
+   (cd src/console && npm ci && npm run build)
    (cd docs && npm ci && npm run build)
    ```
 6. **Push to your fork** and open a pull request into `orbyntech/forge:master`.
@@ -43,7 +44,7 @@ candidate); pushing a tag runs the release pipeline.
 
 - Keep PRs focused. Write small commits with imperative subjects.
 - Every behaviour, config, API, CLI or UI change updates `docs/` in the same PR.
-- New dependencies must be MIT, Apache-2.0, BSD or another license `deny.toml`
+- New dependencies must be MIT, Apache-2.0, BSD or another license `src/forge/deny.toml`
   allows. No OpenSSL. Open an issue first for anything large.
 - Don't commit real hostnames, IP addresses, usernames or secrets. Use
   placeholders, `lab-a` … `lab-z` for test machines, and `192.0.2.x` for

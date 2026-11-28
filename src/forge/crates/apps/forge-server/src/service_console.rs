@@ -1,4 +1,4 @@
-//! The **Open console** links of a service (`plans/service-orchestration.md`
+//! The **Open console** links of a service (`design/plans/service-orchestration.md`
 //! step 5): its console link (`spec.console`) resolved to URLs, so the web
 //! console does not repeat the address rules. Forge only builds the URL; it
 //! neither proxies the page nor signs anyone in.

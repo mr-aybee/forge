@@ -82,14 +82,17 @@ jobs:
           hit() { [ "$full" = true ] || [ "$changed" = "*" ] || echo "$changed" | grep -Eq "$1"; }
           out() { if hit "$2"; then echo "$1=true"; else echo "$1=false"; fi >> "$GITHUB_OUTPUT"; }
           echo "full=$full" >> "$GITHUB_OUTPUT"
-          out web   '^(src/ui/|docs/|LICENSE)'
-          out store '^(src/adapters/forge-store/|src/domain/|Cargo\.(toml|lock)$)'
-          out deps  '^(Cargo\.lock|deny\.toml|.*Cargo\.toml)$'
-          out agent '^(src/apps/forge-agent/|src/protocol/|src/domain/)'
+          out web   '^(src/console/|docs/|LICENSE)'
+          out store '^(src/forge/crates/adapters/forge-store/|src/forge/crates/domain/|src/forge/Cargo\.(toml|lock)$)'
+          out deps  '^(src/forge/Cargo\.lock|src/forge/deny\.toml|src/forge/\.cargo/audit\.toml|.*Cargo\.toml)$'
+          out agent '^(src/forge/crates/apps/forge-agent/|src/forge/crates/protocol/|src/forge/crates/domain/)'
           cat "$GITHUB_OUTPUT"
 
   # Lane A. Plan runs beside it, then lane B: deny/audit -> PostgreSQL -> web.
   rust:
+    defaults:
+      run:
+        working-directory: src/forge
     name: Rust (Linux)
     timeout-minutes: 90
     runs-on: ubuntu-latest
@@ -99,21 +102,26 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/forge
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: bash scripts/ci/build.sh light cargo clippy --workspace --all-targets -- -D warnings
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/build.sh" light cargo clippy --workspace --all-targets -- -D warnings
       # The forge-agent binary for the startup smoke test (it::agent_binary_smoke)
       # and the analytics worker for the supervisor tests (it::analytics_worker).
       - name: Build agent and analytics worker binaries
-        run: bash scripts/ci/build.sh light cargo build -p forge-agent -p forge-analytics-worker --bin forge-agent --bin forge-analytics-worker
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/build.sh" light cargo build -p forge-agent -p forge-analytics-worker --bin forge-agent --bin forge-analytics-worker
       - name: Test
-        run: bash scripts/ci/build.sh light cargo test --workspace
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/build.sh" light cargo test --workspace
         env:
           FORGE_REQUIRE_AGENT_BIN: "1"
           FORGE_REQUIRE_WORKER_BIN: "1"
 
   rust-windows:
+    defaults:
+      run:
+        working-directory: src/forge
     name: Rust (Windows)
     needs: plan
     # Windows-only code lives in the agent. Disabled: CI covers Linux only.
@@ -126,6 +134,8 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/forge
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       # The forge-agent binary for the startup smoke test (it::agent_binary_smoke)
@@ -139,6 +149,9 @@ jobs:
           FORGE_REQUIRE_WORKER_BIN: "1"
 
   postgres:
+    defaults:
+      run:
+        working-directory: src/forge
     name: Store on PostgreSQL
     needs: [plan, supply-chain]
     if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.store == 'true' }}
@@ -148,10 +161,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/forge
       - name: Build with PostgreSQL driver
-        run: bash scripts/ci/build.sh light cargo build -p forge-server --features postgres
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/build.sh" light cargo build -p forge-server --features postgres
 
   supply-chain:
+    defaults:
+      run:
+        working-directory: src/forge
     name: cargo deny + cargo audit
     needs: plan
     if: needs.plan.outputs.deps == 'true'
@@ -161,11 +179,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
+          manifest-path: src/forge/Cargo.toml
           command: check
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo audit
         run: |
-          command -v cargo-audit >/dev/null || bash scripts/ci/build.sh light cargo install --locked cargo-audit
+          command -v cargo-audit >/dev/null || bash "$GITHUB_WORKSPACE/scripts/ci/build.sh" light cargo install --locked cargo-audit
           cargo audit
 
   web:
@@ -180,7 +199,7 @@ jobs:
         with:
           node-version: 22
       - name: UI
-        working-directory: src/ui
+        working-directory: src/console
         run: bash "$GITHUB_WORKSPACE/scripts/ci/build.sh" light sh -c 'npm ci && npm run build'
       - name: Docs
         working-directory: docs
@@ -189,5 +208,5 @@ jobs:
       # critical fails the run.
       - name: npm audit (UI and docs)
         run: |
-          (cd src/ui && npm audit --omit=dev --audit-level=high)
+          (cd src/console && npm audit --omit=dev --audit-level=high)
           (cd docs && npm audit --omit=dev --audit-level=high)

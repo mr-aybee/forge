@@ -1,4 +1,4 @@
-//! A service's web console link (`plans/service-orchestration.md` step 5):
+//! A service's web console link (`design/plans/service-orchestration.md` step 5):
 //! the port, path and scheme of the admin page it serves. Forge only
 //! builds the URL; it neither proxies the page nor signs anyone in.
 //!

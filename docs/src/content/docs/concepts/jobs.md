@@ -92,7 +92,7 @@ server during step two and it continues after restart.
 ## Adding a job kind
 
 Implement `forge_jobs::JobHandler` and register it in
-`src/apps/forge-server/src/state.rs`. The engine does not change.
+`src/forge/crates/apps/forge-server/src/state.rs`. The engine does not change.
 
 ```rust
 #[async_trait]

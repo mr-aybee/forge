@@ -334,7 +334,7 @@ mod tests {
         missing.sort();
         assert!(
             missing.is_empty(),
-            "routes missing from src/apps/forge-cli/parity.json (add a command, or an `api`/`excluded` reason): {missing:?}"
+            "routes missing from src/forge/crates/apps/forge-cli/parity.json (add a command, or an `api`/`excluded` reason): {missing:?}"
         );
         let mut stale: Vec<&String> = classified.difference(&live).collect();
         stale.sort();

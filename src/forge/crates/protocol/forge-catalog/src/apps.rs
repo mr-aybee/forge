@@ -168,7 +168,7 @@ pub struct AppSpec {
     /// fields.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh_network: Option<String>,
-    /// Restart policy (`plans/service-orchestration.md` step 1). `None`
+    /// Restart policy (`design/plans/service-orchestration.md` step 1). `None`
     /// keeps the older `restart` flag: `true` is `unless-stopped`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restart_policy: Option<RestartPolicy>,

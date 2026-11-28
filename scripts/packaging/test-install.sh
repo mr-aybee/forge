@@ -48,7 +48,7 @@ for bad in "--bogus" "--allow-elevated-tokens maybe" "--cluster a/b" "--terminal
   if sh "$P/install.sh" $bad >/dev/null 2>&1; then echo "accepted: $bad" >&2; exit 1; fi
 done
 if sh "$P/get-forge.sh" --version 'v1;rm' >/dev/null 2>&1; then echo "get-forge accepted a bad version" >&2; exit 1; fi
-key=$(sed -n 's/^pub const RELEASE_PUBLIC_KEY: &str = "\(.*\)";/\1/p' src/protocol/forge-sdk/src/release.rs)
+key=$(sed -n 's/^pub const RELEASE_PUBLIC_KEY: &str = "\(.*\)";/\1/p' src/forge/crates/protocol/forge-sdk/src/release.rs)
 grep -q "PINNED_KEY=\"$key\"" "$P/get-forge.sh" || { echo "get-forge.sh does not pin RELEASE_PUBLIC_KEY" >&2; exit 1; }
 grep -q "\$PinnedKey = \"$key\"" "$P/get-forge.ps1" || { echo "get-forge.ps1 does not pin RELEASE_PUBLIC_KEY" >&2; exit 1; }
 echo "flags and pinned keys: ok"

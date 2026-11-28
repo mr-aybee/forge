@@ -243,7 +243,7 @@ run one PowerShell command on the machine. For every step it performs, see
 Releases do not include a Windows agent yet. Windows nodes work only with an
 agent you build from source, and such builds are not verified. Build it with
 `cargo build --release -p forge-agent --target x86_64-pc-windows-msvc` on a
-Windows machine, copy `target/x86_64-pc-windows-msvc/release/forge-agent.exe`
+Windows machine, copy `src/forge/target/x86_64-pc-windows-msvc/release/forge-agent.exe`
 into `agent_dist_dir` as `forge-agent-windows-x86_64.exe`, add it to
 `MANIFEST.json` with `python3 scripts/dev/dist_manifest.py <dir> <version>`,
 and restart the control plane.

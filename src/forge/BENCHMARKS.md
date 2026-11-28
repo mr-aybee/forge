@@ -1,6 +1,6 @@
 # Benchmarks
 
-Measured with `src/tools/fleet-sim` against release builds (LTO, codegen-units=1,
+Measured with `src/forge/tools/fleet-sim` against release builds (LTO, codegen-units=1,
 panic=abort) on SQLite. Each run starts a real `forge-server` process, enrolls N
 agents (each with its own key, certificate and HTTP/2 mTLS long-poll
 connection), samples the control plane for 60 s idle, measures 200 sequential

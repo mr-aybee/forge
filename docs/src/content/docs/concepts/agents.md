@@ -38,7 +38,7 @@ One HTTP/2 connection over mutual TLS, opened by the agent:
 | `POST /agent/v1/heartbeat` | Long-poll. Carries results and facts; returns signed commands as soon as one is queued, or after the hold time |
 | `POST /agent/v1/renew` | New CSR → new certificate |
 
-Messages are protobuf (`src/protocol/forge-proto/proto/forge_agent_v1.proto`).
+Messages are protobuf (`src/forge/crates/protocol/forge-proto/proto/forge_agent_v1.proto`).
 On failure the agent reconnects with exponential backoff and full jitter
 (1 s → 60 s), so a restarted control plane is not stampeded.
 

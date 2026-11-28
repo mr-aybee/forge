@@ -1,7 +1,7 @@
 //! Which nodes a service runs on: one placer for `forge.deploy.yaml`
 //! (`spec.placement`) and Compose-format services files
 //! (`deploy.replicas`, `mode: global`, constraints, spread and
-//! reservations, `plans/service-orchestration.md` step 3).
+//! reservations, `design/plans/service-orchestration.md` step 3).
 //!
 //! Pure: the caller loads the nodes (with their tags, state and capacity)
 //! and gets node ids back. One copy runs per node.

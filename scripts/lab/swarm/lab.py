@@ -10,7 +10,7 @@ its own Docker Engine, set up end to end through the `forge` CLI.
     python3 scripts/lab/swarm/lab.py down [--reset]
 
 Build first: `cargo build --profile perf -p forge-server -p forge-agent -p forge-cli`
-and `(cd src/ui && npm ci && npm run build)`.
+and `(cd src/console && npm ci && npm run build)`.
 
 The nodes are privileged containers (Docker in Docker): use this lab only on
 a development machine. Lab credentials live in scripts/lab/swarm/.lab/
@@ -74,7 +74,7 @@ def say(msg: str) -> None:
 
 
 def binaries(profile: str) -> Path:
-    target = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / profile
+    target = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "src" / "forge" / "target")) / profile
     missing = [b for b in ("forge-server", "forge-agent", "forge-agent-helper", "forge") if not (target / b).exists()]
     if missing:
         sys.exit(f"missing in {target}: {', '.join(missing)}; build with "
@@ -138,9 +138,9 @@ def save(c: dict) -> None:
 def start_cp(port: int, c: dict, bind: str = "127.0.0.1") -> None:
     (LAB / "data").mkdir(parents=True, exist_ok=True)
     (LAB / "forge.toml").write_text(config(port))
-    ui = ROOT / "src/ui/dist"
+    ui = ROOT / "src/console/dist"
     if not (ui / "index.html").exists():
-        print("warning: src/ui/dist is missing; the console will not load (npm run build in src/ui)")
+        print("warning: src/console/dist is missing; the console will not load (npm run build in src/console)")
         ui.mkdir(parents=True, exist_ok=True)
     mounts = ["-v", f"{LAB}/bin:/opt/forge/bin:ro", "-v", f"{LAB}/dist:/opt/forge/dist:ro",
               "-v", f"{ui}:/opt/forge/ui:ro", "-v", f"{LAB}/forge.toml:/etc/forge/forge.toml:ro",

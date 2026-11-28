@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["src/domain/*", "src/services/*", "src/adapters/*", "src/protocol/*", "src/apps/*", "src/tools/*"]
+members = ["crates/*/*", "tools/*"]
 
 [workspace.package]
 version = "0.0.1"
@@ -8,34 +8,34 @@ edition = "2024"
 rust-version = "1.89"
 license = "Apache-2.0"
 publish = false
-repository = "https://github.com/orbyn/forge"
+repository = "https://github.com/orbyntech/forge"
 
 [workspace.dependencies]
 # internal
-forge-core = { path = "src/domain/forge-core" }
-forge-authz = { path = "src/services/forge-authz" }
-forge-ssh = { path = "src/adapters/forge-ssh" }
-forge-store = { path = "src/adapters/forge-store" }
-forge-analytics = { path = "src/adapters/forge-analytics" }
-forge-analytics-duckdb = { path = "src/adapters/forge-analytics-duckdb" }
-forge-jobs = { path = "src/services/forge-jobs" }
-forge-audit = { path = "src/services/forge-audit" }
-forge-rules = { path = "src/services/forge-rules" }
-forge-alerts = { path = "src/services/forge-alerts" }
-forge-files = { path = "src/services/forge-files" }
-forge-health = { path = "src/services/forge-health" }
-forge-file-gateway = { path = "src/apps/forge-file-gateway" }
-forge-pki = { path = "src/services/forge-pki" }
-forge-docker = { path = "src/adapters/forge-docker" }
-forge-proto = { path = "src/protocol/forge-proto" }
-forge-analytics-proto = { path = "src/protocol/forge-analytics-proto" }
-forge-analytics-worker = { path = "src/apps/forge-analytics-worker" }
-forge-secrets = { path = "src/services/forge-secrets" }
-forge-identity = { path = "src/services/forge-identity" }
-forge-plugin-host = { path = "src/services/forge-plugin-host" }
-forge-sdk = { path = "src/protocol/forge-sdk" }
-forge-catalog = { path = "src/protocol/forge-catalog" }
-forge-agent = { path = "src/apps/forge-agent" }
+forge-core = { path = "crates/domain/forge-core" }
+forge-authz = { path = "crates/services/forge-authz" }
+forge-ssh = { path = "crates/adapters/forge-ssh" }
+forge-store = { path = "crates/adapters/forge-store" }
+forge-analytics = { path = "crates/adapters/forge-analytics" }
+forge-analytics-duckdb = { path = "crates/adapters/forge-analytics-duckdb" }
+forge-jobs = { path = "crates/services/forge-jobs" }
+forge-audit = { path = "crates/services/forge-audit" }
+forge-rules = { path = "crates/services/forge-rules" }
+forge-alerts = { path = "crates/services/forge-alerts" }
+forge-files = { path = "crates/services/forge-files" }
+forge-health = { path = "crates/services/forge-health" }
+forge-file-gateway = { path = "crates/apps/forge-file-gateway" }
+forge-pki = { path = "crates/services/forge-pki" }
+forge-docker = { path = "crates/adapters/forge-docker" }
+forge-proto = { path = "crates/protocol/forge-proto" }
+forge-analytics-proto = { path = "crates/protocol/forge-analytics-proto" }
+forge-analytics-worker = { path = "crates/apps/forge-analytics-worker" }
+forge-secrets = { path = "crates/services/forge-secrets" }
+forge-identity = { path = "crates/services/forge-identity" }
+forge-plugin-host = { path = "crates/services/forge-plugin-host" }
+forge-sdk = { path = "crates/protocol/forge-sdk" }
+forge-catalog = { path = "crates/protocol/forge-catalog" }
+forge-agent = { path = "crates/apps/forge-agent" }
 
 # async / http
 tokio = { version = "1.47", features = ["rt", "rt-multi-thread", "macros", "net", "time", "sync", "signal", "process", "io-util", "fs"] }

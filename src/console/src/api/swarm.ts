@@ -1,5 +1,5 @@
 // Docker Swarm of a Swarm-mode cluster (D-154): members, live nodes and
-// quorum. Server: `src/apps/forge-server/src/api/swarm.rs`. Every reader
+// quorum. Server: `src/forge/crates/apps/forge-server/src/api/swarm.rs`. Every reader
 // normalizes the JSON so an older server or a missing field never crashes.
 import { useQuery } from "@tanstack/react-query";
 

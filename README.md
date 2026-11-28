@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="branding/forge-mark.svg" alt="Orbyn Forge" width="104" height="104">
+<img src="design/branding/forge-mark.svg" alt="Orbyn Forge" width="104" height="104">
 
 # Orbyn Forge
 
@@ -40,7 +40,7 @@ See [Security](docs/src/content/docs/security/index.md).
 
 ### 🪶 Lightweight
 An idle agent uses about **17 MB** of RAM. One control plane runs
-**1,000 agents** in about **87 MB**. See [BENCHMARKS.md](BENCHMARKS.md).
+**1,000 agents** in about **87 MB**. See [BENCHMARKS.md](src/forge/BENCHMARKS.md).
 
 </td>
 <td width="33%" valign="top">
@@ -85,7 +85,7 @@ escalation, database management, scheduled automation, Traefik/YARP. See the
 ## 🧭 How it works
 
 <p align="center">
-  <img src="branding/forge-architecture.svg" alt="Orbyn Forge architecture: operators reach the control plane over HTTPS from the web console, the forge CLI and API clients; AI agents connect to its MCP endpoint; agents on Linux, Windows and edge nodes dial out to it over mutual TLS." width="100%">
+  <img src="design/branding/forge-architecture.svg" alt="Orbyn Forge architecture: operators reach the control plane over HTTPS from the web console, the forge CLI and API clients; AI agents connect to its MCP endpoint; agents on Linux, Windows and edge nodes dial out to it over mutual TLS." width="100%">
 </p>
 
 Every request is authorized where it takes effect (API, MCP endpoint, job
@@ -130,19 +130,19 @@ builds are not verified. On Windows, releases publish only the `forge` CLI
 **Prerequisites:** [Rust](https://rustup.rs) (stable) and [Node.js](https://nodejs.org) 20+.
 
 ```powershell
-# 1. Build the control plane, agent and plugin runner
-cargo build --release -p forge-server -p forge-agent -p forge-plugin-runner -p forge-analytics-worker
+# 1. Build the control plane, agent and plugin runner (the Rust workspace is src/forge)
+cd src/forge; cargo build --release -p forge-server -p forge-agent -p forge-plugin-runner -p forge-analytics-worker; cd ../..
 
 # 2. Build the web console
-cd src/ui; npm ci; npm run build; cd ../..
+cd src/console; npm ci; npm run build; cd ../..
 
 # 3. Create the first administrator (password is read from the environment)
 $env:FORGE_ADMIN_PASSWORD = "choose-a-long-passphrase"
-target\release\forge-server.exe --config scripts/dev/forge.dev.toml init --username admin
+src\forge\target\release\forge-server.exe --config scripts/dev/forge.dev.toml init --username admin
 Remove-Item Env:FORGE_ADMIN_PASSWORD
 
 # 4. Start it
-target\release\forge-server.exe --config scripts/dev/forge.dev.toml serve
+src\forge\target\release\forge-server.exe --config scripts/dev/forge.dev.toml serve
 ```
 
 Open **http://localhost:8090** and sign in. The dev config uses port 8090;
@@ -163,7 +163,7 @@ wsl -d Ubuntu-24.04 -u root -- bash scripts/lab/setup-wsl.sh <your-wsl-user>
 
 # build, then start
 wsl -d Ubuntu-24.04 -- bash scripts/lab/build.sh
-cd src/ui; npm run build; cd ../..
+cd src/console; npm run build; cd ../..
 wsl -d Ubuntu-24.04 -- bash scripts/lab/up.sh
 ```
 
@@ -185,18 +185,22 @@ login for the test nodes `node-1`, `node-2` and `node-3`. Stop with
 
 ## 📁 Project layout
 
+The repository holds three projects: the Rust workspace (`src/forge`), the
+web console (`src/console`) and the documentation site (`docs/`).
+
 | Path | What's there |
 | --- | --- |
-| `src/domain` | Core types and interfaces |
-| `src/services` | Authorization, audit, identity, jobs, PKI, secrets, plugin host |
-| `src/adapters` | Database (SQLite/PostgreSQL), analytics (ClickHouse, DuckDB) and SSH |
-| `src/protocol` | Agent protocol and plugin SDK |
-| `src/apps` | `forge-server`, `forge-analytics-worker`, `forge-agent`, `forge-plugin-runner`, `forge` CLI |
-| `src/ui` | Web console (React + TypeScript) |
-| `src/tools`, `src/plugins` | Fleet benchmark, sample plugin |
+| `src/forge` | Rust workspace: `Cargo.toml`, `Cargo.lock`, toolchain, lint and licence config. Run `cargo` here. |
+| `src/forge/crates/domain` | Core types and interfaces |
+| `src/forge/crates/services` | Authorization, audit, identity, jobs, PKI, secrets, plugin host |
+| `src/forge/crates/adapters` | Database (SQLite/PostgreSQL), analytics (ClickHouse, DuckDB) and SSH |
+| `src/forge/crates/protocol` | Agent protocol and plugin SDK |
+| `src/forge/crates/apps` | `forge-server`, `forge-analytics-worker`, `forge-agent`, `forge-plugin-runner`, `forge` CLI |
+| `src/console` | Web console (React + TypeScript) |
+| `src/forge/tools`, `src/forge/plugins` | Fleet benchmark, sample plugin |
 | `docs/` | Documentation site, served at `/docs/`: `cd docs; npm ci; npm run dev` |
 | `scripts/` | Dev config, the WSL lab, release packaging and the license |
-| `branding/` | Logo files |
+| `design/` | Product plans and logo files |
 
 ## 📚 Learn more
 
@@ -207,7 +211,7 @@ login for the test nodes `node-1`, `node-2` and `node-3`. Stop with
 | [Security](docs/src/content/docs/security/index.md) | How Forge protects a fleet, what it enforces and open security work |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Components, trust boundaries, data model |
 | [DECISIONS.md](DECISIONS.md) | Why things are the way they are |
-| [BENCHMARKS.md](BENCHMARKS.md) | Measured memory and CPU use |
+| [BENCHMARKS.md](src/forge/BENCHMARKS.md) | Measured memory and CPU use |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Fork, branch, test and open a pull request |
 | [CLAUDE.md](CLAUDE.md) | Code, security and docs conventions |
 | [SECURITY.md](SECURITY.md) | Reporting vulnerabilities privately |
@@ -226,6 +230,7 @@ git switch -c <topic> upstream/master
 Before you open a PR into `master`, run:
 
 ```sh
+cd src/forge
 cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo deny check && cargo audit

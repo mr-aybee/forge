@@ -44,7 +44,7 @@ world plugin {
 }
 ```
 
-The source is `src/protocol/forge-sdk/wit/forge-plugin.wit`.
+The source is `src/forge/crates/protocol/forge-sdk/wit/forge-plugin.wit`.
 
 ## 2. Build a Rust plugin
 
@@ -86,7 +86,7 @@ wasm-tools component new target/wasm32-unknown-unknown/release/probe.wasm -o pro
 Do not target WASI: the runner provides no WASI imports, and a component that
 imports them fails to instantiate.
 
-The repository's sample, `src/plugins/uptime-probe`, is written in the
+The repository's sample, `src/forge/plugins/uptime-probe`, is written in the
 component text format so it builds without a wasm toolchain.
 
 ## 3. Write the manifest

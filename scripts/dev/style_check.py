@@ -5,7 +5,7 @@ Usage:
     python3 scripts/dev/style_check.py --check [paths...]   # exit 1 on violations
     python3 scripts/dev/style_check.py --fix [paths...]     # insert missing blank lines
 
-With no paths it scans every .rs file under src/. Run `cargo fmt --all` first:
+With no paths it scans every .rs file under src/forge/. Run `cargo fmt --all` first:
 the scan relies on rustfmt's layout (one statement start per line, `{` at the
 end of a block header). It only ever inserts blank lines; rustfmt already
 removes blank lines after `{`, before `}` and collapses runs of blank lines.
@@ -318,7 +318,8 @@ def main():
     ap.add_argument("--exclude", action="append", default=[], help="path to skip (repeatable)")
     ap.add_argument("paths", nargs="*", type=Path)
     args = ap.parse_args()
-    roots = args.paths or [Path("src")]
+    # The Rust workspace, wherever the script is run from.
+    roots = args.paths or [Path(__file__).resolve().parents[2] / "src" / "forge"]
     files = []
     for r in roots:
         files += sorted(r.rglob("*.rs")) if r.is_dir() else [r]

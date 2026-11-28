@@ -1,5 +1,5 @@
 //! Compose / Swarm format services files run by Forge itself
-//! (`plans/service-orchestration.md` step 3, D-178).
+//! (`design/plans/service-orchestration.md` step 3, D-178).
 //!
 //! Every entry under `services:` becomes one native Forge service: an
 //! [`AppSpec`](crate::AppSpec)-shaped [`NativeSpec`], plain environment

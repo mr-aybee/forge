@@ -63,11 +63,15 @@ export CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${CARGO_PROFILE_RELEASE_CODEGEN_UNIT
 export FORGE_BUILD_VERSION="$VERSION"
 export FORGE_BUILD_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
+# The console lives outside the Rust workspace (src/console). cross mounts
+# it through Cross.toml `volumes`; forge-server/build.rs embeds it.
+export FORGE_UI_DIST="$PWD/src/console/dist"
+
 echo "==> Building $TAG ($TARGET)"
-cargo build --release --target "$TARGET" -p forge-server -p forge-agent -p forge-plugin-runner -p forge-analytics-worker
+(cd src/forge && cargo build --release --target "$TARGET" -p forge-server -p forge-agent -p forge-plugin-runner -p forge-analytics-worker)
 # The `forge` CLI separately, as in release.yml: its features stay out of the
 # server and agent binaries.
-cargo build --release --target "$TARGET" -p forge-cli
+(cd src/forge && cargo build --release --target "$TARGET" -p forge-cli)
 
 CROSS_DIR="$CARGO_TARGET_DIR-cross"
 for arch in $ARCHES; do
@@ -80,8 +84,8 @@ for arch in $ARCHES; do
       # glibc: its own target dir, or build scripts compiled on the host fail
       # to run in it ("GLIBC_2.xx not found"). The host's lld flags are for
       # x86_64 only.
-      CARGO_TARGET_DIR="$CROSS_DIR" RUSTC_WRAPPER="" cross build --release --target aarch64-unknown-linux-musl -p forge-server -p forge-agent -p forge-plugin-runner -p forge-analytics-worker
-      CARGO_TARGET_DIR="$CROSS_DIR" RUSTC_WRAPPER="" cross build --release --target aarch64-unknown-linux-musl -p forge-cli ;;
+      (cd src/forge && CARGO_TARGET_DIR="$CROSS_DIR" RUSTC_WRAPPER="" cross build --release --target aarch64-unknown-linux-musl -p forge-server -p forge-agent -p forge-plugin-runner -p forge-analytics-worker)
+      (cd src/forge && CARGO_TARGET_DIR="$CROSS_DIR" RUSTC_WRAPPER="" cross build --release --target aarch64-unknown-linux-musl -p forge-cli) ;;
     *) die "unknown architecture $arch (x86_64, aarch64)" ;;
   esac
 done

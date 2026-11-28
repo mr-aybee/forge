@@ -28,7 +28,7 @@ import shutil
 import subprocess
 import sys
 
-from _common import REPO, build_env
+from _common import RUST, build_env
 
 
 def main() -> None:
@@ -50,7 +50,7 @@ def main() -> None:
 
     if a.sweep:
         if shutil.which("cargo-sweep"):
-            subprocess.call(["cargo", "sweep", "--time", str(a.days), str(REPO)])
+            subprocess.call(["cargo", "sweep", "--time", str(a.days), str(RUST)])
         else:
             print("cargo-sweep not found; install it with: cargo install cargo-sweep --locked")
 

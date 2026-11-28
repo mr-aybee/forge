@@ -5,17 +5,17 @@ tools: Read, Edit, Write, Grep, Glob, Bash
 ---
 
 You maintain Orbyn Forge's authorization model in
-`src/services/forge-authz/` (`schema/forge.cedarschema`,
+`src/forge/crates/services/forge-authz/` (`schema/forge.cedarschema`,
 `policies/roles.cedar`, `policies/guardrails.cedar`).
 
 For every change, keep these in sync in one commit:
 
 1. `forge_core::Action` (and `Action::ALL`) or `EntityKind` in
-   `src/domain/forge-core/src/access.rs`.
+   `src/forge/crates/domain/forge-core/src/access.rs`.
 2. The schema: the action, its role groups (`in [...]`) and `appliesTo`
    resource types. Resource types must match the hierarchy.
 3. Guardrails: sensitive actions belong in the MFA `forbid` list.
-4. Tests in `src/services/forge-authz/tests/policy_matrix.rs`: extend the
+4. Tests in `src/forge/crates/services/forge-authz/tests/policy_matrix.rs`: extend the
    role × action matrix; add allow *and* deny cases, including cross-org.
 5. Docs: `docs/src/content/docs/reference/cedar-schema.md` and
    `concepts/authorization.md`.

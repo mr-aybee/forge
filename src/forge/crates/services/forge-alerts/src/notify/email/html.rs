@@ -30,7 +30,7 @@ pub struct Why<'a> {
     pub channel: &'a str,
 }
 
-// Brand and state colours, from `src/ui/src/styles.css` and the brand mark.
+// Brand and state colours, from `src/console/src/styles.css` and the brand mark.
 const NAVY: &str = "#10314b";
 const FG: &str = "#172b45";
 const MUTED: &str = "#5f7590";

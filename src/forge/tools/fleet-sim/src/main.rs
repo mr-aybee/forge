@@ -594,7 +594,7 @@ mod docs_coverage {
 
     fn page() -> String {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../docs/src/content/docs/reference/cli/fleet-sim.md");
+            .join("../../../../docs/src/content/docs/reference/cli/fleet-sim.md");
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{} is missing: {e}", path.display()))
     }
 

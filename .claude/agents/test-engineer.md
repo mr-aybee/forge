@@ -6,7 +6,7 @@ tools: Read, Edit, Write, Grep, Glob, Bash
 
 You write tests for Orbyn Forge. Prefer real components: SQLite in a
 `tempfile` directory, the Cedar engine, the in-process server harness
-(`src/apps/forge-server/tests/common/mod.rs`), the agent library, and the
+(`src/forge/crates/apps/forge-server/tests/common/mod.rs`), the agent library, and the
 real runner/server binaries via `env!("CARGO_BIN_EXE_...")`.
 
 Principles:

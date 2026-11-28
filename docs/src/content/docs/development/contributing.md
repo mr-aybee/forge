@@ -35,11 +35,12 @@ a pull request into `master`.
 5. Run the checks:
 
    ```sh
+   cd src/forge          # the Rust workspace
    cargo fmt --all
    cargo clippy --workspace --all-targets -- -D warnings
    cargo test --workspace
    cargo deny check
-   (cd src/ui && npm ci && npm run build)
+   (cd src/console && npm ci && npm run build)
    (cd docs && npm ci && npm run build)
    ```
 
@@ -64,17 +65,18 @@ GitHub Security Advisory. Don't open a public issue or pull request for them.
 ## Toolchain
 
 - Rust stable (MSRV 1.88, edition 2024), `clippy`, `rustfmt`
-- Node 20+ for `src/ui` and `docs`
+- Node 20+ for `src/console` and `docs`
 - `cargo install cargo-deny cargo-audit`
 
 ## Everyday commands
 
 ```sh
+cd src/forge          # the Rust workspace; run cargo here
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo deny check && cargo audit
-(cd src/ui && npm run build && npm audit --omit=dev)
+(cd src/console && npm run build && npm audit --omit=dev)
 (cd docs && npm run build && npm audit --omit=dev)
 ```
 
@@ -98,11 +100,11 @@ slow because every file access crosses the filesystem boundary.
 
 | Setting | Where | Effect |
 | --- | --- | --- |
-| LLD linker (`rust-lld.exe`) | `.cargo/config.toml`, applies to everyone on Windows | Shorter link step. LLD ships with the Rust toolchain. |
+| LLD linker (`rust-lld.exe`) | `src/forge/.cargo/config.toml`, applies to everyone on Windows | Shorter link step. LLD ships with the Rust toolchain. |
 | sccache | User-level `~/.cargo/config.toml`, once per machine | Compiled dependencies are cached outside `target/`, so they survive a `cargo clean` and are shared by every Rust project on the machine. |
 | `cargo ck` | Alias for `cargo check --workspace --all-targets` | Type-checks without code generation or linking. |
 | `cargo lint` | Alias for `cargo clippy --workspace --all-targets -- -D warnings` | The lint gate CI runs. |
-| `--profile perf` | `Cargo.toml` | Optimised build with thin LTO. Use it instead of `--release` for local performance work. |
+| `--profile perf` | `src/forge/Cargo.toml` | Optimised build with thin LTO. Use it instead of `--release` for local performance work. |
 
 Turn on sccache once per machine:
 
@@ -130,7 +132,7 @@ for one terminal only, run
 (PowerShell).
 
 :::caution
-Never put `rustc-wrapper` in the repository's `.cargo/config.toml`. It breaks
+Never put `rustc-wrapper` in the repository's `src/forge/.cargo/config.toml`. It breaks
 CI and `cross` builds, which do not have sccache.
 :::
 
@@ -172,7 +174,7 @@ artifact slows compilation noticeably.
 
 ## Dependency policy
 
-Only MIT, Apache-2.0, BSD and equivalent permissive licenses (`deny.toml`).
+Only MIT, Apache-2.0, BSD and equivalent permissive licenses (`src/forge/deny.toml`).
 **Ask before adding** a dependency with another license, one that adds more
 than 5 MB to the agent, or anything that brings in OpenSSL. Record the
 decision in `DECISIONS.md`.

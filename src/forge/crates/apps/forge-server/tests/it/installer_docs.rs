@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 
 fn repo() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../..")
 }
 
 fn read(rel: &str) -> String {

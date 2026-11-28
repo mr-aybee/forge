@@ -13,8 +13,8 @@ use forge_plugin_host::*;
 use forge_sdk::signing::{PublisherKey, TrustStore};
 use forge_store::Store;
 
-const SAMPLE_MANIFEST: &str = include_str!("../../../plugins/uptime-probe/forge-plugin.toml");
-const SAMPLE_WAT: &str = include_str!("../../../plugins/uptime-probe/uptime-probe.wat");
+const SAMPLE_MANIFEST: &str = include_str!("../../../../plugins/uptime-probe/forge-plugin.toml");
+const SAMPLE_WAT: &str = include_str!("../../../../plugins/uptime-probe/uptime-probe.wat");
 
 const LOOP_WAT: &str = r#"(component
   (core module $M (func (export "run") (param i32) (result i32) (loop $l (br $l)) (i32.const 0)))

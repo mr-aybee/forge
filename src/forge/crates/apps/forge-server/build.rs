@@ -1,4 +1,4 @@
-//! Embeds the built web console (`src/ui/dist`) into the binary, so a Forge
+//! Embeds the built web console (`src/console/dist`) into the binary, so a Forge
 //! release is one self-contained executable. When the UI has not been built
 //! (plain `cargo build` during development), the table is empty and the
 //! server serves `ui_dir` from disk if configured.
@@ -51,7 +51,8 @@ fn mime(path: &str) -> &'static str {
 fn main() {
     println!("cargo:rerun-if-env-changed=FORGE_UI_DIST");
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
-    let dist = std::env::var("FORGE_UI_DIST").map(PathBuf::from).unwrap_or_else(|_| manifest.join("../../ui/dist"));
+    let dist =
+        std::env::var("FORGE_UI_DIST").map(PathBuf::from).unwrap_or_else(|_| manifest.join("../../../../console/dist"));
     println!("cargo:rerun-if-changed={}", dist.display());
     let index = dist.join("index.html");
     println!("cargo:rerun-if-changed={}", index.display());

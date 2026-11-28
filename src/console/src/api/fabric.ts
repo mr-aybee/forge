@@ -1,5 +1,5 @@
 // A cluster's network plan and per-node sync state (`GET /clusters/{id}/fabric`).
-// Server: `src/apps/forge-server/src/api/fabric.rs`.
+// Server: `src/forge/crates/apps/forge-server/src/api/fabric.rs`.
 import { useQuery } from "@tanstack/react-query";
 
 import type { FabricResponse } from "../components/fabric/FabricForm";

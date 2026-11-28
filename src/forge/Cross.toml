@@ -11,6 +11,9 @@ passthrough = [
     # which has no sccache.
     "RUSTC_WRAPPER",
 ]
+# The web console is built outside this workspace (src/console/dist);
+# build_release.sh sets FORGE_UI_DIST and cross mounts that directory.
+volumes = ["FORGE_UI_DIST"]
 
 # DuckDB's bundled C++ (forge-analytics-worker, D-143) needs a newer GCC
 # than the musl images of cross 0.2.5 (GCC 9.2). cross's `main` images use

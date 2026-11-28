@@ -1,5 +1,5 @@
 // A node's Docker Engine API endpoint (mutual TLS on dockerd): state, enable,
-// disable and check. Server: `src/apps/forge-server/src/api/docker.rs`.
+// disable and check. Server: `src/forge/crates/apps/forge-server/src/api/docker.rs`.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 

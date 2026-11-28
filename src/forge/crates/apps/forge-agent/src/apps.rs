@@ -988,7 +988,7 @@ fn apply_container_options(body: &mut Value, spec: &AppSpec) {
 }
 
 /// Capabilities, ulimits, tmpfs, DNS, sysctls, devices and init
-/// (`plans/service-orchestration.md` step 1). The server approved the
+/// (`design/plans/service-orchestration.md` step 1). The server approved the
 /// privileged ones; the spec was validated on both sides.
 fn apply_runtime_options(body: &mut Value, spec: &AppSpec) {
     let host = &mut body["HostConfig"];

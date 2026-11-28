@@ -30,7 +30,7 @@ security finding ID (for example S1) for context only.
 6. Verify with the narrowest command that covers the change
    (`cargo check -p <crate>`, `cargo test -p <crate>`, `cargo lint`), then the
    workspace commands before pushing. For UI work run `npm run build` in
-   `src/ui`.
+   `src/console`.
 7. When an item is finished, mark it in the status table at the end of this
    file in the same pull request.
 
@@ -39,7 +39,7 @@ security finding ID (for example S1) for context only.
 - Read-only. No build, no `cargo clippy`, no test run. The one exception:
   `npx tsc --noEmit` on the UI, which passed with no diagnostics.
 - Size at review time: 345 Rust files and about 111,000 lines under `src/`;
-  152 UI files and about 39,300 lines under `src/ui/src`.
+  152 UI files and about 39,300 lines under `src/console/src`.
 - About 10 of the 55 API handler files were read in depth. The rest were
   judged by counts. Most of the 20 largest Rust files were not read in full.
 - Not analysed: `.clone()` in hot paths, locks held across `await`, deep
@@ -82,10 +82,10 @@ Suggested order:
 ### Problem
 
 `CLAUDE.md` rule 1 says services depend on ports in `forge-core` and concrete
-types are wired only in `src/apps/forge-server/src/state.rs`. The service
+types are wired only in `src/forge/crates/apps/forge-server/src/state.rs`. The service
 crates follow it. The server crate does not:
 
-- `src/apps/forge-server/src/api/` is about 22,000 lines in 55 files. All
+- `src/forge/crates/apps/forge-server/src/api/` is about 22,000 lines in 55 files. All
   eleven service crates together are about 11,400 lines.
 - `state.rs:37` declares `pub store: Store`, the concrete adapter type.
   `Services` has 35 public fields.
@@ -135,10 +135,10 @@ stacks, then fabric.
 2. **Extract a use-case type (medium).** For each feature, write a struct that
    takes `Arc<dyn Port>` values and returns `DomainResult`. Handlers shrink to
    parse, authorize, call, audit, respond. `forge-files::FileService`
-   (`src/services/forge-files`) is the model already in the repository,
-   including its in-memory fakes in `src/services/forge-files/src/tests.rs`.
+   (`src/forge/crates/services/forge-files`) is the model already in the repository,
+   including its in-memory fakes in `src/forge/crates/services/forge-files/src/tests.rs`.
 3. **Promote and close (large).** Move the clean use-case modules to
-   `src/services/*` crates and make `store` private on `Services`.
+   `src/forge/crates/services/*` crates and make `store` private on `Services`.
 
 Record the decision in `DECISIONS.md`: either amend D-001 to allow thin CRUD
 handlers that call a port directly, or commit to full extraction.
@@ -147,7 +147,7 @@ handlers that call a port directly, or commit to full extraction.
 
 - For the feature you moved: its handler file contains no `state.store` call,
   and the use-case type has unit tests that run without the server harness.
-- `grep -rn "crate::api::" src/apps/forge-server/src --include=*.rs` finds no
+- `grep -rn "crate::api::" src/forge/crates/apps/forge-server/src --include=*.rs` finds no
   hit outside `api/` for that feature.
 - Behaviour, REST responses and audit events are unchanged (the existing
   integration tests pass).
@@ -162,7 +162,7 @@ handlers that call a port directly, or commit to full extraction.
 
 `CLAUDE.md` rule 4 says new features are added, not edited into engines. Job
 kinds obey it. Node commands do not. In
-`src/apps/forge-server/src/jobs/agent_command.rs`:
+`src/forge/crates/apps/forge-server/src/jobs/agent_command.rs`:
 
 - `parse_command` (`:43-119`) matches on `"type"` strings to build the wire
   command.
@@ -180,10 +180,10 @@ kinds obey it. Node commands do not. In
 ### Example
 
 To add one node command today you edit: the `prost` oneof
-(`src/protocol/forge-proto/src/messages.rs:257`), `parse_command`,
+(`src/forge/crates/protocol/forge-proto/src/messages.rs:257`), `parse_command`,
 `required_action`, the agent's long-running classification
-(`src/apps/forge-agent/src/agent.rs:179-189`), the executor match
-(`src/apps/forge-agent/src/executor.rs:44`) and the helper allow-list. If
+(`src/forge/crates/apps/forge-agent/src/agent.rs:179-189`), the executor match
+(`src/forge/crates/apps/forge-agent/src/executor.rs:44`) and the helper allow-list. If
 `parse_command` and `required_action` read the payload differently, the
 command is authorized as one thing and executed as another.
 
@@ -220,10 +220,10 @@ agent.
 
 Function-local `static OnceLock<Mutex<…>>` registries hold per-server state.
 The integration tests start many servers in one process
-(`src/apps/forge-server/tests/it/main.rs`), so those servers share it. The
+(`src/forge/crates/apps/forge-server/tests/it/main.rs`), so those servers share it. The
 state is invisible in the composition root and is never reset.
 
-Sites, all under `src/apps/forge-server/src/`:
+Sites, all under `src/forge/crates/apps/forge-server/src/`:
 
 - `facts.rs:25-46`
 - `measures.rs:26`
@@ -245,7 +245,7 @@ Move each registry into a field on `Services`, as `telemetry`, `tunnels` and
 
 ### Done when
 
-`grep -rn "static .*OnceLock" src/apps/forge-server/src` shows no per-server
+`grep -rn "static .*OnceLock" src/forge/crates/apps/forge-server/src` shows no per-server
 state (constants and compiled regexes may stay).
 
 ---
@@ -257,7 +257,7 @@ See also R2 for the wire and request side.
 
 ### Problem
 
-- **Raw JSON in the model.** `src/domain/forge-core/src/model.rs` fields at
+- **Raw JSON in the model.** `src/forge/crates/domain/forge-core/src/model.rs` fields at
   `:791` and `:892-922` are `serde_json::Value` (fabric `spec`, `pins`,
   `leases`, `status`; cluster `profile`; site `config`, `edge_status`). Code
   probes them by key: `jobs/agent_command.rs:201-205`
@@ -267,11 +267,11 @@ See also R2 for the wire and request side.
   in `storage.rs:34-82` and `stacks.rs:95`. `ApprovalRepository::decide_approval`
   takes `status: &str` (`ports.rs:144`).
 - **A string protocol inside an error.** The MFA denial is signalled by the
-  prefix `"mfa_required:"` (`src/services/forge-authz/src/authorizer.rs:12,89`)
-  and parsed back out in `src/apps/forge-server/src/error.rs:52`.
+  prefix `"mfa_required:"` (`src/forge/crates/services/forge-authz/src/authorizer.rs:12,89`)
+  and parsed back out in `src/forge/crates/apps/forge-server/src/error.rs:52`.
 - **A magic prefix on a hash field.** "This session is an API key" is encoded
   as an `apikey:` prefix on `Session.id_hash`
-  (`src/apps/forge-server/src/auth.rs:57,171,353,393`).
+  (`src/forge/crates/apps/forge-server/src/auth.rs:57,171,353,393`).
 - **One error type with free text.** `DomainError` carries a `String` in every
   variant; `DomainError::internal(...)` appears about 141 times.
 
@@ -455,7 +455,7 @@ exists and passes.
 
 `.github/workflows/ci.yml:157-170` only runs `cargo build --features postgres`.
 The SQL discipline looks right (migrations use only `TEXT` and `BIGINT`;
-PRAGMAs are confined to `src/adapters/forge-store/src/lib.rs:72-75`), but
+PRAGMAs are confined to `src/forge/crates/adapters/forge-store/src/lib.rs:72-75`), but
 rule 5 ("portable SQL") is unverified.
 
 ### Fix
@@ -484,7 +484,7 @@ CI runs the store tests on both SQLite and PostgreSQL.
 - **Wide job handlers.** `NodeBootstrapJob` has 16 injected fields, `StackJob`
   11. This is a symptom of A1.
 - **Clock bypasses.** `api/onboarding.rs:63`, `jobs/node_bootstrap.rs:121`,
-  `src/adapters/forge-ssh/src/ca.rs:72`, `src/adapters/forge-s3/src/lib.rs:160`
+  `src/forge/crates/adapters/forge-ssh/src/ca.rs:72`, `src/forge/crates/adapters/forge-s3/src/lib.rs:160`
   read the system time directly. Elsewhere the server uses `clock.now()` 178
   times. See also R6 (`now_ms`).
 - **Large pure module.** `forge-core/src/files.rs` is 1,451 lines of path
@@ -546,8 +546,8 @@ Count with: `grep -rn "Result<[^>]*, String>" src --include=*.rs | wc -l`.
 ### Problem
 
 - 16 `pub action: String` or `pub op: String` fields:
-  `src/protocol/forge-proto/src/messages.rs:356,366,385,401,505`,
-  `src/domain/forge-core/src/model.rs:335,549,560,637`, and request structs in
+  `src/forge/crates/protocol/forge-proto/src/messages.rs:356,366,385,401,505`,
+  `src/forge/crates/domain/forge-core/src/model.rs:335,549,560,637`, and request structs in
   `api/{applications,containers,packages,stacks,storage}.rs`.
 - 34 `match action {` or `match op {` blocks on string literals, for example
   `forge-agent/src/apps.rs:510,814`, `forge-server/src/jobs/stack.rs:180,278,301`,
@@ -640,7 +640,7 @@ search; `service_accounts.rs` read in full.
 Server code uses `state.store.<call>().await.unwrap_or_default()` or `.ok()`.
 A database failure then renders as "nothing there" and the caller gets a 200.
 
-Sites, under `src/apps/forge-server/src/`:
+Sites, under `src/forge/crates/apps/forge-server/src/`:
 
 - `api/service_accounts.rs:60-61`
 - `api/servers.rs:48-49,74,77`
@@ -682,7 +682,7 @@ it.
 
 No `state.store` call in the server ends in `.unwrap_or_default()` or `.ok()`
 without a comment that says why the default is correct. Check with:
-`grep -rnE "store\.[a-z_]+\(.*\)\.await\.(ok\(\)|unwrap_or_default\(\))" src/apps/forge-server/src`.
+`grep -rnE "store\.[a-z_]+\(.*\)\.await\.(ok\(\)|unwrap_or_default\(\))" src/forge/crates/apps/forge-server/src`.
 
 ---
 
@@ -698,21 +698,21 @@ Largest files (lines):
 
 | Lines | File |
 | --- | --- |
-| 2087 | `src/apps/forge-cli/src/admincmd.rs` |
-| 1606 | `src/apps/forge-server/src/api/storage.rs` |
-| 1525 | `src/protocol/forge-catalog/src/stacks.rs` |
-| 1451 | `src/domain/forge-core/src/files.rs` |
-| 1336 | `src/services/forge-files/src/lib.rs` |
-| 1311 | `src/apps/forge-cli/src/cmds.rs` |
-| 1290 | `src/apps/forge-cli/src/filescmd.rs` |
-| 1269 | `src/apps/forge-agent/src/files/mod.rs` |
-| 1232 | `src/apps/forge-server/src/api/files.rs` |
-| 1225 | `src/protocol/forge-catalog/src/lib.rs` |
-| 1190 | `src/apps/forge-cli/src/rescmd.rs` |
-| 1134 | `src/apps/forge-server/src/api/tunnels.rs` |
-| 1126 | `src/apps/forge-cli/src/tunnelcmd.rs` |
-| 1088 | `src/apps/forge-server/src/api/mcp.rs` |
-| 1031 | `src/apps/forge-agent/src/apps.rs` |
+| 2087 | `src/forge/crates/apps/forge-cli/src/admincmd.rs` |
+| 1606 | `src/forge/crates/apps/forge-server/src/api/storage.rs` |
+| 1525 | `src/forge/crates/protocol/forge-catalog/src/stacks.rs` |
+| 1451 | `src/forge/crates/domain/forge-core/src/files.rs` |
+| 1336 | `src/forge/crates/services/forge-files/src/lib.rs` |
+| 1311 | `src/forge/crates/apps/forge-cli/src/cmds.rs` |
+| 1290 | `src/forge/crates/apps/forge-cli/src/filescmd.rs` |
+| 1269 | `src/forge/crates/apps/forge-agent/src/files/mod.rs` |
+| 1232 | `src/forge/crates/apps/forge-server/src/api/files.rs` |
+| 1225 | `src/forge/crates/protocol/forge-catalog/src/lib.rs` |
+| 1190 | `src/forge/crates/apps/forge-cli/src/rescmd.rs` |
+| 1134 | `src/forge/crates/apps/forge-server/src/api/tunnels.rs` |
+| 1126 | `src/forge/crates/apps/forge-cli/src/tunnelcmd.rs` |
+| 1088 | `src/forge/crates/apps/forge-server/src/api/mcp.rs` |
+| 1031 | `src/forge/crates/apps/forge-agent/src/apps.rs` |
 
 Longest functions (approximate):
 
@@ -851,9 +851,9 @@ Root `Cargo.toml:107-116` sets `unsafe_code = "deny"` and clippy `all`,
 `unwrap_used`, `dbg_macro`, `todo` at warn. There is no `clippy.toml`.
 
 - `CLAUDE.md` bans `expect()` outside tests, but `clippy::expect_used` is not
-  enabled. Known non-test use: `src/adapters/forge-ssh/src/ca.rs:135`
+  enabled. Known non-test use: `src/forge/crates/adapters/forge-ssh/src/ca.rs:135`
   (`.expect("signed by the CA and currently valid")`, not opened).
-  `src/services/forge-secrets/src/crypto.rs:16` is allowed and justified.
+  `src/forge/crates/services/forge-secrets/src/crypto.rs:16` is allowed and justified.
 - Tests avoid `unwrap_used` in two ways: 115 `#[allow(clippy::unwrap_used)]`
   attributes (58 item-level, 54 file-level, 3 combined), and 50 workarounds
   across 23 files such as `.unwrap_or_else(|e| panic!("{e}"))` and
@@ -897,7 +897,7 @@ These are fixed sleeps:
   client poll interval.
 - `forge-server/tests/it/sftp.rs:390`: 300 ms, then asserts the session is not
   closed.
-- `src/services/forge-jobs/tests/engine.rs:212`: 400 ms waiting for a lease to
+- `src/forge/crates/services/forge-jobs/tests/engine.rs:212`: 400 ms waiting for a lease to
   expire.
 - `forge-server/tests/it/agent_binary_smoke.rs:101`: 5 s "stays up" check.
   Defensible as a negative assertion; leave it with a comment.
@@ -1058,7 +1058,7 @@ Fix when you are in the file.
 
 ---
 
-# Part C: the web console (`src/ui`)
+# Part C: the web console (`src/console`)
 
 UI metrics at review time:
 
@@ -1086,7 +1086,7 @@ Use the `ui-engineer` subagent for UI work.
 
 ### Problem
 
-`src/ui/package.json` has no ESLint dependency and no `lint` script, and there
+`src/console/package.json` has no ESLint dependency and no `lint` script, and there
 is no config file. CI (`.github/workflows/ci.yml:254-263`) runs only
 `npm ci && npm run build` and `npm audit`. The 107 `useEffect` calls have no
 `exhaustive-deps` or `rules-of-hooks` check. The 21
@@ -1256,7 +1256,7 @@ whether the types have already drifted from the server.
 ### Problem
 
 The server serves `GET /api/openapi.json`
-(`src/apps/forge-server/src/api/mod.rs:300`). The UI never uses it.
+(`src/forge/crates/apps/forge-server/src/api/mod.rs:300`). The UI never uses it.
 `src/api/types.ts` (940 lines) is maintained by hand, and about 100 more
 `interface` and `type` declarations sit in pages and components.
 
@@ -1465,23 +1465,23 @@ Do not refactor these away. New code should follow them.
 
 - Compiler-enforced layering: no service, domain or protocol crate depends on
   an adapter.
-- `JobHandler` + `JobRegistry` (`src/services/forge-jobs/src/handler.rs`): the
+- `JobHandler` + `JobRegistry` (`src/forge/crates/services/forge-jobs/src/handler.rs`): the
   engine has no `match` on kind.
 - `Caller` as the single authorize-and-audit helper, with denials audited
-  inside `authorize` (`src/apps/forge-server/src/auth.rs:86-95`).
+  inside `authorize` (`src/forge/crates/apps/forge-server/src/auth.rs:86-95`).
 - `Idempotency-Key` as middleware (`api/mod.rs:291`), not per handler.
 - One `ApiError` and one `IntoResponse`, with internal errors masked.
 - Typed ids (UUID v7, one macro in `ids.rs`) and the injected `Clock` with
   `ManualClock`.
 - `Action::ALL` checked against the Cedar schema
-  (`src/services/forge-authz/src/engine.rs:119`).
+  (`src/forge/crates/services/forge-authz/src/engine.rs:119`).
 - `forge-catalog` sharing one validation between the control plane and the
   helper.
 - `forge-files` as the model service: ports in, in-memory fakes in tests.
 - `forge-store`: one row mapper per entity, shared decoding helpers in
   `row.rs`, transactions inside the adapter.
 - Server background loops tracked and joined on shutdown
-  (`src/apps/forge-server/src/lib.rs:93-135`).
+  (`src/forge/crates/apps/forge-server/src/lib.rs:93-135`).
 - `spawn_blocking` for CPU-heavy work.
 - No TODO, FIXME or commented-out code; doc comments that explain why.
 
@@ -1546,7 +1546,7 @@ Update this table in the pull request that finishes an item.
 Found by the branch's quality review. These are not bugs, just debt to pay down when the code is next touched:
 
 - **Untyped Swarm states:** `SwarmStatus.state`, `SwarmTask.state` and `desired_state`, and the service `update_state` are strings. Make them serde enums with an `Unknown` fallback.
-- **Untyped Docker JSON in the agent:** `src/apps/forge-agent/src/{swarm,docker_ops}.rs` build their views from untyped Docker JSON (`v["X"].as_str().unwrap_or_default()`). Read typed `#[serde(default)]` structs instead, and give the agent its own Docker error enum.
+- **Untyped Docker JSON in the agent:** `src/forge/crates/apps/forge-agent/src/{swarm,docker_ops}.rs` build their views from untyped Docker JSON (`v["X"].as_str().unwrap_or_default()`). Read typed `#[serde(default)]` structs instead, and give the agent its own Docker error enum.
 - **Long functions:** split `deploy.rs` (`start`, `prepare`), `api/docker_resources.rs` (`op`), `forge_catalog::swarm_service::engine_spec` and `api/hooks.rs` (`fire`) into named steps.
 - **Handlers calling handlers:** webhooks call the deploy handlers (`services::deploy`, `stacks::deploy`). Move the deploy use cases into services that both can call.
 - **Repeated helpers:** `ws_ref`, `server_ref` and `cluster_ref` are repeated. Add `EntityRef::workspace/server/cluster` in `forge-core`.

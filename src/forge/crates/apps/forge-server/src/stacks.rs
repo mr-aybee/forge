@@ -271,7 +271,7 @@ pub struct NodeCaps {
     /// The agent reports `forge_dns: running`.
     pub forge_dns_running: bool,
     /// The agent takes the typed container options on app specs
-    /// (`plans/service-orchestration.md` step 1).
+    /// (`design/plans/service-orchestration.md` step 1).
     pub container_options: bool,
 }
 

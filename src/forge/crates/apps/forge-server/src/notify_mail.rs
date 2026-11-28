@@ -40,7 +40,7 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(40);
 const FALLBACK_DOMAIN: &str = "orbyn-forge.invalid";
 
 /// The brand mark (128 px, shown at 32 px), rendered once from
-/// `branding/forge-mark.svg`: mail clients do not show SVG.
+/// `design/branding/forge-mark.svg`: mail clients do not show SVG.
 const MARK_PNG: &[u8] = include_bytes!("../assets/email/forge-mark-128.png");
 
 /// `Auto-Submitted: auto-generated` (RFC 3834): out-of-office and other

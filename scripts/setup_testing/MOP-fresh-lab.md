@@ -63,7 +63,7 @@ starts from an empty cache), about 15 minutes after that.
 python scripts/setup_testing/publish.py --ui --notes "Fresh lab from develop"
 ```
 
-- `-Ui` rebuilds the web console (`src/ui`) so the release has the current UI.
+- `-Ui` rebuilds the web console (`src/console`) so the release has the current UI.
 - The build runs in WSL as a quick lab build, linked with LLD for speed
   (installed by `setup-wsl.sh`). Add `-Full` for a fully optimised build (much
   slower; not needed for testing).

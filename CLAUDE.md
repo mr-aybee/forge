@@ -1,7 +1,7 @@
 # CLAUDE.md: Orbyn Forge
 
 Guidance for AI coding agents and human contributors working in this repository.
-More specific rules live next to the code: [`src/ui/CLAUDE.md`](src/ui/CLAUDE.md)
+More specific rules live next to the code: [`src/console/CLAUDE.md`](src/console/CLAUDE.md)
 and [`docs/CLAUDE.md`](docs/CLAUDE.md). The website lives in its own repository,
 `github.com/orbyntech/forge-website`.
 
@@ -14,48 +14,61 @@ PowerDNS, guacd, databases) and never reimplements them.
 - **Done:** Phase 1, the core foundation. It covers identity, Cedar
   authorization, agents, durable jobs, audit, plugins and the console.
 - **Read first:** `ARCHITECTURE.md`, then `DECISIONS.md`. The product plan is
-  `plans/inital_plan.md`.
+  `design/plans/inital_plan.md`.
 - **Repository:** `github.com/orbyntech/forge` holds the source, releases and
   issues. Contributors fork it and open PRs into `master` (see `CONTRIBUTING.md`).
 
 ## Layout
 
-All source code lives under `src/`. New crates go in the matching
-`src/<layer>/`; the workspace globs pick them up. Never recreate a top-level
-`crates/`, `tools/`, `ui/`, `plugins/` or `agents/`.
+The repository holds three projects. The root keeps only what applies to all
+of them (README, licence, CI, scripts, design notes).
+
+- `src/forge/` is the Rust workspace. It is self-contained: `Cargo.toml`,
+  `Cargo.lock`, `rust-toolchain.toml`, `rustfmt.toml`, `deny.toml`,
+  `Cross.toml`, `.cargo/` and `target/` all live there. Run `cargo` from it.
+- `src/console/` is the web console (React, TypeScript, Vite).
+- `docs/` is the documentation site.
+
+New crates go in the matching `src/forge/crates/<layer>/`; the workspace globs
+pick them up. Don't put Rust crates, Cargo files or a second workspace
+anywhere else, and don't add new top-level folders for code.
 
 | Path | Contents |
 | --- | --- |
-| `src/domain/forge-core` | Types, typed ids, access vocabulary, **ports** (traits). No I/O. |
-| `src/services/*` | `forge-authz` (Cedar), `forge-audit`, `forge-identity`, `forge-jobs`, `forge-pki`, `forge-secrets`, `forge-plugin-host`, … |
-| `src/adapters/forge-store` | sqlx repositories and migrations (SQLite default, `postgres` feature) |
-| `src/protocol/*` | `forge-proto` (agent wire protocol), `forge-sdk` (WIT, manifest, signing, release feed) |
-| `src/apps/*` | `forge-server` (composition root: `src/state.rs`), `forge-agent` (+ helper), `forge-cli`, `forge-plugin-runner`, `forge-analytics-worker`, `forge-file-gateway` |
-| `src/tools/fleet-sim` | Fleet benchmark |
-| `src/plugins/uptime-probe` | Sample signed plugin (component WAT) |
-| `src/ui` | Web console: React, TypeScript, Vite |
+| `src/forge/crates/domain/forge-core` | Types, typed ids, access vocabulary, **ports** (traits). No I/O. |
+| `src/forge/crates/services/*` | `forge-authz` (Cedar), `forge-audit`, `forge-identity`, `forge-jobs`, `forge-pki`, `forge-secrets`, `forge-plugin-host`, … |
+| `src/forge/crates/adapters/*` | `forge-store` (sqlx repositories and migrations; SQLite default, `postgres` feature), `forge-docker`, `forge-ssh`, `forge-analytics*` |
+| `src/forge/crates/protocol/*` | `forge-proto` (agent wire protocol), `forge-sdk` (WIT, manifest, signing, release feed), `forge-catalog` |
+| `src/forge/crates/apps/*` | `forge-server` (composition root: `src/state.rs`), `forge-agent` (+ helper), `forge-cli`, `forge-dns`, `forge-plugin-runner`, `forge-analytics-worker`, `forge-file-gateway` |
+| `src/forge/tools/fleet-sim` | Fleet benchmark (never shipped) |
+| `src/forge/plugins/uptime-probe` | Sample signed plugin (component WAT) |
+| `src/console` | Web console: React, TypeScript, Vite |
 | `docs/` | Astro Starlight docs, served at `/docs/` |
-| `scripts/` | Packaging (`packaging/`), CI helpers (`ci/`), developer tools (`dev/`), test lab (`setup_testing/`) |
+| `design/` | Product plans (`plans/`) and brand assets (`branding/`) |
+| `scripts/` | Packaging (`packaging/`), CI helpers (`ci/`), developer tools (`dev/`), test labs (`lab/`, `setup_testing/`) |
 | `.claude/agents/` | Subagent definitions for this repo |
 
 ## Commands
 
 ```sh
-# Gate: run all of these before you push
+# Gate: run all of these before you push. Rust commands run in src/forge;
+# the others from the repository root.
+cd src/forge
 cargo fmt --all
-python3 scripts/dev/style_check.py --check            # blank-line rules below (--fix inserts them)
+python3 ../../scripts/dev/style_check.py --check      # blank-line rules below (--fix inserts them)
 cargo clippy --workspace --all-targets -- -D warnings   # alias: cargo lint
 cargo test --workspace                                  # includes kill-and-resume tests
 cargo deny check && cargo audit
+cd ../..
 docker run --rm -v "$PWD":/repo zricethezav/gitleaks:v8.21.2 dir /repo --no-banner   # secret scan (.gitleaks.toml)
-(cd src/ui && npm ci && npm run build)
+(cd src/console && npm ci && npm run build)
 (cd docs && npm ci && npm run build)                    # must have no broken links
 
-# While iterating
+# While iterating (in src/forge)
 cargo ck                          # check, no linking
 cargo check -p <crate> && cargo test -p <crate>
 
-# Builds
+# Builds (in src/forge)
 cargo build --profile perf -p forge-server             # optimised local build
 cargo build --release -p forge-server -p forge-agent -p forge-plugin-runner -p forge-analytics-worker -p fleet-sim
 target/release/fleet-sim --agents 50 --agents 1000     # updates BENCHMARKS.md
@@ -65,11 +78,11 @@ target/release/fleet-sim --agents 50 --agents 1000     # updates BENCHMARKS.md
 
 - `--release` (fat LTO, one codegen unit) is for shipping. Use `perf` locally.
 - sccache: set `[build] rustc-wrapper = "sccache"` in your user-level
-  `~/.cargo/config.toml`, **never** in the repo's `.cargo/config.toml`, where it
+  `~/.cargo/config.toml`, **never** in the repo's `src/forge/.cargo/config.toml`, where it
   breaks CI and `cross`. `python3 scripts/dev/build_env.py` reports your setup.
 - Reclaim disk with `python3 scripts/dev/build_env.py --sweep` before `cargo clean`.
 - On Windows, build on the Windows filesystem, not through WSL on `/mnt/<drive>`.
-  `.cargo/config.toml` links with `rust-lld.exe`. If a link error looks
+  `src/forge/.cargo/config.toml` links with `rust-lld.exe`. If a link error looks
   linker-specific, set `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=link.exe`,
   as the release workflow does.
 - Developer scripts are Python 3 using only the standard library. `install.ps1`
@@ -79,7 +92,7 @@ target/release/fleet-sim --agents 50 --agents 1000     # updates BENCHMARKS.md
 
 1. **Dependencies point inward.** Services depend on `forge-core` ports, never
    on `forge-store` or other adapters. Concrete types are wired only in
-   `src/apps/forge-server/src/state.rs`.
+   `src/forge/crates/apps/forge-server/src/state.rs`.
 2. **Authorize where it takes effect:** in the API handler (`Caller::authorize`),
    the job runner (every step), the agent hub, the agent and the plugin host.
    Never rely on the UI.
@@ -113,7 +126,7 @@ target/release/fleet-sim --agents 50 --agents 1000     # updates BENCHMARKS.md
 ## Rust code quality
 
 These rules apply to new and changed code. Known debt is listed in
-`plans/code-quality.md`. Do not add to it, and do not start a repo-wide clean-up
+`design/plans/code-quality.md`. Do not add to it, and do not start a repo-wide clean-up
 unless asked.
 
 - **Thin handlers.**
@@ -212,7 +225,7 @@ pub fn process_orders(orders: &[Order], limit: usize) -> Result<Summary, Error> 
 
 ## Dependencies
 
-- Only MIT, Apache-2.0, BSD and the permissive equivalents in `deny.toml` are
+- Only MIT, Apache-2.0, BSD and the permissive equivalents in `src/forge/deny.toml` are
   allowed.
 - **Ask a maintainer first** before adding a dependency that:
   - has another license;
@@ -239,7 +252,7 @@ pub fn process_orders(orders: &[Order], limit: usize) -> Result<Summary, Error> 
 - A change is not done until the docs describe it (see `docs/CLAUDE.md`). Also
   keep these current:
   - `README.md`: feature table, quick start, layout, benchmark figures.
-  - `ARCHITECTURE.md` and `branding/forge-architecture.svg` when components,
+  - `ARCHITECTURE.md` and `design/branding/forge-architecture.svg` when components,
     trust boundaries or flows change.
   - `docs/src/content/docs/reference/rest-api.md` for every endpoint change.
 

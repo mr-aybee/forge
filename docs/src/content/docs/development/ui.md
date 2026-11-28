@@ -5,11 +5,11 @@ sidebar:
   order: 4
 ---
 
-`src/ui` — React 19, TypeScript, Vite, Tailwind CSS, TanStack Query, Radix
+`src/console` — React 19, TypeScript, Vite, Tailwind CSS, TanStack Query, Radix
 primitives.
 
 ```sh
-cd src/ui
+cd src/console
 npm ci
 npm run dev        # http://localhost:55132, proxies /api and /oauth to :55130 (FORGE_API and FORGE_UI_PORT override)
 npm run build      # dist/ — serve with ui_dir in forge.toml
@@ -83,7 +83,7 @@ avoids showing entries and pages that would fail.
    revoking a role binding invalidate `["me"]` and refresh the flags.
 
 To gate a new page, add a field to `ConsoleCapabilities` in
-`src/apps/forge-server/src/console_access.rs` and `src/api/access.ts`, map it
+`src/forge/crates/apps/forge-server/src/console_access.rs` and `src/api/access.ts`, map it
 to the action the page's main endpoint authorizes, set `cap` on its `NAV`
 item, extend the test in `tests/it/console_access.rs` and document the field.
 

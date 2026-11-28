@@ -59,7 +59,7 @@ def main() -> None:
                     help="optimise like a real release (thin LTO, opt-level 3); default is a quick lab build")
     a = ap.parse_args()
 
-    m = re.search(r'^version\s*=\s*"([^"]+)"', (REPO / "Cargo.toml").read_text(encoding="utf-8"), re.M)
+    m = re.search(r'^version\s*=\s*"([^"]+)"', (REPO / "src" / "forge" / "Cargo.toml").read_text(encoding="utf-8"), re.M)
     if not m:
         die("no version in Cargo.toml")
     # The next patch version: Forge orders X.Y.Z-dev.… below X.Y.Z, so a dev
@@ -67,7 +67,7 @@ def main() -> None:
     major, minor, patch = (m.group(1).split("-")[0].split(".") + ["0", "0"])[:3]
     version = f"{major}.{minor}.{int(patch) + 1}-dev.{dt.datetime.now():%Y%m%d.%H%M%S}"
 
-    ui = REPO / "src" / "ui"
+    ui = REPO / "src" / "console"
     if a.ui or not (ui / "dist" / "index.html").exists():
         print("==> Building the web console")
         if not (ui / "node_modules").is_dir() and call(["npm", "ci"], cwd=ui):

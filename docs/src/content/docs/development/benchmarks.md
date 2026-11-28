@@ -5,11 +5,12 @@ sidebar:
   order: 3
 ---
 
-`src/tools/fleet-sim` starts a real control plane, enrolls N agents with real
+`src/forge/tools/fleet-sim` starts a real control plane, enrolls N agents with real
 keys, certificates and mTLS connections, and records idle RSS/CPU, API latency
 and reconnect-storm recovery.
 
 ```sh
+cd src/forge
 cargo build --release -p forge-server -p forge-agent -p fleet-sim
 target/release/fleet-sim --agents 50 --agents 1000 --idle-secs 60 --out bench.json
 ```
@@ -30,7 +31,7 @@ carries a resource sample for node telemetry, which accounts for most of the
 extra cost at 1,000 agents.
 
 The full table, findings (API latency grows with fleet size; fix planned) and
-the list of runs still to do are in `BENCHMARKS.md` at the repository root.
+the list of runs still to do are in `src/forge/BENCHMARKS.md`.
 
 ## Analytics: DuckDB against chDB
 

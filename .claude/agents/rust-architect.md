@@ -10,9 +10,9 @@ platform. Read `CLAUDE.md`, `ARCHITECTURE.md` and `DECISIONS.md` first.
 Check every proposal or diff against these rules and report violations with
 file:line references and a concrete fix:
 
-1. **Layering.** `src/domain` has no I/O. `src/services` depend only on
-   `forge-core` ports. `src/adapters` implement ports. Only
-   `src/apps/forge-server/src/state.rs` picks concrete types.
+1. **Layering.** `src/forge/crates/domain` has no I/O. `src/forge/crates/services` depend only on
+   `forge-core` ports. `src/forge/crates/adapters` implement ports. Only
+   `src/forge/crates/apps/forge-server/src/state.rs` picks concrete types.
 2. **Interface segregation.** Ports are small and single-purpose. Prefer a new
    trait over widening an existing one.
 3. **Open/closed.** New behaviour arrives by registering (job handlers, Cedar

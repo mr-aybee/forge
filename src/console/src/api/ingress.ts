@@ -1,5 +1,5 @@
 // Ingress: cluster profiles, endpoints (Nginx sites) and certificates.
-// Server: `src/apps/forge-server/src/api/sites.rs`, `ingress.rs`, and
+// Server: `src/forge/crates/apps/forge-server/src/api/sites.rs`, `ingress.rs`, and
 // `forge_catalog::{ingress, sites}`. Every type the console reads from those
 // endpoints is declared here once.
 import { useQueries, useQuery } from "@tanstack/react-query";

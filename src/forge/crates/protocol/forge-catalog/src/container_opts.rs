@@ -1,5 +1,5 @@
 //! Container runtime options beyond the basic service spec
-//! (`plans/service-orchestration.md` step 1): restart policy with attempts,
+//! (`design/plans/service-orchestration.md` step 1): restart policy with attempts,
 //! capabilities, ulimits, tmpfs mounts, DNS servers, sysctls, devices,
 //! `init` and extra networks.
 //!

@@ -69,7 +69,7 @@ def main() -> None:
     ap.add_argument("--os", action="append", choices=["windows", "wsl"], help="default: both")
     ap.add_argument("--only", action="append", default=[], help="scenario number, e.g. 03; repeatable")
     ap.add_argument("--no-reset", action="store_true", help="do not restore `clean` (reuse the lab as it is)")
-    ap.add_argument("--forge-exe", default=str(REPO / "target" / "debug" / "forge.exe"), help="the Windows forge CLI")
+    ap.add_argument("--forge-exe", default=str(REPO / "src" / "forge" / "target" / "debug" / "forge.exe"), help="the Windows forge CLI")
     ap.add_argument("--timeout", type=int, default=90, help="minutes per scenario")
     a = ap.parse_args()
     systems = a.os or ["windows", "wsl"]

@@ -1,4 +1,4 @@
-# CLAUDE.md: web console (`src/ui`)
+# CLAUDE.md: web console (`src/console`)
 
 React 19, TypeScript, Vite, Tailwind v4 tokens, TanStack Query, Radix and
 lucide icons. The root [`CLAUDE.md`](../../CLAUDE.md) still applies.

@@ -1,5 +1,5 @@
 // Container registry credentials (D-157). Server:
-// `src/apps/forge-server/src/api/registries.rs`. The secret is write-only: the
+// `src/forge/crates/apps/forge-server/src/api/registries.rs`. The secret is write-only: the
 // list never returns it. Mutations need `registry.manage` and an MFA-verified
 // sign-in (the client handles step-up).
 import { useQuery } from "@tanstack/react-query";

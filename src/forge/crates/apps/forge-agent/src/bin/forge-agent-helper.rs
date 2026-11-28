@@ -703,7 +703,7 @@ mod docs_coverage {
     #[test]
     fn every_command_and_option_is_documented() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../docs/src/content/docs/reference/cli/forge-agent-helper.md");
+            .join("../../../../../docs/src/content/docs/reference/cli/forge-agent-helper.md");
         let doc = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{} is missing: {e}", path.display()));
         let missing: Vec<&str> = COMMANDS
             .iter()

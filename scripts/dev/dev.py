@@ -3,7 +3,7 @@
 against either the lab server or a forge-server running on this machine.
 
   --mode lab    (default) UI only. Vite on http://localhost:55132 proxies /api
-                and /oauth to the lab server (--lab-url). Every save in src/ui
+                and /oauth to the lab server (--lab-url). Every save in src/console
                 shows up in the browser at once. Real nodes, real data. New
                 backend endpoints only exist after the lab server is updated.
 
@@ -30,7 +30,7 @@ import sys
 import threading
 from pathlib import Path
 
-from _common import EXE, REPO, WINDOWS, build_env, cyan, dev_version, die, green, run, tool
+from _common import CONSOLE, EXE, REPO, RUST, WINDOWS, build_env, cyan, dev_version, die, green, run, tool
 
 DEFAULT_DATA = Path(r"D:\forge-dev") if WINDOWS else Path.home() / ".local" / "share" / "forge-dev"
 
@@ -61,7 +61,7 @@ def server_loop(cfg: Path, log: Path, stop: threading.Event, current: list[subpr
             out.write("--- building and starting forge-server ---\n")
             out.flush()
             proc = subprocess.Popen([tool("cargo"), "run", "-p", "forge-server", "--", "--config", str(cfg), "serve"],
-                                    cwd=REPO, env=env, stdout=out, stderr=subprocess.STDOUT)
+                                    cwd=RUST, env=env, stdout=out, stderr=subprocess.STDOUT)
             current[:] = [proc]
             proc.wait()
             stop.wait(1)
@@ -74,7 +74,7 @@ def main() -> None:
     ap.add_argument("--data-dir", type=Path, default=DEFAULT_DATA)
     a = ap.parse_args()
 
-    ui = REPO / "src" / "ui"
+    ui = CONSOLE
     if not (ui / "node_modules").is_dir():
         run(["npm", "ci"], cwd=ui)
 
@@ -91,10 +91,10 @@ def main() -> None:
 
         # First run: build once and create the administrator.
         if not (data_dir / "data" / "forge.db").exists():
-            run(["cargo", "build", "-p", "forge-server"], cwd=REPO, env=build_env(), what="build")
+            run(["cargo", "build", "-p", "forge-server"], cwd=RUST, env=build_env(), what="build")
             pw = getpass.getpass("Choose a password for the local admin (12+ characters): ")
             init_env = dict(os.environ, FORGE_ADMIN_PASSWORD=pw)
-            server = REPO / "target" / "debug" / f"forge-server{EXE}"
+            server = RUST / "target" / "debug" / f"forge-server{EXE}"
             rc = subprocess.call([str(server), "--config", str(cfg), "init", "--username", "admin"], env=init_env)
             if rc:
                 die("forge-server init failed", rc)

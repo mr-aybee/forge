@@ -169,7 +169,7 @@ impl CommandExecutor for LocalExecutor {
                 "mesh_network": cfg!(unix),
                 // Restart policy, capabilities, ulimits, tmpfs, DNS, sysctls,
                 // devices, init and extra networks on app specs
-                // (plans/service-orchestration.md step 1).
+                // (design/plans/service-orchestration.md step 1).
                 "container_options": true,
                 // Writes secret and config files of app specs (`files`,
                 // D-179) and mounts them. Older agents omit it.

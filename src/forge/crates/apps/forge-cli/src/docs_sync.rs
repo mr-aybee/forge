@@ -90,7 +90,7 @@ fn leaves() -> Vec<(Vec<String>, Vec<String>)> {
 }
 
 fn docs_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../docs/src/content/docs/reference/cli")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../../docs/src/content/docs/reference/cli")
 }
 
 /// The text of `### forge <path>` up to the next `##`/`###` heading.

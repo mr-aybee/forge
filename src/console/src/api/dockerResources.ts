@@ -1,6 +1,6 @@
 // Docker images, volumes, networks, disk usage and events on one node, run by
 // the node's root helper (no TLS endpoint needed). Server:
-// `src/apps/forge-server/src/api/docker_resources.rs`. Every reader normalizes
+// `src/forge/crates/apps/forge-server/src/api/docker_resources.rs`. Every reader normalizes
 // the node's JSON so an older server or a missing field never crashes a view.
 import { useQuery } from "@tanstack/react-query";
 

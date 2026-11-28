@@ -16,7 +16,7 @@ in [`docs/`](docs/) (Astro Starlight).
 | Node agent | `forge-agent` | Dials out to the control plane over mTLS, verifies signed commands, reports facts. Keeps the node's analytics spool, runs the local log listener (`127.0.0.1:5341` and the Docker bridge gateway) and uploads the spool to the analytics worker (D-142) | Trusted for its own server only |
 | Privileged helper | `forge-agent-helper` | Runs the few privileged operations from a fixed allowlist | Root/SYSTEM, minimal surface |
 | CLI | `forge-cli` (binary `forge`) | Operator and pipeline client of `/api/v1`: contexts, browser and device sign-in, step-up, typed commands, `forge api` from the OpenAPI document; tokens in the OS credential store | User credentials (bearer tokens) |
-| Fleet simulator | `src/tools/fleet-sim` | Simulates 10–5,000 agents for benchmarks | Test only |
+| Fleet simulator | `src/forge/tools/fleet-sim` | Simulates 10–5,000 agents for benchmarks | Test only |
 
 Library crates:
 
@@ -238,7 +238,7 @@ environments placed in it, and a project binding covers all of the
 project's environments and their services. A service's parents are its
 environment and the workspace. Tenants do not contain environments.
 
-Core tables (`src/adapters/forge-store/migrations/0001_initial.sql`, the
+Core tables (`src/forge/crates/adapters/forge-store/migrations/0001_initial.sql`, the
 single baseline): `workspaces`, `tenants`, `clusters`, `projects`,
 `environments`, `environment_scopes` (internal: per-cluster uniqueness scope
 for environment names), `services`, `users`, `role_bindings`, `sessions`,
@@ -420,7 +420,7 @@ mesh addresses, plus SRV and PTR records. Agents keep these current by
 sending `Heartbeat.stack_states` when their containers change. `HostNames`
 carries the cluster's record set (`records_json`) and zone; the helper
 writes it to `/var/lib/forge-agent/names.json`, and `forge-dns`, a separate
-unprivileged binary (`src/apps/forge-dns`, hickory), serves it on the node's
+unprivileged binary (`src/forge/crates/apps/forge-dns`, hickory), serves it on the node's
 mesh address and forwards other names to the host's resolvers. Containers
 on the cluster network use it through `dns`/`dns_search`; the node uses it
 through interface-scoped systemd-resolved. With `[dns] listen` set, the
@@ -568,7 +568,7 @@ See D-142.
 container (label `forge.app`) in `Heartbeat.app_states` when it changes.
 `forge-server` records it on the instance and marks it `drifted` when no
 container runs the release of the last deploy. Every 15 s the
-`ServiceReconciler` (`src/apps/forge-server/src/reconcile.rs`, ports only)
+`ServiceReconciler` (`src/forge/crates/apps/forge-server/src/reconcile.rs`, ports only)
 starts exited containers on online nodes (at most 5 times in 30 minutes,
 then `failed`), and strands instances whose node is offline past
 `services.node_grace_secs` or drained: a container without local data is
@@ -583,7 +583,7 @@ D-177.
 format file. `forge_catalog::compose_native` reads it strictly (unknown keys
 refused with their path) into typed specs and an `Orchestration` (replicas,
 global mode, constraints, spread, reservations, update settings,
-`depends_on`); `ServiceFiles` (`src/apps/forge-server/src/service_files.rs`,
+`depends_on`); `ServiceFiles` (`src/forge/crates/apps/forge-server/src/service_files.rs`,
 ports only) diffs it with the environment's services, places each with
 `forge_catalog::placement::select` (the placer `forge.deploy.yaml` uses too)
 and, after the handler authorized the plan, writes the services and submits
@@ -611,4 +611,4 @@ runner with budgets; budget exhaustion stops it and quarantines the plugin.
 One process + SQLite, no Redis, no broker. The plugin runner only exists while
 a plugin runs. The agent uses a single-threaded Tokio runtime, one HTTP/2
 connection, and bounded buffers. Measured numbers are in
-[`BENCHMARKS.md`](BENCHMARKS.md).
+[`BENCHMARKS.md`](src/forge/BENCHMARKS.md).

@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-Source: `src/services/forge-authz/schema/forge.cedarschema`. Templates:
+Source: `src/forge/crates/services/forge-authz/schema/forge.cedarschema`. Templates:
 `policies/roles.cedar`. Guardrails: `policies/guardrails.cedar`.
 
 ## Entity types (namespace `Forge`)

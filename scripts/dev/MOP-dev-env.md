@@ -7,7 +7,7 @@ Nginx ingress and PostgreSQL.
 
 ```
  host (Linux)
- ├─ forge-server (target/debug)      :55130 API + console, :55131 agents
+ ├─ forge-server (src/forge/target/debug)     :55130 API + console, :55131 agents
  │    data: ~/.local/share/forge-dev
  │    └─ embedded analytics engine     127.0.0.1:18123 (child process; metrics, logs)
  └─ Docker engine
@@ -45,8 +45,8 @@ The binary is a separate download; step 4 installs it.
 # One dev stamp for the server and the agents of this build: the next patch
 # version, so it sorts above the last release (Forge orders X.Y.Z-dev.… below X.Y.Z).
 export FORGE_BUILD_VERSION="0.1.1-dev.$(date +%Y%m%d.%H%M%S)"
-cargo build -p forge-server
-(cd src/ui && npm ci && npm run build)       # served by forge-server from src/ui/dist
+(cd src/forge && cargo build -p forge-server)
+(cd src/console && npm ci && npm run build)       # served by forge-server from src/console/dist
 ```
 
 ## 3. Build the agent for the nodes
@@ -61,7 +61,7 @@ export FORGE_BUILD_VERSION="${FORGE_BUILD_VERSION:-0.1.1-dev.$(date +%Y%m%d.%H%M
        CARGO_PROFILE_RELEASE_OPT_LEVEL=1 CARGO_PROFILE_RELEASE_LTO=off \
        CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256 CARGO_PROFILE_RELEASE_INCREMENTAL=true \
        CC_x86_64_unknown_linux_musl=gcc
-cargo build --release --target x86_64-unknown-linux-musl -p forge-agent
+(cd src/forge && cargo build --release --target x86_64-unknown-linux-musl -p forge-agent)
 T=$CARGO_TARGET_DIR/x86_64-unknown-linux-musl/release
 cp $T/forge-agent        $D/dist/forge-agent-linux-x86_64
 cp $T/forge-agent-helper $D/dist/forge-agent-helper-linux-x86_64
@@ -89,7 +89,7 @@ node_public_url = "http://172.17.0.1:55130"
 agent_public_url = "https://172.17.0.1:55131"
 agent_hostnames = ["172.17.0.1", "localhost", "127.0.0.1"]
 agent_dist_dir = "/home/<user>/.local/share/forge-dev/dist"
-ui_dir = "/home/<user>/repos/Forge/src/ui/dist"
+ui_dir = "/home/<user>/repos/Forge/src/console/dist"
 environment = "development"
 cookie_secure = false
 
@@ -126,7 +126,7 @@ mkdir -p /tmp/forge-ch && curl -fL -o /tmp/forge-ch/clickhouse \
 chmod +x /tmp/forge-ch/clickhouse
 /tmp/forge-ch/clickhouse --version                          # unpacks; prints the version
 SUM=$(sha256sum /tmp/forge-ch/clickhouse | cut -d' ' -f1)   # builds.clickhouse.com publishes no checksum
-target/debug/forge-server --config $D/forge.toml analytics install \
+src/forge/target/debug/forge-server --config $D/forge.toml analytics install \
   --binary /tmp/forge-ch/clickhouse --sha256 "$SUM"
 ```
 
@@ -141,13 +141,13 @@ Create the admin account once, with a generated password kept in a file:
 umask 077
 PW=$(python3 -c "import secrets;print(secrets.token_urlsafe(18))")
 echo "$PW" > $D/admin-password.txt
-FORGE_ADMIN_PASSWORD="$PW" target/debug/forge-server --config $D/forge.toml init --username admin
+FORGE_ADMIN_PASSWORD="$PW" src/forge/target/debug/forge-server --config $D/forge.toml init --username admin
 ```
 
 Start it detached, so it outlives the shell that started it:
 
 ```sh
-setsid nohup target/debug/forge-server --config $D/forge.toml serve >> $D/server.log 2>&1 < /dev/null &
+setsid nohup src/forge/target/debug/forge-server --config $D/forge.toml serve >> $D/server.log 2>&1 < /dev/null &
 ```
 
 Verify:
@@ -162,7 +162,7 @@ Sign in at `http://<host-ip>:55130` as `admin` with the password from
 `$D/admin-password.txt`.
 
 To restart after a code change: stop the process, `cargo build -p
-forge-server`, start it again. Rebuild `src/ui` too if UI code changed.
+forge-server`, start it again. Rebuild `src/console` too if UI code changed.
 
 ## 6. Start the Docker nodes
 
@@ -175,7 +175,7 @@ single-use token on first start; the identity is kept in a named volume.
    ```sh
    cd scripts/dev/nodes
    umask 077
-   S=../../../target/debug/forge-server; C=$D/forge.toml
+   S=../../../src/forge/target/debug/forge-server; C=$D/forge.toml
    { for n in 1 2 3; do
        echo "NODE${n}_TOKEN=$($S --config $C enroll-token --cluster dev --hostname dev-node-$n --ttl-minutes 60)"
      done; } > .env
@@ -253,8 +253,8 @@ Verify:
   pass it in the environment:
 
   ```sh
-  cargo build -p forge-cli
-  FORGE_SERVER=http://127.0.0.1:55130 FORGE_TOKEN=<api-key> target/debug/forge services list
+  (cd src/forge && cargo build -p forge-cli)
+  FORGE_SERVER=http://127.0.0.1:55130 FORGE_TOKEN=<api-key> src/forge/target/debug/forge services list
   ```
 
 ## 8. Load testing (optional)
@@ -270,7 +270,7 @@ Run `Get-Help ./load-portals.ps1 -Full` for parameters.
 ## 9. Tear down
 
 ```sh
-pgrep -ax forge-server                               # find the pid of `target/debug/forge-server ... serve`
+pgrep -ax forge-server                               # find the pid of `src/forge/target/debug/forge-server ... serve`
 kill <pid>                                           # stop the server; the engine child stops with it
 (cd scripts/dev/nodes && docker compose down -v)     # nodes and their identities
 docker rm -f forge-dev-edge-proxy                    # the ingress port forward seed_portals.py starts

@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from _common import EXE, REPO, WINDOWS, build_env, die, run
+from _common import EXE, REPO, RUST, WINDOWS, build_env, die, run
 
 
 def default_psql() -> str:
@@ -51,7 +51,7 @@ def main() -> None:
     ap.add_argument("--postgres-url")
     ap.add_argument("--postgres-db", default="forge_bench")
     ap.add_argument("--psql", default=default_psql())
-    ap.add_argument("--out-dir", type=Path, default=REPO / "target" / "bench")
+    ap.add_argument("--out-dir", type=Path, default=RUST / "target" / "bench")
     ap.add_argument("--no-names", action="store_true")
     ap.add_argument("--skip-sqlite", action="store_true")
     ap.add_argument("--no-build", action="store_true")
@@ -61,11 +61,11 @@ def main() -> None:
         die("--postgres-db must be a plain identifier")
     out_dir: Path = a.out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    sim = REPO / "target" / "perf" / f"fleet-sim{EXE}"
+    sim = RUST / "target" / "perf" / f"fleet-sim{EXE}"
 
     if not a.no_build:
         run(["cargo", "build", "--profile", "perf", "-p", "forge-server", "--features", "postgres",
-             "-p", "forge-agent", "-p", "fleet-sim"], cwd=REPO, env=build_env(), what="build")
+             "-p", "forge-agent", "-p", "fleet-sim"], cwd=RUST, env=build_env(), what="build")
 
     common = ["--no-agent-process"] + (["--no-names"] if a.no_names else [])
     tag = "no-names" if a.no_names else "names"

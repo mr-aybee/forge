@@ -1,4 +1,4 @@
-// Deploy webhooks (D-159). Server: `src/apps/forge-server/src/api/webhooks.rs`.
+// Deploy webhooks (D-159). Server: `src/forge/crates/apps/forge-server/src/api/webhooks.rs`.
 // The list never returns the token or secret; create and rotate return them
 // once. Mutations need `webhook.manage` and an MFA-verified sign-in (the client
 // handles step-up).

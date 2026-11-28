@@ -12,7 +12,7 @@ V="${TAG#v}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DL="https://github.com/$REPO/releases/download/$TAG"
 DOCS="https://forge.orbyntech.com/docs"
-KEY=$(sed -n 's/^pub const RELEASE_PUBLIC_KEY: &str = "\(.*\)";/\1/p' "$HERE/../../src/protocol/forge-sdk/src/release.rs")
+KEY=$(sed -n 's/^pub const RELEASE_PUBLIC_KEY: &str = "\(.*\)";/\1/p' "$HERE/../../src/forge/crates/protocol/forge-sdk/src/release.rs")
 [ -n "$KEY" ] || { echo "RELEASE_PUBLIC_KEY not found" >&2; exit 1; }
 
 if [ "$PRE" = true ]; then

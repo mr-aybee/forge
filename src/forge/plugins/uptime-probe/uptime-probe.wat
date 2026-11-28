@@ -5,7 +5,7 @@
 ;; `server-online("web-01")`, returning 1 if the server is online, else 0.
 ;;
 ;; Written in WAT so the repository needs no wasm toolchain; plugins in Rust
-;; use wit-bindgen against src/protocol/forge-sdk/wit/forge-plugin.wit instead.
+;; use wit-bindgen against src/forge/crates/protocol/forge-sdk/wit/forge-plugin.wit instead.
 
 (component
   (import "forge:plugin/host@0.1.0" (instance $host

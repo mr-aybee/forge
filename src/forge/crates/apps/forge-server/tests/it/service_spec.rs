@@ -1,4 +1,4 @@
-//! The typed container spec (`plans/service-orchestration.md` step 1):
+//! The typed container spec (`design/plans/service-orchestration.md` step 1):
 //! restart policy, capabilities, ulimits, tmpfs, DNS, sysctls, devices, init
 //! and networks are stored and validated; added capabilities need
 //! `stack.privileged`; an edit based on an old version is refused (409);

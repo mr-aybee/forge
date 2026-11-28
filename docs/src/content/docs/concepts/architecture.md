@@ -68,14 +68,14 @@ All code lives under `src/`, grouped by architectural role:
 
 | Directory | Crates | Role |
 | --- | --- | --- |
-| `src/domain` | `forge-core` | Types, typed ids, access vocabulary, **ports** (traits). No I/O. |
-| `src/services` | `forge-authz`, `forge-audit`, `forge-identity`, `forge-jobs`, `forge-pki`, `forge-secrets`, `forge-plugin-host` | Business rules. Depend only on ports. |
-| `src/adapters` | `forge-store` | Implementations of ports (SQL). |
-| `src/protocol` | `forge-proto`, `forge-sdk` | Wire contracts shared with agents and plugin authors. |
-| `src/apps` | `forge-server`, `forge-analytics-worker`, `forge-agent`, `forge-plugin-runner` | Binaries and composition roots. |
-| `src/tools` | `fleet-sim` | Benchmarks. |
-| `src/plugins` | `uptime-probe` | Sample plugin. |
-| `src/ui` | React app | Web UI, later bundled into Tauri apps. |
+| `src/forge/crates/domain` | `forge-core` | Types, typed ids, access vocabulary, **ports** (traits). No I/O. |
+| `src/forge/crates/services` | `forge-authz`, `forge-audit`, `forge-identity`, `forge-jobs`, `forge-pki`, `forge-secrets`, `forge-plugin-host` | Business rules. Depend only on ports. |
+| `src/forge/crates/adapters` | `forge-store` | Implementations of ports (SQL). |
+| `src/forge/crates/protocol` | `forge-proto`, `forge-sdk` | Wire contracts shared with agents and plugin authors. |
+| `src/forge/crates/apps` | `forge-server`, `forge-analytics-worker`, `forge-agent`, `forge-plugin-runner` | Binaries and composition roots. |
+| `src/forge/tools` | `fleet-sim` | Benchmarks. |
+| `src/forge/plugins` | `uptime-probe` | Sample plugin. |
+| `src/console` | React app | Web UI, later bundled into Tauri apps. |
 
 ### Dependency rule
 

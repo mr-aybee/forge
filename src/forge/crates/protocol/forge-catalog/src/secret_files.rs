@@ -1,5 +1,5 @@
 //! Secrets and configs as files for native services
-//! (`plans/service-orchestration.md` step 3a, D-179).
+//! (`design/plans/service-orchestration.md` step 3a, D-179).
 //!
 //! A service stores only [`FileRef`]s: which credential vault item to
 //! mount, at which path, with which mode and owner. The server resolves

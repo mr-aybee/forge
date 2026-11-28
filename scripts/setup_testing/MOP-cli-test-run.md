@@ -24,8 +24,8 @@ you don't have to fight PowerShell's quoting.
 
 ```powershell
 cd <repo-root>
-cargo build --release -p forge-cli                    # builds target\release\forge.exe
-$env:Path = "<repo-root>\target\release;$env:Path"   # or add it to your user PATH once
+cd src/forge; cargo build --release -p forge-cli; cd ../..   # builds src\forge\target\release\forge.exe
+$env:Path = "<repo-root>\src\forge\target\release;$env:Path"   # or add it to your user PATH once
 $env:FORGE_ALLOW_HTTP = "1"     # the lab server is plain http (lab only: tokens go unencrypted)
 
 forge contexts add lab --server http://10.50.0.10:3880
