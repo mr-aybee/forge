@@ -16,7 +16,7 @@ thiserror.workspace = true
 tokio = { workspace = true }
 # Typed OpenAPI schemas for the settings the console edits (D-077). Never
 # used by forge-agent. MIT.
-schemars = { version = "1.2", default-features = false, features = ["derive", "std"] }
+schemars = { workspace = true }
 
 [dev-dependencies]
 tempfile.workspace = true
