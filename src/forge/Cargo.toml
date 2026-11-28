@@ -106,7 +106,7 @@ zstd = { version = "0.14", default-features = false }
 # File search patterns in the agent (already in the tree through other crates).
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode"] }
 rustix = { version = "1.1", default-features = false, features = ["std", "fs", "process", "thread"] }
-sysinfo = { version = "0.33", default-features = false, features = ["system", "disk", "network", "user"] }
+sysinfo = { version = "0.39", default-features = false, features = ["system", "disk", "network", "user"] }
 
 # errors / logs / cli
 thiserror = "2"
