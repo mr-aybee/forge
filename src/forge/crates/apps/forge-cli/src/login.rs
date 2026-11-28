@@ -70,8 +70,77 @@ fn parse_callback(request: &str) -> Option<(Option<String>, Option<String>, Opti
     Some((code, state, error))
 }
 
-const PAGE_OK: &str = "<!doctype html><meta charset=utf-8><title>Orbyn Forge</title><body style=\"font-family:system-ui;padding:3rem\"><h2>Signed in</h2><p>You can close this tab and return to the terminal.</p>";
-const PAGE_ERR: &str = "<!doctype html><meta charset=utf-8><title>Orbyn Forge</title><body style=\"font-family:system-ui;padding:3rem\"><h2>Sign-in failed</h2><p>Return to the terminal for details.</p>";
+/// The page the loopback callback shows in the browser, styled like the
+/// console. It is self-contained (inline CSS and logo, no script), and the
+/// response headers forbid loading anything else.
+const PAGE: &str = include_str!("callback.html");
+
+/// Response headers for the callback page.
+const PAGE_HEADERS: &str = "Content-Type: text/html; charset=utf-8\r\n\
+    Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\n\
+    Referrer-Policy: no-referrer\r\n\
+    X-Content-Type-Options: nosniff\r\n\
+    Cache-Control: no-store\r\n";
+
+/// What the browser is told after the redirect lands.
+#[derive(Debug, PartialEq)]
+enum Outcome<'a> {
+    /// A code with the expected state: the CLI goes on to the token exchange.
+    SignedIn { host: &'a str },
+    /// The person declined on the consent screen.
+    Denied,
+    /// The server returned another OAuth error code.
+    Refused { error: &'a str },
+    /// No code, or the state of another (older) sign-in attempt.
+    Mismatch,
+}
+
+impl Outcome<'_> {
+    fn render(&self) -> String {
+        let (tone, title, message, detail) = match self {
+            Outcome::SignedIn { host } => (
+                "ok",
+                "You\u{2019}re signed in",
+                "The Forge CLI is finishing sign-in. Return to your terminal to carry on.",
+                plain(host).map(|h| format!("Signed in to <code>{h}</code>")),
+            ),
+            Outcome::Denied => (
+                "bad",
+                "Sign-in cancelled",
+                "Access was declined, so the CLI was not signed in. Run the command again to retry.",
+                None,
+            ),
+            Outcome::Refused { error } => (
+                "bad",
+                "Sign-in failed",
+                "The server did not sign the CLI in. Your terminal has the details.",
+                plain(error).map(|e| format!("Error: <code>{e}</code>")),
+            ),
+            Outcome::Mismatch => (
+                "bad",
+                "This sign-in link has expired",
+                "It belongs to an earlier sign-in attempt. Finish the newest one, or run the command again.",
+                None,
+            ),
+        };
+
+        let role = if tone == "ok" { "status" } else { "alert" };
+
+        PAGE.replace("{{TONE}}", tone)
+            .replace("{{ROLE}}", role)
+            .replace("{{TITLE}}", title)
+            .replace("{{MESSAGE}}", message)
+            .replace("{{DETAIL}}", &detail.unwrap_or_default())
+    }
+}
+
+/// `s` when it can go into HTML as is (host names and OAuth error codes), so
+/// nothing taken from the redirect ever needs escaping.
+fn plain(s: &str) -> Option<&str> {
+    let ok = !s.is_empty() && s.len() <= 120 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.:[]".contains(&b));
+
+    ok.then_some(s)
+}
 
 /// Runs the browser flow and returns tokens for `server`.
 pub async fn browser(server: &str, ca_file: Option<&str>, timeout: Duration) -> Result<Tokens> {
@@ -90,6 +159,9 @@ pub async fn browser(server: &str, ca_file: Option<&str>, timeout: Duration) -> 
         .append_pair("code_challenge_method", "S256")
         .append_pair("state", &state);
 
+    // Shown on the success page only; a URL without a host just leaves it out.
+    let host = url.host_str().unwrap_or_default().to_owned();
+
     eprintln!("Opening your browser to sign in to {server} …");
 
     if !open_browser(url.as_str()) {
@@ -106,14 +178,23 @@ pub async fn browser(server: &str, ca_file: Option<&str>, timeout: Duration) -> 
             let req = String::from_utf8_lossy(&buf[..n]).into_owned();
 
             let Some((code, got_state, error)) = parse_callback(&req) else {
-                let _ = sock.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+                let _ =
+                    sock.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
                 continue;
             };
 
-            let ok = error.is_none() && code.is_some() && got_state.as_deref() == Some(state.as_str());
-            let page = if ok { PAGE_OK } else { PAGE_ERR };
+            let ours = got_state.as_deref() == Some(state.as_str());
+
+            let outcome = match (error.as_deref(), &code) {
+                (Some("access_denied"), _) => Outcome::Denied,
+                (Some(e), _) => Outcome::Refused { error: e },
+                (None, Some(_)) if ours => Outcome::SignedIn { host: &host },
+                _ => Outcome::Mismatch,
+            };
+
+            let page = outcome.render();
             let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{page}",
+                "HTTP/1.1 200 OK\r\n{PAGE_HEADERS}Content-Length: {}\r\nConnection: close\r\n\r\n{page}",
                 page.len()
             );
             let _ = sock.write_all(resp.as_bytes()).await;
@@ -252,5 +333,33 @@ mod tests {
         assert_eq!(parse_callback("POST /callback HTTP/1.1"), None);
         let e = parse_callback("GET /callback?error=access_denied&state=s HTTP/1.1");
         assert_eq!(e, Some((None, Some("s".into()), Some("access_denied".into()))));
+    }
+
+    #[test]
+    fn every_callback_page_is_filled_in() {
+        let pages = [
+            Outcome::SignedIn { host: "forge.example.com" },
+            Outcome::Denied,
+            Outcome::Refused { error: "server_error" },
+            Outcome::Mismatch,
+        ]
+        .map(|o| o.render());
+
+        for page in &pages {
+            assert!(!page.contains("{{"), "unfilled placeholder");
+        }
+
+        assert!(pages[0].contains("<code>forge.example.com</code>") && pages[0].contains("class=\"card ok\""));
+        assert!(pages[1].contains("Sign-in cancelled") && pages[1].contains("class=\"card bad\""));
+        assert!(pages[2].contains("<code>server_error</code>"));
+    }
+
+    #[test]
+    fn callback_page_never_reflects_markup() {
+        let page = Outcome::Refused { error: "<script>alert(1)</script>" }.render();
+
+        assert!(!page.contains("<script"));
+        assert_eq!(plain("a\"b"), None);
+        assert_eq!(plain("forge.example.com"), Some("forge.example.com"));
     }
 }
