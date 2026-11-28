@@ -5,7 +5,8 @@ import { type ReactNode, useState } from "react";
 import { api, post } from "../../api/client";
 import { useServers } from "../../api/hooks";
 import { errorText, useToast } from "../../app/toast";
-import { Button, Confirm, Empty, Field, Input, Modal, Skeleton, TextArea, ago } from "../ui";
+import { Button, Confirm, Empty, Field, Input, Modal, Skeleton, ago } from "../ui";
+import { CodeField } from "../CodeField";
 import { AddAlertButton } from "../alerts/AddAlert";
 import { type Certificate, type EdgeCert, type Site, useCertificates, useSites } from "../../api/ingress";
 
@@ -20,7 +21,7 @@ export function PemField({ label, hint, value, onChange, placeholder }: { label:
   return (
     <Field label={label} hint={hint}>
       <div className="space-y-1">
-        <TextArea rows={5} spellCheck={false} className="font-mono text-[11px]" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
+        <CodeField aria-label={label} lang="plain" minLines={5} maxLines={14} gutter={false} wrap={false} value={value} onChange={onChange} placeholder={placeholder} />
         <label className="inline-flex cursor-pointer items-center gap-1 text-xs text-accent hover:underline">
           <Upload className="size-3.5" /> Choose a file
           <input

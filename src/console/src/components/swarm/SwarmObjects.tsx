@@ -4,6 +4,8 @@ import { useState } from "react";
 import { type SwarmObject, type SwarmObjectKind, useCreateSwarmObject, usePruneSwarmObjects, useRemoveSwarmObject, useSwarmObjects } from "../../api/swarm";
 import { errorText, useToast } from "../../app/toast";
 import { Badge, Button, Confirm, Empty, ErrorNote, Field, Input, Modal, Panel, Segmented, Skeleton, TextArea, ago, time } from "../ui";
+import { CodeField } from "../CodeField";
+import { detectLanguage } from "../files/lang";
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/;
 
@@ -211,7 +213,11 @@ function ObjectDialog({ clusterId, kind, name, onClose }: { clusterId: string; k
         )}
         {f.source === "value" || kind === "config" ? (
           <Field label="Value" hint={kind === "secret" ? "Sent once to the swarm; Forge does not keep it." : undefined}>
-            <TextArea rows={kind === "config" ? 8 : 3} value={f.value} onChange={(e) => setF({ ...f, value: e.target.value })} className="font-mono" autoFocus={rotating} spellCheck={false} autoComplete="off" />
+            {kind === "config" ? (
+              <CodeField aria-label="Config value" lang={detectLanguage(f.name, f.value.split("\n", 1)[0] ?? "")} minLines={8} maxLines={24} value={f.value} onChange={(value) => setF((o) => ({ ...o, value }))} />
+            ) : (
+              <TextArea rows={3} value={f.value} onChange={(e) => setF({ ...f, value: e.target.value })} className="font-mono" autoFocus={rotating} spellCheck={false} autoComplete="off" />
+            )}
           </Field>
         ) : (
           <Field label="Vault item id" hint="The item's password becomes the secret; the value never reaches the browser.">

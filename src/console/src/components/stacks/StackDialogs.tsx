@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Globe, Loader2, Lock, RefreshCw, Rocket, Save, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ApiError, get } from "../../api/client";
 import { useServers } from "../../api/hooks";
@@ -20,7 +20,6 @@ import { nodeName, type Job } from "../../api/types";
 import { errorText, useToast } from "../../app/toast";
 import type { Certificate } from "../ingress/types";
 import { Badge, Button, CopyButton, Field, Input, Modal, Select } from "../ui";
-import { diffLines } from "./diff";
 import { Designer, MeshToggle, ServicePicker, YamlEditor, startBlocker, useMfaRetry } from "./parts";
 import { DiffView } from "./Revisions";
 import { CodeField } from "../CodeField";
@@ -98,7 +97,6 @@ export function UpdateDialog({ d, onClose, onSaved }: { d: StackDetail; onClose:
   const [view, setView] = useState<"edit" | "diff" | "preview">("edit");
   const [docRev, setDocRev] = useState(0);
   const changed = content !== d.content;
-  const diff = useMemo(() => (view === "diff" ? diffLines(d.content, content) : []), [view, d.content, content]);
 
   useEffect(() => {
     if (!changed && !env) return;
@@ -134,7 +132,7 @@ export function UpdateDialog({ d, onClose, onSaved }: { d: StackDetail; onClose:
           </span>
         </div>
         {view === "edit" && <YamlEditor value={content} docKey={`upd-${d.stack.id}-${d.stack.revision}-${docRev}`} onChange={setContent} height="h-[42vh]" />}
-        {view === "diff" && <DiffView lines={diff} />}
+        {view === "diff" && <DiffView before={d.content} after={content} />}
         {view === "preview" && (preview ? <div className="max-h-[42vh] overflow-y-auto"><Designer preview={preview} /></div> : <p className="text-xs text-muted">No preview.</p>)}
         {pvError && <p role="alert" className="rounded-md bg-bad-soft px-3 py-2 font-mono text-[11.5px] whitespace-pre-wrap text-bad">{pvError}</p>}
         <div className="grid gap-3 sm:grid-cols-2">

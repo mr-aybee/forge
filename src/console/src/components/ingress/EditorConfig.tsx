@@ -9,7 +9,7 @@ import {
   useSitePreview,
 } from "../../api/ingress";
 import { useServers } from "../../api/hooks";
-import { CodeField } from "../CodeField";
+import { CodeField, CodeView } from "../CodeField";
 import {
   CopyButton,
   ErrorNote,
@@ -89,9 +89,13 @@ export function ConfigSection({
           ) : preview.isLoading ? (
             <p className="text-xs text-faint">Rendering…</p>
           ) : (
-            <pre className="log-console max-h-[55vh] min-h-[200px] overflow-auto rounded-md bg-term p-3 font-mono text-[11.5px] leading-relaxed text-term-fg select-text">
-              {main || "—"}
-            </pre>
+            <CodeView
+              lang="nginx"
+              aria-label="Main configuration"
+              minLines={14}
+              maxLines={36}
+              value={main || "# Nothing rendered yet."}
+            />
           )}
         </>
       )}
@@ -130,6 +134,18 @@ export function ConfigSection({
             value={f.spec.custom}
             onChange={(custom) => setSpec({ custom })}
             invalid={!!ce}
+            diagnostics={
+              ce
+                ? [
+                    {
+                      line: ce.line,
+                      message: ce.directive
+                        ? `${ce.directive}: ${ce.message}`
+                        : ce.message,
+                    },
+                  ]
+                : undefined
+            }
             placeholder={
               'add_header X-Frame-Options SAMEORIGIN;\nlocation = /robots.txt {\n    return 200 "User-agent: *\\nDisallow:\\n";\n}'
             }

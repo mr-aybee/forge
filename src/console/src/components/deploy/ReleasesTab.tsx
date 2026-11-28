@@ -22,7 +22,7 @@ import { useServers } from "../../api/hooks";
 import type { Service } from "../../api/types";
 import { errorText, useToast } from "../../app/toast";
 import { Badge, Button, Confirm, CopyButton, Drawer, Empty, ErrorNote, Modal, Skeleton, Status, Table, Td, ago, time } from "../ui";
-import { CodeField } from "../CodeField";
+import { CodeField, CodeView } from "../CodeField";
 
 const Num = ({ children }: { children: React.ReactNode }) => <span className="font-mono text-[11px] tabular-nums">{children}</span>;
 
@@ -288,7 +288,7 @@ function ReleaseSource({ appId, number, onClose }: { appId: string; number: numb
               <div className="mb-1 flex justify-end">
                 <CopyButton text={r.data.source} />
               </div>
-              <pre className="max-h-[60vh] overflow-auto rounded-md border border-line bg-panel-2 p-3 font-mono text-[11px] whitespace-pre select-text">{r.data.source}</pre>
+              <CodeView lang="yaml" aria-label="Release source" minLines={10} maxLines={32} value={r.data.source} />
             </div>
           ) : (
             <p className="text-xs text-muted">This release has no stored source.</p>

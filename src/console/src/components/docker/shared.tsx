@@ -20,6 +20,7 @@ import { ApiError } from "../../api/client";
 import { errorText, useToast } from "../../app/toast";
 import { JobDetail } from "../JobsDrawer";
 import { ago, Badge, Button, bytes, CopyButton, CopyIcon, Drawer, Empty, ErrorNote, Segmented, Skeleton, time } from "../ui";
+import { CodeView } from "../CodeField";
 
 /** Why a list could not load: Docker missing, an older server, or the plain error. */
 export function DockerProblem({ error, server }: { error: unknown; server: string }) {
@@ -79,7 +80,7 @@ export function InspectDrawer({ server, op, title, onClose }: { server: string; 
           {details && !raw ? (
             details
           ) : (
-            <pre className="max-h-[calc(100vh-140px)] overflow-auto rounded-md border border-line bg-panel-2 p-3 font-mono text-[11px] leading-relaxed whitespace-pre select-text">{text}</pre>
+            <CodeView lang="json" aria-label="Raw JSON" minLines={12} maxLines={44} value={text} />
           )}
         </div>
       )}

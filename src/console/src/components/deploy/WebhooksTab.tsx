@@ -21,6 +21,7 @@ import {
 } from "../../api/webhooks";
 import { errorText, useToast } from "../../app/toast";
 import { ago, Badge, Button, Confirm, CopyButton, CopyIcon, Drawer, Empty, ErrorNote, Field, Input, Modal, Panel, RowMenu, type RowAction, Select, Skeleton, Switch, Table, Td, time, useRowMenu } from "../ui";
+import { CodeView } from "../CodeField";
 
 const SIG: Record<WebhookSignature, { label: string; tone: "ok" | "warn" | "muted"; help: string }> = {
   forge: { label: "Forge", tone: "ok", help: "HMAC of timestamp and body (X-Forge-Signature). Best for any CI." },
@@ -354,7 +355,7 @@ function IssuedDialog({ issued, rotated, onClose }: { issued: WebhookIssued; rot
             </div>
             <CopyIcon text={code} label="Copy snippet" />
           </div>
-          <pre className="max-h-64 overflow-auto rounded-md border border-line bg-panel-2 p-2.5 font-mono text-[11px] leading-relaxed whitespace-pre select-all">{code}</pre>
+          <CodeView lang={kind === "curl" ? "shell" : "yaml"} aria-label="Snippet" minLines={4} maxLines={13} value={code} />
           <p className="mt-1 text-[11px] text-faint">Store the values as {vars}.{w.tag_pattern ? ` The tag must match ${w.tag_pattern}.` : ""}</p>
         </div>
         <div className="flex justify-end">

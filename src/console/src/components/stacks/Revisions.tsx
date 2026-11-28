@@ -1,67 +1,25 @@
 import { History, RotateCcw } from "lucide-react";
-import { Fragment, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { type StackDetail, useRevision, useRevisions } from "../../api/stacks";
 import { Badge, Button, CopyButton, ErrorNote, Skeleton, ago, time } from "../ui";
-import { type DiffLine, diffLines } from "./diff";
+import { CodeDiff } from "../CodeField";
+import { diffLines } from "./diff";
 import { YamlEditor } from "./parts";
 
-/** Unified line diff; long unchanged runs fold to their first and last lines. */
-export function DiffView({ lines, height = "max-h-[42vh]" }: { lines: DiffLine[]; height?: string }) {
-  const [open, setOpen] = useState<Set<number>>(new Set());
-  const list = Array.isArray(lines) ? lines : [];
-  if (!list.some((l) => l.op !== "same")) return <p className="rounded-md border border-line px-3 py-4 text-center text-xs text-muted">No differences.</p>;
-  // Group into runs so long "same" stretches can fold.
-  const runs: { start: number; lines: DiffLine[]; same: boolean }[] = [];
-  list.forEach((l, i) => {
-    const same = l.op === "same";
-    const last = runs[runs.length - 1];
-    if (last && last.same === same) last.lines.push(l);
-    else runs.push({ start: i, lines: [l], same });
-  });
-  const ctx = 3;
-  const row = (l: DiffLine, k: string) => (
-    <tr key={k} className={l.op === "add" ? "bg-ok-soft" : l.op === "del" ? "bg-bad-soft" : ""}>
-      <td className="w-10 px-1.5 text-right text-faint select-none">{l.op !== "add" ? l.a : ""}</td>
-      <td className="w-10 px-1.5 text-right text-faint select-none">{l.op !== "del" ? l.b : ""}</td>
-      <td className={`w-4 text-center select-none ${l.op === "add" ? "text-ok" : l.op === "del" ? "text-bad" : "text-faint"}`}>{l.op === "add" ? "+" : l.op === "del" ? "-" : " "}</td>
-      <td className="pr-3 whitespace-pre">{l.text}</td>
-    </tr>
-  );
-  const added = list.filter((l) => l.op === "add").length;
-  const removed = list.filter((l) => l.op === "del").length;
+/** Compose YAML before/after in Monaco's diff view, with +/- counts; unchanged runs fold. */
+export function DiffView({ before, after, height = 380 }: { before: string; after: string; height?: number }) {
+  const counts = useMemo(() => {
+    const list = diffLines(before, after);
+    return { added: list.filter((l) => l.op === "add").length, removed: list.filter((l) => l.op === "del").length };
+  }, [before, after]);
+  if (!counts.added && !counts.removed) return <p className="rounded-md border border-line px-3 py-4 text-center text-xs text-muted">No differences.</p>;
   return (
-    <div className="rounded-md border border-line">
-      <div className="border-b border-line px-3 py-1 font-mono text-[11px] tabular-nums">
-        <span className="text-ok">+{added}</span> <span className="text-bad">-{removed}</span>
+    <div className="space-y-1">
+      <div className="font-mono text-[11px] tabular-nums">
+        <span className="text-ok">+{counts.added}</span> <span className="text-bad">-{counts.removed}</span>
       </div>
-      <div className={`${height} overflow-auto`}>
-        <table className="w-full font-mono text-[11.5px] leading-5">
-          <tbody>
-            {runs.map((r, ri) => {
-              const first = ri === 0;
-              const lastRun = ri === runs.length - 1;
-              const keepHead = first ? 0 : ctx;
-              const keepTail = lastRun ? 0 : ctx;
-              if (!r.same || open.has(r.start) || r.lines.length <= keepHead + keepTail + 2) return <Fragment key={r.start}>{r.lines.map((l, i) => row(l, `${r.start}-${i}`))}</Fragment>;
-              const hidden = r.lines.length - keepHead - keepTail;
-              return (
-                <Fragment key={r.start}>
-                  {r.lines.slice(0, keepHead).map((l, i) => row(l, `${r.start}-h${i}`))}
-                  <tr>
-                    <td colSpan={4} className="bg-panel-2 px-3 py-0.5 text-center">
-                      <button type="button" className="text-[11px] text-muted hover:text-accent" onClick={() => setOpen((s) => new Set(s).add(r.start))}>
-                        ⋯ {hidden} unchanged line{hidden === 1 ? "" : "s"}
-                      </button>
-                    </td>
-                  </tr>
-                  {r.lines.slice(r.lines.length - keepTail).map((l, i) => row(l, `${r.start}-t${i}`))}
-                </Fragment>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <CodeDiff before={before} after={after} lang="yaml" height={height} aria-label="Changes" />
     </div>
   );
 }
@@ -75,7 +33,6 @@ export function RevisionsPanel({ d, onRollback }: { d: StackDetail; onRollback: 
   const picked = sel ?? list.find((r) => r.revision !== d.stack.revision)?.revision ?? list[0]?.revision;
   const rev = useRevision(d.stack.id, picked);
   const content = rev.data?.content ?? "";
-  const diff = useMemo(() => (rev.data?.content !== undefined ? diffLines(content, d.content) : []), [rev.data, content, d.content]);
 
   if (revs.isLoading) return <Skeleton rows={3} />;
   if (revs.error) return <ErrorNote error={revs.error} />;
@@ -133,7 +90,7 @@ export function RevisionsPanel({ d, onRollback }: { d: StackDetail; onRollback: 
         ) : rev.error ? (
           <ErrorNote error={rev.error} />
         ) : mode === "diff" ? (
-          picked === d.stack.revision ? <p className="rounded-md border border-line px-3 py-4 text-center text-xs text-muted">This is the latest revision. Pick an older one to compare.</p> : <DiffView lines={diff} height="max-h-[52vh]" />
+          picked === d.stack.revision ? <p className="rounded-md border border-line px-3 py-4 text-center text-xs text-muted">This is the latest revision. Pick an older one to compare.</p> : <DiffView before={content} after={d.content} height={460} />
         ) : (
           <YamlEditor value={content} docKey={`rev-${d.stack.id}-${picked}-${content.length}`} onChange={() => {}} readOnly height="h-[52vh]" />
         )}

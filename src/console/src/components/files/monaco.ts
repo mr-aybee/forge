@@ -11,12 +11,17 @@ import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import JsonWorker from "monaco-editor/languages/features/json/json.worker?worker";
 
 import type { Language } from "./lang";
+import { nginxConfiguration, nginxTokens } from "./nginx";
 
 self.MonacoEnvironment = {
   getWorker: (_id: string, label: string) => (label === "json" ? new JsonWorker() : new EditorWorker()),
 };
 
 export { monaco };
+
+monaco.languages.register({ id: "nginx", aliases: ["nginx"] });
+monaco.languages.setLanguageConfiguration("nginx", nginxConfiguration);
+monaco.languages.setMonarchTokensProvider("nginx", nginxTokens);
 
 /** Our language names mapped to Monaco's; unknown ones show as plain text. */
 const IDS: Partial<Record<Language, string>> = {
@@ -57,7 +62,7 @@ const IDS: Partial<Record<Language, string>> = {
   powershell: "powershell",
   batch: "bat",
   sql: "sql",
-  nginx: "shell",
+  nginx: "nginx",
   caddyfile: "shell",
   dockerfile: "dockerfile",
   terraform: "hcl",
