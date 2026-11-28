@@ -308,6 +308,20 @@ listed. A container gets each file bind-mounted read-only at `target`; a
 native service gets the folder in `FORGE_SECRETS_DIR`. `remove` and `retire`
 delete the folder.
 
+## Private registry credentials
+
+An `app` command (`AppAction`) carries `registry_auth` (tag 5, string) for
+the `deploy` of a container whose image is on the host of a registry added
+in Forge: Docker's `X-Registry-Auth` value (padded base64url of
+`{username, password, serveraddress}`). The server resolves it from the
+service's workspace inside the job step, never when the job is created, and
+leaves it empty for public images, native services and every other action.
+It travels only inside the signed command, never inside `spec_json` (which
+the node writes to disk); `AppAction` prints it as `***` in debug output and
+neither side logs it. The helper passes it to Docker on the image pull. An
+older agent ignores the field and pulls without credentials; an older server
+sends none.
+
 ## Compatibility
 
 Fields are only ever added with new tags. New command variants are ignored

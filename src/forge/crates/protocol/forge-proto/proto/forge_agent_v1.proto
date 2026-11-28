@@ -289,6 +289,10 @@ message AppAction {
   string spec_json = 2;
   uint32 tail = 3;
   string cursor = 4;  // follow: where the previous segment stopped
+  // deploy of a container: Docker's X-Registry-Auth for the image's private
+  // registry, resolved by the server at step time; empty = none. A
+  // credential: never stored, logged or printed. Older agents ignore it.
+  string registry_auth = 5;
 }
 
 // Nginx site (forge_catalog::SiteSpec as JSON) and PowerDNS operations.

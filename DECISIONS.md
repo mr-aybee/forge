@@ -6110,3 +6110,15 @@ hand.
 **Why.** `forge services apply` from CI and lab scripts failed whenever a file mounted a vault item, though the same user could do it in the browser. Attaching never returns the value to the caller: the server unseals it only inside the deploy job and sends it in the signed command. An elevated key already carries the MFA weight for every other guarded action.
 
 **Trade-offs.** A leaked elevated key of a platform administrator can attach any vault item to a service it may deploy and so get the value onto a node it controls. That is no wider than what the same key can already do with `container.exec` or node commands. Operators who do not want this turn off `[security] allow_elevated_tokens`, which makes every elevated key a plain one.
+
+## D-182 Registry credentials on service deploys
+
+**Decision.** A container service deploy pulls a private image with the workspace's registry credentials (D-158), as image pulls and Swarm services already did. `AppAction` gains `registry_auth` (proto tag 5, string; empty = none): Docker's `X-Registry-Auth` for the image's host.
+
+- **Server.** `AppJob::registry_auth` resolves it with `RegistryService::auth_for(service workspace, image)` inside the step, for container `deploy` only (`app.action` dispatch and the rollout's `AppJob::send`, so a digest pinned by the first node is pulled with credentials on the others too). Public images, native services and every other action send none. It is never in the job payload, its state, the audit log or `spec_json`.
+- **Agent.** `HelperRequest::App` carries it (`RegistryAuth`, `Debug` prints `***`; derived from the signed command, so the agent cannot choose it), and `apps::pull` sends it as `X-Registry-Auth`. A refusal (`unauthorized`, `denied`) fails at once, naming the registry host and what to check in Forge; network blips are still retried.
+- **Authorization.** Unchanged: anyone with `deploy` on the environment pulls with the workspace's registry credentials, as `docs/guides/registries.md` already said.
+
+**Why.** A field on the command, not in the spec: the spec is written to disk on the node and shows up in logs, the credential must not. Resolving it per step means a rotated token is used by the next attempt and nothing durable holds it.
+
+**Trade-offs.** An older agent ignores the field and keeps failing private pulls until it is updated; an older server sends none. The credential is resolved by the image's host, so one registry per host per workspace, as before.

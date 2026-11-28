@@ -12,6 +12,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
+use forge_catalog::swarm::RegistryAuth;
 use forge_catalog::{AppSpec, Runtime};
 use rustix::fs as rfs;
 use rustix::io::Errno;
@@ -1155,7 +1156,7 @@ async fn create_and_start(spec: &AppSpec, name: &str, t: Duration) -> Result<(),
     Ok(())
 }
 
-async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, String> {
+async fn container(action: &str, spec: &AppSpec, tail: u32, auth: Option<&RegistryAuth>) -> Result<Value, String> {
     // A deploy makes the service's own container; everything else acts on
     // the one that runs it now (an adopted container until the first deploy).
     let name = if action == "deploy" { spec.unit() } else { spec.current_container() };
@@ -1167,7 +1168,7 @@ async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, Str
         "deploy" => {
             write(&spec.env_path(), &spec.env_file(), 0o600)?;
             let (from, tag, _) = pull_ref(&spec.image);
-            pull(&from, &tag).await?;
+            pull(Path::new(docker::SOCKET), &from, &tag, auth).await?;
 
             // An adopted container (D-180) holds the ports and volumes: it
             // stops first, goes once the new one runs, and starts again if
@@ -1240,11 +1241,16 @@ async fn container(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, Str
     }))
 }
 
-/// Pulls an image; a registry that times out or drops the connection is
-/// tried again (three attempts in about 30 s), so one network blip does not
-/// fail a deploy. Other errors (unknown image, denied) fail at once.
-async fn pull(from: &str, tag: &str) -> Result<(), String> {
+/// Pulls an image through the Docker socket at `socket`, with Docker's
+/// `X-Registry-Auth` when the image's registry needs credentials (`auth`,
+/// from the signed command; never logged). A registry that times out or
+/// drops the connection is tried again (three attempts in about 30 s), so
+/// one network blip does not fail a deploy. A refusal (unauthorized,
+/// denied) fails at once with a message that names the registry host;
+/// other errors (unknown image) fail at once too.
+async fn pull(socket: &Path, from: &str, tag: &str, auth: Option<&RegistryAuth>) -> Result<(), String> {
     let path = format!("/images/create?fromImage={from}&tag={tag}");
+    let header = auth.map(|a| a.0.as_str());
     let mut last = String::new();
 
     for attempt in 0..3u64 {
@@ -1252,14 +1258,37 @@ async fn pull(from: &str, tag: &str) -> Result<(), String> {
             tokio::time::sleep(Duration::from_secs(5 * attempt * attempt)).await;
         }
 
-        match docker::api("POST", &path, None, Duration::from_secs(20 * 60)).await {
+        match docker::api_with_registry_auth(socket, "POST", &path, header, Duration::from_secs(20 * 60)).await {
             Ok(_) => return Ok(()),
+            Err(e) if refused_pull_error(&e) => return Err(refused_pull(from, tag, auth.is_some(), &e)),
             Err(e) if transient_pull_error(&e) => last = e,
             Err(e) => return Err(e),
         }
     }
 
     Err(format!("pulling {from}:{tag} failed three times: {last}"))
+}
+
+/// A registry that refused the credentials, or wanted some.
+fn refused_pull_error(e: &str) -> bool {
+    let e = e.to_ascii_lowercase();
+    ["unauthorized", "denied", "authentication required", "no basic auth credentials"].iter().any(|m| e.contains(m))
+}
+
+/// What a refused pull says: the registry host and what to check in Forge,
+/// never the credential.
+fn refused_pull(from: &str, tag: &str, had_auth: bool, docker: &str) -> String {
+    let host = forge_core::registries::image_host(from);
+
+    if had_auth {
+        format!(
+            "the registry {host} refused the credentials Forge has for it while pulling {from}:{tag}; check the registry for {host} in Forge (Settings > Registries): its user name, and a token that may read this image ({docker})"
+        )
+    } else {
+        format!(
+            "the registry {host} refused to pull {from}:{tag} without credentials (or the image does not exist); for a private image add a registry for {host} in Forge (Settings > Registries, or forge registries add) and deploy again ({docker})"
+        )
+    }
 }
 
 /// A registry error worth another try: timeouts and dropped connections.
@@ -1592,12 +1621,18 @@ async fn probe(spec: &AppSpec, default: (bool, String)) -> Value {
     json!({ "ready": ready, "checks": checks })
 }
 
-/// Runs one action for a validated spec.
-pub async fn run(action: &str, spec: &AppSpec, tail: u32) -> Result<Value, String> {
+/// Runs one action for a validated spec. `registry_auth` is Docker's
+/// `X-Registry-Auth` for a container deploy from a private registry.
+pub async fn run(
+    action: &str,
+    spec: &AppSpec,
+    tail: u32,
+    registry_auth: Option<&RegistryAuth>,
+) -> Result<Value, String> {
     spec.validate()?;
 
     match spec.runtime {
-        Runtime::Container => container(action, spec, tail).await,
+        Runtime::Container => container(action, spec, tail, registry_auth).await,
         Runtime::Systemd => native(action, spec, tail).await,
     }
 }
@@ -1744,6 +1779,100 @@ mod tests {
         assert!(transient_pull_error("read tcp 10.0.0.2:5000: connection reset by peer"));
         assert!(!transient_pull_error("pull access denied for nosuch/image, repository does not exist"));
         assert!(!transient_pull_error("manifest unknown"));
+    }
+
+    /// A fake Docker Engine that answers every request with `status` and
+    /// `body`, and records each request head.
+    fn fake_docker(
+        dir: &Path,
+        status: &'static str,
+        body: &'static str,
+    ) -> (std::path::PathBuf, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let path = dir.join("docker.sock");
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = listener.accept().await {
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+
+                while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let n = s.read(&mut chunk).await.unwrap();
+                    if n == 0 {
+                        break;
+                    }
+
+                    buf.extend_from_slice(&chunk[..n]);
+                }
+
+                log.lock().unwrap().push(String::from_utf8_lossy(&buf).to_string());
+                let reply = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                s.write_all(reply.as_bytes()).await.unwrap();
+            }
+        });
+
+        (path, seen)
+    }
+
+    fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+        head.lines().find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            k.eq_ignore_ascii_case(name).then(|| v.trim())
+        })
+    }
+
+    /// A deploy from a private registry sends Docker's `X-Registry-Auth`
+    /// with the pull; a public image sends no such header.
+    #[tokio::test]
+    async fn a_pull_carries_the_registry_credential_only_when_given() {
+        let dir = tempfile::tempdir().unwrap();
+        let (socket, seen) = fake_docker(dir.path(), "200 OK", "{\"status\":\"Downloaded newer image\"}\n");
+        let auth = RegistryAuth("eyJ1c2VybmFtZSI6ImJvdCJ9".into());
+
+        pull(&socket, "ghcr.io/acme/app", "1", Some(&auth)).await.unwrap();
+        pull(&socket, "nginx", "1.27", None).await.unwrap();
+
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2);
+        assert!(seen[0].contains("/images/create?fromImage=ghcr.io/acme/app&tag=1"), "{}", seen[0]);
+        assert_eq!(header(&seen[0], "x-registry-auth"), Some("eyJ1c2VybmFtZSI6ImJvdCJ9"));
+        assert!(seen[1].contains("/images/create?fromImage=nginx&tag=1.27"), "{}", seen[1]);
+        assert_eq!(header(&seen[1], "x-registry-auth"), None, "a public image sends no credential");
+    }
+
+    /// `unauthorized` is not a network blip: the pull fails at once, and
+    /// the message names the registry host but never the credential.
+    #[tokio::test]
+    async fn a_refused_pull_fails_at_once_and_names_the_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let (socket, seen) =
+            fake_docker(dir.path(), "500 Internal Server Error", "{\"message\":\"error from registry: unauthorized\"}");
+        let auth = RegistryAuth("c2VjcmV0LXRva2Vu".into());
+
+        let e = pull(&socket, "ghcr.io/acme/app", "1", Some(&auth)).await.unwrap_err();
+        assert_eq!(seen.lock().unwrap().len(), 1, "no retry");
+        assert!(e.contains("ghcr.io") && e.contains("refused the credentials"), "{e}");
+        assert!(e.contains("unauthorized"), "Docker's own words stay: {e}");
+        assert!(!e.contains("c2VjcmV0LXRva2Vu"), "{e}");
+
+        let e = pull(&socket, "ghcr.io/acme/app", "1", None).await.unwrap_err();
+        assert!(e.contains("add a registry for ghcr.io"), "{e}");
+    }
+
+    #[test]
+    fn refusals_are_told_apart_from_blips() {
+        assert!(refused_pull_error("Docker: error from registry: unauthorized (HTTP 500)"));
+        assert!(refused_pull_error("Docker: pull access denied for acme/app (HTTP 404)"));
+        assert!(refused_pull_error("Docker: Head \"https://ghcr.io/v2/a/b/manifests/1\": denied (HTTP 500)"));
+        assert!(!refused_pull_error("Docker: manifest unknown (HTTP 404)"));
+        assert!(!refused_pull_error("read tcp 10.0.0.2:5000: connection reset by peer"));
     }
 
     #[test]

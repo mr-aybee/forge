@@ -770,8 +770,10 @@ pub struct ContainerAction {
 
 /// Deploys or operates a service (`forge_catalog::AppSpec`, JSON-encoded;
 /// validated again by the node helper). May carry resolved secret values: it
-/// lives only in memory and on the mTLS link.
+/// lives only in memory and on the mTLS link. `Debug` never prints the
+/// registry credential.
 #[derive(Clone, PartialEq, prost::Message)]
+#[prost(skip_debug)]
 pub struct AppAction {
     /// deploy | start | stop | restart | status | logs | run | remove |
     /// health. `health` replaces the app's health policy on the node:
@@ -787,6 +789,26 @@ pub struct AppAction {
     /// offset or Docker timestamp); empty = start with the last lines.
     #[prost(string, tag = "4")]
     pub cursor: String,
+    /// `deploy` of a container: Docker's `X-Registry-Auth` for the image's
+    /// private registry, resolved by the server at step time; empty = none.
+    /// A credential: never stored or logged. Absent from older servers and
+    /// ignored by older agents.
+    #[prost(string, tag = "5")]
+    pub registry_auth: String,
+}
+
+impl std::fmt::Debug for AppAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let auth = if self.registry_auth.is_empty() { "" } else { "***" };
+
+        f.debug_struct("AppAction")
+            .field("action", &self.action)
+            .field("spec_json", &self.spec_json)
+            .field("tail", &self.tail)
+            .field("cursor", &self.cursor)
+            .field("registry_auth", &auth)
+            .finish()
+    }
 }
 
 /// Applies or removes an Nginx site (`forge_catalog::SiteSpec`, JSON).
@@ -1126,6 +1148,28 @@ mod oneof_tests {
         let coded = CommandResult { error_code: RefusalCode::Busy.as_str().into(), ..old };
         let back = CommandResult::decode(coded.encode_to_vec().as_slice()).unwrap();
         assert_eq!(RefusalCode::parse(&back.error_code), Some(RefusalCode::Busy));
+    }
+
+    /// The registry credential of a deploy never shows in `Debug`, and an
+    /// action from an older server (no field 5) decodes with none.
+    #[test]
+    fn app_action_hides_the_registry_credential() {
+        let a = AppAction {
+            action: "deploy".into(),
+            spec_json: "{}".into(),
+            registry_auth: "eyJwYXNzd29yZCI6InMzY3JldCJ9".into(),
+            ..Default::default()
+        };
+        let shown = format!("{a:?}");
+        assert!(!shown.contains("eyJwYXNzd29yZCI6InMzY3JldCJ9"), "{shown}");
+        assert!(shown.contains("registry_auth: \"***\""), "{shown}");
+        let back = AppAction::decode(a.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(back.registry_auth, a.registry_auth, "the credential survives the wire");
+
+        let old = AppAction { action: "deploy".into(), spec_json: "{}".into(), ..Default::default() };
+        let back = AppAction::decode(old.encode_to_vec().as_slice()).unwrap();
+        assert!(back.registry_auth.is_empty());
+        assert!(format!("{back:?}").contains("registry_auth: \"\""));
     }
 
     /// Every command variant must survive encode → decode: a tag missing from

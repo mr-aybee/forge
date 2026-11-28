@@ -386,6 +386,11 @@ impl Services {
             jobs: Arc::new(store.clone()),
             facts: Arc::new(store.clone()),
         }));
+        let registries = Arc::new(crate::registries::RegistryService {
+            repo: Arc::new(store.clone()),
+            envelope: envelope.clone(),
+            clock: clock.clone(),
+        });
         let app_job = Arc::new(crate::jobs::AppJob {
             hub: hub.clone(),
             signer: signer.clone(),
@@ -401,13 +406,9 @@ impl Services {
             deploys: Arc::new(store.clone()),
             fabrics: Arc::new(store.clone()),
             facts: Arc::new(store.clone()),
+            registries: registries.clone(),
         });
         registry.register(app_job.clone());
-        let registries = Arc::new(crate::registries::RegistryService {
-            repo: Arc::new(store.clone()),
-            envelope: envelope.clone(),
-            clock: clock.clone(),
-        });
         let node_rpc = crate::node_rpc::NodeRpc { hub: hub.clone(), signer: signer.clone(), clock: clock.clone() };
         let endpoints = Arc::new(crate::endpoints::EndpointService { files: Arc::new(store.clone()) });
         let docker_resources = Arc::new(crate::docker_resources::DockerResources {

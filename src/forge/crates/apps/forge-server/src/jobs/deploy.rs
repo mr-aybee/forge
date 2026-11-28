@@ -339,7 +339,7 @@ impl DeployJob {
         .await?;
         self.event(d.id, "info", Some(server), format!("starting release {} on {}", r.release.number, r.copy(t))).await;
 
-        let out = match self.runner.send(&r.principal, server, "deploy", &spec, DEPLOY_WAIT).await {
+        let out = match self.runner.send(&r.principal, r.app.workspace_id, server, "deploy", &spec, DEPLOY_WAIT).await {
             Ok(o) => o,
             Err(e) => {
                 let msg = match &e {
@@ -404,7 +404,7 @@ impl DeployJob {
         loop {
             self.aborted(d.id).await?;
 
-            match self.runner.send(&r.principal, server, "probe", &spec, PROBE_WAIT).await {
+            match self.runner.send(&r.principal, r.app.workspace_id, server, "probe", &spec, PROBE_WAIT).await {
                 Ok(out) if out["ready"] == true => {
                     let since = *ready_since.get_or_insert_with(tokio::time::Instant::now);
                     if since.elapsed() >= stable_for {
@@ -603,7 +603,7 @@ impl DeployJob {
     async fn stop_one(&self, d: &Deployment, r: &Run<'_>, t: &Target) -> Done {
         let server = server_of(&t.server_id)?;
         let (spec, _) = self.copy_spec(r, t).await?;
-        self.runner.send(&r.principal, server, "retire", &spec, RETIRE_WAIT).await?;
+        self.runner.send(&r.principal, r.app.workspace_id, server, "retire", &spec, RETIRE_WAIT).await?;
         self.deploys.delete_slot(r.app.id, server, Slot::name(t.slot)).await?;
         self.event(d.id, "info", Some(server), format!("stopped {}", r.copy(t))).await;
 
