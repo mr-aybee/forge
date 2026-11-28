@@ -21,8 +21,8 @@ export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-$(nproc)}"
 export CARGO_PROFILE_RELEASE_LTO="${CARGO_PROFILE_RELEASE_LTO:-thin}"
 export CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${CARGO_PROFILE_RELEASE_CODEGEN_UNITS:-16}"
 
-cargo build --release --target "$TARGET" \
-  -p forge-server -p forge-agent -p forge-plugin-runner -p forge-analytics-worker
+(cd src/forge && cargo build --release --target "$TARGET" \
+  -p forge-server -p forge-agent -p forge-plugin-runner -p forge-analytics-worker)
 
 out="$CARGO_TARGET_DIR/$TARGET/release"
 mkdir -p "$LAB/bin" "$LAB/dist"

@@ -17,7 +17,7 @@ repository; the documentation stays here, next to the code it describes.
 
 The docs keep their own copy of the brand tokens. When you change the
 palette or fonts, change both copies, and the console's theme in
-`src/ui/src/styles.css`, together.
+`src/console/src/styles.css`, together.
 
 ## Build the docs
 

@@ -24,8 +24,8 @@ listed in the signed `SHA256SUMS`:
 | `forge-cli-x86_64-pc-windows-msvc.exe` | Windows 10 / 11, Windows Server 2019 or later, x86_64 |
 
 Releases include no macOS binary. On macOS, and on any other platform, build
-it from source with `cargo build --release -p forge-cli`.
-The binary is `target/release/forge` (`forge.exe` on Windows).
+it from source with `cargo build --release -p forge-cli` in `src/forge`.
+The binary is `src/forge/target/release/forge` (`forge.exe` on Windows).
 
 ### Install on Linux
 

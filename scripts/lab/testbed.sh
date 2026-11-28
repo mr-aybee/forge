@@ -56,7 +56,7 @@ case "${1:-standalone}" in
   fresh)
     step "Building binaries and UI"
     bash build.sh
-    (cd ../../src/ui && npm run build >/dev/null)
+    (cd ../../src/console && npm run build >/dev/null)
     step "Resetting the lab"
     bash down.sh --reset || true
     bash up.sh

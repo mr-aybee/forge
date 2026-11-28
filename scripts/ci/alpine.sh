@@ -10,7 +10,7 @@
 #   scripts/ci/alpine.sh pack    <target> <file>      # tar the reusable outputs
 #
 # Both workflows build with the same image, the same in-container paths
-# (/work, /cargo, /work/target/alpine) and the same first cargo command, so
+# (/work, /cargo, /work/src/forge/target/alpine) and the same first cargo command, so
 # Cargo's fingerprints for libduckdb-sys match and it is not rebuilt.
 #
 # Env: FORGE_CI_BUILD_JOBS (default 4), FORGE_CI_CONTAINER_OPTS (docker run
@@ -29,7 +29,7 @@ target=${2:?usage: alpine.sh $cmd <target>}
 case "$target" in x86_64-unknown-linux-musl|aarch64-unknown-linux-musl) ;; *)
   echo "::error::alpine.sh: unsupported target $target"; exit 2 ;; esac
 
-host_target="$PWD/target/alpine"
+host_target="$PWD/src/forge/target/alpine"
 cargo_home="${RUNNER_TEMP:-/tmp}/cargo-alpine"
 
 # Runs a shell script in the container: source at /work, CARGO_HOME=/cargo.
@@ -38,8 +38,8 @@ in_container() {
   mkdir -p "$host_target" "$cargo_home"
   # shellcheck disable=SC2086 # options are a word list
   docker run --rm ${FORGE_CI_CONTAINER_OPTS:-} \
-    -v "$PWD":/work -w /work -v "$cargo_home":/cargo \
-    -e CARGO_HOME=/cargo -e CARGO_TARGET_DIR=/work/target/alpine \
+    -v "$PWD":/work -w /work/src/forge -v "$cargo_home":/cargo \
+    -e CARGO_HOME=/cargo -e CARGO_TARGET_DIR=/work/src/forge/target/alpine \
     -e CARGO_TERM_COLOR=always -e RUSTC_WRAPPER= \
     -e FORGE_BUILD_SHA -e FORGE_BUILD_VERSION \
     -e T="$target" -e JOBS="${FORGE_CI_BUILD_JOBS:-4}" -e OWNER="$(id -u):$(id -g)" \
@@ -47,7 +47,7 @@ in_container() {
 }
 
 duckdb_version() {
-  awk '/^name = "libduckdb-sys"$/ { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock
+  awk '/^name = "libduckdb-sys"$/ { getline; gsub(/version = |"/, ""); print; exit }' src/forge/Cargo.lock
 }
 
 rustc_version() { docker run --rm "$IMAGE" sh -c 'RUSTUP_TOOLCHAIN="$RUST_VERSION" rustc -V'; }
@@ -63,7 +63,7 @@ case "$cmd" in
   build)
     cli=true; [ "${3:-}" = --no-cli ] && cli=false
     in_container '
-      trap "chown -R \"$OWNER\" /work/target/alpine /cargo" EXIT
+      trap "chown -R \"$OWNER\" /work/src/forge/target/alpine /cargo" EXIT
       apk add -q --no-cache build-base g++ perl linux-headers
       rustc -vV
       cargo fetch --locked --target "$T"

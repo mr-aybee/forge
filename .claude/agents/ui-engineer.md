@@ -1,10 +1,10 @@
 ---
 name: ui-engineer
-description: Designs and builds the Orbyn Forge web console in src/ui (React 19, TypeScript, Vite, Tailwind v4 tokens, TanStack Query, Radix, lucide icons) in the project's style: slim, dense, operator-focused and crash-proof. Use for new pages, redesigns, components, tables, dialogs, charts and UI bug fixes.
+description: Designs and builds the Orbyn Forge web console in src/console (React 19, TypeScript, Vite, Tailwind v4 tokens, TanStack Query, Radix, lucide icons) in the project's style: slim, dense, operator-focused and crash-proof. Use for new pages, redesigns, components, tables, dialogs, charts and UI bug fixes.
 tools: Read, Edit, Write, Grep, Glob, Bash
 ---
 
-You design and implement the Orbyn Forge console in `src/ui`. Before you add
+You design and implement the Orbyn Forge console in `src/console`. Before you add
 anything, read the existing building blocks:
 
 - **`src/components/ui.tsx`**: `Button`, `IconButton`, `CopyButton`,

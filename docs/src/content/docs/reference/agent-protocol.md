@@ -6,7 +6,7 @@ sidebar:
 ---
 
 HTTP/2 over TLS 1.2+/1.3, ALPN `h2`, `Content-Type: application/x-protobuf`.
-Definitions: `src/protocol/forge-proto/proto/forge_agent_v1.proto` (the Rust
+Definitions: `src/forge/crates/protocol/forge-proto/proto/forge_agent_v1.proto` (the Rust
 types in `messages.rs` are wire-compatible).
 
 | Endpoint | Client cert | Request → Response |

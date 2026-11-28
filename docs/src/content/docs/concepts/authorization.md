@@ -247,6 +247,6 @@ use `server.manage` and do not need step-up.
 
 ## Testing policies
 
-`src/services/forge-authz/tests/policy_matrix.rs` checks a role × action
+`src/forge/crates/services/forge-authz/tests/policy_matrix.rs` checks a role × action
 matrix, scope isolation between workspaces, the MFA guardrail, revocation, and
 strict validation of every policy against the schema.

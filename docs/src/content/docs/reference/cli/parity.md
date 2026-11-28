@@ -30,7 +30,7 @@ checked.
 | `unclassified` | This CLI does not know the operation: the server is newer than the CLI | empty |
 
 The classification ships inside the CLI, built from
-`src/apps/forge-cli/parity.json`. A server test fails when a route is
+`src/forge/crates/apps/forge-cli/parity.json`. A server test fails when a route is
 missing from that file, so a CLI and server of the same release have no
 `unclassified` operations. If you see some, update the CLI with
 [`forge update`](/docs/reference/cli/update/).

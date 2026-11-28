@@ -1,4 +1,4 @@
-/target
+target/
 node_modules/
 dist/
 .astro/
@@ -22,3 +22,6 @@ tsconfig.tsbuildinfo
 # Generated benchmark report
 scripts/dev/benchmarks/report/data.json
 scripts/dev/benchmarks/report.html
+
+# JetBrains IDE (RustRover) per-user project state
+.idea/

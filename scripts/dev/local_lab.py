@@ -45,7 +45,7 @@ import sys
 from pathlib import Path
 
 from dist_manifest import write_manifest
-from _common import EXE, REPO, WINDOWS, build_env, cyan, dev_version, die, green, read_env_file, run
+from _common import CONSOLE, EXE, REPO, RUST, WINDOWS, build_env, cyan, dev_version, die, green, read_env_file, run
 
 DEFAULT_DATA = Path(r"D:\forge-dev") if WINDOWS else Path.home() / ".local" / "share" / "forge-dev"
 MUSL = "x86_64-unknown-linux-musl"
@@ -59,7 +59,7 @@ node_public_url = "http://{host}:{api}"
 agent_public_url = "https://{host}:{agent}"
 agent_hostnames = ["{host}", "localhost", "127.0.0.1"]
 agent_dist_dir = "{data}/dist"
-ui_dir = "{repo}/src/ui/dist"
+ui_dir = "{repo}/src/console/dist"
 environment = "development"
 # Plain HTTP: a Secure cookie is dropped by the browser and sign-in loops.
 cookie_secure = false
@@ -78,7 +78,7 @@ export CARGO_TARGET_DIR="$HOME/.cache/forge-target-quick"
 export CARGO_PROFILE_RELEASE_OPT_LEVEL=1 CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256 CARGO_PROFILE_RELEASE_INCREMENTAL=true
 command -v sccache >/dev/null && [ -z "${{RUSTC_WRAPPER:-}}" ] && export RUSTC_WRAPPER=sccache
 command -v ld.lld >/dev/null && export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS='-C link-arg=-fuse-ld=lld'
-cargo build --release --target {musl} -p forge-agent
+(cd src/forge && cargo build --release --target {musl} -p forge-agent)
 out="$CARGO_TARGET_DIR/{musl}/release"
 mkdir -p '{dist}'
 cp "$out/forge-agent" '{dist}/forge-agent-linux-x86_64'
@@ -98,7 +98,7 @@ class LocalLab:
         self.cfg = self.data / "forge.toml"
         self.ports_file = self.data / "ports.json"
         self.dist = self.data / "dist"
-        self.server = REPO / "target" / "debug" / f"forge-server{EXE}"
+        self.server = RUST / "target" / "debug" / f"forge-server{EXE}"
         self.dist.mkdir(parents=True, exist_ok=True)
 
     def ports(self) -> dict[str, int]:
@@ -122,7 +122,7 @@ class LocalLab:
         env = build_env()
         env["FORGE_BUILD_VERSION"] = stamp
         print("==> forge-server")
-        run(["cargo", "build", "-p", "forge-server"], cwd=REPO, env=env, what="forge-server build")
+        run(["cargo", "build", "-p", "forge-server"], cwd=RUST, env=env, what="forge-server build")
 
         print("==> forge-agent + helper (Linux musl" + (", WSL)" if WINDOWS else ")"))
         dist = wsl_path(self.dist) if WINDOWS else self.dist.as_posix()
@@ -139,10 +139,10 @@ class LocalLab:
         write_manifest(self.dist, stamp)
         (self.data / "version.txt").write_text(stamp, encoding="utf-8")
 
-        if not (REPO / "src" / "ui" / "dist" / "index.html").exists():
+        if not (CONSOLE / "dist" / "index.html").exists():
             print("==> UI (first time)")
-            run(["npm", "ci"], cwd=REPO / "src" / "ui")
-            run(["npm", "run", "build"], cwd=REPO / "src" / "ui")
+            run(["npm", "ci"], cwd=CONSOLE)
+            run(["npm", "run", "build"], cwd=CONSOLE)
 
     def serve(self) -> None:
         if not self.server.exists():
@@ -151,7 +151,7 @@ class LocalLab:
         print(green(f"forge-server {self.version()}"))
         print(f"  console  http://{h}:{p['api']}   (or http://localhost:{p['api']})")
         print(f"  agents   https://{h}:{p['agent']}")
-        print(f"  UI hot reload: cd src/ui; npm run dev  ->  http://localhost:{p['ui']} (proxies /api to :{p['api']})")
+        print(f"  UI hot reload: cd src/console; npm run dev  ->  http://localhost:{p['ui']} (proxies /api to :{p['api']})")
         try:
             subprocess.call([str(self.server), "--config", str(self.cfg), "serve"])
         except KeyboardInterrupt:

@@ -32,7 +32,7 @@ Installs `docker.io`, build tools, `musl-tools` and Rust with the
 
 ```powershell
 wsl -d Ubuntu-24.04 -- bash scripts/lab/build.sh   # static binaries → scripts/lab/.lab/
-(cd src/ui; npm run build)                         # the console
+(cd src/console; npm run build)                         # the console
 wsl -d Ubuntu-24.04 -- bash scripts/lab/up.sh
 ```
 

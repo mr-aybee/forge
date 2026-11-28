@@ -1,12 +1,12 @@
 version: 2
 updates:
   - package-ecosystem: cargo
-    directory: /
+    directory: /src/forge
     schedule: { interval: weekly }
     target-branch: master
     open-pull-requests-limit: 5
   - package-ecosystem: npm
-    directories: [/src/ui, /docs]
+    directories: [/src/console, /docs]
     schedule: { interval: weekly }
     target-branch: master
     open-pull-requests-limit: 5

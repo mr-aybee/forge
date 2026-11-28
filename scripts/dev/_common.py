@@ -15,6 +15,9 @@ from pathlib import Path
 WINDOWS = os.name == "nt"
 EXE = ".exe" if WINDOWS else ""
 REPO = Path(__file__).resolve().parents[2]
+# The Rust workspace (Cargo.toml, target/) and the web console.
+RUST = REPO / "src" / "forge"
+CONSOLE = REPO / "src" / "console"
 
 
 def die(msg: str, code: int = 1) -> None:
@@ -67,7 +70,7 @@ def build_env(quiet: bool = False) -> dict[str, str]:
 
 def cargo_version() -> str:
     """The workspace version in Cargo.toml (`0.1.0`)."""
-    m = re.search(r'^version\s*=\s*"([^"]+)"', (REPO / "Cargo.toml").read_text(encoding="utf-8"), re.M)
+    m = re.search(r'^version\s*=\s*"([^"]+)"', (RUST / "Cargo.toml").read_text(encoding="utf-8"), re.M)
     if not m:
         die("no version in Cargo.toml")
     return m.group(1)

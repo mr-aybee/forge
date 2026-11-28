@@ -11,7 +11,7 @@ Run this once per PowerShell window before any scenario.
 ## 1. Sign in
 
 ```powershell
-$env:Path = "<repo-root>\target\release;$env:Path"
+$env:Path = "<repo-root>\src\forge\target\release;$env:Path"
 $env:FORGE_ALLOW_HTTP = "1"                      # lab only: plain http
 forge contexts add lab --server http://10.50.0.10:3880   # once; "exists" is fine
 forge contexts use lab

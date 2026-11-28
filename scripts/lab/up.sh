@@ -10,7 +10,7 @@ NET=forge-lab
 NODES=(node-1 node-2 node-3)
 
 [ -x "$LAB/bin/forge-server" ] || { echo "run scripts/lab/build.sh first" >&2; exit 1; }
-[ -f "$ROOT/src/ui/dist/index.html" ] || echo "warning: src/ui/dist missing; build the UI (npm run build) for the web console" >&2
+[ -f "$ROOT/src/console/dist/index.html" ] || echo "warning: src/console/dist missing; build the UI (npm run build) for the web console" >&2
 
 mkdir -p "$LAB/cp-data"
 creds="$LAB/credentials.env"
@@ -48,7 +48,7 @@ TOML
 
 cp_mounts=(
   -v "$LAB/bin:/opt/forge/bin:ro" -v "$LAB/dist:/opt/forge/dist:ro"
-  -v "$ROOT/src/ui/dist:/opt/forge/ui:ro"
+  -v "$ROOT/src/console/dist:/opt/forge/ui:ro"
   -v "$LAB/forge.toml:/etc/forge/forge.toml:ro" -v "$LAB/cp-data:/var/lib/forge"
 )
 # Older labs ran the control plane on bare debian (no CA bundle): recreate it

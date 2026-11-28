@@ -25,7 +25,7 @@ python3 -I scripts/dev/benchmarks/report/build_report.py
 | 2026-11-20 | [SQLite + chDB before the worker](2026-11-20-sqlite-chdb-before-worker.md) | chDB via `forge-server` | Up to 2,000 nodes × 20 lines/s | Held ~1,000 nodes; server memory up to 4.4 GB |
 
 Control-plane benchmarks (enrolment, API latency, reconnect after a
-restart, the 1,000-node scale test) are in [`BENCHMARKS.md`](../../../BENCHMARKS.md)
+restart, the 1,000-node scale test) are in [`BENCHMARKS.md`](../../../src/forge/BENCHMARKS.md)
 at the repository root.
 
 ## Systems

@@ -24,7 +24,7 @@ first.
   - `scripts/packaging/package.sh` builds the packages;
   - `SHA256SUMS` is signed with Ed25519 using the `FORGE_RELEASE_KEY` secret,
     and the job checks that this key matches `RELEASE_PUBLIC_KEY` in
-    `src/apps/forge-server/src/update.rs`;
+    `src/forge/crates/apps/forge-server/src/update.rs`;
   - then the job publishes the GitHub release.
   - The self-updater depends on the asset names and the signature, so treat
     both as a public contract.

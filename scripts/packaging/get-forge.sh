@@ -31,7 +31,7 @@
 #                              lab key; a warning is printed
 set -eu
 
-# Must equal RELEASE_PUBLIC_KEY in src/protocol/forge-sdk/src/release.rs
+# Must equal RELEASE_PUBLIC_KEY in src/forge/crates/protocol/forge-sdk/src/release.rs
 # (the release workflow checks this).
 PINNED_KEY="6yf7l7jBEw6u446vqWAgt7P7bqEuaY5tpbYnWPHBmbg"
 BASE="${FORGE_RELEASES_URL:-https://github.com/orbyntech/forge/releases}"

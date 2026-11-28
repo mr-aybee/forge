@@ -1,7 +1,7 @@
 name: Release
 
 # Push a tag to build, sign and publish a release (X.Y.Z must match the
-# workspace version in Cargo.toml):
+# workspace version in src/forge/Cargo.toml):
 #   vX.Y.Z         stable release; the commit must be on master
 #   vX.Y.Z-rc-NN   GitHub pre-release (not "latest"); tag it on master too
 # The usual flow: master green -> tag master.
@@ -52,7 +52,7 @@ env:
   FORGE_CI_BUILD_JOBS: 4
   FORGE_CI_CONTAINER_OPTS: --memory=14g --memory-swap=14g
   CARGO_TERM_COLOR: always
-  # .cargo/config.toml links with LLD on Windows for fast local builds.
+  # src/forge/.cargo/config.toml links with LLD on Windows for fast local builds.
   # Shipped Windows binaries keep the MSVC linker.
   CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: link.exe
 
@@ -96,9 +96,9 @@ jobs:
             echo "::warning::$TAG is not on master. Releases are normally tagged on master."
           fi
           base="${version%%-*}"
-          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' src/forge/Cargo.toml | head -1)
           if [ "$base" != "$cargo_version" ]; then
-            echo "::error::tag $TAG does not match the workspace version $cargo_version: set [workspace.package] version = \"$base\" in Cargo.toml, merge, and tag again"; exit 1
+            echo "::error::tag $TAG does not match the workspace version $cargo_version: set [workspace.package] version = \"$base\" in src/forge/Cargo.toml, merge, and tag again"; exit 1
           fi
           publish=false
           if [ "$EVENT" = push ] || [ "$PUBLISH_INPUT" = true ]; then publish=true; fi
@@ -119,8 +119,8 @@ jobs:
         env:
           FORGE_RELEASE_KEY: ${{ secrets.FORGE_RELEASE_KEY }}
         run: |
-          want=$(sed -n 's/^pub const RELEASE_PUBLIC_KEY: &str = "\(.*\)";/\1/p' src/protocol/forge-sdk/src/release.rs)
-          [ -n "$want" ] || { echo "::error::RELEASE_PUBLIC_KEY not found in src/protocol/forge-sdk/src/release.rs"; exit 1; }
+          want=$(sed -n 's/^pub const RELEASE_PUBLIC_KEY: &str = "\(.*\)";/\1/p' src/forge/crates/protocol/forge-sdk/src/release.rs)
+          [ -n "$want" ] || { echo "::error::RELEASE_PUBLIC_KEY not found in src/forge/crates/protocol/forge-sdk/src/release.rs"; exit 1; }
           if [ -z "$FORGE_RELEASE_KEY" ]; then
             echo "::error::the FORGE_RELEASE_KEY secret is not set: add it in Settings -> Secrets and variables -> Actions"; exit 1
           fi
@@ -144,12 +144,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - working-directory: src/ui
+      - working-directory: src/console
         run: bash ../../scripts/ci/build.sh light sh -c 'npm ci && npm run build'
       - uses: actions/upload-artifact@v4
         with:
           name: ui-dist
-          path: src/ui/dist
+          path: src/console/dist
           retention-days: 3
 
   build:
@@ -179,7 +179,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: ui-dist
-          path: src/ui/dist
+          path: src/console/dist
       - uses: dtolnay/rust-toolchain@stable
         if: matrix.os == 'windows'
         with:
@@ -187,6 +187,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: matrix.os == 'windows'
         with:
+          workspaces: src/forge
           key: release-${{ matrix.target }}
       - name: Restore the prebuilt DuckDB
         if: matrix.os != 'windows'
@@ -209,12 +210,13 @@ jobs:
           if [ "${{ matrix.os }}" != windows ]; then
             # Server, agent and services, then the CLI, in the container.
             bash scripts/ci/alpine.sh build ${{ matrix.target }}
-            echo "CARGO_TARGET_DIR=$PWD/target/alpine" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_DIR=$PWD/src/forge/target/alpine" >> "$GITHUB_ENV"
             exit 0
           fi
-          echo "CARGO_TARGET_DIR=target" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=src/forge/target" >> "$GITHUB_ENV"
           # Windows ships the `forge` CLI only.
-          bash scripts/ci/build.sh heavy cargo build -j "$FORGE_CI_BUILD_JOBS" --locked --release --target ${{ matrix.target }} -p forge-cli
+          cd src/forge
+          bash ../../scripts/ci/build.sh heavy cargo build -j "$FORGE_CI_BUILD_JOBS" --locked --release --target ${{ matrix.target }} -p forge-cli
       - name: Collect and check binaries
         shell: bash
         env:
@@ -308,7 +310,7 @@ jobs:
           server=../bin/forge-server-x86_64-unknown-linux-musl
           chmod +x "$server"
           "$server" release sign SHA256SUMS > SHA256SUMS.sig
-          want=$(sed -n 's/^pub const RELEASE_PUBLIC_KEY: &str = "\(.*\)";/\1/p' ../src/protocol/forge-sdk/src/release.rs)
+          want=$(sed -n 's/^pub const RELEASE_PUBLIC_KEY: &str = "\(.*\)";/\1/p' ../src/forge/crates/protocol/forge-sdk/src/release.rs)
           got=$("$server" release pubkey)
           [ "$want" = "$got" ] || { echo "::error::FORGE_RELEASE_KEY does not match RELEASE_PUBLIC_KEY (compiled in: $want, from the secret: $got)"; exit 1; }
           cat SHA256SUMS

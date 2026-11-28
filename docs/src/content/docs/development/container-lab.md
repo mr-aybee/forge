@@ -22,8 +22,8 @@ a development machine, never on a shared or production host.
 - Build the binaries and the console:
 
   ```sh
-  cargo build --profile perf -p forge-server -p forge-agent -p forge-cli
-  (cd src/ui && npm ci && npm run build)
+  (cd src/forge && cargo build --profile perf -p forge-server -p forge-agent -p forge-cli)
+  (cd src/console && npm ci && npm run build)
   ```
 
 ## Steps
@@ -98,7 +98,7 @@ python3 scripts/lab/swarm/lab.py down --reset   # delete nodes, volumes and lab 
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `missing in target/perf` | The binaries are not built. | Run the `cargo build` command above. |
+| `missing in src/forge/target/perf` | The binaries are not built. | Run the `cargo build` command above. |
 | A node is not online after 4 minutes | Its dockerd or the installer failed. | Run `docker logs lab-b`; dockerd's own log is `/var/log/dockerd.log` in the node. |
 | `dockerd did not start` | The host kernel lacks overlay or iptables support for nested Docker. | Check `docker logs <node>`; the node needs `--privileged`, which the script sets. |
 | A new agent build is not picked up | Enrolled nodes keep the agent they installed. | Run `down --reset`, then `up`. |

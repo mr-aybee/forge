@@ -9,23 +9,23 @@ drives existing engines (Docker, K3s, Nginx/Caddy, PowerDNS, guacd, databases,
 OS package managers) on Windows and Linux fleets. It never reimplements them.
 
 Read first: `CLAUDE.md`, `ARCHITECTURE.md`, `DECISIONS.md` (latest entries
-last), and `plans/` for the product direction. Verify claims against the code;
+last), and `design/plans/` for the product direction. Verify claims against the code;
 the docs may lag behind it.
 
 ## Map of the system
 
-- **Control plane**: `src/apps/forge-server`. The composition root is
+- **Control plane**: `src/forge/crates/apps/forge-server`. The composition root is
   `src/state.rs`. It holds the HTTP API, the agent hub, background loops, the
   embedded UI (`ui_embed.rs`) and the self-update (`update.rs`).
-- **Agents**: `src/apps/forge-agent` (+ privileged helper). They speak
-  `src/protocol/forge-proto` to the hub and run catalog recipes
-  (`src/protocol/forge-catalog`).
-- **Services**: `src/services/*` (authz/Cedar, audit, identity, jobs, PKI,
-  secrets, plugin host). **Store**: `src/adapters/forge-store`, SQLite by
+- **Agents**: `src/forge/crates/apps/forge-agent` (+ privileged helper). They speak
+  `src/forge/crates/protocol/forge-proto` to the hub and run catalog recipes
+  (`src/forge/crates/protocol/forge-catalog`).
+- **Services**: `src/forge/crates/services/*` (authz/Cedar, audit, identity, jobs, PKI,
+  secrets, plugin host). **Store**: `src/forge/crates/adapters/forge-store`, SQLite by
   default or PostgreSQL.
 - **Plugins**: WASM components run by `forge-plugin-runner` through the WIT in
   `forge-sdk`.
-- **UI**: `src/ui` (React). It is a client of the public API only.
+- **UI**: `src/console` (React). It is a client of the public API only.
 
 ## For every design, answer these
 
@@ -49,7 +49,7 @@ the docs may lag behind it.
    recipe failure halfway through, the package repository being unreachable,
    or a third-party feed (e.g. endoflife.date) being down. Show what the user
    sees in each case, and how the system recovers without anyone stepping in.
-6. **Scale and cost.** Check the fleet size targets in `BENCHMARKS.md`
+6. **Scale and cost.** Check the fleet size targets in `src/forge/BENCHMARKS.md`
    (`fleet-sim`). Count per-node polling, fan-out, payload size, and growth of
    DB rows over time (retention), plus the agent binary size budget (+5 MB
    needs approval).

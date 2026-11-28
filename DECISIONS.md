@@ -130,7 +130,7 @@ the `node.bootstrap` job uploads the same installer the manual one-liner uses,
 runs it with sudo, waits for the agent, then purges the credential unless the
 user opted to keep it. After that the node is managed only via the agent's mTLS
 identity. Requires the new `node.onboard` action, which is MFA-guarded. SSH is
-`russh` (Apache-2.0, ring backend) in `src/adapters/forge-ssh`, server-side only.
+`russh` (Apache-2.0, ring backend) in `src/forge/crates/adapters/forge-ssh`, server-side only.
 **Consequences.** Windows assisted onboarding (WinRM/OpenSSH) is not built yet;
 Windows uses the manual installer.
 
@@ -178,7 +178,7 @@ points; SFTP upload is not built yet.
 plugins (Docker, Swarm, K3s, RustFS, PowerDNS) on chosen nodes. That needs root
 on the node, while the agent must stay unprivileged.
 **Decision.**
-- New crate `src/protocol/forge-catalog`: package manifests with typed
+- New crate `src/forge/crates/protocol/forge-catalog`: package manifests with typed
   parameters and one POSIX shell recipe per package (shared prelude). It is
   compiled into the control plane *and* the node helper.
 - The wire command `PackageAction {package, version, action, params}` carries
@@ -511,7 +511,7 @@ recipes, dnf and winget sources, and new catalog packages follow in small steps.
 ## D-037 Self-contained releases and one-click self-update
 **Decision.**
 - *Self-contained:* the web console is compiled into `forge-server`
-  (`build.rs` embeds `src/ui/dist`; no new dependency). A release package
+  (`build.rs` embeds `src/console/dist`; no new dependency). A release package
   carries the server, the plugin runner, all agent binaries (`dist/`, found
   next to the server), an installer and an example configuration. The Linux
   installer sets up a systemd service; the Windows installer a SYSTEM
@@ -1957,7 +1957,7 @@ transitions inside the store was rejected: it is a domain rule (rule 1).
 **Context.** Seven fixed roles cannot express "view the UAT nodes, restart
 one application, no shell". Background work (schedules, CI, MCP) needs an
 identity that is not a person. The enforcement inventory
-(`plans/authz-inventory/`) is the baseline this builds on.
+(`design/plans/authz-inventory/`) is the baseline this builds on.
 
 **Decision.**
 - **Cedar stays the only engine.** An access profile is a named, explicit
@@ -4015,8 +4015,8 @@ text stays for filters, text-only clients and screen readers.
   (`node.agent.status`, `node.cpu|mem|disk`, other `node.*`, `health.*`,
   `app.*`, `package.*`, `tls.*`, anything else) and by event (`resolved`,
   `ended`). They are fixed text in code until notification templates exist.
-- The mark is `branding/forge-mark.svg` rendered once to a 128 px PNG
-  (`src/apps/forge-server/assets/email/forge-mark-128.png`, about 5 KB,
+- The mark is `design/branding/forge-mark.svg` rendered once to a 128 px PNG
+  (`src/forge/crates/apps/forge-server/assets/email/forge-mark-128.png`, about 5 KB,
   made with `sharp` from the docs toolchain) and compiled into the server
   with `include_bytes!`. Mail clients block SVG and remote images. No new
   dependency.
@@ -4779,7 +4779,7 @@ sent again, so it was stored twice. Analytics load could take the control
 plane down with it.
 
 **Decision.** All analytics work moves into one process,
-`forge-analytics-worker` (`src/apps/forge-analytics-worker`), a child of
+`forge-analytics-worker` (`src/forge/crates/apps/forge-analytics-worker`), a child of
 `forge-server`. `forge-server` becomes its client and supervisor and keeps
 no analytics data, buffer or queue.
 
@@ -5367,7 +5367,7 @@ never that an in-container update is lost when the container is recreated.
 - The **Update agents** dialog groups **Will update** (ticked; `unknown`
   marked "not checked", containers warned "until recreated"), **Needs
   reinstall** (reasons, link to the installer guide) and **Offline
-  (skipped)**. The UI's types and query live in `src/ui/src/api/agentUpdates.ts`;
+  (skipped)**. The UI's types and query live in `src/console/src/api/agentUpdates.ts`;
   a missing verdict (older server) is derived, never shown empty.
 
 **Why.** Owner decisions 3 and 4 and the review's capability design: the
@@ -5832,7 +5832,7 @@ attacker can change; and that a GitLab delivery without
 A GitHub delivery can be replayed after 30 days; rotating the secret ends
 that. GitLab mode remains the weakest (a static token); the docs recommend
 Forge or GitHub signatures. The compensating restore can race a concurrent
-console edit; that is recorded as CODE-02 in `plans/code-quality.md`.
+console edit; that is recorded as CODE-02 in `design/plans/code-quality.md`.
 
 ## D-169 Ingress endpoints: one list, typed features, read-only main config
 
@@ -5982,7 +5982,7 @@ hand.
 
 ## D-173 forge-dns: a standalone cluster DNS binary on hickory
 
-**Decision.** Cluster names (D-175) are served by a new binary, `forge-dns` (`src/apps/forge-dns`), built on `hickory-server` and `hickory-proto` 0.26 with default features off: plain UDP and TCP only, no DoT, DoH, DoQ, DNSSEC or resolver features, so no TLS stack and no OpenSSL enters the tree. It reads `names.json` (`forge_catalog::names::Records`), polls the file's mtime and size every 2 s instead of using `notify`, swaps the answer map in whole and keeps the old map on a parse failure. Names outside the zones are forwarded to the upstreams in order (1 s each) with no cache. It runs as its own systemd unit `forge-dns.service` (user `forge-dns`, only `CAP_NET_BIND_SERVICE`) on nodes and, when `[dns] listen` is set, on the server host.
+**Decision.** Cluster names (D-175) are served by a new binary, `forge-dns` (`src/forge/crates/apps/forge-dns`), built on `hickory-server` and `hickory-proto` 0.26 with default features off: plain UDP and TCP only, no DoT, DoH, DoQ, DNSSEC or resolver features, so no TLS stack and no OpenSSL enters the tree. It reads `names.json` (`forge_catalog::names::Records`), polls the file's mtime and size every 2 s instead of using `notify`, swaps the answer map in whole and keeps the old map on a parse failure. Names outside the zones are forwarded to the upstreams in order (1 s each) with no cache. It runs as its own systemd unit `forge-dns.service` (user `forge-dns`, only `CAP_NET_BIND_SERVICE`) on nodes and, when `[dns] listen` is set, on the server host.
 
 - **Licence.** hickory-server, hickory-proto and hickory-net are `MIT OR Apache-2.0`; their remaining new transitive crates are permissive and `cargo deny check` passes.
 - **Until a valid file is read** every query is REFUSED: the zones are not known yet, and forwarding would leak cluster names upstream.
@@ -6022,7 +6022,7 @@ hand.
 
 ## D-176 Service orchestration in native mode, step 1: a complete, typed container spec
 
-**Decision.** In native mode a Service is the one managed unit (`plans/service-orchestration.md`). Step 1 completes and types its container spec, and adds optimistic locking for edits.
+**Decision.** In native mode a Service is the one managed unit (`design/plans/service-orchestration.md`). Step 1 completes and types its container spec, and adds optimistic locking for edits.
 
 - **Fields.** `forge_catalog::AppSpec` gains:
   - `restart_policy` (`no`, `always`, `unless-stopped` or `on-failure`) and `restart_max_attempts`;
@@ -6042,7 +6042,7 @@ hand.
 
 ## D-177 Service orchestration in native mode, step 2: the service reconciler and node drain
 
-**Decision.** A `ServiceReconciler` (`src/apps/forge-server/src/reconcile.rs`, ports and the `Clock` only) keeps native services in their desired state.
+**Decision.** A `ServiceReconciler` (`src/forge/crates/apps/forge-server/src/reconcile.rs`, ports and the `Clock` only) keeps native services in their desired state.
 
 - **Reports.** Agents push their native service containers (label `forge.app`) in the optional `Heartbeat.app_states` field (tag 13) on change, with the same 10-second gap as stack states, and report the fact `app_states`. The server stores the state and exit code on the instance without touching its status. A container missing from the report is `missing`.
 - **Desired state.** Migration 0006 adds `service_instances.desired` (`running`/`stopped`, set by start, restart, deploy and stop; instances already stopped become `stopped`), `deployed_release` (set when a deploy succeeds) and `exit_code`, and `servers.drained`.
@@ -6089,7 +6089,7 @@ hand.
 
 ## D-180 Object Storage removed; any running container can be adopted as a service
 
-**Decision.** Forge no longer installs, connects or manages object stores, buckets, access keys or bucket grants (`plans/service-orchestration.md` step 6). D-106, D-107, D-108 and D-170 are withdrawn. In their place, any running container can be adopted as a `container` Service.
+**Decision.** Forge no longer installs, connects or manages object stores, buckets, access keys or bucket grants (`design/plans/service-orchestration.md` step 6). D-106, D-107, D-108 and D-170 are withdrawn. In their place, any running container can be adopted as a `container` Service.
 
 - **Adoption.** `POST /api/v1/services/adopt {environment_id, server_id, container, name?}`, `forge services adopt --environment <env> --node <node> <container>` and **Adopt as service** on the Containers page. The server sends one signed `inspect` with environment values (`forge_server::service_adopt`) and maps it onto the ordinary service input: image, environment (names containing KEY, SECRET, PASSWORD, PASSWD, TOKEN or CREDENTIAL are sealed as secret variables; `PATH` is skipped), published ports, bind mounts and named volumes (`/var/lib/docker/volumes/<name>/_data`), restart policy, user, extra networks and non-Docker labels. Host-network containers and `forge-app-*` containers are refused. Migration 0009 adds `services.adopted_from` (the container name) and the instance is recorded `deployed` without any command that changes the container.
 - **Authorization.** `deploy` on the environment, `server.manage` and `container.inspect_env` (MFA, because environment values are read) on the node; denials and the adoption are audited (`service.adopt`).

@@ -11,7 +11,7 @@ write a test client. For why the spool exists and how it behaves, see
 [Analytics: node spools](/docs/concepts/analytics/#node-spools).
 
 The definitions live in `forge_core::spool`
-(`src/domain/forge-core/src/spool.rs`).
+(`src/forge/crates/domain/forge-core/src/spool.rs`).
 
 ## Location
 

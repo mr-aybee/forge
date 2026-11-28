@@ -64,7 +64,7 @@ Maintainers keep these settings on `orbyntech/forge`:
 
 Each step needs a maintainer's go-ahead.
 
-1. Set the version in the workspace `Cargo.toml` (`[workspace.package]
+1. Set the version in the workspace `src/forge/Cargo.toml` (`[workspace.package]
    version`). For release candidates the tag adds `-rc-NN` to it.
 2. Optional: write the highlights to
    `scripts/packaging/release-notes/<tag>.md`; they head the release notes.
@@ -94,7 +94,7 @@ Each step needs a maintainer's go-ahead.
 | `vX.Y.Z` | Stable. The commit must be on `master`. Marked "latest" |
 | `vX.Y.Z-rc-NN` | GitHub pre-release. Never "latest", so `/releases/latest`, the self-updater's feed and `get-forge.sh` without `--version` keep the last stable release. Installs that run a pre-release are offered newer ones |
 
-A tag that does not match `Cargo.toml` fails in the first job. To fix a
+A tag that does not match `src/forge/Cargo.toml` fails in the first job. To fix a
 tag, delete it (`git push origin :refs/tags/<tag>`), fix, and tag again.
 
 ### What the release workflow does
@@ -103,10 +103,10 @@ tag, delete it (`git push origin :refs/tags/<tag>`), fix, and tag again.
 
 1. **Check tag, version and signing key** (seconds): the tag format, that a
    stable tag is on `master` (a warning for a release candidate), that the
-   tag matches `Cargo.toml`, and that the `FORGE_RELEASE_KEY` secret holds
+   tag matches `src/forge/Cargo.toml`, and that the `FORGE_RELEASE_KEY` secret holds
    the private half of `RELEASE_PUBLIC_KEY` (ring's PKCS#8 document ends
    with the public key) and that the scripts and docs pin that key.
-2. **Web console**: builds `src/ui` once and shares it as an artifact.
+2. **Web console**: builds `src/console` once and shares it as an artifact.
 3. **Build** each target: `forge-server`, `forge-analytics-worker`,
    `forge-plugin-runner` and the agents, then the `forge` CLI in a second
    `cargo build -p forge-cli` (its features stay out of the server and agent
@@ -157,7 +157,7 @@ DuckDB** step logs one of:
   as before (about 20 minutes longer). It never fails the build.
 
 **Refreshing.** The workflow runs on pushes to `master` that change
-`Cargo.lock`, `rust-toolchain.toml`, `scripts/ci/alpine.sh` or the workflow,
+`src/forge/Cargo.lock`, `src/forge/rust-toolchain.toml`, `scripts/ci/alpine.sh` or the workflow,
 and by hand (**Actions** → **Prebuilt DuckDB** → **Run workflow**, about
 35 minutes). Run it after bumping `libduckdb-sys` or the image in
 `scripts/ci/alpine.sh`, before tagging. The image is pinned by digest; update
@@ -193,7 +193,7 @@ Running installs see a new stable release within six hours (or at once with
 ### The release signing key
 
 The key is Ed25519. The public half is compiled into Forge
-(`RELEASE_PUBLIC_KEY` in `src/protocol/forge-sdk/src/release.rs`) and pinned
+(`RELEASE_PUBLIC_KEY` in `src/forge/crates/protocol/forge-sdk/src/release.rs`) and pinned
 in `get-forge.sh`, `get-forge.ps1` and the installation guide;
 the private half is the repository secret **`FORGE_RELEASE_KEY`** (base64
 PKCS#8):

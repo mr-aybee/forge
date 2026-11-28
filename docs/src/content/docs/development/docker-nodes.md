@@ -55,6 +55,8 @@ agent_dist_dir = "<data-dir>/dist"
 
 The server hands the agent to the nodes from `agent_dist_dir`:
 
+Run these in `src/forge`, the Rust workspace:
+
 ```sh
 CC_x86_64_unknown_linux_musl=gcc \
   cargo build --release --target x86_64-unknown-linux-musl -p forge-agent
@@ -73,7 +75,7 @@ compiler when `musl-tools` is not installed.
    ```sh
    cd scripts/dev/nodes
    umask 077
-   S=../../../target/debug/forge-server
+   S=../../../src/forge/target/debug/forge-server
    { echo "FORGE_URL=http://172.17.0.1:55130"
      for n in 1 2 3; do
        echo "NODE${n}_TOKEN=$($S --config <data-dir>/forge.toml enroll-token --cluster dev --hostname dev-node-$n --ttl-minutes 60)"

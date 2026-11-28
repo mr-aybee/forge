@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-`cargo test --workspace` runs about 130 tests. Integration tests use real
+`cargo test --workspace` (in `src/forge`) runs about 130 tests. Integration tests use real
 components: SQLite, Cedar, TLS, the agent library, the plugin runner binary and
 the server binary. Nothing security-relevant is mocked.
 

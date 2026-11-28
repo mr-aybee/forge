@@ -12,12 +12,15 @@ working on Forge itself. To install a release, see the
 
 ## 1. Build
 
+The Rust workspace is `src/forge`; run `cargo` there. The web console is
+`src/console`. From the repository root:
+
 ```sh
-cargo build --release -p forge-server -p forge-agent -p forge-plugin-runner -p forge-analytics-worker
-(cd src/ui && npm ci && npm run build)
+(cd src/forge && cargo build --release -p forge-server -p forge-agent -p forge-plugin-runner -p forge-analytics-worker)
+(cd src/console && npm ci && npm run build)
 ```
 
-Binaries land in `target/release/`.
+Binaries land in `src/forge/target/release/`.
 
 ## 2. Configure and initialise
 
@@ -30,7 +33,7 @@ agent_listen = "0.0.0.0:3843"
 public_url = "http://localhost:3880"
 agent_public_url = "https://localhost:3843"
 cookie_secure = false        # local HTTP only; keep true behind TLS
-ui_dir = "src/ui/dist"
+ui_dir = "src/console/dist"
 ```
 
 Create the first platform administrator. The password comes from the
@@ -65,7 +68,7 @@ curl -s -X POST http://localhost:3880/api/v1/enrollment-tokens \
 
 The response contains the token and ready-made enroll commands. On the
 machine to manage (here the same machine, so the agent binary is in
-`target/release/`):
+`src/forge/target/release/`):
 
 ```sh
 printf 'Enrollment token: '; stty -echo; read -r FORGE_ENROLL_TOKEN; stty echo; echo; export FORGE_ENROLL_TOKEN
