@@ -66,7 +66,7 @@ rcgen = { version = "0.13", default-features = false, features = ["ring", "pem",
 x509-parser = "0.16"
 time = "0.3"
 ring = "0.17"
-argon2 = "0.5"
+argon2 = { version = "0.6", default-features = false, features = ["alloc", "password-hash"] }
 subtle = "2.6"
 
 # data
