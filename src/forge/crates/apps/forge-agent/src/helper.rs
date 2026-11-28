@@ -741,7 +741,9 @@ pub async fn call(req: &HelperRequest, timeout: std::time::Duration) -> HelperRe
                 Err(_) => HelperResponse::failed("process action timed out"),
             }
         }
-        HelperRequest::Names { suffix, entries, containers } => {
+        // DNS records feed forge-dns, which runs on Linux nodes only, so
+        // Windows writes the hosts file and ignores them.
+        HelperRequest::Names { suffix, entries, containers, .. } => {
             match tokio::time::timeout(timeout, crate::host_names::apply(suffix.clone(), entries.clone(), *containers))
                 .await
             {

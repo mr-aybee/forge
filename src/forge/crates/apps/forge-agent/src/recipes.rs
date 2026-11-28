@@ -124,38 +124,6 @@ pub async fn run(
     .await
 }
 
-/// Writes a script to a new, uniquely named file in the service's temp
-/// directory and prepares PowerShell to run it without inherited `FORGE_*`.
-#[cfg(windows)]
-fn powershell_file(script: &str) -> Result<(tokio::process::Command, std::path::PathBuf), String> {
-    use std::io::Write;
-    let mut name = [0u8; 12];
-    getrandom(&mut name);
-    let file = std::env::temp_dir().join(format!("forge-recipe-{}.ps1", hex(&name)));
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&file)
-        .map_err(|e| format!("cannot write the script to {}: {e}", file.display()))?;
-    f.write_all(b"\xEF\xBB\xBF").and_then(|()| f.write_all(script.as_bytes())).map_err(|e| e.to_string())?;
-    drop(f);
-    let shell = if which("pwsh.exe") { "pwsh.exe" } else { "powershell.exe" };
-    let mut cmd = tokio::process::Command::new(shell);
-    cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]).arg(&file);
-
-    // A PSModulePath inherited from PowerShell 7 makes Windows PowerShell 5.1
-    // load the wrong module versions; each shell rebuilds its own default.
-    cmd.env_remove("PSModulePath");
-
-    for (k, _) in std::env::vars_os() {
-        if k.to_string_lossy().to_ascii_uppercase().starts_with("FORGE_") {
-            cmd.env_remove(&k);
-        }
-    }
-
-    Ok((cmd, file))
-}
-
 type Launch = (tokio::process::Command, Option<Vec<u8>>, Option<std::path::PathBuf>);
 
 #[cfg(not(windows))]
